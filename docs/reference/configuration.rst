@@ -1220,7 +1220,8 @@ place it on the host that has Docker.
    generator.designer-token | the token for ``designer-url``
    generator.designer-model | the served model the designer asks for; the deployment's by default
    generator.designer-timeout-s | 1800 | seconds one designer call may take; ``inference.timeout-s`` must allow it too
-   generator.designer-options | extra fields of the designer's chat request, e.g. ``{"reasoning_effort": "none"}``
+   generator.designer-api | the API the designer asks through: ``openai`` (Chat Completions) or ``responses`` (the Responses API). The default is ``responses`` when designer calls go to this deployment and its ``inference.upstream-api`` is ``responses``, and ``openai`` otherwise
+   generator.designer-options | extra fields of the designer's request, e.g. ``{"reasoning_effort": "none"}``; with ``designer-api: responses``, Responses fields such as ``{"reasoning": {"effort": "low"}}``
    generator.ready-timeout | 60 | seconds ``reef serve`` waits for the generator to answer
 
 .. code:: yaml

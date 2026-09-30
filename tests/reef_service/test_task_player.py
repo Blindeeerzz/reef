@@ -28,9 +28,13 @@ from reef.harness.client.tasks import (
 
 
 class StandInReef:
-    """A Reef service that answers inference with a receipt and keeps every report it gets."""
+    """A Reef service that answers inference with a receipt and keeps every report it gets.
 
-    def __init__(self, *, refuse_reports: bool = False, refuse_inference: bool = False) -> None:
+    Chat Completions replies ``reply``; Responses replies it one ``output_text`` part per character, after a
+    reasoning item.
+    """
+
+    def __init__(self, *, refuse_reports: bool = False, refuse_inference: bool = False, reply: str = "ls") -> None:
         self.inferences: list[dict[str, object]] = []
         self.reports: list[dict[str, object]] = []
         service = self
@@ -40,14 +44,19 @@ class StandInReef:
                 length = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(length) or b"{}")
                 headers = {name.lower(): value for name, value in self.headers.items()}
-                if self.path == "/v1/chat/completions" and refuse_inference:
-                    service.inferences.append({"headers": headers, "body": body})
-                    self.answer(401, {"error": {"message": "invalid service token"}})
-                elif self.path == "/v1/chat/completions":
-                    service.inferences.append({"headers": headers, "body": body})
+                if self.path in ("/v1/chat/completions", "/v1/responses"):
+                    service.inferences.append({"path": self.path, "headers": headers, "body": body})
                     receipt = f"rec-{len(service.inferences)}"
-                    answer = {"id": receipt, "choices": [{"message": {"role": "assistant", "content": "ls"}}]}
-                    self.answer(200, answer, receipt=receipt)
+                    if refuse_inference:
+                        self.answer(401, {"error": {"message": "invalid service token"}})
+                    elif self.path == "/v1/responses":
+                        parts = [{"type": "output_text", "text": character} for character in reply]
+                        message = {"type": "message", "role": "assistant", "content": parts}
+                        output = [{"type": "reasoning", "summary": []}, message]
+                        self.answer(200, {"id": receipt, "output": output}, receipt=receipt)
+                    else:
+                        answer = {"id": receipt, "choices": [{"message": {"role": "assistant", "content": reply}}]}
+                        self.answer(200, answer, receipt=receipt)
                 elif self.path == "/reef/report":
                     service.reports.append({"headers": headers, "body": body})
                     if refuse_reports:
