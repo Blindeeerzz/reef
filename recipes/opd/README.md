@@ -29,9 +29,9 @@ For a larger teacher with the same token ids, the deployment's `teacher`
 section serves the teacher on its own frozen SGLang process with its own Ray
 GPUs, and the bridge scores each recorded sequence there instead of swapping a
 checkpoint into the actor. [`serve.teacher-engine.yaml`](examples/math/serve.teacher-engine.yaml)
-distils Qwen3-32B into Qwen3-4B-Base after SFT, on eight GPUs: the TP2 actor
-on two, four single-GPU rollout engines on four and the TP2 teacher on the
-other two:
+distils Qwen3-32B into a rank/alpha 32 adapter on frozen Qwen3-4B-Base,
+started from the SFT adapter, on eight GPUs: the TP2 actor on two, four
+single-GPU rollout engines on four and the TP2 teacher on the other two:
 
 ```yaml
 teacher:
