@@ -1,5 +1,7 @@
 # Qwen3.5-9B LoRA OPD: a rank/alpha 32 adapter on the frozen base, started from a PEFT SFT adapter.
-# Mount model and experiment directories at /work. See README.md.
+# Eight GPUs: the TP4 actor on four and four single-GPU rollout engines on the other four, not
+# colocated, so the engines keep their memory between steps. Mount model and experiment
+# directories at /work. See README.md.
 schema-version: 2
 reef:
   ready-timeout: 3600
@@ -16,7 +18,10 @@ inference:
     router-port: "23094"
     context-length: "65536"
     dtype: bfloat16
-    mem-fraction-static: "0.6"
+    # A request the engine retracts under memory pressure re-prefills its generated tokens with
+    # input log-probs, so keep that chunk's full-vocabulary logits small and leave headroom for them.
+    chunked-prefill-size: "2048"
+    mem-fraction-static: "0.80"
     disable-cuda-graph: true
     # SGLang otherwise ignores the per-request sampling seeds.
     enable-deterministic-inference: true
@@ -36,7 +41,7 @@ recipe:
     checkpoint-every-n-versions: 1000
 training:
   backend: slime
-  colocate: true
+  colocate: false
   ready-timeout: 1800
   ray-address: local
   ray-namespace: reef-opd-lora-small
@@ -67,9 +72,10 @@ training:
     micro-batch-size: "1"
     actor-num-nodes: "1"
     actor-num-gpus-per-node: "4"
-    num-gpus-per-node: "4"
+    num-gpus-per-node: "8"
     tensor-model-parallel-size: "4"
     pipeline-model-parallel-size: "1"
+    context-parallel-size: "1"
     seq-length: "32768"
     rollout-max-response-len: "16384"
     rollout-max-context-len: "32768"
