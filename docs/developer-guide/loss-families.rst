@@ -215,7 +215,7 @@ checkpoint teacher stays the default; the wire row, the loss and the report
 schema do not change.
 
 The bridge sends each sample's recorded teacher-prefix and response ids to the
-engine's ``/generate`` with ``max_new_tokens=0`` and the log-probs requested
+engine's ``/generate`` with ``max_new_tokens=0``, sixteen requests at a time, and the log-probs requested
 from the last prompt token, checks the returned ids and row counts against the
 recorded response, and fills ``distill_teacher_sampled_log_probs``,
 ``distill_teacher_topk_ids`` and ``distill_teacher_topk_log_probs`` before the
@@ -241,7 +241,7 @@ log-probs come from the engine's bf16 kernels rather than the trainer's; for a
 frozen teacher that is a small constant bias.
 
 ``recipes/opd/examples/math/serve.teacher-engine.yaml`` shows a Qwen3-4B-Base
-student with a Qwen3-8B teacher.
+student after SFT with a Qwen3-32B teacher on eight GPUs.
 
 Score centering
 ---------------

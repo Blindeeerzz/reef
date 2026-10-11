@@ -29,17 +29,20 @@ For a larger teacher with the same token ids, the deployment's `teacher`
 section serves the teacher on its own frozen SGLang process with its own Ray
 GPUs, and the bridge scores each recorded sequence there instead of swapping a
 checkpoint into the actor. [`serve.teacher-engine.yaml`](examples/math/serve.teacher-engine.yaml)
-distils Qwen3-8B into Qwen3-4B-Base:
+distils Qwen3-32B into Qwen3-4B-Base after SFT, on eight GPUs: the TP2 actor
+on two, four single-GPU rollout engines on four and the TP2 teacher on the
+other two:
 
 ```yaml
 teacher:
-  model-path: Qwen/Qwen3-8B
-  num-gpus: 1
+  model-path: Qwen/Qwen3-32B
+  num-gpus: 2
   port: 30001
   options:
     dtype: bfloat16
     context-length: 32768
-    mem-fraction-static: 0.35
+    chunked-prefill-size: 2048
+    mem-fraction-static: 0.80
 training:
   options:
     opd-teacher: separate
@@ -55,7 +58,7 @@ embedding rows including the padding beyond the tokenizer; set it to the
 student configuration's `vocab_size` for another model.
 
 The bridge sends the exact recorded ids to the engine's `/generate` with zero
-output tokens, checks every returned response id, and fills the teacher
+output tokens, sixteen requests at a time, checks every returned response id, and fills the teacher
 probability columns before the optimizer step; `perf/distill_teacher_time` is
 the scoring wall time in seconds. A vocabulary or decoder mismatch, an endpoint
 serving another model, a missing row or a timeout fails the step. The engine

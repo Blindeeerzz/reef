@@ -1,7 +1,7 @@
-"""Prepare a full-parameter or LoRA Qwen3.5 language-model SFT checkpoint.
+"""Prepare a full-parameter or LoRA Qwen3 or Qwen3.5 language-model SFT checkpoint.
 
-Launch with torchrun. The unused vision encoder stays frozen. A positive
---lora-rank trains only text MLP down and full-attention output adapters.
+Launch with torchrun. Qwen3.5's unused vision encoder stays frozen. A positive
+--lora-rank trains only text MLP down and attention output adapters.
 """
 
 import argparse
@@ -11,7 +11,15 @@ from pathlib import Path
 
 import torch
 from datasets import load_dataset, load_from_disk
-from transformers import AutoModelForImageTextToText, AutoTokenizer, DataCollatorForSeq2Seq, Trainer, TrainingArguments
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoTokenizer,
+    DataCollatorForSeq2Seq,
+    Trainer,
+    TrainingArguments,
+)
 
 
 class TokenizePair:
@@ -86,30 +94,41 @@ def main() -> None:
     data = load_from_disk(str(args.tokenized))
     if len(data) < args.steps * args.global_batch_size:
         raise ValueError("The SFT schedule needs more examples; do not silently repeat a small subset")
-    from transformers.models.qwen3_5.modeling_qwen3_5 import is_fast_path_available
+    # Qwen3 is a text model; Qwen3.5 wraps its text model beside a vision encoder.
+    text_model = AutoConfig.from_pretrained(args.model).model_type == "qwen3"
+    if not text_model:
+        from transformers.models.qwen3_5.modeling_qwen3_5 import is_fast_path_available
 
-    if not is_fast_path_available:
-        raise RuntimeError("Qwen3.5 SFT requires flash-linear-attention and causal-conv1d; refusing the slow fallback")
+        if not is_fast_path_available:
+            raise RuntimeError(
+                "Qwen3.5 SFT requires flash-linear-attention and causal-conv1d; refusing the slow fallback"
+            )
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     # Full tuning uses FP32 master parameters; LoRA keeps the frozen base in bf16.
-    model = AutoModelForImageTextToText.from_pretrained(
+    model_class = AutoModelForCausalLM if text_model else AutoModelForImageTextToText
+    model = model_class.from_pretrained(
         args.model, dtype=torch.bfloat16 if args.lora_rank else torch.float32, attn_implementation="flash_attention_2"
     )
     model.config.use_cache = False
-    model.config.get_text_config().use_cache = False
-    for parameter in model.model.visual.parameters():
-        parameter.requires_grad_(False)
+    if text_model:
+        layers_prefix = "model.layers."
+        decoder_layer_class = "Qwen3DecoderLayer"
+    else:
+        model.config.get_text_config().use_cache = False
+        for parameter in model.model.visual.parameters():
+            parameter.requires_grad_(False)
+        layers_prefix = "model.language_model.layers."
+        decoder_layer_class = "Qwen3_5DecoderLayer"
     if args.lora_rank:
         from peft import LoraConfig, TaskType, get_peft_model
 
         targets = [
             name
             for name, _ in model.named_modules()
-            if name.startswith("model.language_model.layers.")
-            and name.endswith((".mlp.down_proj", ".self_attn.o_proj"))
+            if name.startswith(layers_prefix) and name.endswith((".mlp.down_proj", ".self_attn.o_proj"))
         ]
         if not targets:
-            raise ValueError("No supported Qwen3.5 text LoRA targets found")
+            raise ValueError("No supported Qwen text LoRA targets found")
         model = get_peft_model(
             model,
             LoraConfig(
@@ -158,7 +177,7 @@ def main() -> None:
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         fsdp="full_shard auto_wrap",
-        fsdp_config={"transformer_layer_cls_to_wrap": ["Qwen3_5DecoderLayer"], "use_orig_params": True},
+        fsdp_config={"transformer_layer_cls_to_wrap": [decoder_layer_class], "use_orig_params": True},
         save_strategy="steps" if args.save_steps else "no",
         save_steps=args.save_steps,
         save_total_limit=1,

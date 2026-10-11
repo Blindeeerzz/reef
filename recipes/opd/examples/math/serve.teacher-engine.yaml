@@ -1,3 +1,6 @@
+# Qwen3-4B-Base after SFT distilled from Qwen3-32B on eight GPUs: the TP2 actor on two, four
+# single-GPU rollout engines on four, and the TP2 teacher engine on the other two. Mount model and
+# experiment directories at /work. See README.md.
 schema-version: 2
 reef:
   ready-timeout: 3600
@@ -8,13 +11,16 @@ reef:
 inference:
   model-path: ${OPD_MODEL_PATH:?}
   timeout-s: 3600
-  num-gpus: 1
+  num-gpus: 4
   tensor-parallel-size: 1
   options:
     router-port: 23000
-    context-length: 32768
+    context-length: 65536
     dtype: bfloat16
-    mem-fraction-static: 0.35
+    # A request the engine retracts under memory pressure re-prefills its generated tokens with
+    # input log-probs, so keep that chunk's full-vocabulary logits small and leave headroom for them.
+    chunked-prefill-size: 2048
+    mem-fraction-static: 0.80
     disable-cuda-graph: true
     enable-deterministic-inference: true
   handler-factory: reef.inference.sglang.chat.SGLangInferenceHandler
@@ -23,13 +29,13 @@ inference:
       top_p: 1.0
       top_k: -1
       repetition_penalty: 1.0
-      max_new_tokens: 2048
+      max_new_tokens: 16384
 recipe:
   implementation: recipes.opd.recipe:OPDRecipe
   config:
-    batch-size: 16
+    batch-size: 256
     max-staleness: 0
-    max-teacher-tokens: 8192
+    max-teacher-tokens: 32768
     checkpoint-every-n-versions: 1000
 training:
   backend: slime
@@ -46,7 +52,7 @@ training:
       max_storage_fraction: 0.8
       min_free_space: 100GB
       policy: latest
-    global_batch_size: 16
+    global_batch_size: 256
   options:
     reef-checkpoint-max-storage: ${training.config.checkpoint_retention.max_storage}
     reef-checkpoint-max-storage-fraction: ${training.config.checkpoint_retention.max_storage_fraction}
@@ -58,20 +64,21 @@ training:
     vocab-size: 151936
     load: ${training.config.checkpoint_dir}/megatron
     save: ${training.config.checkpoint_dir}/megatron
-    save-interval: 1
+    save-interval: 10
     save-hf: ${training.config.checkpoint_dir}/hf/{rollout_id}
     num-rollout: '100000000'
     rollout-batch-size: ${training.config.global_batch_size}
     global-batch-size: ${training.config.global_batch_size}
     micro-batch-size: '1'
     actor-num-nodes: '1'
-    actor-num-gpus-per-node: 1
-    num-gpus-per-node: 4
-    tensor-model-parallel-size: 1
+    actor-num-gpus-per-node: 2
+    num-gpus-per-node: 8
+    tensor-model-parallel-size: 2
     pipeline-model-parallel-size: '1'
-    seq-length: 8192
-    rollout-max-response-len: 2048
-    rollout-max-context-len: 8192
+    context-parallel-size: '1'
+    seq-length: 32768
+    rollout-max-response-len: 16384
+    rollout-max-context-len: 32768
     disable-bias-linear: true
     qk-layernorm: true
     group-query-attention: true
@@ -85,7 +92,8 @@ training:
     recompute-method: uniform
     recompute-num-layers: '1'
     use-dynamic-batch-size: true
-    max-tokens-per-gpu: 8192
+    sequence-parallel: true
+    max-tokens-per-gpu: 32768
     log-probs-chunk-size: '512'
     ckpt-fully-parallel-save: true
     attention-dropout: '0.0'
@@ -110,15 +118,6 @@ training:
     opd-importance-sampling-cap: '0'
     n-samples-per-prompt: '1'
     rollout-temperature: '1.0'
-    megatron-lora-rank: 16
-    megatron-lora-alpha: 16
-    megatron-lora-dropout: '0'
-    megatron-lora-target-modules:
-    - linear_fc2
-    - linear_proj
-    megatron-lora-init: ${OPD_ADAPTER_PATH:?}
-    check-lora-weight-equal: true
-    verify-lora-base-weights: true
 storage:
   artifact-repository: ${OPD_RUN_DIR:?}/artifacts.git
   artifact-work-dir: ${OPD_RUN_DIR:?}/artifact-work
@@ -132,11 +131,12 @@ observability:
     enabled: false
 teacher:
   model-path: ${OPD_TEACHER_PATH:?}
-  num-gpus: 1
+  num-gpus: 2
   port: 30001
-  timeout: 300
+  timeout: 600
   options:
     dtype: bfloat16
     context-length: 32768
-    mem-fraction-static: 0.35
+    chunked-prefill-size: 2048
+    mem-fraction-static: 0.80
     disable-cuda-graph: true

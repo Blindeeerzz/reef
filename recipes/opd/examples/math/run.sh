@@ -6,12 +6,13 @@
 # $OPD_RUN_DIR/results.
 #
 #   ./run.sh                                 the LoRA protocol: 30 updates, evaluated at 0 and 30
+#   OPD_CONFIG=$PWD/serve.teacher-engine.yaml REEF_PORT=8900 ./run.sh   the teacher-engine protocol
 #   OPD_STEPS=1 OPD_EVAL_REPEATS=1 ./run.sh  one update and one sample per question, to check the stack
 set -euo pipefail
 cd "$(dirname "$0")"
 export OPD_MODEL_PATH="${OPD_MODEL_PATH:?the student weights, the pinned Qwen3.5-9B-Base directory}"
 export OPD_TEACHER_PATH="${OPD_TEACHER_PATH:?the frozen teacher, the pinned Qwen3.5-9B directory}"
-export OPD_ADAPTER_PATH="${OPD_ADAPTER_PATH:?the SFT adapter directory, the final/ output of sft.py}"
+export OPD_ADAPTER_PATH="${OPD_ADAPTER_PATH:-}"      # the LoRA configuration's SFT adapter, sft.py's final/ output
 export OPD_RUN_DIR="${OPD_RUN_DIR:-$PWD/work}"
 OPD_DATA="${OPD_DATA:-/work/lora-small/data}"   # prepare_small.py's output
 OPD_CONFIG="${OPD_CONFIG:-$PWD/serve.lora-small.yaml}"
@@ -22,7 +23,7 @@ REPO_ROOT="$(cd ../../../.. && pwd)"
 # Prerequisites: the Slime GPU environment (docker/README.md), the models and the prepared data.
 python -c "import reef, reef_client" || { echo "run.sh: run inside the Reef GPU environment" >&2; exit 1; }
 for path in "$OPD_MODEL_PATH" "$OPD_TEACHER_PATH" "$OPD_ADAPTER_PATH" "$OPD_DATA/deepmath.jsonl" "$OPD_DATA/aime24.jsonl"; do
-  [ -e "$path" ] || { echo "run.sh: $path not found; see README" >&2; exit 1; }
+  [ -z "$path" ] || [ -e "$path" ] || { echo "run.sh: $path not found; see README" >&2; exit 1; }
 done
 mkdir -p "$OPD_RUN_DIR"
 [ -f "$OPD_RUN_DIR/token" ] || openssl rand -hex 16 > "$OPD_RUN_DIR/token"
