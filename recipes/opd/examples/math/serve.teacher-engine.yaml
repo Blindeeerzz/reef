@@ -1,4 +1,4 @@
-# Qwen3-4B-Base with a rank/alpha 32 SFT adapter distilled from Qwen3-32B on eight GPUs: the TP2 actor on two, four
+# Qwen3-4B-Base after a full-parameter SFT, with a fresh rank/alpha 32 adapter distilled from Qwen3-32B on eight GPUs: the TP2 actor on two, four
 # single-GPU rollout engines on four, and the TP2 teacher engine on the other two. Mount model and
 # experiment directories at /work. See README.md.
 schema-version: 2
@@ -125,7 +125,6 @@ training:
     megatron-lora-target-modules:
     - linear_fc2
     - linear_proj
-    megatron-lora-init: ${OPD_ADAPTER_PATH:?}
     check-lora-weight-equal: true
     verify-lora-base-weights: true
 storage:
