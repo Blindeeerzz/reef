@@ -52,7 +52,10 @@ training:
 
 `num-gpus` is both the teacher's GPU budget and its tensor parallel size, on
 top of the student's training and inference GPUs; its context limit must
-cover the teacher prefix plus the recorded response. Drop
+cover the teacher prefix plus the recorded response. Qwen3-4B-Base's window
+is 32768 tokens, so this pair evaluates with a 30720-token output budget
+(`OPD_EVAL_TOKENS=30720` for `run.sh`) instead of the 64000 of the Qwen3.5
+configurations. Drop
 `opd-teacher-checkpoint`. The example sets `vocab-size: 151936`, the Qwen3
 embedding rows including the padding beyond the tokenizer; set it to the
 student configuration's `vocab_size` for another model.

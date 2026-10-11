@@ -15,7 +15,8 @@ inference:
   tensor-parallel-size: 1
   options:
     router-port: 23000
-    context-length: 65536
+    # Qwen3-4B-Base's native window; the evaluation budget leaves 2048 tokens of it for the prompt.
+    context-length: 32768
     dtype: bfloat16
     # A request the engine retracts under memory pressure re-prefills its generated tokens with
     # input log-probs, so keep that chunk's full-vocabulary logits small and leave headroom for them.
