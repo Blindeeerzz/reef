@@ -13,10 +13,15 @@ import os
 import time
 import urllib.request
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from numbers import Integral, Real
 from typing import Any
 
 from reef.train.slime_backend.distill.algorithm import ENGINE_TEACHER_BATCH_KEYS, DistillSettings
+
+#: Scoring requests in flight at once; the engine batches them, and the columns are installed
+#: only once every row is in.
+SCORING_CONCURRENCY = 16
 
 
 def validate_teacher_tokenizer(student_path: str, teacher_path: str) -> None:
@@ -146,10 +151,8 @@ class EngineTeacher:
         """Install all teacher columns atomically before a training job starts."""
         started = time.monotonic()
         self.validate_model()
-        columns: dict[str, list[Any]] = {key: [] for key in ENGINE_TEACHER_BATCH_KEYS}
-        for tokens, length in zip(rollout_data["teacher_tokens"], rollout_data["response_lengths"], strict=True):
-            row = self.score(tokens, length)
-            for key in ENGINE_TEACHER_BATCH_KEYS:
-                columns[key].append(row[key])
-        rollout_data.update(columns)
+        samples = list(zip(rollout_data["teacher_tokens"], rollout_data["response_lengths"], strict=True))
+        with ThreadPoolExecutor(max_workers=SCORING_CONCURRENCY) as pool:
+            rows = list(pool.map(lambda sample: self.score(*sample), samples))
+        rollout_data.update({key: [row[key] for row in rows] for key in ENGINE_TEACHER_BATCH_KEYS})
         return {"perf/distill_teacher_time": time.monotonic() - started}
