@@ -1,4 +1,4 @@
-"""Score recorded response tokens with an independent, frozen SGLang teacher.
+"""Score recorded response tokens with a frozen SGLang teacher engine.
 
 The bridge fills the existing distillation columns before partitioning or
 starting a training step. No generation, retokenization or actor weight swap
@@ -16,13 +16,7 @@ from collections.abc import Mapping, Sequence
 from numbers import Integral, Real
 from typing import Any
 
-from reef.train.slime_backend.distill.algorithm import DistillSettings
-
-ENGINE_COLUMNS = (
-    "distill_teacher_topk_ids",
-    "distill_teacher_topk_log_probs",
-    "distill_teacher_sampled_log_probs",
-)
+from reef.train.slime_backend.distill.algorithm import ENGINE_TEACHER_BATCH_KEYS, DistillSettings
 
 
 def validate_teacher_tokenizer(student_path: str, teacher_path: str) -> None:
@@ -32,22 +26,21 @@ def validate_teacher_tokenizer(student_path: str, teacher_path: str) -> None:
     student = AutoTokenizer.from_pretrained(student_path, trust_remote_code=False)
     teacher = AutoTokenizer.from_pretrained(teacher_path, trust_remote_code=False)
     if student.get_vocab() != teacher.get_vocab():
-        raise ValueError("independent distillation teacher must use the student's token-to-ID vocabulary")
-    # The teacher reads IDs, never the chat template. Different instruction
-    # templates are expected, but the underlying token bytes must agree.
-    student_backend = getattr(student, "backend_tokenizer", None)
-    teacher_backend = getattr(teacher, "backend_tokenizer", None)
-    if student_backend is None or teacher_backend is None:
-        raise ValueError("independent teacher validation requires fast tokenizers")
-    student_decoder = student_backend.decoder
-    teacher_decoder = teacher_backend.decoder
+        raise ValueError("a distillation teacher engine must use the student's token-to-ID vocabulary")
+    # The teacher reads ids, never the chat template. Different instruction
+    # templates are expected, but the token bytes behind the ids must agree.
+    if not student.is_fast or not teacher.is_fast:
+        raise ValueError("teacher engine validation requires fast tokenizers")
+    student_decoder = json.loads(student.backend_tokenizer.to_str()).get("decoder")
+    teacher_decoder = json.loads(teacher.backend_tokenizer.to_str()).get("decoder")
     if student_decoder is None or teacher_decoder is None:
-        raise ValueError("independent teacher validation requires token decoders")
-    if student_decoder.__getstate__() != teacher_decoder.__getstate__():
-        raise ValueError("independent distillation teacher must use the student's token decoder")
+        raise ValueError("teacher engine validation requires token decoders")
+    if student_decoder != teacher_decoder:
+        raise ValueError("a distillation teacher engine must use the student's token decoder")
 
 
-def _entry(value: Any) -> tuple[float, int]:
+def log_prob_entry(value: Any) -> tuple[float, int]:
+    """One SGLang log-prob entry, ``[log_prob, token_id, text]``, as a finite log-prob and a token id."""
     if not isinstance(value, list) or len(value) < 2:
         raise ValueError("teacher logprob entry must contain a probability and token ID")
     probability, token = value[:2]
@@ -93,19 +86,19 @@ def parse_teacher_scores(result: Any, tokens: Sequence[int], response_length: in
         raise ValueError("teacher response has an invalid leading prompt-token row")
     selected_ids, selected_probs, sampled_probs = [], [], []
     for token, sample, entries in zip(tokens[-response_length:], sampled[1:], top_rows[1:], strict=True):
-        probability, actual_token = _entry(sample)
+        probability, actual_token = log_prob_entry(sample)
         if actual_token != token:
             raise ValueError("teacher probability token IDs do not match the recorded response")
         if not isinstance(entries, list) or len(entries) != top_k:
             raise ValueError("teacher top-K row has the wrong number of entries")
-        parsed = [_entry(entry) for entry in entries]
+        parsed = [log_prob_entry(entry) for entry in entries]
         ids = [entry[1] for entry in parsed]
         if len(set(ids)) != top_k:
             raise ValueError("teacher top-K row contains duplicate token IDs")
         selected_ids.append(ids)
         selected_probs.append([entry[0] for entry in parsed])
         sampled_probs.append(probability)
-    return dict(zip(ENGINE_COLUMNS, (selected_ids, selected_probs, sampled_probs), strict=True))
+    return dict(zip(ENGINE_TEACHER_BATCH_KEYS, (selected_ids, selected_probs, sampled_probs), strict=True))
 
 
 class EngineTeacher:
@@ -153,10 +146,10 @@ class EngineTeacher:
         """Install all teacher columns atomically before a training job starts."""
         started = time.monotonic()
         self.validate_model()
-        columns: dict[str, list[Any]] = {key: [] for key in ENGINE_COLUMNS}
+        columns: dict[str, list[Any]] = {key: [] for key in ENGINE_TEACHER_BATCH_KEYS}
         for tokens, length in zip(rollout_data["teacher_tokens"], rollout_data["response_lengths"], strict=True):
             row = self.score(tokens, length)
-            for key in ENGINE_COLUMNS:
+            for key in ENGINE_TEACHER_BATCH_KEYS:
                 columns[key].append(row[key])
         rollout_data.update(columns)
         return {"perf/distill_teacher_time": time.monotonic() - started}

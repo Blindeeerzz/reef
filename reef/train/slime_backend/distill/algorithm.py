@@ -114,7 +114,8 @@ class DistillSettings:
                 raise ValueError("teacher_url requires teacher_model_path for tokenizer validation")
             if self.top_k == 0 or self.top_k_source != "teacher":
                 raise ValueError(
-                    "engine teacher requires positive top_k and top_k_source teacher; use checkpoint mode"
+                    "a teacher engine needs positive top_k and top_k_source teacher; the exact and "
+                    "student-selected representations use the checkpoint teacher"
                 )
         elif self.teacher_model_path:
             raise ValueError("teacher_model_path requires teacher_url")
@@ -226,6 +227,13 @@ TEACHER_BATCH_KEYS = (
     "distill_teacher_topk_log_probs",
     "distill_teacher_sampled_log_probs",
 )
+#: The columns a teacher engine fills on the bridge: the top-K representation. The exact
+#: full-vocabulary column stays with the checkpoint teacher, which scores on the actor.
+ENGINE_TEACHER_BATCH_KEYS = (
+    "distill_teacher_topk_ids",
+    "distill_teacher_topk_log_probs",
+    "distill_teacher_sampled_log_probs",
+)
 
 
 class DistillAlgorithm(SlimeAlgorithm):
@@ -247,7 +255,7 @@ class DistillAlgorithm(SlimeAlgorithm):
     forbidden_advantages_message = (
         "a distillation family distils its teacher's distribution; the Reef payload must omit advantages"
     )
-    rollout_data_keys = ("teacher_tokens", "distill_sample_weights", *TEACHER_BATCH_KEYS[1:])
+    rollout_data_keys = ("teacher_tokens", "distill_sample_weights", *ENGINE_TEACHER_BATCH_KEYS)
     rollout_tensor_dtypes: Mapping[str, str] = {
         "teacher_tokens": "long",
         "distill_teacher_topk_ids": "long",
@@ -259,7 +267,10 @@ class DistillAlgorithm(SlimeAlgorithm):
     required_objective_hooks = ("custom_loss_function_path", "reef_actor_pre_train_hook_path")
     #: The recipe's settings type, with its defaults.
     settings_type: type[DistillSettings] = DistillSettings
-    _teacher_settings: DistillSettings | None = None
+
+    def __init__(self, teacher_settings: DistillSettings | None = None) -> None:
+        #: The teacher engine a bound instance scores with; None leaves scoring to the actor.
+        self.teacher_settings = teacher_settings
 
     # --- stage 1: configure ---
 
@@ -282,8 +293,10 @@ class DistillAlgorithm(SlimeAlgorithm):
         # trained student never ranked highest.
         settings = settings_from_args(args)
         if settings.teacher_url:
-            if getattr(args, "rollout_temperature", 1.0) != 1.0:
-                raise ValueError("engine teacher requires rollout_temperature=1: SGLang input logprobs are untempered")
+            if args.rollout_temperature != 1.0:
+                raise ValueError(
+                    "a teacher engine requires --rollout-temperature 1: SGLang's input log-probs are untempered"
+                )
             from reef.train.slime_backend.distill.engine import validate_teacher_tokenizer
 
             validate_teacher_tokenizer(args.hf_checkpoint, settings.teacher_model_path)
@@ -427,22 +440,20 @@ class DistillAlgorithm(SlimeAlgorithm):
         critic_steps_per_actor: int | None = None,
         critic_only_steps: int = 0,
     ) -> DistillAlgorithm:
-        # Checkpoint teachers travel on args; engine scoring is owned by this bridge.
+        # A checkpoint teacher travels on args; a teacher engine is scored by the bound instance.
         if config is not None and not isinstance(config, DistillSettings):
             raise TypeError(f"{self.loss_family} bridge algorithm config must be {self.settings_type.__name__}")
         if isinstance(config, DistillSettings) and config.teacher_url:
-            bound = self.__class__()
-            bound._teacher_settings = config
-            return bound
+            return self.__class__(teacher_settings=config)
         return self
 
     def prepare_rollout(self, rollout_data: dict[str, Any]) -> dict[str, Any]:
-        """Score an independent teacher before tensorization and the training job marker."""
-        if self._teacher_settings is None:
+        """Score with the teacher engine before tensorization and the training job marker."""
+        if self.teacher_settings is None:
             return {}
         from reef.train.slime_backend.distill.engine import EngineTeacher
 
-        return EngineTeacher(self._teacher_settings).prepare(rollout_data)
+        return EngineTeacher(self.teacher_settings).prepare(rollout_data)
 
     # --- stage 2: shape row ---
 
@@ -465,9 +476,9 @@ def settings_from_args(args: Namespace) -> DistillSettings:
         top_k_distribution=args.distill_top_k_distribution,
         teacher_update_rate=args.distill_teacher_update_rate,
         teacher_checkpoint=args.distill_teacher_checkpoint,
-        teacher_url=getattr(args, "distill_teacher_url", ""),
-        teacher_model_path=getattr(args, "distill_teacher_model_path", ""),
-        teacher_timeout=getattr(args, "distill_teacher_timeout", 300.0),
+        teacher_url=args.distill_teacher_url,
+        teacher_model_path=args.distill_teacher_model_path,
+        teacher_timeout=args.distill_teacher_timeout,
         importance_sampling_cap=args.distill_importance_sampling_cap,
         importance_sampling_level=args.distill_importance_sampling_level,
         skip_response_tokens=args.distill_skip_response_tokens,
@@ -477,6 +488,7 @@ def settings_from_args(args: Namespace) -> DistillSettings:
 
 __all__ = [
     "DIVERGENCES",
+    "ENGINE_TEACHER_BATCH_KEYS",
     "TEACHER_BATCH_KEYS",
     "TEACHER_SOURCES",
     "DistillAlgorithm",

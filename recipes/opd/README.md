@@ -23,12 +23,13 @@ opd/
 
 `--opd-teacher=separate` names a checkpoint (`--opd-teacher-checkpoint`) that the teacher pass swaps into the actor's model layout, so teacher and student must share the architecture, parallel layout and token ids; the Qwen3.5-9B base/post-trained pair does. `--opd-top-k=1` selects the base's sampled-token reverse-KL estimator: the loss uses the teacher's log-probability of the student's sampled token, normalized over the full vocabulary, with the score-function gradient. The other divergences and representations of the base are reachable through the inherited `--opd-*` flags; changing them changes the method.
 
-## Independent teacher engine
+## Teacher engine
 
-For a different-size teacher with the same token mapping, use the opt-in
-[independent teacher example](examples/math/serve.teacher-engine.yaml). Its
-`teacher` section launches a frozen SGLang process with a separate Ray GPU
-allocation. For example, a Qwen3-4B-Base student can learn from Qwen3-8B:
+For a larger teacher with the same token ids, the deployment's `teacher`
+section serves the teacher on its own frozen SGLang process with its own Ray
+GPUs, and the bridge scores each recorded sequence there instead of swapping a
+checkpoint into the actor. [`serve.teacher-engine.yaml`](examples/math/serve.teacher-engine.yaml)
+distils Qwen3-8B into Qwen3-4B-Base:
 
 ```yaml
 teacher:
@@ -38,7 +39,7 @@ teacher:
   options:
     dtype: bfloat16
     context-length: 32768
-    mem-fraction-static: 0.6
+    mem-fraction-static: 0.35
 training:
   options:
     opd-teacher: separate
@@ -46,31 +47,23 @@ training:
     rollout-temperature: 1.0
 ```
 
-The example sets `vocab-size: 151936` to match the Qwen3 student embedding
-rows, including padding beyond the tokenizer length. For another student, set
-this option to the model configuration's `vocab_size`.
+`num-gpus` is both the teacher's GPU budget and its tensor parallel size, on
+top of the student's training and inference GPUs; its context limit must
+cover the teacher prefix plus the recorded response. Drop
+`opd-teacher-checkpoint`. The example sets `vocab-size: 151936`, the Qwen3
+embedding rows including the padding beyond the tokenizer; set it to the
+student configuration's `vocab_size` for another model.
 
-Remove `opd-teacher-checkpoint` when using this section. `teacher.num-gpus`
-is both the dedicated GPU budget and teacher tensor parallel size; it is
-additional to student training/inference GPUs and never joins their weight
-updates. Reef owns startup, readiness and shutdown. The teacher needs a context
-limit covering the full teacher prompt plus recorded response.
-
-The bridge sends exact recorded token IDs to `/generate` with zero output
-tokens, checks every scored response ID, and fills the existing teacher
-probability columns before starting the optimizer step. `perf/distill_teacher_time`
-reports scoring wall time in seconds. Vocabulary/decoder mismatches, an endpoint
-serving a different model, missing probability rows and timeouts fail the step;
-there is no teacher-generated replacement response or correctness reward.
-
-This mode supports sampled reverse KL and teacher-selected top-K objectives.
-SGLang input logprobs are untempered, so `rollout-temperature` must be 1.
-Exact full-vocabulary (`top-k: 0`) and student-selected top-K retain checkpoint
-mode. The pinned SGLang API accepts one arbitrary-ID list per request rather
-than per-position student top-K lists; that optimization is not implemented.
-Engine and Megatron BF16 kernels need not produce identical probabilities;
-measure their bias when comparing experiments. This integration alone makes no
-AIME improvement claim.
+The bridge sends the exact recorded ids to the engine's `/generate` with zero
+output tokens, checks every returned response id, and fills the teacher
+probability columns before the optimizer step; `perf/distill_teacher_time` is
+the scoring wall time in seconds. A vocabulary or decoder mismatch, an endpoint
+serving another model, a missing row or a timeout fails the step. The engine
+path supports the sampled reverse KL and teacher-selected top-K objectives at
+rollout temperature 1; the exact full-vocabulary and student-selected top-K
+representations stay on the checkpoint teacher. Engine log-probs come from
+bf16 kernels rather than the trainer's, a small constant bias for a frozen
+teacher.
 
 ## Where the rest is documented
 
