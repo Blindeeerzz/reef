@@ -145,8 +145,8 @@ curl -f http://127.0.0.1:8900/healthz          # ready to serve
 Send inference requests through Reef and report a score for each response. The
 SAO recipe uses each eligible scored rollout to run a training step.
 
-Reef's inference endpoint is OpenAI- and Anthropic-compatible: `/v1/chat/completions`
-and `/v1/messages` take the provider's own request body. A request includes the
+Reef's inference endpoint is OpenAI- and Anthropic-compatible: `/v1/chat/completions`,
+`/v1/responses` and `/v1/messages` take the provider's own request body. A request includes the
 `x-reef-scenario` header; a new name creates a scenario using the deployment's
 configured recipe. Requests do not select recipes.
 
@@ -278,7 +278,7 @@ selected by dotted class reference and not shipped in the Reef wheel.
 | Scientific discovery | Repeated attempts at one hard problem with a measurable objective | [TTT-Discover](https://reefinfra.ai/docs/user-guide/recipes/tttd/), [Guidance-TTT](recipes/tttd/examples/guidance_ttt/README.md) | None yet | Measured: [TriMul](recipes/tttd/examples/guidance_ttt/results/README.md), [circle packing](recipes/tttd/examples/tttd/README.md#formal-8x64-results), [Erdős minimum overlap](recipes/tttd/examples/tttd/README.md#formal-8x64-results). |
 | Continual learning on a task stream | A stream of independent tasks that a verifier scores one by one | [SAO](https://reefinfra.ai/docs/user-guide/recipes/sao/) | [Meta-Harness](recipes/meta_harness/README.md), [GEPA](https://reefinfra.ai/docs/user-guide/recipes/gepa/) | Measured: [AIME 2025](recipes/gepa/examples/aime/README.md#the-validation-contract), [IMOAnswerBench](recipes/sao/examples/imo_answerbench/README.md#results), [CEO-Bench](recipes/sao/examples/ceobench/README.md#results), [Terminal-Bench](recipes/meta_harness/examples/terminal_bench/README.md#results). |
 | Learning from usage | Real interaction where no one reports a score or feedback arrives late | [OpenClaw-RL](https://reefinfra.ai/docs/user-guide/recipes/openclawrl/) | [SkillClaw](https://reefinfra.ai/docs/user-guide/recipes/skillclaw/), [Reefine](docs/user-guide/recipes/reefine.rst) | Measured: [simulated student with GSM8K task stream](recipes/openclawrl/examples/openclawrl/README.md#results), [WildClawBench](recipes/skillclaw/README.md#the-2026-08-29-results-glm-53-flash-preliminary). |
-| Learning from a separate teacher | The student samples responses and a frozen teacher scores each token | [OPD](docs/user-guide/recipes/opd.rst) | None yet | Measured: [AIME 2024](recipes/opd/examples/math/README.md#results). |
+| Learning from a separate teacher | The student samples responses and a frozen teacher scores each token | [OPD](docs/user-guide/recipes/opd.rst) | None yet | None yet. |
 
 [`recipes/basic/`](recipes/basic/) is the record-only starting stack and stays
 outside the catalog. For a small walkthrough of feedback, candidate edits, and
@@ -347,6 +347,7 @@ This list is non-exhaustive, with team members listed alphabetically by last nam
 [Zhenting Qi](https://github.com/zhentingqi),
 [Ao Qu](https://github.com/quao627),
 [Mingruo Qu](https://github.com/workhardforcoding),
+[Yihong Tang](https://github.com/YihongT),
 [Zhaokai Wang](https://github.com/wzk1015),
 [Xuezhi Yan](https://github.com/yanxz),
 [Hanfei Yu](https://github.com/hanfeiyu),

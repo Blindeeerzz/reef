@@ -81,5 +81,4 @@ Math example
 The `math example <../../../recipes/opd/examples/math/README.md>`__ distils
 Qwen3.5-9B into Qwen3.5-9B-Base after OpenThoughts3 SFT and evaluates on
 AIME'24, the model pair of the updated cookbook; the original write-up used
-Qwen3-8B. The page documents the protocol, the deployment configurations and
-the measured results.
+Qwen3-8B. The page documents the protocol and the deployment configurations.

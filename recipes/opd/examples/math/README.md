@@ -11,34 +11,8 @@ Everything runs on local GPU workers through Reef, Slime/Megatron and SGLang.
 `prepare.py` pins the datasets, `sft.py` trains the initialization, `run.py`
 drives sampling, reporting and evaluation against a live `reef serve`, and
 `analyze.py` plots the curve. The scripts form a direct `reef_client` campaign
-and need neither Harbor nor reef-eval.
-
-## Results
-
-![AIME'24 mean accuracy against OPD updates](results/2026-09-30-lora-small/learning_curve.png)
-
-One LoRA run of 30 updates on four B200 GPUs (2026-09-30): frozen
-Qwen3.5-9B-Base with a rank/alpha 32 adapter trained for one epoch on 4096
-OpenThoughts3 math examples, then 30 OPD updates of 64 DeepMath prompts by
-four responses each. Training responses were capped at 4096 tokens and the
-evaluation at 32768 output tokens, over 30 questions by 16 seeds.
-
-| Checkpoint | Correct / samples | Mean accuracy | Responses at the output limit |
-| --- | --- | --- | --- |
-| Frozen Qwen3.5-9B teacher, 64000-token budget | 406 / 480 | 84.6% | 63 |
-| LoRA SFT, OPD step 0 | 360 / 480 | 75.0% | 92 |
-| OPD step 30 | 338 / 480 | 70.4% | 101 |
-
-The change is −4.6 percentage points with a paired question-bootstrap 95%
-interval of [−13.3, +3.3] points, so the run shows neither an improvement nor
-a clear degradation. The budgets explain most of it. The student's median
-response was already 14.6k tokens before OPD, so the 4096-token training cap
-gave it the teacher's signal only on the start of its reasoning, and the
-responses that grew under OPD ran into the 32768-token evaluation limit: 51 of
-the 62 answers lost were newly cut off. The configurations below use the
-16384-token training and 64000-token evaluation budgets of the full-parameter
-protocol, and a rerun under them is pending. The full-parameter SFT
-initialization was stopped at step 1239 of 3000, so its OPD run never started.
+and need neither Harbor nor reef-eval. No benchmark result is published yet;
+runs are recorded in #682.
 
 ## Protocol
 
@@ -176,30 +150,37 @@ with exact-match AIME questions excluded (not a paraphrase audit) and truncated
 to 8192 tokens without an invented EOS, plus 1920 DeepMath prompts disjoint
 from them.
 
+From the repository root (`prepare_small.py` imports the example's own
+modules, so the root must be on `PYTHONPATH`):
+
 ```bash
-python recipes/opd/examples/math/prepare_small.py --random-truncate --source /work/data --output /work/lora-small/data
-torchrun --standalone --nproc-per-node=4 recipes/opd/examples/math/sft.py \
+PYTHONPATH=. python recipes/opd/examples/math/prepare_small.py --random-truncate --source /work/data --output /work/lora-small/data
+torchrun --standalone --nproc-per-node=8 recipes/opd/examples/math/sft.py \
   --data /work/lora-small/data/sft.jsonl --tokenized /work/lora-small/data/tokenized \
   --output /work/lora-small/sft --steps 128 --global-batch-size 32 \
   --max-length 8192 --save-steps 64 --lora-rank 32 --lora-alpha 32
 ```
 
-Point `OPD_MODEL_PATH` at the unchanged base weights, `OPD_ADAPTER_PATH` at
-the SFT `final` adapter, `OPD_TEACHER_PATH` at the teacher and `OPD_RUN_DIR` at
-a fresh directory, export `REEF_TOKEN`, then:
+The global batch of 32 is what the protocol fixes; the GPU count only changes
+how it is split. Point `OPD_MODEL_PATH` at the unchanged base weights,
+`OPD_TEACHER_PATH` at the teacher, `OPD_ADAPTER_PATH` at the SFT `final`
+adapter and `OPD_RUN_DIR` at a fresh directory, then:
 
 ```bash
-reef serve -c recipes/opd/examples/math/serve.lora-small.yaml
-python recipes/opd/examples/math/run.py \
-  --config recipes/opd/examples/math/serve.lora-small.yaml \
-  --url http://127.0.0.1:28994 --scenario opd-lora-small \
-  --train-data /work/lora-small/data/deepmath.jsonl \
-  --eval-data /work/lora-small/data/aime24.jsonl --output /work/lora-small/results \
-  --steps 30 --prompts-per-step 64 --samples-per-prompt 4 \
-  --train-tokens 16384 --eval-tokens 64000 --eval-repeats 16 --eval-every 30 --concurrency 64
-python recipes/opd/examples/math/analyze.py /work/lora-small/results \
-  --final-step 30 --eval-every 30 --target-improvement 0.03 --training-mode LoRA
+OPD_DATA=/work/lora-small/data recipes/opd/examples/math/run.sh
 ```
+
+`run.sh` mints the service token, starts `reef serve` with
+`serve.lora-small.yaml`, waits for `/healthz`, runs the campaign (30 updates
+of 64 prompts by four responses, 16384 training and 64000 evaluation tokens,
+evaluated at updates 0 and 30) and writes `acceptance.json` and
+`learning_curve.png` under `$OPD_RUN_DIR/results`. `OPD_STEPS=1
+OPD_EVAL_REPEATS=1` makes a stack check. The configuration uses eight GPUs:
+the TP4 actor on four and four single-GPU rollout engines on the other four,
+not colocated. Its `chunked-prefill-size` stays small because a request the
+engine retracts under memory pressure re-prefills its generated tokens with
+input log-probs, and that chunk's full-vocabulary logits must fit beside the
+engine's static memory pool.
 
 The importer validates all 80 adapter tensors and splits the row-parallel ones
 across TP4 before the optimizer is created; only these unfused Qwen3.5

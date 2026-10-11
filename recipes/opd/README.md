@@ -5,7 +5,7 @@ On-policy distillation from a separate frozen teacher as a Reef weight-training 
 - Method: [Thinking Machines Lab, On-Policy Distillation](https://thinkingmachines.ai/blog/on-policy-distillation/).
 - Reference implementation: the [tinker-cookbook distillation recipe](https://github.com/thinking-machines-lab/tinker-cookbook/tree/dfe4d77e8e8c/tinker_cookbook/recipes/distillation) at `dfe4d77e8e8c`. The Reef implementation configures the Slime backend's distillation base (`reef/train/slime_backend/distill/`) and makes no Tinker API calls.
 - Pins: `slime` pinned to `THUDM/slime@41014d1f29e201137fdffce737bb8bac65bc5219` (via `pyproject.toml` `dependency-groups.runtime`).
-- Claim scope: [OPD on mathematical reasoning](examples/math/README.md), Qwen3.5-9B-Base after OpenThoughts3 SFT distilled from Qwen3.5-9B and evaluated on AIME'24. Tracked in [#682](https://github.com/Human-Agent-Society/reef/issues/682) under roadmap [#502](https://github.com/Human-Agent-Society/reef/issues/502).
+- Claim scope: none yet. The [math example](examples/math/README.md) distils a frozen teacher into an OpenThoughts3-SFT student and evaluates on AIME 2024; its runs are tracked in [#682](https://github.com/Human-Agent-Society/reef/issues/682) under roadmap [#502](https://github.com/Human-Agent-Society/reef/issues/502).
 
 ## Layout
 
