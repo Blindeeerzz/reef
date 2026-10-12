@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from reef.core.records_types import AgentRecord, RequestType
-from reef.record2record.stage import Record2RecordStage
+from reef.record2record import Record2RecordStage
 from reef.train.processors.base import DataProcessor
 
 

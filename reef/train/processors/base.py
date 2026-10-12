@@ -15,7 +15,7 @@ from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase
 from reef.core.training_request import TrainingRequest
 from reef.observability import ExperimentLogger
-from reef.record2record.sets import RecordSet, SingleRecordSet
+from reef.record2record import RecordSet, SingleRecordSet
 from reef.train.types import ProcessorContext, TrainingBatch
 
 

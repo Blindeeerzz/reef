@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Hashable, Sequence
 
 from reef.record2record.eligibility import EligibilityCheck, IneligibleUnit
-from reef.record2record.selection import ArrivalOrder, BatchUnit, SelectionPolicy
+from reef.record2record.selection import ArrivalOrder, SelectionPolicy
+from reef.record2record.units import BatchUnit
 
 
 class UnitBuffer:

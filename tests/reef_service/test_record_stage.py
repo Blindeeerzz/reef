@@ -8,8 +8,7 @@ from typing import Any
 import pytest
 
 from reef.core import AgentRecord, RequestType
-from reef.record2record.sets import RecordSet, SingleRecordSet
-from reef.record2record.stage import PassThroughStage, Record2RecordStage
+from reef.record2record import PassThroughStage, Record2RecordStage, RecordSet, SingleRecordSet
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.train import ProcessorContext, Trainer
 from reef.train.feed import TrainingFeed

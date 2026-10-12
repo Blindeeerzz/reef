@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from reef.record2record.selection import BatchUnit
+from reef.record2record.units import BatchUnit
 from reef.runtime.interfaces import RuntimeLoadId
 
 

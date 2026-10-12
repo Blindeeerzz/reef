@@ -27,7 +27,7 @@ from reef.core.reports import ReportBase
 from reef.core.training_request import TrainingRequest
 from reef.observability import ExperimentLogger, NullExperimentLogger
 from reef.observability.operations import OperationMetrics
-from reef.record2record.stage import PassThroughStage, Record2RecordStage
+from reef.record2record import PassThroughStage, Record2RecordStage
 from reef.storage.records import RecordStore
 from reef.train.backend import CandidateBackend, PreparedStep, StepExecution
 from reef.train.evaluation.evaluators import BackendAlwaysSelectPlugin
