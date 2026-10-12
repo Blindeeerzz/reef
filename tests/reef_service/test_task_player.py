@@ -85,10 +85,13 @@ class StandInReef:
 class StandInLab(TaskLab):
     """Plays by calling the model twice through the api_base the agent was given, then answers with fixed rewards."""
 
-    def __init__(self, rewards: Mapping[str, float], error: str = "", turns: int = 2) -> None:
+    def __init__(
+        self, rewards: Mapping[str, float], error: str = "", turns: int = 2, trial_uri: str | None = None
+    ) -> None:
         self.rewards = dict(rewards)
         self.error = error
         self.turns = turns
+        self.trial_uri = trial_uri
         self.calls: list[dict[str, object]] = []
 
     async def run(self, task_path, agent, *, key, tags, overrides) -> EpisodeRow:
@@ -109,7 +112,9 @@ class StandInLab(TaskLab):
             # An agent that is refused keeps going, like terminus after its retries; the episode still ends.
             with contextlib.suppress(urllib.error.HTTPError), urllib.request.urlopen(request, timeout=10) as response:
                 response.read()
-        return EpisodeRow(rewards=self.rewards, error=self.error, trial_uri=f"trials/{task_path.name}")
+        return EpisodeRow(
+            rewards=self.rewards, error=self.error, trial_uri=self.trial_uri or f"trials/{task_path.name}"
+        )
 
 
 @pytest.fixture
@@ -247,6 +252,23 @@ def test_an_episode_whose_verifier_names_no_primary_reward_says_so(reef: StandIn
     played = player(reef, tmp_path, StandInLab({"correctness": 1.0, "style": 0.0})).play(task_path)
     assert played.reward is None and played.error == "the verifier wrote correctness, style and no reward entry"
     assert not played.is_reported and reef.reports == []
+
+
+def test_a_verifier_timeout_scores_the_configured_reward_and_is_reported(reef: StandInReef, tmp_path: Path) -> None:
+    task_path = written_task(tmp_path / "tasks", "t1")
+    # Harbor names the trial with a file URI, which percent-encodes the space in this work dir.
+    trial = tmp_path / "work dir" / "trials" / "t1__abc"
+    trial.mkdir(parents=True)
+    exception = {"exception_type": "VerifierTimeoutError", "exception_message": "timed out after 900.0 seconds"}
+    (trial / "result.json").write_text(json.dumps({"exception_info": exception}))
+    lab = StandInLab({}, error="timed out after 900.0 seconds", trial_uri=trial.as_uri())
+    assert player(reef, tmp_path, lab).play(task_path).reward is None, "unscored unless the player opts in"
+    played = player(reef, tmp_path, lab, verifier_timeout_reward=0.0).play(task_path)
+    assert played.reward == 0.0 and played.is_reported and len(reef.reports) == 1
+    (trial / "result.json").write_text(json.dumps({"exception_info": {"exception_type": "AgentTimeoutError"}}))
+    assert player(reef, tmp_path, lab, verifier_timeout_reward=0.0).play(task_path).reward is None
+    (trial / "result.json").unlink()
+    assert player(reef, tmp_path, lab, verifier_timeout_reward=0.0).play(task_path).reward is None, "harbor was killed"
 
 
 def test_an_episode_without_model_calls_is_not_reported(reef: StandInReef, tmp_path: Path) -> None:
