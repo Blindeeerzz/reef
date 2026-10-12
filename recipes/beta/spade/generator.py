@@ -39,7 +39,6 @@ from recipes.beta.spade.generation import (
 )
 from reef.core.plugins import PluginConfigError
 from reef.core.tasks import (
-    TRAINING_ARM,
     GeneratedTask,
     HarborTask,
     PlayArm,
@@ -265,8 +264,8 @@ class SpadeTaskGenerator(TaskGenerator):
             if not result.is_played:
                 proposals.append((proposal, None))
                 continue
-            plain = result.rewards.get(TRAINING_ARM, ())
-            hint = result.rewards.get(HINT_ARM, ())
+            plain = result.training_rewards
+            hint = result.measurement_rewards.get(HINT_ARM, ())
             record = PlayRecord(
                 name=result.task.name,
                 skill=pending.skill,

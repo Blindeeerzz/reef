@@ -3,7 +3,7 @@ Processors
 
 A processor is a scenario's batch builder: records in, one typed training
 batch out, with ownership of its in-memory buffers. Storage owns deletion. This page
-explains the two feedback engines, the task-generation ABC, and the path a
+explains the two feedback engines, the task generation contract, and the path a
 record takes to a batch.
 
 .. page::
@@ -213,11 +213,11 @@ generator gets what it needs from its ``config`` and from these calls only:
 A ``PlayArm(name, count, extra_instruction_files)`` asks for ``count`` more
 plays of a task. Each play shows the agent the files that
 ``extra_instruction_files`` names after the instruction, for example
-``solution/hint.txt``. The recipe never trains on a measurement arm. The name
-``plain`` belongs to the training arm.
+``solution/hint.txt``. The recipe never trains on a measurement arm.
 
-A ``TaskPlayResult`` holds the task, the rewards of each played arm, and an
-``error``. The rewards include only episodes that ran. An episode that ran
+A ``TaskPlayResult`` holds the task, ``training_rewards``,
+``measurement_rewards`` (by arm name), and an ``error``. The rewards include
+only episodes that ran. An episode that ran
 without a reward counts as 0. A non-empty ``error`` means that the task was not
 played: it failed validation, the generator service refused it, or the agent
 could not start on it.
@@ -232,8 +232,10 @@ on a private ``JudgingWorker``, outside the trainer lock. In each round it:
    ``plays-per-task`` times on the training arm, then plays each measurement arm.
 4. Sends the results to ``record_results``.
 
-The processor trains only on reports whose ``arm`` label is ``plain``. It
-groups them by ``metadata.task.name``. A group is complete at
+The processor labels its training plays with the arm ``plain`` and trains
+only on reports with that label. A generated task whose measurement arm is
+named ``plain`` comes back unplayed with an error. The processor groups the
+training reports by ``metadata.task.name``. A group is complete at
 ``plays-per-task`` episodes, and a batch holds ``tasks-per-step`` complete
 groups. The ``task_group`` objective centers and scales each reward within its
 task group, on Tinker's ``importance_sampling`` loss. The processor releases

@@ -21,8 +21,6 @@ from reef.core.plugins import Plugin
 from reef.core.records_types import AgentRecord
 from reef.core.tasks.harbor import HarborTask
 
-#: The arm a recipe trains on. A generator cannot name a measurement arm with it.
-TRAINING_ARM = "plain"
 ARM_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
@@ -115,8 +113,6 @@ class PlayArm:
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not ARM_NAME_PATTERN.fullmatch(self.name):
             raise ValueError(f"an arm name must match {ARM_NAME_PATTERN.pattern}")
-        if self.name == TRAINING_ARM:
-            raise ValueError(f"{TRAINING_ARM!r} is the training arm; a measurement arm needs another name")
         if isinstance(self.count, bool) or not isinstance(self.count, int) or self.count < 1:
             raise ValueError("an arm's count must be a positive integer")
         if not isinstance(self.extra_instruction_files, tuple):
@@ -150,26 +146,29 @@ class GeneratedTask:
 class TaskPlayResult:
     """What became of one generated task in a round.
 
-    ``rewards`` maps each played arm to the rewards of its episodes that ran:
-    the training arm ``plain`` and each measurement arm. An episode that ran
-    and returned no reward counts as 0. An episode that did not start is not
-    in the tuple. ``error`` is not empty when the task was not played: it
-    failed validation, the task player refused it, or the agent could not
-    start on it.
+    ``training_rewards`` holds the rewards of the plays the recipe trains on.
+    ``measurement_rewards`` maps the name of each measurement arm to the
+    rewards of its plays. Each tuple holds only the episodes that ran. An
+    episode that ran and returned no reward counts as 0. ``error`` is not
+    empty when the task was not played: it failed validation, the task player
+    refused it, or the agent could not start on it.
     """
 
     task: HarborTask
-    rewards: Mapping[str, tuple[float, ...]] = field(default_factory=dict)
+    training_rewards: tuple[float, ...] = ()
+    measurement_rewards: Mapping[str, tuple[float, ...]] = field(default_factory=dict)
     error: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.task, HarborTask):
             raise TypeError("task must be a HarborTask")
-        if not isinstance(self.rewards, Mapping):
-            raise TypeError("rewards must map arm names to tuples of rewards")
-        for arm, rewards in self.rewards.items():
-            if not isinstance(arm, str) or not isinstance(rewards, tuple):
-                raise TypeError("rewards must map arm names to tuples of rewards")
+        if not isinstance(self.measurement_rewards, Mapping) or any(
+            not isinstance(arm, str) for arm in self.measurement_rewards
+        ):
+            raise TypeError("measurement_rewards must map arm names to tuples of rewards")
+        for rewards in (self.training_rewards, *self.measurement_rewards.values()):
+            if not isinstance(rewards, tuple):
+                raise TypeError("rewards must be tuples of numbers")
             if any(
                 isinstance(reward, bool) or not isinstance(reward, (int, float)) or not math.isfinite(reward)
                 for reward in rewards
@@ -177,7 +176,7 @@ class TaskPlayResult:
                 raise ValueError("rewards must be finite numbers")
         if not isinstance(self.error, str):
             raise TypeError("error must be text")
-        if self.error and self.rewards:
+        if self.error and (self.training_rewards or self.measurement_rewards):
             raise ValueError("a task that was not played has no rewards")
 
     @property

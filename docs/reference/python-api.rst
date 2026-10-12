@@ -786,12 +786,12 @@ task preserves source record IDs in order.
 ``GeneratedTask(task, measurement_arms=())`` holds one task and the
 measurement arms the generator wants played on it. ``PlayArm(name, count,
 extra_instruction_files=())`` names an arm, its number of plays, and the task
-files shown after the instruction. Arm names are unique for each task, and
-``plain`` is reserved for the training arm.
+files shown after the instruction. Arm names are unique for each task.
 
-``TaskPlayResult(task, rewards={}, error="")`` maps each played arm to the
-rewards of its episodes that ran. ``is_played`` is true when ``error`` is
-empty. A task that was not played has no rewards.
+``TaskPlayResult(task, training_rewards=(), measurement_rewards={}, error="")``
+holds the rewards of the training plays and, by arm name, of each measurement
+arm. Each tuple holds only the episodes that ran. ``is_played`` is true when
+``error`` is empty. A task that was not played has no rewards.
 
 ``TaskValidationResult(errors=())`` exposes ``is_valid``. Each error is a
 non-empty explanation of a task defect. Failures to execute the checks raise

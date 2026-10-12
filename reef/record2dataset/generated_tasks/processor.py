@@ -20,8 +20,9 @@ while it runs, so the generator always writes for the policy that trains now. A 
 task is followed at once. A summary of each round goes under ``state_dir/<scenario>``; a restart
 reads it to continue with the next round.
 
-Only the training arm trains. The processor releases reports of other arms, and reports without an
-arm, such as a generator's own reports, without assembling them.
+Only the training arm, labeled ``plain``, trains. The processor releases reports of other arms, and
+reports without an arm, such as a generator's own reports, without assembling them. A generated task
+whose measurement arm is named ``plain`` is not played.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from reef.core import AgentRecord
-from reef.core.tasks import TRAINING_ARM, GeneratedTask, TaskGenerationRequest, TaskGenerator, TaskPlayResult
+from reef.core.tasks import GeneratedTask, TaskGenerationRequest, TaskGenerator, TaskPlayResult
 from reef.harness.client.tasks import TaskPlay
 from reef.record2dataset.client import DuplicateTask, Generator, HttpGenerator, TaskNameConflict
 from reef.train.processors.computed import Failed, JudgingWorker, SupportsReceipt
@@ -50,6 +51,8 @@ DEFAULT_SCAFFOLD_TOLERANCE = 8
 DEFAULT_BATCHES_PER_ROUND = 1
 ERROR_EXCERPT_CHARS = 300
 ROUND_PREFIX = "round-"
+# The arm label of the plays this recipe trains on: played as they are, with no extra instruction files.
+TRAINING_ARM = "plain"
 
 
 def reported_task_name(report: AgentRecord) -> str | None:
@@ -296,6 +299,10 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor):
         try:
             generated = await self.task_generator.generate(TaskGenerationRequest((), self.description))
             for item in generated:
+                if any(arm.name == TRAINING_ARM for arm in item.measurement_arms):
+                    refusal = f"the measurement arm {TRAINING_ARM!r} has the name of the training arm"
+                    results.append(TaskPlayResult(item.task, error=refusal))
+                    continue
                 validation = await self.task_generator.validate(item.task)
                 if validation.is_valid:
                     results.append(await self.played(item, job.round_number))
@@ -341,7 +348,7 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor):
             return TaskPlayResult(
                 task, error=f"the agent could not play the task: {training[0].error[:ERROR_EXCERPT_CHARS]}"
             )
-        rewards = {TRAINING_ARM: rewards_of(training)}
+        measurement_rewards: dict[str, tuple[float, ...]] = {}
         for arm in item.measurement_arms:
             plays = await self.task_player.play(
                 written.path,
@@ -353,8 +360,8 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor):
                 tags=tags,
                 model=self.served_model,
             )
-            rewards[arm.name] = rewards_of(plays)
-        return TaskPlayResult(task, rewards)
+            measurement_rewards[arm.name] = rewards_of(plays)
+        return TaskPlayResult(task, rewards_of(training), measurement_rewards)
 
     def write_round_summary(self, round_number: int, results: tuple[TaskPlayResult, ...], error: str) -> Path:
         """Keep each task's result and the round's error; a restart counts these files."""
@@ -368,7 +375,8 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor):
                 {
                     "name": result.task.name,
                     "error": result.error,
-                    "rewards": {arm: list(rewards) for arm, rewards in result.rewards.items()},
+                    "training_rewards": list(result.training_rewards),
+                    "measurement_rewards": {arm: list(rewards) for arm, rewards in result.measurement_rewards.items()},
                 }
                 for result in results
             ],

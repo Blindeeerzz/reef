@@ -1,7 +1,6 @@
 """The task generation contract, Harbor task values, and task file operations."""
 
 from reef.core.tasks.generation import (
-    TRAINING_ARM,
     GeneratedTask,
     PlayArm,
     TaskGenerationRequest,
@@ -28,7 +27,6 @@ from reef.core.tasks.split import (
 
 __all__ = [
     "TASK_CONFIG_VERSION",
-    "TRAINING_ARM",
     "GeneratedTask",
     "HarborTask",
     "HarborTaskConflict",

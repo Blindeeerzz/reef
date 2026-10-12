@@ -56,8 +56,8 @@ def played(generator: SpadeTaskGenerator, *, plain: float = 0.25, hint: float = 
             results.append(TaskPlayResult(item.task, error="; ".join(validation.errors)))
             continue
         asyncio.run(generator.service.write_task(item.task))
-        rewards = {"plain": (plain, plain), **{arm.name: (hint,) * arm.count for arm in item.measurement_arms}}
-        results.append(TaskPlayResult(item.task, rewards))
+        measurement_rewards = {arm.name: (hint,) * arm.count for arm in item.measurement_arms}
+        results.append(TaskPlayResult(item.task, (plain, plain), measurement_rewards))
     return tuple(results)
 
 

@@ -189,14 +189,14 @@ def test_a_batch_whose_groups_are_all_constant_is_skipped_and_keeps_the_step_cou
 @pytest.mark.parametrize(
     ("build", "message"),
     [
-        (lambda: PlayArm("plain", 1), "training arm"),
         (lambda: PlayArm("Hint", 1), "arm name must match"),
         (lambda: PlayArm("hint", 0), "positive integer"),
         (lambda: PlayArm("hint", 1, ("../hint.txt",)), "inside the task"),
         (lambda: PlayArm("hint", 1, ("/hint.txt",)), "inside the task"),
         (lambda: GeneratedTask(task_for("t-a", "r", 1), (PlayArm("hint", 1), PlayArm("hint", 2))), "unique"),
-        (lambda: TaskPlayResult(task_for("t-a", "r", 1), {"plain": (1.0,)}, error="refused"), "no rewards"),
-        (lambda: TaskPlayResult(task_for("t-a", "r", 1), {"plain": (float("nan"),)}), "finite"),
+        (lambda: TaskPlayResult(task_for("t-a", "r", 1), (1.0,), error="refused"), "no rewards"),
+        (lambda: TaskPlayResult(task_for("t-a", "r", 1), (float("nan"),)), "finite"),
+        (lambda: TaskPlayResult(task_for("t-a", "r", 1), (), {"hint": [1.0]}), "tuples"),
         (lambda: TaskValidationResult(("",)), "non-empty"),
     ],
 )
@@ -400,11 +400,13 @@ def test_the_first_look_for_a_batch_runs_round_zero_end_to_end(tmp_path: Path) -
 
     (results,) = task_generator.results
     assert [result.task.name for result in results] == names
-    assert results[0].rewards == {"plain": (0.25, 0.25), "hint": (0.75,)}
-    assert results[2].rewards == {"plain": (0.25, 0.25)} and results[2].is_played
+    assert results[0].training_rewards == (0.25, 0.25) and results[0].measurement_rewards == {"hint": (0.75,)}
+    assert results[2].training_rewards == (0.25, 0.25) and results[2].measurement_rewards == {}
+    assert results[2].is_played
     document = summary(tmp_path, 0)
     assert document["error"] == "" and [task["name"] for task in document["tasks"]] == names
-    assert document["tasks"][0]["rewards"] == {"plain": [0.25, 0.25], "hint": [0.75]}
+    assert document["tasks"][0]["training_rewards"] == [0.25, 0.25]
+    assert document["tasks"][0]["measurement_rewards"] == {"hint": [0.75]}
     assert p.operational_metrics()["rounds_completed"] == 1
 
 
@@ -416,9 +418,19 @@ def test_an_invalid_task_comes_back_with_its_errors_and_is_never_written(tmp_pat
     assert not looked(p)
     assert player.writes == ["harbor-00000-001"]
     (results,) = task_generator.results
-    assert results[0].error == "oracle check refused: the oracle scored 0" and results[0].rewards == {}
+    assert results[0].error == "oracle check refused: the oracle scored 0" and results[0].training_rewards == ()
     assert results[1].is_played
     assert p.status()["task_generation"]["tasks_played"] == 1
+
+
+def test_a_measurement_arm_with_the_training_arms_name_is_refused_unplayed(tmp_path: Path) -> None:
+    clashing = GeneratedTask(task_for("harbor-00000-000", "designer-0", 9000), (PlayArm("plain", 1),))
+    task_generator = ScriptedGenerator([(clashing, *generated(0, 1))])
+    p, player = rounds(tmp_path, task_generator)
+    assert not looked(p)
+    assert task_generator.validated == ["harbor-00000-001"] and player.writes == ["harbor-00000-001"]
+    (results,) = task_generator.results
+    assert results[0].error == "the measurement arm 'plain' has the name of the training arm"
 
 
 def test_a_refused_write_or_a_task_the_agent_cannot_play_comes_back_unplayed(tmp_path: Path) -> None:
