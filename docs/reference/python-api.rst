@@ -770,9 +770,7 @@ judgments. ``observe`` then uses the stage's ``track(record)``,
 ``tracked_record(receipt)``, ``dispatch(job)``, ``retire(receipt)``, and
 ``abandon(receipt)``. A failed judgment or a ``None`` sample retires the record
 instead of failing a training step. All correlation state must be
-reconstructible from replay. A processor class that still defines ``ingest``,
-``judge``, ``expire``, or the old engine verbs raises ``TypeError`` when its
-module is imported.
+reconstructible from replay.
 
 While no batch is out, the stage retires candidates that are more than
 ``max_staleness`` versions behind the newest candidate, by record arrival. The

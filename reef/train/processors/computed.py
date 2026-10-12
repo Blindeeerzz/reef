@@ -47,9 +47,6 @@ __all__ = [
     "SupportsReceipt",
 ]
 
-#: Hooks that moved from the processor to ``RecordJudging``. A subclass that still defines one fails at import.
-MOVED_JUDGING_HOOKS = ("ingest", "judge", "expire", "catch_up", "dispatch", "track", "retire", "abandon")
-
 
 class ComputedFeedbackProcessor(DataProcessor, ABC):
     """Assemble judged records into batches for computed-feedback recipes.
@@ -60,16 +57,6 @@ class ComputedFeedbackProcessor(DataProcessor, ABC):
     context's ``max_staleness`` versions behind the newest one, by record
     arrival, while no batch is out.
     """
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-        moved = [name for name in MOVED_JUDGING_HOOKS if name in vars(cls)]
-        if moved:
-            raise TypeError(
-                f"{cls.__name__} defines {', '.join(moved)}: correlation and judging moved to "
-                "reef.record2record.RecordJudging (observe, judge, expire). Pass it to "
-                "ComputedFeedbackProcessor.__init__ as judging."
-            )
 
     def __init__(
         self, context: ProcessorContext, *, judging: RecordJudging, worker: BackgroundJobWorker | None
