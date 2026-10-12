@@ -3,7 +3,7 @@ Processors
 
 A processor is a scenario's batch builder: records in, one typed training
 batch out, with ownership of its in-memory buffers. Storage owns deletion. This page
-explains the two feedback engines, the task-generation ABC, and the path a
+explains the two feedback engines, the task generation contract, and the path a
 record takes to a batch.
 
 .. page::
@@ -188,48 +188,74 @@ by the reported-feedback contract.
 Task generation contract
 ------------------------
 
-``TaskGenerationProcessor(DataProcessor, ABC)`` declares two asynchronous
-methods on the processor itself:
+A deployment can train on tasks that a task generator makes. The deployment
+names a ``TaskGenerator`` class in its ``task-generation`` section and selects
+the built-in generated-task recipe,
+``reef.record2dataset.generated_tasks:GeneratedTaskRecipe``. The recipe does not
+depend on the generator's method, so a team can replace the generator without
+a new recipe. SPADE (``recipes/beta/spade``) is one generator.
 
-- ``generate(request: TaskGenerationRequest) -> HarborTask`` produces one
-  task specification from source records, a description and optional asset
-  paths. The source records, when there are any, must have distinct ids and
-  belong to one scenario, the processor's; a method whose designer writes
-  from the description alone passes none. Preserve their ordered ids, or the
-  designer's own inference record id, in the generated task's
-  ``source_agent_record_ids``.
-- ``validate(task_path: Path) -> TaskValidationResult`` checks a materialized
-  candidate without modifying it. The implementation chooses the required
-  structural and execution checks. Empty ``errors`` means all checks passed;
-  non-empty errors reject the task. Infrastructure failures raise exceptions
-  rather than reporting that the task is invalid.
+``TaskGenerator`` is in ``reef.core.tasks``. Reef calls its class method
+``from_config(config, *, scenario, environ)`` once for each scenario. The
+generator gets what it needs from its ``config`` and from these calls only:
 
-Import the ABC from ``reef.train.processors`` and the request/result types
-from ``reef.train.processors.task_generation``. Asset paths name generator-accessible files or
-directories, such as repository snapshots or verifier fixtures; constructing
-a request does not read them. Method-specific prompts and settings belong to
-the processor configuration.
+- ``async generate(request: TaskGenerationRequest) -> tuple[GeneratedTask, ...]``
+  returns zero or more tasks. A ``GeneratedTask`` holds a ``HarborTask`` and
+  its ``measurement_arms``. Preserve the request's source record IDs in each
+  task's ``source_agent_record_ids``.
+- ``async validate(task: HarborTask) -> TaskValidationResult`` checks one
+  task. Empty ``errors`` means the task passed. Return task defects as errors.
+  Raise when the checks cannot run. The task is a value, so the check does not
+  need a file system that it shares with Reef.
+- ``async record_results(results: tuple[TaskPlayResult, ...])`` receives the
+  results of the last ``generate`` call. The default keeps nothing.
 
-The ABC supplies no lifecycle: implementing the two hooks does not start a
-worker or make batches ready, and the inherited lifecycle is the no-update
-default. A method supplies its own, keeping the two rules every lifecycle
-must keep: both hooks run outside the trainer lock, and ``ingest``,
-``ready`` and ``build_batch`` never wait for them.
+A ``PlayArm(name, count, extra_instruction_files)`` asks for ``count`` more
+plays of a task. Each play shows the agent the files that
+``extra_instruction_files`` names after the instruction, for example
+``solution/hint.txt``. The recipe never trains on a measurement arm.
 
-The first implementation is SPADE (``recipes/beta/spade/processor.py``),
-which pairs the ABC with the reported-feedback engine. A private worker (the
-computed engine's ``JudgingWorker``) runs one generation at a time:
-``generate`` asks the designer for a task, the task is written, ``validate``
-runs Harbor's oracle check on it, the task is played, and the episodes come
-back as reports the reported half groups and batches; the next generation
-starts after a configured number of batches was acknowledged, and a restart
-carries on from the generation reports on disk. None of the container-bound
-steps run in the Reef service process: ``reef.record2dataset`` is the
-generator service ``reef serve`` starts beside the HTTP service from the
-deployment's ``generator`` section (see `the generator section
-<../reference/configuration.rst#the-generator-section>`__), and the processor
-drives it over HTTP. Conversion of generated tasks into ``TaskItem`` batches
-for a rollout-capable backend remains future work.
+A ``TaskPlayResult`` holds the task, ``training_rewards``,
+``measurement_rewards`` (by arm name), and an ``error``. The rewards include
+only episodes that ran. An episode that ran
+without a reward counts as 0. A non-empty ``error`` means that the task was not
+played: it failed validation, the generator service refused it, or the agent
+could not start on it.
+
+The recipe's processor, ``GeneratedTaskProcessor``, runs one round at a time
+on a private ``JudgingWorker``, outside the trainer lock. In each round it:
+
+1. Asks the generator for tasks with the configured ``description``. The
+   request has no source records.
+2. Validates each task with the generator.
+3. Writes each valid task through the generator service and plays it
+   ``plays-per-task`` times on the training arm, then plays each measurement arm.
+4. Sends the results to ``record_results``.
+
+The processor labels its training plays with the arm ``plain`` and trains
+only on reports with that label. A generated task whose measurement arm is
+named ``plain`` comes back unplayed with an error. The processor groups the
+training reports by ``metadata.task.name``. A group is complete at
+``plays-per-task`` episodes, and a batch holds ``tasks-per-step`` complete
+groups. The ``task_group`` objective centers and scales each reward within its
+task group, on Tinker's ``importance_sampling`` loss. The processor releases
+the reports of measurement arms and reports without an arm, such as a
+generator's own reports, without assembling them.
+
+The first round starts when the processor first looks for a batch. The next
+round starts after ``batches-per-round`` batches were acknowledged since the
+previous round started. A round that played no task is followed at once. An
+exception from the generator stops the round. The processor still sends the
+results it has to ``record_results``. A summary of each round goes to
+``state-dir/<scenario>/round-<round>.json``. After a restart, the processor
+continues with the next round. ``GET /reef/status`` shows the generator, the
+round, the task counts, and the last error under ``task_generation``.
+
+Container operations run in the generator service, ``reef.record2dataset``.
+The processor calls this service over HTTP. The ``generator`` deployment
+section configures the service that ``reef serve`` starts.
+See `generator configuration
+<../reference/configuration.rst#the-generator-section>`__ for its settings.
 
 A record's path to a batch
 --------------------------
