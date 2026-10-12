@@ -764,8 +764,8 @@ Task generation
 - ``async validate(task: HarborTask) -> TaskValidationResult``.
 
 ``async record_results(results: tuple[TaskPlayResult, ...])`` is optional. The
-default keeps nothing. The built-in task-training recipe,
-``reef.record2dataset.task_training:TaskTrainingRecipe``, calls these methods.
+default keeps nothing. The built-in generated-task recipe,
+``reef.record2dataset.generated_tasks:GeneratedTaskRecipe``, calls these methods.
 See `Processors <../developer-guide/processors.rst#task-generation-contract>`__
 for the round and its failure behavior.
 
@@ -804,8 +804,7 @@ its ``generate`` and ``validate`` methods to a ``TaskGenerator`` subclass:
 - ``validate`` receives the ``HarborTask`` instead of a directory path.
 - Import ``TaskValidationResult`` from ``reef.core.tasks``.
 
-Select the class in the ``task-generation`` section and use the task-training
-recipe. The recipe plays and trains, so the processor half of the method is
+Select the class in the ``task-generation`` section and use the generated-task recipe. The recipe plays and trains, so the processor half of the method is
 not needed.
 
 Batch

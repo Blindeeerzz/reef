@@ -190,8 +190,8 @@ Task generation contract
 
 A deployment can train on tasks that a task generator makes. The deployment
 names a ``TaskGenerator`` class in its ``task-generation`` section and selects
-the built-in task-training recipe,
-``reef.record2dataset.task_training:TaskTrainingRecipe``. The recipe does not
+the built-in generated-task recipe,
+``reef.record2dataset.generated_tasks:GeneratedTaskRecipe``. The recipe does not
 depend on the generator's method, so a team can replace the generator without
 a new recipe. SPADE (``recipes/beta/spade``) is one generator.
 
@@ -222,7 +222,7 @@ without a reward counts as 0. A non-empty ``error`` means that the task was not
 played: it failed validation, the generator service refused it, or the agent
 could not start on it.
 
-The recipe's processor, ``TaskTrainingProcessor``, runs one round at a time
+The recipe's processor, ``GeneratedTaskProcessor``, runs one round at a time
 on a private ``JudgingWorker``, outside the trainer lock. In each round it:
 
 1. Asks the generator for tasks with the configured ``description``. The

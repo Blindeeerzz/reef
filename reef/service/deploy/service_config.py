@@ -198,7 +198,7 @@ class ServiceConfig:
         default=None,
         metadata=config_metadata("Candidate evaluation settings as a JSON/YAML object.", path=("evaluation",)),
     )
-    #: The task generator a task-training recipe asks for tasks: a plugin class and its config.
+    #: The task generator the generated-task recipe asks for tasks: a plugin class and its config.
     task_generation_settings: Mapping[str, Any] | None = field(
         default=None,
         metadata=config_metadata(

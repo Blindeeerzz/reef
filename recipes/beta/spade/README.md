@@ -13,10 +13,10 @@
 beta/spade/
   generation.py   the experience section (results sorted by regret into the frontier, the mastered and the out of reach), a generation's records
   generator.py    SpadeTaskGenerator: the Designer's generations through the generator service
-  examples/tinker/serve.yaml   a Tinker deployment with the generator service and the task-training recipe
+  examples/tinker/serve.yaml   a Tinker deployment with the generator service and the generated-task recipe
 ```
 
-SPADE is a task generator. The deployment selects it in the `task-generation` section. The built-in task-training recipe (`reef.record2dataset.task_training:TaskTrainingRecipe`) plays the tasks and trains on them. The recipe and its settings are described in [the task-generation section](../../../docs/reference/configuration.rst).
+SPADE is a task generator. The deployment selects it in the `task-generation` section. The built-in generated-task recipe (`reef.record2dataset.generated_tasks:GeneratedTaskRecipe`) plays the tasks and trains on them. The recipe and its settings are described in [the task-generation section](../../../docs/reference/configuration.rst).
 
 ## The generator
 
@@ -49,7 +49,7 @@ The generator's `config` keys:
 | `designer_report` | true | report each proposal's regret against the Designer's receipt |
 | `served_model` | the deployment's | the model the Designer asks for |
 
-The task-training recipe uses the `task_group` objective. It centers and scales each episode's reward within its task group. If all rewards in a group are equal, each advantage is 0. Tinker's `importance_sampling` loss applies that advantage to every response token. The recipe requires the `tinker` backend. Selecting Slime fails because it has no loss family with that name.
+The generated-task recipe uses the `task_group` objective. It centers and scales each episode's reward within its task group. If all rewards in a group are equal, each advantage is 0. Tinker's `importance_sampling` loss applies that advantage to every response token. The recipe requires the `tinker` backend. Selecting Slime fails because it has no loss family with that name.
 
 ## Run it
 

@@ -6,7 +6,7 @@ results in the prompt as SPADE's experience section. A task with ``solution/hint
 ``hint`` arm of ``hint_plays`` plays with that file appended to the instruction.
 
 ``validate`` writes the task under the service's tasks root, runs Harbor's oracle and nop agents on it,
-and removes it again: the task-training recipe writes the valid task once more to play it.
+and removes it again: the generated-task recipe writes the valid task once more to play it.
 
 ``record_results`` closes the generation. It reports each proposal's regret against the Designer's
 receipt (0 for a refused one), writes the split manifest of the played tasks, and keeps the

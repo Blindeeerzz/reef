@@ -1,4 +1,4 @@
-"""The task-training processor: rounds of generated tasks played here, their training episodes trained here.
+"""The generated-task processor: rounds of generated tasks played here, their training episodes trained here.
 
 Two contracts meet in this class. As a reported feedback processor it takes the task player's reports:
 every episode of the training arm names its task under ``metadata.task``, the episodes of one task form
@@ -104,7 +104,7 @@ class RoundOutcome(SupportsReceipt):
     error: str
 
 
-class TaskTrainingProcessor(ReportedFeedbackProcessor):
+class GeneratedTaskProcessor(ReportedFeedbackProcessor):
     """Groups the training arm's episodes by task and runs the rounds of task generation that produce them."""
 
     output_schema = TrainingBatch
@@ -186,7 +186,7 @@ class TaskTrainingProcessor(ReportedFeedbackProcessor):
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
         task_name = reported_task_name(context.report)
         if task_name is None:
-            raise ValueError("task training requires metadata.task.name on the report, as the task player sends it")
+            raise ValueError("a generated task's report requires metadata.task.name, as the task player sends it")
         sample = self.assembly.build(context, context.require_score())
         return replace(sample, group_id=task_name)
 
@@ -197,7 +197,7 @@ class TaskTrainingProcessor(ReportedFeedbackProcessor):
         return GroupDecision.READY if len(items) >= self.plays_per_task else GroupDecision.INCOMPLETE
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
-        return TrainingBatch(f"{self.scenario}:task-training:{batch_number}", items)
+        return TrainingBatch(f"{self.scenario}:generated-tasks:{batch_number}", items)
 
     # ---------------------------------------------------------- the round half
 
@@ -254,7 +254,7 @@ class TaskTrainingProcessor(ReportedFeedbackProcessor):
             self.has_landed = True
             if isinstance(outcome, Failed):
                 self.last_error = f"{outcome.receipt} did not finish; see the service log"
-                logger.error("task training %s failed on scenario %r", outcome.receipt, self.scenario)
+                logger.error("generated-task %s failed on scenario %r", outcome.receipt, self.scenario)
                 continue
             if not isinstance(outcome, RoundOutcome):
                 raise TypeError("the round worker must hand back a RoundOutcome")
@@ -265,7 +265,7 @@ class TaskTrainingProcessor(ReportedFeedbackProcessor):
             self.last_error = outcome.error
             self.landed_empty = played == 0
             logger.info(
-                "task training round %d on scenario %r: %d tasks played of %d",
+                "generated-task round %d on scenario %r: %d tasks played of %d",
                 outcome.round_number,
                 self.scenario,
                 played,
@@ -303,7 +303,7 @@ class TaskTrainingProcessor(ReportedFeedbackProcessor):
                     results.append(TaskPlayResult(item.task, error="; ".join(validation.errors)))
         except Exception as exc:
             error = str(exc) or type(exc).__name__
-            logger.exception("task training round %d stopped on scenario %r", job.round_number, self.scenario)
+            logger.exception("generated-task round %d stopped on scenario %r", job.round_number, self.scenario)
         try:
             await self.task_generator.record_results(tuple(results))
         except Exception as exc:

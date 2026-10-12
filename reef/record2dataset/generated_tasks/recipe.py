@@ -1,4 +1,4 @@
-"""The task-training recipe: train on the tasks that the deployment's task generator makes."""
+"""The generated-task recipe: train on the tasks that the deployment's task generator makes."""
 
 from __future__ import annotations
 
@@ -13,13 +13,13 @@ from reef.core.tasks import TaskGenerator
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.recipe.errors import RecipeConfigError
-from reef.record2dataset.task_training.objective import TaskGroupObjective
-from reef.record2dataset.task_training.processor import (
+from reef.record2dataset.generated_tasks.objective import TaskGroupObjective
+from reef.record2dataset.generated_tasks.processor import (
     DEFAULT_BATCHES_PER_ROUND,
     DEFAULT_PLAYS_PER_TASK,
     DEFAULT_SCAFFOLD_TOLERANCE,
     DEFAULT_TASKS_PER_STEP,
-    TaskTrainingProcessor,
+    GeneratedTaskProcessor,
 )
 from reef.train.algos import StepScheduling
 from reef.train.processors.base import DataProcessor
@@ -43,7 +43,7 @@ class TaskGenerationConfig:
 
 
 @dataclass(frozen=True, kw_only=True)
-class TaskTrainingRecipe(WeightTrainingRecipe):
+class GeneratedTaskRecipe(WeightTrainingRecipe):
     """Rounds of generated tasks played by the served model; group relative advantages per task.
 
     The deployment's ``task-generation`` section selects the generator. With ``rounds`` above zero the
@@ -52,7 +52,7 @@ class TaskTrainingRecipe(WeightTrainingRecipe):
     and ``state_dir`` keeps a summary of each round, in one directory for each scenario.
     """
 
-    name: str = "task-training"
+    name: str = "generated-tasks"
     tasks_per_step: int = config_field(DEFAULT_TASKS_PER_STEP)
     plays_per_task: int = config_field(DEFAULT_PLAYS_PER_TASK)
     # A thinking template's generation prompt ends with a think scaffold the history drops; the assembly may
@@ -75,7 +75,7 @@ class TaskTrainingRecipe(WeightTrainingRecipe):
     def training_spec(cls) -> WeightTrainingSpec:
         return WeightTrainingSpec(
             objective=TaskGroupObjective.name,
-            processor=TaskTrainingProcessor,
+            processor=GeneratedTaskProcessor,
             scheduling=StepScheduling(unit="sample", batch_size="actual"),
         )
 
@@ -118,4 +118,4 @@ class TaskTrainingRecipe(WeightTrainingRecipe):
 
     def build_processor(self, context: ProcessorContext) -> DataProcessor:
         task_generator = None if self.task_generation is None else self.task_generation.build(context.scenario)
-        return TaskTrainingProcessor(context.with_config(self.processor_config()), task_generator=task_generator)
+        return GeneratedTaskProcessor(context.with_config(self.processor_config()), task_generator=task_generator)

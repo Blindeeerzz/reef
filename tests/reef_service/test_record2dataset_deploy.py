@@ -120,7 +120,7 @@ def test_the_service_carries_the_designer_model_when_the_section_names_one_not_o
     assert built.designer_model is None and built.default_model == "m"
 
 
-def test_the_spade_example_selects_the_task_training_recipe_and_the_spade_generator(
+def test_the_spade_example_selects_the_generated_task_recipe_and_the_spade_generator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("REEF_TOKEN", "t")
@@ -129,7 +129,7 @@ def test_the_spade_example_selects_the_task_training_recipe_and_the_spade_genera
     resolved, _ = resolve_deployment_config(yaml.safe_load(example.read_text()), None, example)
     assert [service["name"] for service in resolved["services"]] == ["generator", "reef"]
     settings = service_config_from_mapping(resolved)
-    assert settings.recipe == "reef.record2dataset.task_training:TaskTrainingRecipe"
+    assert settings.recipe == "reef.record2dataset.generated_tasks:GeneratedTaskRecipe"
     assert settings.recipe_settings["rounds"] == 20 and settings.recipe_settings["plays_per_task"] == 4
     assert settings.task_generation_settings is not None
     assert settings.task_generation_settings["module"] == "recipes.beta.spade:SpadeTaskGenerator"

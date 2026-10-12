@@ -1,4 +1,4 @@
-"""The task-training objective: group relative advantages over the episodes of one task, on the importance sampling loss."""
+"""The generated-task objective: group relative advantages over the episodes of one task, on the importance sampling loss."""
 
 from __future__ import annotations
 

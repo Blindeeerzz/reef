@@ -22,8 +22,8 @@ from reef.core.tasks import (
     write_harbor_task,
 )
 from reef.record2dataset import TaskNameConflict
-from reef.record2dataset.task_training import TaskTrainingProcessor
-from reef.record2dataset.task_training.processor import RoundJob
+from reef.record2dataset.generated_tasks import GeneratedTaskProcessor
+from reef.record2dataset.generated_tasks.processor import RoundJob
 from reef.train.types import ProcessorContext
 
 DESCRIPTION = "shell tasks with hidden state under /var and /etc"
@@ -48,7 +48,7 @@ def spade(tmp_path: Path, service: StandInGenerator | None = None, **fields: Any
 
 
 def played(generator: SpadeTaskGenerator, *, plain: float = 0.25, hint: float = 0.75) -> tuple[TaskPlayResult, ...]:
-    """Generate, validate, write and play every task the way the task-training recipe does, with fixed rewards."""
+    """Generate, validate, write and play every task the way the generated-task recipe does, with fixed rewards."""
     results = []
     for item in asyncio.run(generator.generate(REQUEST)):
         validation = asyncio.run(generator.validate(item.task))
@@ -245,10 +245,10 @@ def test_from_config_reads_its_section_and_keeps_one_state_directory_for_each_sc
             SpadeTaskGenerator.from_config(config, scenario="one", environ={})
 
 
-def test_a_round_of_the_task_training_recipe_runs_spade_end_to_end(tmp_path: Path) -> None:
+def test_a_round_of_the_generated_task_recipe_runs_spade_end_to_end(tmp_path: Path) -> None:
     service = StandInGenerator(tmp_path / "tasks", refusals={1: "reply refused: no json"})
     generator = spade(tmp_path, service)
-    processor = TaskTrainingProcessor(
+    processor = GeneratedTaskProcessor(
         ProcessorContext(
             "spade",
             {"plays_per_task": 2, "rounds": 1, "description": DESCRIPTION, "state_dir": str(tmp_path / "rounds")},

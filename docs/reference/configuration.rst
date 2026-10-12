@@ -88,7 +88,7 @@ The public layout groups fields by their owner:
 * ``storage``: artifact repository, work/cache directories and record retention.
 * ``execution`` / ``executors``: role placement and named executor profiles.
 * ``evaluation`` / ``observability``: their existing component-owned settings.
-* ``task-generation``: the task generator a task-training recipe asks for tasks.
+* ``task-generation``: the task generator the generated-task recipe asks for tasks.
 * ``generator``: the generator service that writes, checks and plays Harbor tasks.
 
 Version 2 contains no process definitions. ``service`` and ``services`` are
@@ -1146,8 +1146,8 @@ The plugin interface is in `Write a recipe
 The ``task-generation`` section
 -------------------------------
 
-Only the built-in task-training recipe,
-``reef.record2dataset.task_training:TaskTrainingRecipe``, reads this section.
+Only the built-in generated-task recipe,
+``reef.record2dataset.generated_tasks:GeneratedTaskRecipe``, reads this section.
 Another weight-training recipe refuses it, and a deployment that pairs it with
 a recipe that trains no weights fails at startup. When present, Reef calls the
 named class's ``from_config`` method once for each scenario.
@@ -1160,7 +1160,7 @@ named class's ``from_config`` method once for each scenario.
 .. code:: yaml
 
    recipe:
-     implementation: reef.record2dataset.task_training:TaskTrainingRecipe
+     implementation: reef.record2dataset.generated_tasks:GeneratedTaskRecipe
      config:
        generator-url: ${endpoints.generator}
        rounds: 20
@@ -1180,7 +1180,7 @@ class when it loads the recipe config and rejects functions and abstract
 classes. The generator interface and the round are in `Processors
 <../developer-guide/processors.rst#task-generation-contract>`__.
 
-The task-training recipe reads these ``recipe.config`` fields:
+The generated-task recipe reads these ``recipe.config`` fields:
 
 .. config::
 
@@ -1204,7 +1204,7 @@ Absent by default. When present, ``reef serve`` starts the generator service
 (``python -m reef.record2dataset``) before the HTTP service, which depends on
 it, and publishes its address as ``${endpoints.generator}`` for the recipe to
 consume. The generator writes, checks and plays Harbor tasks for the
-task-training recipe and for a task generator such as SPADE, under the same
+generated-task recipe and for a task generator such as SPADE, under the same
 interpreter as the Reef service (``REEF_PYTHON``, otherwise the launcher's). Its host needs Docker and the
 ``harbor`` command line; the Reef service itself does not. ``execution.generator`` selects its executor, so a deployment can
 place it on the host that has Docker.

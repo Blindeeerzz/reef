@@ -1,4 +1,4 @@
-"""The task-training recipe: rounds of generated tasks played and sent back, episodes grouped by task and trained."""
+"""The generated-task recipe: rounds of generated tasks played and sent back, episodes grouped by task and trained."""
 
 from __future__ import annotations
 
@@ -29,19 +29,19 @@ from reef.core.trajectories import make_trajectory
 from reef.harness.client.tasks import TaskPlay
 from reef.inference.http import InferenceProxyRuntime
 from reef.recipe.errors import RecipeConfigError
-from reef.record2dataset.task_training import (
+from reef.record2dataset.generated_tasks import (
+    GeneratedTaskProcessor,
+    GeneratedTaskRecipe,
     TaskGenerationConfig,
     TaskGroupObjective,
-    TaskTrainingProcessor,
-    TaskTrainingRecipe,
 )
-from reef.record2dataset.task_training.processor import RoundJob, reported_task_name, rewards_of
+from reef.record2dataset.generated_tasks.processor import RoundJob, reported_task_name, rewards_of
 from reef.train.algos.registry import resolve_objective
 from reef.train.processors.computed import Failed, JudgingWorker, SupportsReceipt
 from reef.train.processors.reported import GroupDecision
 from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem, trajectory_groups
 
-MODULE = "reef_service.test_task_training"
+MODULE = "reef_service.test_generated_tasks"
 DESCRIPTION = "shell tasks with hidden state under /var and /etc"
 
 # ------------------------------------------------------------------------------------------- the reported half
@@ -79,11 +79,11 @@ def report(
     )
 
 
-def processor(**config: object) -> TaskTrainingProcessor:
-    return TaskTrainingProcessor(ProcessorContext("tasks", {"tasks_per_step": 2, "plays_per_task": 2, **config}))
+def processor(**config: object) -> GeneratedTaskProcessor:
+    return GeneratedTaskProcessor(ProcessorContext("tasks", {"tasks_per_step": 2, "plays_per_task": 2, **config}))
 
 
-def played(processor: TaskTrainingProcessor, task: str, index: int, score: float, **fields: Any) -> None:
+def played(processor: GeneratedTaskProcessor, task: str, index: int, score: float, **fields: Any) -> None:
     processor.ingest(inference(f"rec-{task}-{index}"))
     processor.ingest(report(f"rep-{task}-{index}", f"rec-{task}-{index}", task, score, **fields))
 
@@ -111,7 +111,7 @@ def test_episodes_of_one_task_form_a_group_and_a_batch_holds_complete_groups_onl
     played(p, "harbor-00000-001", 1, 1.0)
     assert p.ready()
     batch = p.build_batch()
-    assert isinstance(batch, TrainingBatch) and batch.batch_id == "tasks:task-training:1"
+    assert isinstance(batch, TrainingBatch) and batch.batch_id == "tasks:generated-tasks:1"
     groups = trajectory_groups(batch)
     assert [[sample.group_id for sample in group] for group in groups] == [
         ["harbor-00000-000", "harbor-00000-000"],
@@ -267,7 +267,7 @@ class InlineWorker(JudgingWorker):
 
     def __init__(self) -> None:
         super().__init__(self.unbound, concurrency=1)
-        self.processor: TaskTrainingProcessor | None = None
+        self.processor: GeneratedTaskProcessor | None = None
         self.submitted: list[SupportsReceipt] = []
         self.outcomes: list[SupportsReceipt] = []
 
@@ -299,7 +299,7 @@ class DeferredWorker(JudgingWorker):
 
     def __init__(self) -> None:
         super().__init__(self.unbound, concurrency=1)
-        self.processor: TaskTrainingProcessor | None = None
+        self.processor: GeneratedTaskProcessor | None = None
         self.submitted: list[RoundJob] = []
         self.waiting: list[RoundJob] = []
         self.finished: list[SupportsReceipt] = []
@@ -337,10 +337,10 @@ def rounds(
     *,
     worker: InlineWorker | DeferredWorker | None = None,
     **config: object,
-) -> tuple[TaskTrainingProcessor, StandInGenerator]:
+) -> tuple[GeneratedTaskProcessor, StandInGenerator]:
     player = player if player is not None else StandInGenerator(tmp_path / "tasks")
     worker = worker if worker is not None else InlineWorker()
-    built = TaskTrainingProcessor(
+    built = GeneratedTaskProcessor(
         ProcessorContext(
             "tasks",
             {
@@ -361,7 +361,7 @@ def rounds(
     return built, player
 
 
-def looked(p: TaskTrainingProcessor) -> bool:
+def looked(p: GeneratedTaskProcessor) -> bool:
     """Look for a batch twice: the inline worker's outcome lands on the look after the one that submitted it."""
     p.ready()
     return p.ready()
@@ -547,7 +547,7 @@ def test_a_round_that_never_finishes_is_named_in_the_status(tmp_path: Path) -> N
 
 
 def test_the_real_worker_runs_a_round_off_the_trainers_thread(tmp_path: Path) -> None:
-    p = TaskTrainingProcessor(
+    p = GeneratedTaskProcessor(
         ProcessorContext("tasks", {"rounds": 1, "description": "shell tasks", "state_dir": str(tmp_path / "state")}),
         task_generator=ScriptedGenerator([generated(0, 0)]),
         task_player=StandInGenerator(tmp_path / "tasks"),
@@ -578,8 +578,8 @@ def test_a_processor_configuration_that_cannot_train_is_refused(config: dict[str
 
 
 def test_rounds_need_a_description_a_state_dir_and_the_generator_service() -> None:
-    def built(**config: object) -> TaskTrainingProcessor:
-        return TaskTrainingProcessor(
+    def built(**config: object) -> GeneratedTaskProcessor:
+        return GeneratedTaskProcessor(
             ProcessorContext("tasks", {"rounds": 1, **config}), task_generator=ScriptedGenerator()
         )
 
@@ -594,17 +594,17 @@ def test_rounds_need_a_description_a_state_dir_and_the_generator_service() -> No
 # ------------------------------------------------------------------------------------------------- the recipe
 
 
-def training_recipe(**fields: Any) -> TaskTrainingRecipe:
+def training_recipe(**fields: Any) -> GeneratedTaskRecipe:
     runtime = InferenceProxyRuntime(model_path="Qwen/Qwen3-8B", base_url="http://127.0.0.1:8000")
-    return TaskTrainingRecipe(training_runtime=StubTrainingRuntime(), runtime=runtime, **fields)
+    return GeneratedTaskRecipe(training_runtime=StubTrainingRuntime(), runtime=runtime, **fields)
 
 
 def test_the_recipe_binds_the_processor_the_objective_and_its_schedule() -> None:
-    spec = TaskTrainingRecipe.training_spec()
-    assert spec.processor is TaskTrainingProcessor and spec.objective == "task_group"
+    spec = GeneratedTaskRecipe.training_spec()
+    assert spec.processor is GeneratedTaskProcessor and spec.objective == "task_group"
     assert spec.loss_family == "importance_sampling"
     assert spec.scheduling.unit == "sample" and spec.scheduling.batch_size == "actual"
-    assert TaskTrainingRecipe.report_type.fget(TaskTrainingRecipe) is ScoredRolloutReport  # type: ignore[union-attr]
+    assert GeneratedTaskRecipe.report_type.fget(GeneratedTaskRecipe) is ScoredRolloutReport  # type: ignore[union-attr]
     config = training_recipe().processor_config()
     assert config["tasks_per_step"] == 4 and config["plays_per_task"] == 4 and config["scaffold_tolerance"] == 8
     assert config["rounds"] == 0 and config["generator_url"] == ""
@@ -617,7 +617,7 @@ def test_the_recipe_binds_the_processor_the_objective_and_its_schedule() -> None
 def test_the_section_selects_a_generator_class_built_once_for_each_scenario(tmp_path: Path) -> None:
     setting = {"module": f"{MODULE}:ScriptedGenerator", "config": {"count": 3}}
     environ = {"TASKS_KEY": "secret"}
-    recipe = TaskTrainingRecipe.from_environment(
+    recipe = GeneratedTaskRecipe.from_environment(
         environ,
         config={
             "data": {
@@ -632,11 +632,11 @@ def test_the_section_selects_a_generator_class_built_once_for_each_scenario(tmp_
         runtime=InferenceProxyRuntime(model_path="Qwen/Qwen3-8B", base_url="http://127.0.0.1:8000"),
         training_runtime=StubTrainingRuntime(),
     )
-    assert isinstance(recipe, TaskTrainingRecipe)
+    assert isinstance(recipe, GeneratedTaskRecipe)
     assert recipe.task_generation == TaskGenerationConfig(PluginReference(ScriptedGenerator, {"count": 3}), environ)
     ScriptedGenerator.built.clear()
     built = recipe.build_processor(ProcessorContext("one"))
-    assert isinstance(built, TaskTrainingProcessor) and isinstance(built.task_generator, ScriptedGenerator)
+    assert isinstance(built, GeneratedTaskProcessor) and isinstance(built.task_generator, ScriptedGenerator)
     assert ScriptedGenerator.built == [{"config": {"count": 3}, "scenario": "one", "environ": environ}]
     assert built.state_dir == tmp_path / "state" / "one"
     assert recipe.scenario_state_dirs("one") == (tmp_path / "state" / "one",)
@@ -647,13 +647,13 @@ def test_the_section_selects_a_generator_class_built_once_for_each_scenario(tmp_
     ("setting", "message"),
     [
         (f"{MODULE}:ScriptedGenerator.missing", "cannot import task-generation"),
-        ("reef.record2dataset.task_training:TaskTrainingRecipe", "must name a class that inherits TaskGenerator"),
+        ("reef.record2dataset.generated_tasks:GeneratedTaskRecipe", "must name a class that inherits TaskGenerator"),
         ("reef.core.tasks:TaskGenerator", "names an abstract class"),
     ],
 )
 def test_a_section_that_names_no_usable_generator_is_refused(setting: str, message: str) -> None:
     with pytest.raises(RecipeConfigError, match=message):
-        TaskTrainingRecipe.from_environment(
+        GeneratedTaskRecipe.from_environment(
             {},
             config={"data": {}, "model": {"path": "m"}, "task_generation": setting},
             runtime=InferenceProxyRuntime(model_path="m", base_url="http://127.0.0.1:8000"),

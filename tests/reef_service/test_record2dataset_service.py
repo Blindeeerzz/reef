@@ -43,8 +43,8 @@ from reef.record2dataset import (
     TaskPlays,
     readiness_probes,
 )
+from reef.record2dataset.generated_tasks import GeneratedTaskProcessor
 from reef.record2dataset.service import CLOSE_GRACE_S, DockerProbe, HarborProbe, ModuleProbe
-from reef.record2dataset.task_training import TaskTrainingProcessor
 from reef.record2dataset.wire import (
     WireError,
     designer_request_document,
@@ -673,7 +673,7 @@ def test_history_and_materials_reach_the_designer_and_feedback_uses_its_receipt(
         assert task.metadata["designer_record_id"] == "designer-1"
         assert task.name.startswith("harbor-history-")
         assert (await task_generator.validate(task)).is_valid
-        processor = TaskTrainingProcessor(ProcessorContext("spade", {"plays_per_task": 2}), task_player=generator)
+        processor = GeneratedTaskProcessor(ProcessorContext("spade", {"plays_per_task": 2}), task_player=generator)
         result = await processor.played(item, 0)
         assert result.is_played and set(result.rewards) == {"plain", "hint"}
         assert read_harbor_task(tmp_path / "tasks" / task.name).source_agent_record_ids == task.source_agent_record_ids

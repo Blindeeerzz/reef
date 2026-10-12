@@ -22,7 +22,7 @@ from reef.service.deploy.service_config import ServiceConfig
 
 OPENCLAWRL_RECIPE = "recipes.openclawrl.recipe:OpenClawRLRecipe"
 SAO_RECIPE = "recipes.sao.recipe:SAORecipe"
-TASK_TRAINING_RECIPE = "reef.record2dataset.task_training:TaskTrainingRecipe"
+GENERATED_TASK_RECIPE = "reef.record2dataset.generated_tasks:GeneratedTaskRecipe"
 
 
 def test_configured_handler_rejects_a_function() -> None:
@@ -445,16 +445,18 @@ def test_build_dispatcher_rejects_candidate_evaluation_for_non_weight_recipe(mon
 
 
 @pytest.mark.unit
-def test_build_dispatcher_hands_the_task_generation_section_to_the_task_training_recipe(monkeypatch, tmp_path) -> None:
+def test_build_dispatcher_hands_the_task_generation_section_to_the_generated_task_recipe(
+    monkeypatch, tmp_path
+) -> None:
     monkeypatch.setattr(
         deploy.GitLFSRepositoryBackend,
         "factory",
         lambda *args, **kwargs: lambda scenario: object(),
     )
-    task_generation = {"module": "reef_service.test_task_training:ScriptedGenerator", "config": {"count": 1}}
+    task_generation = {"module": "reef_service.test_generated_tasks:ScriptedGenerator", "config": {"count": 1}}
 
     settings = _settings(
-        recipe=TASK_TRAINING_RECIPE,
+        recipe=GENERATED_TASK_RECIPE,
         task_generation_settings=task_generation,
         agent_record_dir=str(tmp_path / "agent-record"),
     )
@@ -490,7 +492,7 @@ def test_build_dispatcher_rejects_task_generation_for_another_recipe(
         deploy.build_dispatcher(
             _settings(
                 recipe=recipe,
-                task_generation_settings={"module": "reef_service.test_task_training:ScriptedGenerator"},
+                task_generation_settings={"module": "reef_service.test_generated_tasks:ScriptedGenerator"},
                 agent_record_dir=str(tmp_path / "agent-record"),
             ),
             connector=lambda **kwargs: stub_runtimes(),

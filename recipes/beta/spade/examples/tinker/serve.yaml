@@ -1,5 +1,5 @@
 # SPADE on Tinker: the served model writes tasks as the Designer and trains on them as the Reasoning Agent.
-# The built-in task-training recipe plays and trains; SPADE is the task generator.
+# The built-in generated-task recipe plays and trains; SPADE is the task generator.
 # Supply TINKER_API_KEY through the shell, never here; REEF_SPADE_STATE_DIR is where this deployment keeps its state.
 # The generator service runs under the same interpreter as Reef.
 schema-version: 2
@@ -29,7 +29,7 @@ generator:
           chat_template_kwargs:
             enable_thinking: false
 recipe:
-  implementation: reef.record2dataset.task_training:TaskTrainingRecipe
+  implementation: reef.record2dataset.generated_tasks:GeneratedTaskRecipe
   config:
     # A batch is tasks-per-step complete groups of plays-per-task episodes of one task.
     tasks-per-step: 2

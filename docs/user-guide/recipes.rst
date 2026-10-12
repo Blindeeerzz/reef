@@ -170,7 +170,7 @@ executable environments and a Reasoning Agent that learns in them. Reef knows
 one task format, Harbor, and the Designer writes it directly: an instruction,
 a container, a verifier and a reference solution, a task any Harbor agent can
 play. SPADE is a task generator. The deployment selects it in the
-``task-generation`` section, and the built-in task-training recipe plays the
+``task-generation`` section, and the built-in generated-task recipe plays the
 tasks and trains on them (see `the task-generation section
 <../reference/configuration.rst#the-task-generation-section>`__). Writing,
 checking and playing tasks is Reef's (``reef.record2dataset``, the generator

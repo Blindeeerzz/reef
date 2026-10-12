@@ -1,4 +1,4 @@
-"""The built-in task-training recipe: train the served model on the tasks that a task generator makes.
+"""The built-in generated-task recipe: train the served model on the tasks that a task generator makes.
 
 The deployment selects the generator in its ``task-generation`` section (see
 :class:`reef.core.tasks.TaskGenerator`). The recipe does not depend on the
@@ -13,13 +13,13 @@ generator's method:
 The recipe lives beside the generator service because it plays tasks through it.
 """
 
-from reef.record2dataset.task_training.objective import TaskGroupObjective
-from reef.record2dataset.task_training.processor import TaskTrainingProcessor
-from reef.record2dataset.task_training.recipe import TaskGenerationConfig, TaskTrainingRecipe
+from reef.record2dataset.generated_tasks.objective import TaskGroupObjective
+from reef.record2dataset.generated_tasks.processor import GeneratedTaskProcessor
+from reef.record2dataset.generated_tasks.recipe import GeneratedTaskRecipe, TaskGenerationConfig
 
 __all__ = [
+    "GeneratedTaskProcessor",
+    "GeneratedTaskRecipe",
     "TaskGenerationConfig",
     "TaskGroupObjective",
-    "TaskTrainingProcessor",
-    "TaskTrainingRecipe",
 ]
