@@ -53,6 +53,7 @@ def _bind(
     processor = SimpleNamespace(derivation_pending=lambda: pending)
     trainer = SimpleNamespace(
         processor=processor,
+        derivation_pending=processor.derivation_pending,
         training_mode="auto",
         fail_pending_instruction=lambda error: False,
         instruction_failures=dict,
