@@ -866,8 +866,8 @@ Harness-evolution presets also carry an ``evolution`` section:
      batch_size: 1
    evolution:
      adapter: pi
-     propose: methods.mine:propose
-     evaluate: methods.mine:evaluate
+     propose: methods.mine:MyProposer
+     evaluate: methods.mine:MyScorer
      tasks: ["..."]
 
 The preset's ``implementation`` is ``recipe`` or a dotted recipe class. Weight-training
@@ -903,8 +903,8 @@ keeps the reports its own contract parses:
        implementation: reef.recipe.cordis:CordisRecipe
        evolution:
          adapter: pi
-         propose: methods.mine:propose
-         evaluate: methods.mine:evaluate
+         propose: methods.mine:MyProposer
+         evaluate: methods.mine:MyScorer
          tasks: ["..."]
      config:
        implementation: my_pkg.config:ConfigRecipe
@@ -925,7 +925,7 @@ backend, and the weight component's fields live under its ``data``:
            data: {batch_size: 8}
          harness:
            implementation: reef.recipe.cordis:CordisRecipe
-           evolution: {adapter: pi, propose: methods.mine:propose, evaluate: methods.mine:evaluate, tasks: ["..."]}
+           evolution: {adapter: pi, propose: methods.mine:MyProposer, evaluate: methods.mine:MyScorer, tasks: ["..."]}
    inference:
      model-path: Qwen/Qwen3-8B
    training:
@@ -1008,9 +1008,9 @@ Every valid scored report contributes a trace, including successful outcomes.
 
 .. config::
 
-   evolution.propose | a ``Proposer``, a plain callable, or a dotted ``module:attribute``
-   evolution.evaluate | an ``EpisodeScorer``, likewise, or a dotted reference to one; ``reef.train.cordis_backend.strategies:verifier_reward`` scores a task directory episode by its Harbor verifier's reward, for a gate fed by ``evolution.task_manifest``
-   evolution.selection | score_comparison | ``floor`` (the candidate alone must score at least ``evolution.floor_score`` on every evaluation task; the current release is not run, and ``recheck_every`` is refused since a recheck compares two trees), ``always``, or a dotted reference to an object with ``decide``
+   evolution.propose | a ``Proposer`` class: ``package.module:ClassName``, or a mapping with ``module`` and ``config`` that the class method ``from_config`` receives
+   evolution.evaluate | an ``EpisodeScorer`` class, in the same form; ``reef.train.cordis_backend.strategies:VerifierRewardScorer`` scores a task directory episode by its Harbor verifier's reward, for an evaluation fed by ``evolution.task_manifest``
+   evolution.selection | score_comparison | ``floor`` (the candidate alone must score at least ``evolution.floor_score`` on every evaluation task; the current release is not run, and ``recheck_every`` is refused since a recheck compares two trees), ``always``, or a ``SelectionPlugin`` class in the same form as ``evolution.propose``
    evolution.floor_score | 1.0 | the score every evaluation task must reach under ``selection: floor``; a positive number, refused with any other selection, as ``min_win_margin`` is outside ``score_comparison``
    evolution.tasks | non-empty list of episode prompts, scored once per tree per step
    evolution.task_manifest | a split manifest written by ``reef.core.tasks``; the eval split names the evaluation's tasks as directories under ``evolution.tasks_root``, each passed to the adapter as its path; set instead of ``evolution.tasks`` and only with an adapter whose prompt is a task directory (``terminus``); ``promote_failures`` cannot be combined with it
@@ -1026,7 +1026,7 @@ Every valid scored report contributes a trace, including successful outcomes.
    evolution.max_failure_streak | 0 | stop automatic evolve steps after this many consecutive rejected steps, instruction steps included; 0 disables the limit; an instruction from ``POST /reef/train`` still runs while the breaker is open
    evolution.max_model_calls_per_step | 0 | cap the proposer's model calls in one step; 0 disables the limit
    evolution.multimodal | | reefine only; the gateway Reef relays a scenario's ``/v1/images``, ``/v1/embeddings``, ``/v1/audio/speech`` and ``/v1/decisions`` to, unrecorded, and the agent proposer's trials reach: ``preset`` (``openrouter``, the default, or ``openai-compatible`` for OrcaRouter, LiteLLM, ...), ``url`` (the gateway's address, no ``/v1``; required for ``openai-compatible``) and ``api_key`` (its key; the profile reads ``REEF_MULTIMODAL_API_KEY``, and ``api_key_env`` names a variable instead; empty, the upstream's key when the upstream is the same address). Without a key those routes answer 501
-   evolution.proposer_agent | | off unless set (the reefine recipe sets it); a proposer that takes ``agent_host`` runs a coding agent under it: ``sandbox`` (``bwrap`` jails it with pasta networking and refuses to start where the host cannot; ``e2b`` runs it in an E2B cloud sandbox that reaches the gateway through a tunnel, with ``e2b_api_key`` (else ``E2B_API_KEY``) and ``e2b_template`` (else ``reef-pi-<version>-episodes-v1`` with bubblewrap, built on first use), and needs the ``e2b`` extra; ``none`` runs it unisolated and must be chosen; unset, or ``REEF_PROPOSER_SANDBOX``, jails it where the host can and leaves it off where it cannot), ``timeout_s`` (1800, the whole agent run) and ``trial_timeout_s`` (300, each run of the candidate harness). See the reefine recipe guide
+   evolution.proposer_agent | | off unless set (the reefine recipe sets it); a proposer whose ``runs_agent`` is true runs a coding agent under it: ``sandbox`` (``bwrap`` jails it with pasta networking and refuses to start where the host cannot; ``e2b`` runs it in an E2B cloud sandbox that reaches the gateway through a tunnel, with ``e2b_api_key`` (else ``E2B_API_KEY``) and ``e2b_template`` (else ``reef-pi-<version>-episodes-v1`` with bubblewrap, built on first use), and needs the ``e2b`` extra; ``none`` runs it unisolated and must be chosen; unset, or ``REEF_PROPOSER_SANDBOX``, jails it where the host can and leaves it off where it cannot), ``timeout_s`` (1800, the whole agent run) and ``trial_timeout_s`` (300, each run of the candidate harness). See the reefine recipe guide
    evolution.executor | local | ``local`` runs episodes as a plain subprocess; ``sandbox`` uses a local bubblewrap jail; ``e2b`` creates a cloud VM per episode and checks provider access, template, binary and namespace support at startup. E2B uses remote binaries; Terminus retains its own Harbor execution
    execution.evolution.workers | 1 | fixed worker-group size; CPU auto selects ``uni`` for one and ``mp`` for multiple
    execution.evolution.backend | auto | worker placement, independent of the ``local/sandbox`` episode isolation policy; ``local`` retains shared-memory callbacks
@@ -1036,7 +1036,7 @@ Every valid scored report contributes a trace, including successful outcomes.
    evolution.promote_failures | false | when true, a failing trace's prompt becomes a permanent evaluation task, so no later candidate can win while bringing the failure back; the seed tasks stay the floor
    evolution.max_promoted_tasks | 50 | the cap on promoted tasks; admission stops there so the suite is bounded
    evolution.max_promoted_per_client | 5 | the cap on promoted tasks from one tagged client (its ``x-reef-tag-client``, else session, tag); untagged traffic has no identity to count under and meets only ``max_promoted_tasks``; 0 disables the cap
-   evolution.promote | | optional ``Promoter`` subclass, instance, or dotted ``module:attribute`` reference; its ``__call__(samples, *, manifest=None)`` chooses which trace prompts to promote; without it every failing trace's user prompt is promoted, and the caps and the credential and directive screens still apply
+   evolution.promote | | optional ``Promoter`` class, in the same form as ``evolution.propose``; its ``promote(samples, *, manifest=None)`` chooses which trace prompts to promote; without it every failing trace's user prompt is promoted, and the caps and the credential and directive screens still apply
    evolution.publish | auto | ``review`` holds every successful evaluation as a pending release until ``POST /reef/scenarios/{scenario}/promote`` names it
    evolution.review_kinds | [] | node kinds whose wins wait for a promote while the rest publish at once; a win that touches a ``native_loop`` waits whether or not the list names it
    evolution.seed | entry options loaded into the tree on first boot, or a dotted ``module:attribute`` naming a sequence of them (``reef.harness.runners.native.seed:SEED_NODES`` is the native harness's shipped tools and hook); recovered state takes precedence
@@ -1116,26 +1116,27 @@ Only weight-training recipes read this section; a deployment that pairs it
 with any other recipe fails at startup, because a harness recipe builds its
 evaluator in code. Absent by default, in which case a successful
 weight-training step publishes without an evaluation. When present, Reef calls the
-named factory's ``build`` method once per scenario and hands the plugin the exported but
+named class's ``from_config`` method once per scenario and hands the plugin the exported but
 unpublished checkpoint.
 
 .. config::
 
-   evaluation.module | a ``package.module:Factory`` reference to a ``CandidateEvaluationPluginFactory`` subclass with a no-argument constructor, or a factory instance. Required.
-   evaluation.config | opaque mapping handed to ``factory.build``; Reef never reads it
+   evaluation.module | a ``package.module:ClassName`` reference to a ``ConfiguredEvaluationPlugin`` subclass. Required.
+   evaluation.config | opaque mapping handed to ``from_config``; Reef never reads it
 
 .. code:: yaml
 
    evaluation:
-     module: my_pkg.evaluation:EvaluationFactory
+     module: my_pkg.evaluation:BenchmarkEvaluator
      config:
        benchmark: gsm8k
        threshold: 0.8
 
-``build(config, *, runtime, training_runtime, scenario, environ)`` must return
-a ``CandidateEvaluationPlugin`` subclass instance. The factory constructor is
-validated while loading recipe config and must not allocate model resources.
-Plain function factories and structural lookalikes are not accepted.
+The class method ``from_config(config, *, runtime, training_runtime, scenario,
+environ)`` returns the scenario's plugin. Reef checks the class when it loads
+the recipe config. It builds the plugin later, so allocate model resources in
+``from_config``. Reef rejects functions, abstract classes and structural
+lookalikes.
 
 The plugin interface is in `Write a recipe
 <../developer-guide/write-a-recipe.rst#gate-a-candidate>`__.
