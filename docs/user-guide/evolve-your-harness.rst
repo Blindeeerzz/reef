@@ -271,12 +271,12 @@ In ``hybrid`` mode, either condition starts a step: enough units collected
 under ``data.batch_size`` and ``data.batch_policy``, or a training request
 received.
 
-When both conditions are met, training requests take precedence to make
-next step. Regardless of whether ``data.batch_size`` are met, Reef will
-construct a step that consumes both information. I.e. the proposer
-will see both the training request content and the units an
-automatic batch would have taken next, up to ``data.batch_size`` and
-possibly none, to determine a mutation.
+When both conditions are met, the training request takes precedence for the
+next step. Reef builds one step that uses both, whether or not
+``data.batch_size`` is met. The proposer then
+receives the training request and the units that an automatic batch would
+take next. It gets up to ``data.batch_size`` units, or none, and uses both
+to make a mutation.
 
 Propose: mutation to the harness tree
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

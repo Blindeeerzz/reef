@@ -1133,10 +1133,10 @@ unpublished checkpoint.
        threshold: 0.8
 
 The class method ``from_config(config, *, runtime, training_runtime, scenario,
-environ)`` returns the scenario's plugin. Reef imports and checks the class
-while loading recipe config, and builds the plugin later, so model resources
-belong in ``from_config``. Functions, abstract classes and structural
-lookalikes are not accepted.
+environ)`` returns the scenario's plugin. Reef checks the class when it loads
+the recipe config. It builds the plugin later, so allocate model resources in
+``from_config``. Reef rejects functions, abstract classes and structural
+lookalikes.
 
 The plugin interface is in `Write a recipe
 <../developer-guide/write-a-recipe.rst#gate-a-candidate>`__.

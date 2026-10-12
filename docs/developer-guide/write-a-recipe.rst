@@ -186,9 +186,9 @@ model resources in ``from_config``, not when the module is imported:
 
        def decide(self, candidate, evaluation): ...
 
-The class must implement both ``evaluate`` and ``decide``. Functions, abstract
-classes, and objects that only have matching method names are rejected. The
-trainer runs the plugin between the backend step and publication, calling
+The class must implement both ``evaluate`` and ``decide``. Reef rejects
+functions, abstract classes, and objects that only have matching method names.
+The trainer runs the plugin between the backend step and publication, calling
 ``evaluate`` before ``decide``. A rejection leaves the previous version
 serving. `Python API <../reference/python-api.rst#candidate-evaluation>`__
 documents the plugin contract: ``evaluate``, ``decide``, the fail-closed rule,

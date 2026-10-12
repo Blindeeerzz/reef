@@ -1040,15 +1040,19 @@ builds the class with no arguments and refuses a non-empty ``config``.
 Returning ``None`` from ``propose`` skips the step. Reef passes every keyword
 on every call.
 
-Migration: a plain ``propose`` or ``evaluate`` function becomes a ``Proposer``
-or ``EpisodeScorer`` subclass whose ``propose`` or ``score`` method calls it,
-and the deployment names the class. A ``__call__`` on a ``Proposer``,
-``EpisodeScorer`` or ``Promoter`` subclass becomes ``propose``, ``score`` or
-``promote``. A proposer that took ``requests`` or ``agent_host`` by naming the
-keyword now overrides ``reads_requests`` or ``runs_agent``. A
-``CandidatePluginFactory`` or ``CandidateEvaluationPluginFactory`` becomes the
-class method ``from_config`` on the plugin, which then inherits
-``SelectionPlugin`` or ``ConfiguredEvaluationPlugin``. The worked examples are in
+Migration:
+
+- Wrap a plain ``propose`` or ``evaluate`` function in a ``Proposer`` or
+  ``EpisodeScorer`` subclass. Its ``propose`` or ``score`` method calls the
+  function. Name the class in the deployment file.
+- Rename ``__call__`` on a ``Proposer``, ``EpisodeScorer`` or ``Promoter``
+  subclass to ``propose``, ``score`` or ``promote``.
+- A proposer that named the ``requests`` or ``agent_host`` keyword overrides
+  ``reads_requests`` or ``runs_agent``.
+- Move the body of a ``CandidatePluginFactory`` or
+  ``CandidateEvaluationPluginFactory`` to the class method ``from_config`` on
+  the plugin. The plugin then inherits ``SelectionPlugin`` or
+  ``ConfiguredEvaluationPlugin``. The worked examples are in
 `Evolve your harness <../user-guide/evolve-your-harness.rst#write-a-method>`__.
 
 Candidate evaluation
@@ -1083,12 +1087,12 @@ result was not durably committed. The deployment names the plugin class in
 its ``evaluation`` section (`Configuration
 <configuration.rst#the-evaluation-section>`__).
 
-A configured plugin inherits ``ConfiguredEvaluationPlugin`` and implements the
+A configured plugin inherits ``ConfiguredEvaluationPlugin``. It implements the
 class method ``from_config(config, *, runtime, training_runtime, scenario,
 environ)``, which returns one scenario-local plugin. Reef checks the class
 when it loads the configuration and calls ``from_config`` for each scenario.
-Functions, abstract classes and objects that merely expose matching methods
-are rejected.
+Reef rejects functions, abstract classes and objects that only expose
+matching methods.
 
 Harness recipes instead name a ``reef.train.evaluation.SelectionPlugin``
 class in ``evolution.selection``. Its ``from_config(config, *,

@@ -24,10 +24,10 @@ plugin is optional:
        def from_config(cls, config, *, candidate_backend) -> "MySelection": ...
 
 The deployment file names each class, for example
-``propose: methods.mine:MyProposer``. A class with settings takes the mapping
-form ``{module: methods.mine:MyProposer, config: {...}}`` and overrides the
-class method ``from_config(config)``. Without an override, ``from_config``
-builds the class with no arguments and refuses a non-empty ``config``.
+``propose: methods.mine:MyProposer``. A class with settings uses the mapping
+form ``{module: methods.mine:MyProposer, config: {...}}``. It overrides the
+class method ``from_config(config)``. The default ``from_config`` builds the
+class with no arguments and refuses a non-empty ``config``.
 
 Propose a change
 ~~~~~~~~~~~~~~~~
