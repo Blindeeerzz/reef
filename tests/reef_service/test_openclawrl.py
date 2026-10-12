@@ -12,9 +12,9 @@ from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 from recipes.openclawrl import OpenClawRLProcessor, OpenClawRLRecipe
 from recipes.openclawrl.sessions import SessionIndex
 from recipes.openclawrl.turns import TurnJudgment
+from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, SupportsReceipt
 from reef.core import AgentRecord, RequestType
 from reef.core.trajectories import source_record_id, trajectory_reward
-from reef.record2record import JobRunner, JudgingWorker, SupportsReceipt
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.surface import Surface, WeightInferenceHooks, WeightLoader
 from reef.train.algos import StepScheduling
@@ -24,7 +24,7 @@ from reef.train.types import ProcessorContext, TrainingBatch
 
 
 class FakeWorker:
-    """Duck-typed JudgingWorker: captures jobs, replays scripted judgments."""
+    """Duck-typed BackgroundJobWorker: captures jobs, replays scripted judgments."""
 
     def __init__(self) -> None:
         self.jobs = []
@@ -411,11 +411,11 @@ def test_rejected_submission_retires_the_turn() -> None:
 
 @pytest.mark.unit
 def test_broken_worker_rejects_submissions() -> None:
-    class NeverRuns(JobRunner):
+    class NeverRuns(BackgroundJobRunner):
         async def run(self, job: SupportsReceipt) -> SupportsReceipt:
             raise AssertionError("a broken worker runs no job")
 
-    worker = JudgingWorker(NeverRuns())  # The worker is broken before it gets a job.
+    worker = BackgroundJobWorker(NeverRuns(), thread_name="test-jobs")  # The worker is broken before it gets a job.
     worker.broken = True
     from recipes.openclawrl.turns import TurnJob
 

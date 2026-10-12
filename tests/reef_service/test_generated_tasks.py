@@ -13,6 +13,7 @@ import pytest
 from reef_service.runtime_stubs import StubTrainingRuntime
 from reef_service.task_service_stubs import StandInGenerator, task_for
 
+from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Failed, SupportsReceipt
 from reef.core import AgentRecord, RequestType
 from reef.core.plugins import PluginReference
 from reef.core.reports import ScoredRolloutReport
@@ -36,7 +37,6 @@ from reef.record2dataset.generated_tasks import (
     TaskGroupObjective,
 )
 from reef.record2dataset.generated_tasks.processor import RoundJob, reported_task_name, rewards_of
-from reef.record2record import Failed, JobRunner, JudgingWorker, SupportsReceipt
 from reef.train.algos.registry import resolve_objective
 from reef.train.processors.reported import GroupDecision
 from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem, trajectory_groups
@@ -262,18 +262,18 @@ def generated(round_number: int, *indices: int, hint: bool = True) -> tuple[Gene
     )
 
 
-class Unbound(JobRunner):
+class Unbound(BackgroundJobRunner):
     """The runner of a test worker that runs rounds itself. The real worker thread never calls it."""
 
     async def run(self, job: SupportsReceipt) -> SupportsReceipt:
         raise RuntimeError("no processor bound")
 
 
-class InlineWorker(JudgingWorker):
+class InlineWorker(BackgroundJobWorker):
     """Runs each round the moment it is submitted, on this thread, so a test reads the outcome right away."""
 
     def __init__(self) -> None:
-        super().__init__(Unbound(), concurrency=1)
+        super().__init__(Unbound(), thread_name="test-rounds", concurrency=1)
         self.processor: GeneratedTaskProcessor | None = None
         self.submitted: list[SupportsReceipt] = []
         self.outcomes: list[SupportsReceipt] = []
@@ -298,11 +298,11 @@ class InlineWorker(JudgingWorker):
         self.processor = None
 
 
-class DeferredWorker(JudgingWorker):
+class DeferredWorker(BackgroundJobWorker):
     """Takes a round the moment it is submitted and runs it on ``finish``; the outcome lands on the next poll."""
 
     def __init__(self) -> None:
-        super().__init__(Unbound(), concurrency=1)
+        super().__init__(Unbound(), thread_name="test-rounds", concurrency=1)
         self.processor: GeneratedTaskProcessor | None = None
         self.submitted: list[RoundJob] = []
         self.waiting: list[RoundJob] = []

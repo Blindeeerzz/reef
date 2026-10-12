@@ -84,8 +84,7 @@ import a concrete integration.
 |                         | types, backend integrations                              | configuration parsing                      |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
 | ``reef/record2record/`` | which records Reef uses and in what order:               | processors, record storage, task           |
-|                         | eligibility checks, selection order, held units, the job | generation                                 |
-|                         | worker                                                   |                                            |
+|                         | eligibility checks, selection order, held units          | generation                                 |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
 | ``reef/runtime/``       | backend-neutral runtime contracts, scheduling,           | concrete inference and training            |
 |                         | weight synchronization and publication coordination      | integrations                               |

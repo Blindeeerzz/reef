@@ -27,9 +27,6 @@ Components. Until RFC #765 is complete, the processor engines in
 * ``EligibilityCheck`` (``eligibility.py``): finds held units that can no
   longer train. ``StalenessCheck`` drops units that are more than
   ``max_staleness`` versions behind the newest held unit.
-* ``JudgingWorker`` (``worker.py``): runs the asynchronous jobs of a
-  ``JobRunner`` off the trainer thread. A job that never finishes resolves as
-  ``Failed``.
 
 The package depends only on ``reef.core``, ``reef.runtime.interfaces``, and
 ``reef.observability``. Thus record-to-task and the trainer can both use it.
@@ -40,23 +37,18 @@ from reef.record2record.eligibility import EligibilityCheck, IneligibleUnit, Sta
 from reef.record2record.selection import ArrivalOrder, GroupKeyOrder, SelectionPolicy
 from reef.record2record.stage import PassThroughStage, Record2RecordStage, RecordSet, SingleRecordSet
 from reef.record2record.units import BatchUnit
-from reef.record2record.worker import Failed, JobRunner, JudgingWorker, SupportsReceipt
 
 __all__ = [
     "ArrivalOrder",
     "BatchUnit",
     "EligibilityCheck",
-    "Failed",
     "GroupKeyOrder",
     "IneligibleUnit",
-    "JobRunner",
-    "JudgingWorker",
     "PassThroughStage",
     "Record2RecordStage",
     "RecordSet",
     "SelectionPolicy",
     "SingleRecordSet",
     "StalenessCheck",
-    "SupportsReceipt",
     "UnitBuffer",
 ]

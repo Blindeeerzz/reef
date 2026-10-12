@@ -37,20 +37,20 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Failed, SupportsReceipt
 from reef.core.records_types import AgentRecord
 from reef.record2record import BatchUnit, StalenessCheck, UnitBuffer
-from reef.record2record.worker import Failed, JobRunner, JudgingWorker, SupportsReceipt
 from reef.train.processors.base import DataProcessor
 from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem
 
 logger = logging.getLogger(__name__)
 
-# The worker types moved to reef.record2record.worker. Recipes can still import them from here.
+# The worker types moved to reef.background_jobs. Recipes can still import them from here.
 __all__ = [
+    "BackgroundJobWorker",
     "CandidateUnit",
     "ComputedFeedbackProcessor",
     "Failed",
-    "JudgingWorker",
     "SupportsReceipt",
     "candidate_units",
 ]
@@ -72,7 +72,7 @@ def candidate_units(units: Sequence[BatchUnit]) -> tuple[CandidateUnit, ...]:
     return selected
 
 
-class ComputedFeedbackProcessor(DataProcessor, JobRunner, ABC):
+class ComputedFeedbackProcessor(DataProcessor, BackgroundJobRunner, ABC):
     """Record lifecycle and batch cycle for computed-feedback recipes.
 
     Every ingested receipt sits in exactly one state: tracked
@@ -93,7 +93,7 @@ class ComputedFeedbackProcessor(DataProcessor, JobRunner, ABC):
     recipe's ``make_batch``, ``acknowledge`` releases.
     """
 
-    def __init__(self, context: ProcessorContext, *, worker: JudgingWorker | None) -> None:
+    def __init__(self, context: ProcessorContext, *, worker: BackgroundJobWorker | None) -> None:
         super().__init__(context)
         #: No worker: records track and expire, nothing is ever judged,
         #: everything can be released.

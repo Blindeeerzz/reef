@@ -223,7 +223,7 @@ played: it failed validation, the generator service refused it, or the agent
 could not start on it.
 
 The recipe's processor, ``GeneratedTaskProcessor``, runs one round at a time
-on a private ``JudgingWorker``, outside the trainer lock. In each round it:
+on a private ``BackgroundJobWorker``, outside the trainer lock. In each round it:
 
 1. Asks the generator for tasks with the configured ``description``. The
    request has no source records.

@@ -34,11 +34,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Failed, SupportsReceipt
 from reef.core import AgentRecord
 from reef.core.tasks import GeneratedTask, TaskGenerationRequest, TaskGenerator, TaskPlayResult
 from reef.harness.client.tasks import TaskPlay
 from reef.record2dataset.client import DuplicateTask, Generator, HttpGenerator, TaskNameConflict
-from reef.record2record import Failed, JobRunner, JudgingWorker, SupportsReceipt
 from reef.train.processors.reported import GroupDecision, ReportContext, ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
@@ -107,7 +107,7 @@ class RoundOutcome(SupportsReceipt):
     error: str
 
 
-class GeneratedTaskProcessor(ReportedFeedbackProcessor, JobRunner):
+class GeneratedTaskProcessor(ReportedFeedbackProcessor, BackgroundJobRunner):
     """Groups the training arm's episodes by task and runs the rounds of task generation that produce them."""
 
     output_schema = TrainingBatch
@@ -119,7 +119,7 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor, JobRunner):
         *,
         task_generator: TaskGenerator | None = None,
         task_player: Generator | None = None,
-        worker: JudgingWorker | None = None,
+        worker: BackgroundJobWorker | None = None,
     ) -> None:
         config = dict(context.config)
         self.tasks_per_step = int(config.get("tasks_per_step", DEFAULT_TASKS_PER_STEP))
@@ -162,7 +162,7 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor, JobRunner):
         self.task_player = task_player
         self.worker = worker
         if self.worker is None and self.rounds > 0:
-            self.worker = JudgingWorker(self, concurrency=1)
+            self.worker = BackgroundJobWorker(self, thread_name="generated-task-rounds", concurrency=1)
         if self.task_generator is not None:
             logger.info("scenario %r generates tasks with %s", self.scenario, type(self.task_generator).__name__)
         recorded = recorded_rounds(self.state_dir) if self.state_dir is not None else ()

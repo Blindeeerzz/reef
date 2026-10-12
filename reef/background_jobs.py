@@ -1,4 +1,9 @@
-"""Asynchronous jobs off the trainer thread: a job runner and the worker that runs it."""
+"""Asynchronous jobs off the trainer thread: a job runner and the worker that runs it.
+
+Processors use the worker for slow work that must not block the trainer, such
+as judge calls or task-generation rounds. The module uses only the standard
+library, so every package can depend on it.
+"""
 
 from __future__ import annotations
 
@@ -31,7 +36,7 @@ class Failed(SupportsReceipt):
     """The worker's result for a job that never finished."""
 
 
-class JobRunner(ABC):
+class BackgroundJobRunner(ABC):
     """Run one job and return its result. The worker calls ``run`` on its own thread."""
 
     @abstractmethod
@@ -39,11 +44,11 @@ class JobRunner(ABC):
         """Return the result for ``job``. An exception resolves the job as :class:`Failed`."""
 
 
-class JudgingWorker:
+class BackgroundJobWorker:
     """Run jobs off the trainer thread: jobs go in one queue, results come out of another.
 
     The worker owns only execution: one daemon thread, an event loop, and the
-    two queues. The ``JobRunner`` that the caller gives at construction
+    two queues. The ``BackgroundJobRunner`` that the caller gives at construction
     decides what a job does.
 
     A fault never makes the worker hang. A failed or cancelled job resolves as
@@ -52,8 +57,9 @@ class JudgingWorker:
     so the caller must retire their records directly.
     """
 
-    def __init__(self, runner: JobRunner, *, concurrency: int = 8) -> None:
+    def __init__(self, runner: BackgroundJobRunner, *, thread_name: str, concurrency: int = 8) -> None:
         self.runner = runner
+        self.thread_name = thread_name
         self.concurrency = max(1, concurrency)
         self.jobs: queue.SimpleQueue[SupportsReceipt | None] = queue.SimpleQueue()
         self.results: queue.SimpleQueue[SupportsReceipt] = queue.SimpleQueue()
@@ -71,19 +77,19 @@ class JudgingWorker:
             if self.closed or self.broken:
                 return False
             if self.thread is None:
-                self.thread = Thread(target=self.run_thread, name="computed-feedback-judging", daemon=True)
+                self.thread = Thread(target=self.run_thread, name=self.thread_name, daemon=True)
                 self.thread.start()
             self.jobs.put(job)
             return True
 
     def poll(self) -> list[SupportsReceipt]:
         """Return every finished result without blocking."""
-        judgments: list[SupportsReceipt] = []
+        results: list[SupportsReceipt] = []
         try:
             while True:
-                judgments.append(self.results.get_nowait())
+                results.append(self.results.get_nowait())
         except queue.Empty:
-            return judgments
+            return results
 
     def close(self) -> None:
         """Stop accepting jobs, give running jobs a limited time to finish, and join the thread."""
@@ -102,7 +108,7 @@ class JudgingWorker:
         try:
             asyncio.run(self.run_jobs())
         except Exception:
-            logger.exception("judging worker failed; queued jobs resolve untrainable")
+            logger.exception("background job worker %s failed; queued jobs resolve as Failed", self.thread_name)
         finally:
             with self.gate:
                 self.broken = True
@@ -141,7 +147,7 @@ class JudgingWorker:
                 self.results.put(await self.runner.run(job))
             resolved = True
         except Exception:
-            logger.exception("judgment for receipt %s failed; record resolves untrainable", job.receipt)
+            logger.exception("background job for receipt %s failed; it resolves as Failed", job.receipt)
         finally:
             if not resolved:  # an exception, or a cancellation at shutdown
                 self.results.put(Failed(job.receipt))

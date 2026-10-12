@@ -535,6 +535,13 @@ def test_task_generation_input_definition_does_not_depend_on_consumers() -> None
         assert _imports_of(imported, dependency) == []
 
 
+def test_background_jobs_depend_only_on_the_standard_library() -> None:
+    # Processors in every package use the worker, so it imports no Reef module.
+    tree = ast.parse((REPO_ROOT / "reef" / "background_jobs.py").read_text(encoding="utf-8"))
+    targets = _imported_modules(tree, package="reef")
+    assert not [target for target in targets if target == "reef" or target.startswith("reef.")]
+
+
 def test_record_to_record_stage_depends_only_on_contracts_below_training() -> None:
     # Record-to-task and the trainer both use this stage, so it never imports either of them.
     allowed = ("reef.core", "reef.runtime.interfaces", "reef.observability", "reef.record2record")
