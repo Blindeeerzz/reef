@@ -26,7 +26,8 @@ from dataclasses import replace
 from typing import Any
 
 from reef.core.trajectories import trajectory_reward
-from reef.train.processors.reported import GroupDecision, ReportContext, ReportedFeedbackProcessor, SampleAssembly
+from reef.record2record import GroupDecision, ReportContext, ReportGrouping
+from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,74 @@ logger = logging.getLogger(__name__)
 #: Group key for attempts without a parent commit: first-generation attempts
 #: all diverged from the task seed, so they are each other's siblings.
 ROOT_GROUP = "__coral_root__"
+
+
+def coral_metadata(context: ReportContext) -> Mapping[str, Any] | None:
+    """The report's ``metadata.coral``, or None when it has no commit hash."""
+    metadata = context.report.payload.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return None
+    coral = metadata.get("coral")
+    if not isinstance(coral, Mapping):
+        return None
+    if not isinstance(coral.get("commit_hash"), str) or not coral["commit_hash"]:
+        return None
+    return coral
+
+
+def sibling_group(context: ReportContext) -> tuple[str, str]:
+    """The attempt's sibling group (its parent commit, or ``ROOT_GROUP``) and its own commit hash."""
+    coral = coral_metadata(context)
+    if coral is None:
+        raise ValueError("CoralProcessor requires metadata.coral with a commit_hash")
+    parent = coral.get("parent_hash")
+    return (parent if isinstance(parent, str) and parent else ROOT_GROUP), coral["commit_hash"]
+
+
+def attempt_release_ids(context: ReportContext) -> set[str]:
+    """The releases that served the attempt's inference records."""
+    return {
+        inference.artifact_ref.release_id for inference in context.inferences if inference.artifact_ref is not None
+    }
+
+
+class CoralGrouping(ReportGrouping):
+    """The siblings of one parent commit form one group, and each attempt's commit hash is its slot.
+
+    A group is ready once ``group_size`` siblings are present. A group whose
+    attempts span releases is discarded and listed in ``discarded_groups``.
+    """
+
+    def __init__(self, group_size: int) -> None:
+        self.group_size = group_size
+        self.mixed_release_groups: dict[str, tuple[str, ...]] = {}
+
+    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
+        return sibling_group(context)
+
+    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
+        if len(members) < self.group_size:
+            return GroupDecision.INCOMPLETE
+        versions = {release_id for member in members for release_id in attempt_release_ids(member)}
+        if len(versions) <= 1:
+            return GroupDecision.READY
+        ordered = tuple(sorted(versions))
+        self.mixed_release_groups[str(key)] = ordered
+        logger.error(
+            "CORAL sibling group %s discarded: %d attempts span releases %s",
+            key,
+            len(members),
+            list(ordered),
+        )
+        return GroupDecision.DISCARD
+
+    def status(self) -> Mapping[str, Any]:
+        return {
+            "discarded_groups": [
+                {"parent": parent, "reason": "mixed_release_ids", "release_ids": list(versions)}
+                for parent, versions in sorted(self.mixed_release_groups.items())
+            ],
+        }
 
 
 class CoralProcessor(ReportedFeedbackProcessor):
@@ -59,68 +128,22 @@ class CoralProcessor(ReportedFeedbackProcessor):
         config.setdefault("accept_multi_turn_policy_samples", True)
         assembly_config = context.with_config(config)
         self._assembly = SampleAssembly.from_config(assembly_config)
-        self._mixed_release_groups: dict[str, tuple[str, ...]] = {}
         super().__init__(context.with_config({**config, "batch_size": 1}))
 
-    @staticmethod
-    def _coral_metadata(context: ReportContext) -> Mapping[str, Any] | None:
-        metadata = context.report.payload.get("metadata")
-        if not isinstance(metadata, Mapping):
-            return None
-        coral = metadata.get("coral")
-        if not isinstance(coral, Mapping):
-            return None
-        if not isinstance(coral.get("commit_hash"), str) or not coral["commit_hash"]:
-            return None
-        return coral
-
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
-        coral = self._coral_metadata(context)
+        coral = coral_metadata(context)
         if coral is None:
             raise ValueError("CoralProcessor requires metadata.coral with a commit_hash")
         sample = self._assembly.build(context, context.require_score())
-        release_ids = {
-            inference.artifact_ref.release_id for inference in context.inferences if inference.artifact_ref is not None
-        }
+        release_ids = attempt_release_ids(context)
         if len(release_ids) > 1:
             raise ValueError(f"attempt {coral['commit_hash'][:12]} spans releases {sorted(release_ids)}")
         return sample.with_metadata(
-            coral={**coral, "group": self.grouping(context)[0], "release_id": next(iter(release_ids), None)}
+            coral={**coral, "group": sibling_group(context)[0], "release_id": next(iter(release_ids), None)}
         )
 
-    def grouping(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
-        coral = self._coral_metadata(context)
-        if coral is None:
-            raise ValueError("CoralProcessor requires metadata.coral with a commit_hash")
-        parent = coral.get("parent_hash")
-        group = parent if isinstance(parent, str) and parent else ROOT_GROUP
-        return group, coral["commit_hash"]
-
-    def decide_group(self, key: Hashable, items: tuple[TrainDataItem, ...]) -> GroupDecision:
-        if len(items) < self.group_size:
-            return GroupDecision.INCOMPLETE
-        versions = {
-            item.metadata["coral"]["release_id"] for item in items if item.metadata["coral"]["release_id"] is not None
-        }
-        if len(versions) <= 1:
-            return GroupDecision.READY
-        ordered = tuple(sorted(versions))
-        self._mixed_release_groups[str(key)] = ordered
-        logger.error(
-            "CORAL sibling group %s discarded: %d attempts span releases %s",
-            key,
-            len(items),
-            list(ordered),
-        )
-        return GroupDecision.DISCARD
-
-    def status(self) -> Mapping[str, Any]:
-        return {
-            "discarded_groups": [
-                {"parent": parent, "reason": "mixed_release_ids", "release_ids": list(versions)}
-                for parent, versions in sorted(self._mixed_release_groups.items())
-            ],
-        }
+    def report_grouping(self) -> CoralGrouping:
+        return CoralGrouping(self.group_size)
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         parents = {item.metadata["coral"]["group"] for item in items}

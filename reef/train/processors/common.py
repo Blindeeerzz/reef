@@ -42,18 +42,6 @@ def sample_assembly_config_fields(config: Mapping[str, Any]) -> tuple[bool, int,
     return accept_multi_turn, realign_threshold, scaffold_tolerance
 
 
-def report_score(report: AgentRecord) -> float | None:
-    """Return the report's numeric score, or ``None`` when absent or non-numeric.
-
-    Bool is not a score. Callers layer their own selection policy (windows,
-    finiteness, minimums) on top of this one shared reading of the payload.
-    """
-    score = report.payload.get("score")
-    if not isinstance(score, (int, float)) or isinstance(score, bool):
-        return None
-    return float(score)
-
-
 def recorded_request(payload: Mapping[str, Any]) -> tuple[list[Any], list[Any] | None]:
     """The messages and tools of a recorded inference request.
 

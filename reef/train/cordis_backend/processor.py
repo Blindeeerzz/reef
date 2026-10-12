@@ -33,7 +33,7 @@ class CordisProcessor(ReportedFeedbackProcessor):
 
     def make_training_batch(self, batch_number: int, request: TrainingRequest | None) -> TrainingBatch:
         if request is not None and self.training_mode == "manual":
-            self.unit_buffer.reserve(0)
+            self.record_stage.reserve(0)
             return TrainingBatch(request.id, ())
         # In hybrid an instruction takes the units an automatic batch would, none included; the base attaches it.
         return self._make_pending(batch_number)

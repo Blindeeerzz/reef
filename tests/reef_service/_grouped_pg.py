@@ -5,7 +5,7 @@ processor that groups reports by ``metadata.comparison_set`` and an objective
 that turns the resulting ``TrainingBatch`` into group-relative
 advantages. Both live here rather than in ``reef`` because no bundled recipe
 uses them — the grouping machinery they exercise (group keys, slots, the
-``decide_group`` barrier, ``TrainingBatch`` through the trainer and the
+``ReportGrouping.decide`` barrier, ``TrainingBatch`` through the trainer and the
 runtime) IS production code, and these suites are what keep it pinned.
 
 ``GROUPED_PG_OBJECTIVE`` is the dotted ``module:Objective`` spelling the
@@ -21,9 +21,10 @@ from typing import Any
 
 from reef.core.records_types import AgentRecord
 from reef.core.trajectories import trajectory_reward
+from reef.record2record import GroupDecision, ReportContext, ReportGrouping
 from reef.train.algos import StepSignal, TrainingObjective
 from reef.train.algos.helpers import next_steps
-from reef.train.processors.reported import GroupDecision, ReportContext, ReportedFeedbackProcessor, SampleAssembly
+from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectory_groups
 
 GROUPED_PG_OBJECTIVE = "reef_service._grouped_pg:GroupedPolicyObjective"
@@ -51,6 +52,16 @@ def _comparison_set_id(report: AgentRecord) -> str | None:
     return set_id if isinstance(set_id, str) and set_id else None
 
 
+class ComparisonSetGrouping(ReportGrouping):
+    """Reports with one ``metadata.comparison_set`` form one group, ready at two members."""
+
+    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
+        return _comparison_set_id(context.report), None
+
+    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
+        return GroupDecision.READY if len(members) >= 2 else GroupDecision.INCOMPLETE
+
+
 class GroupedPolicyProcessor(ReportedFeedbackProcessor):
     output_schema = TrainingBatch
 
@@ -64,12 +75,8 @@ class GroupedPolicyProcessor(ReportedFeedbackProcessor):
             raise ValueError("grouped training requires metadata.comparison_set")
         return replace(self._assembly.build(context, context.require_score()), group_id=set_id)
 
-    def grouping(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
-        return _comparison_set_id(context.report), None
-
-    def decide_group(self, key: Hashable, items: tuple[TrainDataItem, ...]) -> GroupDecision:
-        del key
-        return GroupDecision.READY if len(items) >= 2 else GroupDecision.INCOMPLETE
+    def report_grouping(self) -> ReportGrouping:
+        return ComparisonSetGrouping()
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"{self.scenario}:grouped:{batch_number}", items)

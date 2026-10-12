@@ -15,12 +15,12 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Hashable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from reef.core.reports import TeacherContextReport
 from reef.train.processors.common import flatten_content, recorded_request, recorded_response
-from reef.train.processors.reported import GroupDecision, ReportContext, ReportedFeedbackProcessor, SampleAssembly
+from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, SampleAssembly, SkippedReport
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 logger = logging.getLogger(__name__)
@@ -90,7 +90,6 @@ class DistillProcessor(ReportedFeedbackProcessor):
         from transformers import AutoTokenizer
 
         self._tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
-        self._overflow_reports: set[str] = set()
         self._overflow_count = 0
         super().__init__(context)
 
@@ -156,7 +155,7 @@ class DistillProcessor(ReportedFeedbackProcessor):
             prompt_ids = prompt_ids[:max_prompt_tokens]
         return [*prompt_ids, *(int(token) for token in response_ids)]
 
-    def make_sample(self, context: ReportContext) -> TrajectoryItem:
+    def make_sample(self, context: ReportContext) -> TrajectoryItem | SkippedReport:
         parsed = context.parsed_report
         if not isinstance(parsed, TeacherContextReport):
             raise ValueError(f"{type(self).__name__} requires the TeacherContextReport schema")
@@ -172,26 +171,15 @@ class DistillProcessor(ReportedFeedbackProcessor):
             teacher_messages, teacher_tools, sample.training["tokens"][-response_length:]
         )
         if self._max_teacher_tokens and len(teacher_tokens) > self._max_teacher_tokens:
-            self._overflow_reports.add(context.report.agent_record_id)
             logger.warning(
                 "report %s skipped: its teacher sequence is %d tokens, over max_teacher_tokens %d",
                 context.report.agent_record_id,
                 len(teacher_tokens),
                 self._max_teacher_tokens,
             )
+            self._overflow_count += 1
+            return SkippedReport("teacher_overflow")
         return sample.with_training(teacher_tokens=teacher_tokens)
-
-    def grouping(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
-        # An overflowing report is its own group, so the group decision can release it.
-        report_id = context.report.agent_record_id
-        return (report_id if report_id in self._overflow_reports else None), None
-
-    def decide_group(self, key: Hashable, items: tuple[TrainDataItem, ...]) -> GroupDecision:
-        if key not in self._overflow_reports:
-            raise ValueError(f"{type(self).__name__} groups only overflowing reports, got group key {key!r}")
-        self._overflow_reports.discard(key)
-        self._overflow_count += 1
-        return GroupDecision.DISCARD
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"{self.scenario}:{self.batch_label}:{batch_number}", items)

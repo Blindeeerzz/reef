@@ -214,15 +214,13 @@ def test_tttd_rejects_and_releases_a_step_spanning_release_ids(caplog) -> None:
 
     assert not processor.ready()
     assert "span releases" in caplog.text
-    assert processor.status() == {
-        "failed_steps": [
-            {
-                "step": 0,
-                "reason": "mixed_release_ids",
-                "release_ids": ["checkpoint-1", "checkpoint-2"],
-            }
-        ]
-    }
+    assert processor.status()["failed_steps"] == [
+        {
+            "step": 0,
+            "reason": "mixed_release_ids",
+            "release_ids": ["checkpoint-1", "checkpoint-2"],
+        }
+    ]
     retention = processor.releasable_record_ids()
     expected_ids = {
         f"{prefix}-0-{group}-{rollout}" for prefix in ("i", "r") for group in range(2) for rollout in range(3)

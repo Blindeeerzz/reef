@@ -25,6 +25,7 @@ from reef.dispatcher import Dispatcher
 from reef.observability import ExperimentTracker, NullExperimentLogger
 from reef.recipe import Recipe
 from reef.recipe.checkpoint_strategy import EveryNVersions
+from reef.record2record import GroupDecision, ReportContext, ReportGrouping
 from reef.runtime.interfaces import RuntimeContractError
 from reef.scenario import Scenario, StaleTrainingResultError
 from reef.scenario.scenario import validate_component_trainers
@@ -43,7 +44,6 @@ from reef.train import CandidateBackend, ComponentTrainer, PreparedStep, Trainer
 from reef.train.evaluation import EvaluationResult, UpdateCandidate
 from reef.train.processors.base import DataProcessor
 from reef.train.processors.computed import ComputedFeedbackProcessor, SupportsReceipt
-from reef.train.processors.reported import GroupDecision, ReportContext
 from reef.train.types import TrainingBatch
 
 from ._threshold_processor import ThresholdProcessor
@@ -1215,15 +1215,22 @@ def test_a_report_on_an_inference_the_weights_job_trained_is_skipped_not_raised(
     assert [item.source_agent_record_ids for item in weights.items] == [("i2", "r2")]
 
 
-class _SlottedProcessor(ThresholdProcessor):
+class _SlotGrouping(ReportGrouping):
     """Reports batch by the group and the retry slot named in their metadata; a group is ready at two slots."""
 
-    def grouping(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
+    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
         metadata = context.report.payload["metadata"]
         return metadata["group"], metadata["slot"]
 
-    def decide_group(self, key: Hashable, items: tuple[Any, ...]) -> GroupDecision:
-        return GroupDecision.READY if len(items) >= 2 else GroupDecision.INCOMPLETE
+    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
+        return GroupDecision.READY if len(members) >= 2 else GroupDecision.INCOMPLETE
+
+
+class _SlottedProcessor(ThresholdProcessor):
+    """The threshold processor with ``_SlotGrouping``."""
+
+    def report_grouping(self) -> ReportGrouping:
+        return _SlotGrouping()
 
 
 @dataclass(frozen=True)

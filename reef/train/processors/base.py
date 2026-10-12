@@ -7,6 +7,7 @@ computed from traffic).
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -15,7 +16,14 @@ from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase
 from reef.core.training_request import TrainingRequest
 from reef.observability import ExperimentLogger
-from reef.record2record import RecordSet, SingleRecordSet
+from reef.record2record import (
+    AssemblyStatus,
+    PassThroughStage,
+    Record2RecordStage,
+    RecordSet,
+    SetAssembler,
+    SetAssembly,
+)
 from reef.train.types import ProcessorContext, TrainingBatch
 
 
@@ -27,7 +35,7 @@ class InstructionFailure:
     metrics: Mapping[str, Any] = field(default_factory=dict)
 
 
-class DataProcessor:
+class DataProcessor(SetAssembler):
     """The processor contract: turn records into typed training batches.
 
     Which base a recipe builds on is one question — how does its feedback
@@ -102,6 +110,12 @@ class DataProcessor:
         #: reshuffle what it references.
         self._pending: TrainingBatch | None = None
         self._batch_number = 0
+        #: The record-to-record stage that turns this processor's records into record sets.
+        self.record_stage = self.build_record_stage()
+
+    def build_record_stage(self) -> Record2RecordStage:
+        """Return the record-to-record stage for this processor. The default passes each record through."""
+        return PassThroughStage()
 
     @property
     def context(self) -> ProcessorContext:
@@ -127,6 +141,7 @@ class DataProcessor:
     def admit_reports_of(self, report_type: type[ReportBase] | None) -> None:
         """Name the contract the scenario's ingress admits when it is wider than this processor's own."""
         self._context = replace(self._context, admitted_report_type=report_type)
+        self.record_stage.admit_reports_of(report_type)
 
     def buffered_requests(self) -> int:
         """How many instructions are read into memory and not yet consumed."""
@@ -162,22 +177,24 @@ class DataProcessor:
     #: The batch type ``build_batch`` returns; the trainer validates it.
     output_schema: type[TrainingBatch] = TrainingBatch
 
-    def assemble(self, record_set: RecordSet) -> None:
-        """Take one record set that the record-to-record stage formed.
+    def assemble(self, record_set: RecordSet) -> SetAssembly:
+        """Make training data from one record set that the record-to-record stage formed.
 
-        The default stage forms one set per record, and this default ingests that record.
+        The no-update default keeps nothing.
         """
-        if not isinstance(record_set, SingleRecordSet):
-            raise TypeError(f"{type(self).__name__} takes single-record sets, not {type(record_set).__name__}")
-        self.ingest(record_set.record)
+        return SetAssembly(AssemblyStatus.INGESTED)
 
     def ingest(self, item: AgentRecord) -> None:
+        """Read one record. Training instructions stay here; every other record goes through the record stage."""
         if item.request_type is RequestType.TRAIN:
             if item.scenario != self.scenario:
                 raise ValueError("training records must belong to the processor's scenario")
             request = replace(TrainingRequest.from_dict(item.payload), id=item.agent_record_id)
             if request.id not in self._consumed_requests:
                 self._training_requests.setdefault(request.id, request)
+            return
+        self.record_stage.ingest(item)
+        self.record_stage.assemble_formed(self)
 
     # ------------------------------------------------------------ batch cycle
     #
@@ -188,6 +205,9 @@ class DataProcessor:
     # the selected ones become a batch, and what consuming them releases.
 
     def ready(self) -> bool:
+        # Background work in the stage, such as judgments, forms sets without a new record.
+        self.record_stage.poll(time.monotonic())
+        self.record_stage.assemble_formed(self)
         if self._pending is not None:
             return True
         if self.training_mode == "manual":
@@ -283,11 +303,12 @@ class DataProcessor:
 
     def releasable_record_ids(self) -> frozenset[str]:
         """Records whose buffered state can be released after a durable commit."""
-        return frozenset(self._consumed_requests)
+        return frozenset(self._consumed_requests) | self.record_stage.releasable_record_ids()
 
     def release_records(self, agent_record_ids: frozenset[str]) -> None:
         """Release committed in-memory state without changing stored records."""
         self._consumed_requests -= agent_record_ids
+        self.record_stage.release_records(agent_record_ids)
 
     def derivation_pending(self) -> bool:
         """Whether background derivation could flip ``ready`` without records.
@@ -298,11 +319,11 @@ class DataProcessor:
         bounded interval instead. Read on the training thread between
         drains — implementations must not block.
         """
-        return False
+        return self.record_stage.derivation_pending()
 
     def operational_metrics(self) -> Mapping[str, float | int]:
         """Numeric queue state, sampled under the trainer lock without advancing work."""
-        return {"buffered_requests": self.buffered_requests()}
+        return {"buffered_requests": self.buffered_requests(), **self.record_stage.operational_metrics()}
 
     def status(self) -> Mapping[str, Any]:
         """Return JSON-safe state that callers need while waiting.
@@ -321,13 +342,14 @@ class DataProcessor:
         state: dict[str, Any] = {"ready_units": self._ready_count(), "batch_size": self._batch_size}
         if self.supported_training_modes & {"manual", "hybrid"}:
             state["buffered_requests"] = self.buffered_requests()
-        return state
+        return {**state, **self.record_stage.status()}
 
     def close(self) -> None:
         """Release resources the processor owns; safe to call more than once.
 
-        The no-update default owns nothing. Processors with background
+        The default closes the record stage. Processors with background
         derivation work override this to signal their workers and join them;
         after ``close`` returns, no thread of the processor may touch shared
         state or deliver further results.
         """
+        self.record_stage.close()

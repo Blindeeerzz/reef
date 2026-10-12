@@ -34,21 +34,56 @@ The package depends only on ``reef.core``, ``reef.runtime.interfaces``, and
 
 from reef.record2record.buffer import UnitBuffer
 from reef.record2record.eligibility import EligibilityCheck, IneligibleUnit, StalenessCheck
+from reef.record2record.reports import (
+    GroupDecision,
+    ReportCandidate,
+    ReportContext,
+    ReportEntry,
+    ReportGrouping,
+    ReportSet,
+    ReportStage,
+    accepted_by,
+    report_score,
+    report_sets,
+)
 from reef.record2record.selection import ArrivalOrder, GroupKeyOrder, SelectionPolicy
-from reef.record2record.stage import PassThroughStage, Record2RecordStage, RecordSet, SingleRecordSet
+from reef.record2record.stage import (
+    AssemblyStatus,
+    PassThroughStage,
+    Record2RecordStage,
+    RecordSet,
+    SetAssembler,
+    SetAssembly,
+    SingleRecordSet,
+    record_sets,
+)
 from reef.record2record.units import BatchUnit
 
 __all__ = [
     "ArrivalOrder",
+    "AssemblyStatus",
     "BatchUnit",
     "EligibilityCheck",
+    "GroupDecision",
     "GroupKeyOrder",
     "IneligibleUnit",
     "PassThroughStage",
     "Record2RecordStage",
     "RecordSet",
+    "ReportCandidate",
+    "ReportContext",
+    "ReportEntry",
+    "ReportGrouping",
+    "ReportSet",
+    "ReportStage",
     "SelectionPolicy",
+    "SetAssembler",
+    "SetAssembly",
     "SingleRecordSet",
     "StalenessCheck",
     "UnitBuffer",
+    "accepted_by",
+    "record_sets",
+    "report_score",
+    "report_sets",
 ]

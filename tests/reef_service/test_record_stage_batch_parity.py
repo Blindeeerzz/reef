@@ -31,13 +31,14 @@ from reef.artifact import ArtifactRef
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportBase, TeacherContextReport
 from reef.record2dataset.generated_tasks.processor import GeneratedTaskProcessor
+from reef.record2record import GroupDecision, ReportContext, ReportGrouping
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.train import ProcessorContext, Trainer
 from reef.train.backend import CandidateBackend, PreparedStep
 from reef.train.cordis_backend.processor import CordisProcessor
 from reef.train.processors import DataProcessor, DistillProcessor
 from reef.train.processors.computed import ComputedFeedbackProcessor, SupportsReceipt
-from reef.train.processors.reported import GroupDecision, ReportContext, ReportedFeedbackProcessor, SampleAssembly
+from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import TaskItem, TrainDataItem, TrainingBatch, TrajectoryItem
 
 from ._threshold_processor import ThresholdProcessor
@@ -228,8 +229,28 @@ def scored(prefix: str, index: int, score: float = 1.0, **metadata: object) -> l
 # ------------------------------------------------------------- in-file processors
 
 
-class SlotGroupProcessor(ReportedFeedbackProcessor):
+class SlotGrouping(ReportGrouping):
     """Groups by ``metadata.group`` with slots from ``metadata.slot``; ready at two, discarded on mixed feedback."""
+
+    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
+        metadata = context.report.payload.get("metadata", {})
+        return metadata.get("group"), metadata.get("slot")
+
+    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
+        if any(member.report.payload.get("feedback") == "mixed" for member in members):
+            return GroupDecision.DISCARD
+        return GroupDecision.READY if len(members) >= 2 else GroupDecision.INCOMPLETE
+
+
+class AnyGroupReady(SlotGrouping):
+    """Every group is ready as soon as it has a report."""
+
+    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
+        return GroupDecision.READY
+
+
+class SlotGroupProcessor(ReportedFeedbackProcessor):
+    """Trains the groups of ``SlotGrouping``."""
 
     exclusive_sources = True
 
@@ -237,17 +258,11 @@ class SlotGroupProcessor(ReportedFeedbackProcessor):
         self.assembly = SampleAssembly.from_config(context)
         super().__init__(context)
 
+    def report_grouping(self) -> ReportGrouping:
+        return SlotGrouping()
+
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
         return self.assembly.build(context, context.require_score())
-
-    def grouping(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
-        metadata = context.report.payload.get("metadata", {})
-        return metadata.get("group"), metadata.get("slot")
-
-    def decide_group(self, key: Hashable, items: tuple[TrainDataItem, ...]) -> GroupDecision:
-        if any(isinstance(item, TrajectoryItem) and item.metadata.get("feedback") == "mixed" for item in items):
-            return GroupDecision.DISCARD
-        return GroupDecision.READY if len(items) >= 2 else GroupDecision.INCOMPLETE
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"{self.scenario}:slots:{batch_number}", items)
@@ -258,8 +273,8 @@ class OrderedMixProcessor(SlotGroupProcessor):
 
     ordered_groups = True
 
-    def decide_group(self, key: Hashable, items: tuple[TrainDataItem, ...]) -> GroupDecision:
-        return GroupDecision.READY
+    def report_grouping(self) -> ReportGrouping:
+        return AnyGroupReady()
 
 
 @dataclass(frozen=True)

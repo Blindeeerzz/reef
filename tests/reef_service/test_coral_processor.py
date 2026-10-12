@@ -156,4 +156,4 @@ def test_status_is_a_mapping_even_before_any_discard():
     status() call .items() on the base's discard set."""
     processor = _processor()
     status = processor.status()
-    assert status == {"discarded_groups": []}
+    assert status["discarded_groups"] == []

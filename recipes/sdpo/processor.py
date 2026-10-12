@@ -16,9 +16,9 @@ from typing import Any
 
 from recipes.sdpo.report import SDPOReport
 from reef.core.trajectories import trajectory_reward
+from reef.record2record import GroupDecision, ReportContext, ReportGrouping
 from reef.train.processors.common import recorded_request, recorded_response
 from reef.train.processors.distill import DistillProcessor, normalize_messages_for_template
-from reef.train.processors.reported import GroupDecision, ReportContext
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
 #: The reference's reprompt strings (``sdpo.yaml`` at the pin), used verbatim.
@@ -26,6 +26,59 @@ REPROMPT_TEMPLATE = "{prompt}{solution}{feedback}\n\nCorrectly solve the origina
 SOLUTION_TEMPLATE = "\nCorrect solution:\n\n{successful_previous_attempt}"
 FEEDBACK_TEMPLATE = "\nThe following is feedback from your unsuccessful earlier attempt:\n\n{feedback_raw}"
 THINKING_BLOCK = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+
+
+def sibling_request(context: ReportContext) -> tuple[list[Any], list[Any] | None]:
+    """The question a rollout answered: its normalized recorded messages and its tools."""
+    messages, tools = recorded_request(context.inferences[0].payload)
+    return normalize_messages_for_template(messages), tools
+
+
+class SDPOGrouping(ReportGrouping):
+    """One sampling step is one group, and its (group, rollout) coordinates are the slots.
+
+    A step is ready when its grid is complete, it was sampled from one policy
+    release, and the rollouts of each question share one request. Otherwise the
+    complete step is discarded and listed in ``failed_steps``.
+    """
+
+    def __init__(self, groups_per_step: int, rollouts_per_group: int) -> None:
+        self.groups_per_step = groups_per_step
+        self.rollouts_per_group = rollouts_per_group
+        self.failed_steps: dict[int, str] = {}
+
+    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
+        parsed = context.parsed_report
+        if not isinstance(parsed, SDPOReport):
+            raise ValueError("SDPOProcessor requires the SDPOReport schema")
+        return parsed.step, (parsed.group, parsed.rollout)
+
+    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
+        if len(members) != self.groups_per_step * self.rollouts_per_group:
+            return GroupDecision.INCOMPLETE
+        if not isinstance(key, int):
+            raise TypeError("SDPO step must be an integer")
+        releases = {
+            None if member.inferences[0].artifact_ref is None else member.inferences[0].artifact_ref.release_id
+            for member in members
+        }
+        reason = ""
+        if None in releases or len(releases) != 1:
+            reason = "missing_or_mixed_release_ids"
+        reports = [(member, parsed) for member in members if isinstance(parsed := member.parsed_report, SDPOReport)]
+        for group in range(self.groups_per_step):
+            siblings = [sibling_request(member) for member, parsed in reports if parsed.group == group]
+            if any(request != siblings[0] for request in siblings):
+                reason = "different_requests_in_group"
+        if reason:
+            self.failed_steps[key] = reason
+            return GroupDecision.DISCARD
+        return GroupDecision.READY
+
+    def status(self) -> Mapping[str, Any]:
+        return {
+            "failed_steps": [{"step": step, "reason": reason} for step, reason in sorted(self.failed_steps.items())]
+        }
 
 
 class SDPOProcessor(DistillProcessor):
@@ -36,7 +89,7 @@ class SDPOProcessor(DistillProcessor):
     the coordinates are its retry slot: the first report at one wins. A step
     trains only complete, sampled from one policy release, with one request
     per question; anything else is discarded whole and listed in
-    :meth:`status`. A rollout whose teacher reads no privileged information
+    ``status()``. A rollout whose teacher reads no privileged information
     (no successful sibling, no feedback) keeps the plain request and a sample
     weight of 0, so an all-unsuccessful step still takes its optimizer step,
     as the reference does. A teacher sequence over ``max_teacher_tokens``
@@ -63,7 +116,6 @@ class SDPOProcessor(DistillProcessor):
             raise ValueError("SDPO needs positive groups_per_step and at least two rollouts_per_group")
         if not math.isfinite(self.success_reward_threshold):
             raise ValueError("success_reward_threshold must be finite")
-        self.failed_steps: dict[int, str] = {}
         # A batch is one unit: the whole step.
         super().__init__(context.with_config({**config, "batch_size": 1}))
         if not 0 < self.max_teacher_prompt_tokens <= self._max_teacher_tokens:
@@ -78,8 +130,7 @@ class SDPOProcessor(DistillProcessor):
         # The score picks the demonstrating rollouts; the teacher's distribution is the target.
         sample = self.recorded_sample(context, context.require_score())
         payload = context.inferences[0].payload
-        messages, tools = recorded_request(payload)
-        messages = normalize_messages_for_template(messages)
+        messages, tools = sibling_request(context)
         if not messages or messages[-1].get("role") != "user":
             raise ValueError("SDPO's reprompt template needs a request that ends with the user's question")
         artifact_ref = context.inferences[0].artifact_ref
@@ -96,33 +147,8 @@ class SDPOProcessor(DistillProcessor):
             }
         )
 
-    def grouping(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
-        parsed = context.parsed_report
-        if not isinstance(parsed, SDPOReport):
-            raise ValueError("SDPOProcessor requires the SDPOReport schema")
-        return parsed.step, (parsed.group, parsed.rollout)
-
-    def decide_group(self, key: Hashable, items: tuple[TrainDataItem, ...]) -> GroupDecision:
-        if len(items) != self.groups_per_step * self.rollouts_per_group:
-            return GroupDecision.INCOMPLETE
-        if not isinstance(key, int):
-            raise TypeError("SDPO step must be an integer")
-        releases = {item.metadata["sdpo"]["release_id"] for item in items}
-        reason = ""
-        if None in releases or len(releases) != 1:
-            reason = "missing_or_mixed_release_ids"
-        for group in range(self.groups_per_step):
-            siblings = [item.metadata["sdpo"] for item in items if item.metadata["sdpo"]["group"] == group]
-            if any((s["messages"], s["tools"]) != (siblings[0]["messages"], siblings[0]["tools"]) for s in siblings):
-                reason = "different_requests_in_group"
-        if reason:
-            self.failed_steps[key] = reason
-            return GroupDecision.DISCARD
-        return GroupDecision.READY
-
-    def status(self) -> Mapping[str, Any]:
-        failed = [{"step": step, "reason": reason} for step, reason in sorted(self.failed_steps.items())]
-        return {**super().status(), "failed_steps": failed}
+    def report_grouping(self) -> SDPOGrouping:
+        return SDPOGrouping(self.groups_per_step, self.rollouts_per_group)
 
     def demonstration(self, sample: TrajectoryItem, samples: Sequence[TrajectoryItem]) -> str | None:
         """The response of the first successful sibling in rollout order, or None when the question has none."""

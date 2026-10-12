@@ -10,7 +10,8 @@ import pytest
 
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportValidationError
-from reef.train.processors.reported import GroupDecision, ReportContext, ReportedFeedbackProcessor
+from reef.record2record import GroupDecision, ReportContext, ReportGrouping
+from reef.train.processors.reported import ReportedFeedbackProcessor
 from reef.train.types import ProcessorContext, TaskItem, TrainDataItem, TrainingBatch
 
 
@@ -48,19 +49,31 @@ class SampleProcessor(ReportedFeedbackProcessor):
         return TrainingBatch(f"batch:{batch_number}", items)
 
 
-class GroupProcessor(SampleProcessor):
-    def __init__(self, batch_size: int = 1) -> None:
-        super().__init__(batch_size)
+class PairGrouping(ReportGrouping):
+    """Groups by ``metadata.group`` (default ``g``) with slots from ``metadata.slot``; ready at two members."""
+
+    def __init__(self) -> None:
         self.discard = False
 
-    def grouping(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
+    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
         metadata = context.report.payload.get("metadata", {})
         return metadata.get("group", "g"), metadata.get("slot")
 
-    def decide_group(self, key: object, items: tuple[TrainDataItem, ...]) -> GroupDecision:
-        if len(items) < 2:
+    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
+        if len(members) < 2:
             return GroupDecision.INCOMPLETE
         return GroupDecision.DISCARD if self.discard else GroupDecision.READY
+
+
+class GroupProcessor(SampleProcessor):
+    def report_grouping(self) -> ReportGrouping:
+        return PairGrouping()
+
+    @property
+    def grouping_policy(self) -> PairGrouping:
+        grouping = self.report_stage.grouping
+        assert isinstance(grouping, PairGrouping)
+        return grouping
 
 
 def test_a_report_shaped_for_another_component_is_released_not_raised() -> None:
@@ -257,7 +270,7 @@ def test_group_waits_for_complete_samples() -> None:
 
 def test_group_discard_releases_all_members_and_refuses_later_members() -> None:
     processor = GroupProcessor()
-    processor.discard = True
+    processor.grouping_policy.discard = True
     for index in (1, 2, 3):
         processor.ingest(inference(f"i{index}"))
         processor.ingest(report(f"r{index}", f"i{index}"))
@@ -276,15 +289,19 @@ def test_slot_retry_preserves_first_report() -> None:
 
 
 def test_ordered_groups_can_coexist_with_singleton_samples() -> None:
-    class MixedProcessor(SampleProcessor):
-        ordered_groups = True
-
-        def grouping(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
+    class PrefixGrouping(ReportGrouping):
+        def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
             record_id = context.report.agent_record_id
             return (record_id if record_id.startswith("g-") else None), None
 
-        def decide_group(self, key: object, items: tuple[TrainDataItem, ...]) -> GroupDecision:
+        def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
             return GroupDecision.READY
+
+    class MixedProcessor(SampleProcessor):
+        ordered_groups = True
+
+        def report_grouping(self) -> ReportGrouping:
+            return PrefixGrouping()
 
     processor = MixedProcessor(batch_size=3)
     for record_id in ("g-z", "g-a", "single"):
@@ -314,10 +331,6 @@ def test_group_arrivals_after_reservation_are_left_for_the_next_batch() -> None:
 
 def test_recipe_receives_items_and_omitting_one_does_not_lose_consumption() -> None:
     class SelectedProcessor(GroupProcessor):
-        def decide_group(self, key, items):
-            assert all(isinstance(item, TaskItem) for item in items)
-            return super().decide_group(key, items)
-
         def make_batch(self, items, batch_number):
             assert [item.source_agent_record_ids for item in items] == [("i1", "r1"), ("i2", "r2")]
             return super().make_batch(items[:1], batch_number)

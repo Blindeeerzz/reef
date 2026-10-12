@@ -27,11 +27,9 @@ from reef.core.reports import ReportBase
 from reef.core.training_request import TrainingRequest
 from reef.observability import ExperimentLogger, NullExperimentLogger
 from reef.observability.operations import OperationMetrics
-from reef.record2record import PassThroughStage, Record2RecordStage
 from reef.storage.records import RecordStore
 from reef.train.backend import CandidateBackend, PreparedStep, StepExecution
 from reef.train.evaluation.evaluators import BackendAlwaysSelectPlugin
-from reef.train.feed import TrainingFeed
 from reef.train.processors.base import DataProcessor, InstructionFailure
 from reef.train.types import PreparedCommit, ProcessorContext, TrainingBatch, TrainStepResult
 
@@ -97,7 +95,6 @@ class Trainer:
         experiment_logger: ExperimentLogger | None = None,
         training_mode: str = "auto",
         max_staleness: int = 0,
-        record_stage: Record2RecordStage | None = None,
     ) -> Trainer:
         if candidate_backend is None and candidate_evaluator is not None:
             raise ValueError("candidate evaluation requires a candidate backend")
@@ -113,7 +110,7 @@ class Trainer:
             )
         )
         if processor.training_mode != training_mode:
-            TrainingFeed(PassThroughStage() if record_stage is None else record_stage, processor).close()
+            processor.close()
             raise ValueError("processor_factory must preserve the requested training_mode")
         default_state = candidate_backend.initial_state() if candidate_backend is not None else {}
         initial_state = dict(default_state if algorithm_state is None else algorithm_state)
@@ -124,7 +121,6 @@ class Trainer:
             candidate_backend=candidate_backend,
             candidate_evaluator=candidate_evaluator,
             state=initial_state,
-            record_stage=record_stage,
         )
 
     def __init__(
@@ -136,13 +132,10 @@ class Trainer:
         candidate_backend: CandidateBackend | None,
         candidate_evaluator: CandidateEvaluationPlugin | None,
         state: Mapping[str, Any],
-        record_stage: Record2RecordStage | None = None,
     ) -> None:
         self._scenario = scenario
         self._records = records
         self._processor = processor
-        # Records go through the record-to-record stage to the processor. The default stage passes each one through.
-        self._feed = TrainingFeed(PassThroughStage() if record_stage is None else record_stage, processor)
         self._candidate_backend = candidate_backend
         if candidate_backend is None:
             self._candidate_evaluator = None
@@ -190,7 +183,7 @@ class Trainer:
             )
             values["training/reserved_batches"] = int(self._pending is not None)
             values["training/auto_enabled"] = int(self.training_mode in {"auto", "hybrid"})
-            processor_metrics = {**self._feed.status(), **self._feed.operational_metrics()}
+            processor_metrics = {**self._processor.status(), **self._processor.operational_metrics()}
             for name, value in processor_metrics.items():
                 if isinstance(value, (int, float)) and math.isfinite(value):
                     values[f"processor/{name}"] = int(value) if isinstance(value, bool) else value
@@ -298,23 +291,23 @@ class Trainer:
     def batch_ready(self) -> bool:
         """Whether a reserved or buildable batch is waiting on the training thread."""
         with self._lock:
-            return self._pending is not None or self._feed.ready()
+            return self._pending is not None or self._processor.ready()
 
     def derivation_pending(self) -> bool:
         """Whether background work in the stage or the processor can make a batch ready without a new record.
 
         The training worker reads this between drains, without the trainer lock. It must not block.
         """
-        return self._feed.derivation_pending()
+        return self._processor.derivation_pending()
 
     def processor_status(self) -> Mapping[str, Any]:
         """Return caller-visible processor state under the processor's lock."""
         with self._lock:
             loss = self._records.loss(self.scenario)
             if not loss.record_count:
-                return dict(self._feed.status())
+                return dict(self._processor.status())
             return {
-                **self._feed.status(),
+                **self._processor.status(),
                 "record_data_incomplete": loss.record_count > 0,
                 "evicted_record_count": loss.record_count,
                 "evicted_body_bytes": loss.body_bytes,
@@ -357,7 +350,7 @@ class Trainer:
                 self.skipped_record_ids.add(item.agent_record_id)
                 return
         if item.request_type in self.processor.required_request_types:
-            self._feed.ingest(item)
+            self._processor.ingest(item)
 
     def _consume_data(self) -> None:
         while True:
@@ -372,7 +365,7 @@ class Trainer:
                 self.ingest_retained(item)
                 self._data_offset += 1
                 self._data_sequence = sequence
-                if self._feed.ready():
+                if self._processor.ready():
                     return
 
     def run_once(self, scenario_step: int = 0, *, base_release_id: str | None = None) -> TrainStepResult | None:
@@ -401,7 +394,7 @@ class Trainer:
                 kept = self._pending.prepared
             else:
                 self._consume_data()
-                if not self._feed.ready():
+                if not self._processor.ready():
                     return None
                 batch = self._build_validated_batch()
                 self._pending = _PendingStep(batch=batch, result=None, base_release_id=base_release_id)
@@ -497,7 +490,7 @@ class Trainer:
                     self._pending.base_release_id = base_release_id
                 return self._pending.batch
             self._consume_data()
-            if not self._feed.ready():
+            if not self._processor.ready():
                 return None
             batch = self._build_validated_batch()
             self._pending = _PendingStep(batch=batch, result=None, base_release_id=base_release_id)
@@ -596,7 +589,7 @@ class Trainer:
             consumed = self._pending.consumed_ids
             if consumed is None:
                 consumed = self._processor.acknowledge(batch_id)
-            released = self._feed.releasable_record_ids()
+            released = self._processor.releasable_record_ids()
             loss = self._records.loss(self.scenario)
             metrics = dict(result.metrics)
             if loss.record_count > 0:
@@ -640,7 +633,7 @@ class Trainer:
                 return
             if self._pending.prepared_commit is not prepared:
                 raise RuntimeError("prepared commit does not match the pending training step")
-            self._feed.release_records(prepared.released_ids)
+            self._processor.release_records(prepared.released_ids)
             self._state = dict(prepared.algorithm_state)
             self.consumed_record_ids.update(prepared.consumed_ids)
             self.skipped_record_ids.difference_update(prepared.consumed_ids)
@@ -683,7 +676,7 @@ class Trainer:
             if consumed is None:
                 self._processor.dropped(batch_id)
                 consumed = self._processor.acknowledge(batch_id)
-            released = self._feed.releasable_record_ids()
+            released = self._processor.releasable_record_ids()
             metadata: dict[str, Any] = {"outcome": "stale", "metrics": dict(metrics or {})}
             if component is not None:
                 metadata["component"] = component
@@ -694,7 +687,7 @@ class Trainer:
                 metadata=metadata,
             )
             self.consumed_record_ids.update(consumed | released)
-            self._feed.release_records(released)
+            self._processor.release_records(released)
             self._pending = None
 
     def commit_applied(self, state: Mapping[str, Any]) -> None:
@@ -711,7 +704,7 @@ class Trainer:
         """
         with self._lock:
             try:
-                self._feed.close()
+                self._processor.close()
             finally:
                 if self._candidate_backend is not None:
                     self._candidate_backend.close()

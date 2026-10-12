@@ -39,7 +39,8 @@ from reef.core import AgentRecord
 from reef.core.tasks import GeneratedTask, TaskGenerationRequest, TaskGenerator, TaskPlayResult
 from reef.harness.client.tasks import TaskPlay
 from reef.record2dataset.client import DuplicateTask, Generator, HttpGenerator, TaskNameConflict
-from reef.train.processors.reported import GroupDecision, ReportContext, ReportedFeedbackProcessor, SampleAssembly
+from reef.record2record import GroupDecision, ReportContext, ReportGrouping
+from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 logger = logging.getLogger(__name__)
@@ -105,6 +106,25 @@ class RoundOutcome(SupportsReceipt):
     round_number: int
     results: tuple[TaskPlayResult, ...]
     error: str
+
+
+class TaskGroupGrouping(ReportGrouping):
+    """The training arm's episodes of one task form one group, ready at ``plays_per_task`` episodes.
+
+    Measurement arms and the generator's own reports share the scenario; only the training arm trains.
+    """
+
+    def __init__(self, plays_per_task: int) -> None:
+        self.plays_per_task = plays_per_task
+
+    def is_training_report(self, report: AgentRecord) -> bool:
+        return reported_arm(report) == TRAINING_ARM
+
+    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
+        return reported_task_name(context.report), None
+
+    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
+        return GroupDecision.READY if len(members) >= self.plays_per_task else GroupDecision.INCOMPLETE
 
 
 class GeneratedTaskProcessor(ReportedFeedbackProcessor, BackgroundJobRunner):
@@ -182,9 +202,8 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor, BackgroundJobRunner):
 
     # ------------------------------------------------------- the reported half
 
-    def is_training_report(self, report: AgentRecord) -> bool:
-        # Measurement arms and the generator's own reports share the scenario; only the training arm trains.
-        return reported_arm(report) == TRAINING_ARM
+    def report_grouping(self) -> TaskGroupGrouping:
+        return TaskGroupGrouping(self.plays_per_task)
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
         task_name = reported_task_name(context.report)
@@ -192,12 +211,6 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor, BackgroundJobRunner):
             raise ValueError("a generated task's report requires metadata.task.name, as the task player sends it")
         sample = self.assembly.build(context, context.require_score())
         return replace(sample, group_id=task_name)
-
-    def grouping(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
-        return reported_task_name(context.report), None
-
-    def decide_group(self, key: Hashable, items: tuple[TrainDataItem, ...]) -> GroupDecision:
-        return GroupDecision.READY if len(items) >= self.plays_per_task else GroupDecision.INCOMPLETE
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"{self.scenario}:generated-tasks:{batch_number}", items)
@@ -225,6 +238,7 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor, BackgroundJobRunner):
     def close(self) -> None:
         if self.worker is not None:
             self.worker.close()
+        super().close()
 
     def operational_metrics(self) -> Mapping[str, float | int]:
         return {

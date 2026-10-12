@@ -24,10 +24,10 @@ from recipes.tttd import TTTDGroupedRolloutReport, TTTDProcessor
 from reef.artifact import ArtifactRef, InMemoryRepositoryBackend
 from reef.core import AgentRecord, RequestType
 from reef.dispatcher import Dispatcher
+from reef.record2record import GroupDecision, ReportContext, ReportGrouping
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train import ComponentTrainer, Trainer
 from reef.train.processors.computed import ComputedFeedbackProcessor
-from reef.train.processors.reported import GroupDecision, ReportContext
 from reef.train.types import TrainingBatch
 
 from ._threshold_processor import ThresholdProcessor
@@ -77,6 +77,24 @@ class _SessionProcessor(ComputedFeedbackProcessor):
         return TrainingBatch(f"{self.scenario}:session:{batch_number}", tuple(samples))
 
 
+class _StepGrouping(ReportGrouping):
+    """Reports with a ``metadata.step`` group by step and slot; a step of two trains unless its feedback is mixed."""
+
+    def is_training_report(self, report: AgentRecord) -> bool:
+        return "step" in (report.payload.get("metadata") or {})
+
+    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
+        metadata = context.report.payload["metadata"]
+        return metadata["step"], metadata["slot"]
+
+    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
+        if len(members) < 2:
+            return GroupDecision.INCOMPLETE
+        if any(member.report.payload.get("feedback") == "mixed" for member in members):
+            return GroupDecision.DISCARD
+        return GroupDecision.READY
+
+
 class _StepProcessor(ThresholdProcessor):
     """TTTD's shape: a step is one group of two (step, slot) reports, sources are exclusive, a step with a report
     marked mixed is discarded once complete, and a report that names no step is another role's and released."""
@@ -84,19 +102,8 @@ class _StepProcessor(ThresholdProcessor):
     exclusive_sources = True
     ordered_groups = True
 
-    def is_training_report(self, report: AgentRecord) -> bool:
-        return "step" in (report.payload.get("metadata") or {})
-
-    def grouping(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
-        metadata = context.report.payload["metadata"]
-        return metadata["step"], metadata["slot"]
-
-    def decide_group(self, key: Hashable, items: tuple[Any, ...]) -> GroupDecision:
-        if len(items) < 2:
-            return GroupDecision.INCOMPLETE
-        if any(item.metadata.get("feedback") == "mixed" for item in items):
-            return GroupDecision.DISCARD
-        return GroupDecision.READY
+    def report_grouping(self) -> ReportGrouping:
+        return _StepGrouping()
 
 
 @dataclass(frozen=True)

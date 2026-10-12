@@ -1,60 +1,50 @@
-"""Record-to-record stage contracts: what the trainer's feed sends where, and what a commit records."""
+"""Record-to-record stage contracts: how a processor uses its stage, and what a commit records."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Hashable, Mapping
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from reef.core import AgentRecord, RequestType
-from reef.record2record import PassThroughStage, Record2RecordStage, RecordSet, SingleRecordSet
+from reef.core import AgentRecord
+from reef.record2record import (
+    AssemblyStatus,
+    GroupDecision,
+    PassThroughStage,
+    RecordSet,
+    ReportContext,
+    ReportGrouping,
+    ReportStage,
+    SetAssembly,
+    SingleRecordSet,
+)
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.train import ProcessorContext, Trainer
-from reef.train.feed import TrainingFeed
 from reef.train.processors import DataProcessor
+from reef.train.processors.reported import ReportedFeedbackProcessor, SkippedReport
+from reef.train.types import TaskItem, TrainDataItem, TrainingBatch
 
 from ._threshold_processor import ThresholdProcessor
 from .test_record_stage_batch_parity import CountingBackend, inference, instruction, report
 
 
-class RecordingProcessor(DataProcessor):
-    """Keeps every record that it ingests. It never becomes ready."""
-
-    supported_training_modes = frozenset({"auto", "manual", "hybrid"})
-
-    def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context)
-        self.ingested: list[str] = []
-        self.closed = False
-
-    def ingest(self, item: AgentRecord) -> None:
-        super().ingest(item)
-        self.ingested.append(item.agent_record_id)
-
-    def close(self) -> None:
-        self.closed = True
-
-
-class WithholdingStage(Record2RecordStage):
+class WithholdingStage(PassThroughStage):
     """Passes records through, except records whose ID starts with ``drop``: it ends those itself."""
 
     def __init__(self) -> None:
-        self.formed: list[RecordSet] = []
+        super().__init__()
         self.ended: set[str] = set()
         self.released: set[str] = set()
         self.pending = False
-        self.fail_close = False
+        self.closed = False
 
     def ingest(self, record: AgentRecord) -> None:
         if record.agent_record_id.startswith("drop"):
             self.ended.add(record.agent_record_id)
             return
-        self.formed.append(SingleRecordSet(unit_id=record.agent_record_id, arrival_index=0, record=record))
-
-    def take_formed(self) -> tuple[RecordSet, ...]:
-        formed, self.formed = tuple(self.formed), []
-        return formed
+        super().ingest(record)
 
     def releasable_record_ids(self) -> frozenset[str]:
         return frozenset(self.ended)
@@ -70,13 +60,83 @@ class WithholdingStage(Record2RecordStage):
         return {"ended_records": len(self.ended)}
 
     def close(self) -> None:
-        if self.fail_close:
-            raise RuntimeError("stage close failed")
+        self.closed = True
 
 
-def feed(stage: Record2RecordStage) -> tuple[TrainingFeed, RecordingProcessor]:
-    processor = RecordingProcessor(ProcessorContext("s", training_mode="hybrid"))
-    return TrainingFeed(stage, processor), processor
+class RecordingProcessor(DataProcessor):
+    """Keeps the ID of every set that its stage forms. It never becomes ready."""
+
+    supported_training_modes = frozenset({"auto", "manual", "hybrid"})
+
+    def build_record_stage(self) -> WithholdingStage:
+        return WithholdingStage()
+
+    def __init__(self, context: ProcessorContext) -> None:
+        super().__init__(context)
+        self.assembled: list[str] = []
+
+    @property
+    def stage(self) -> WithholdingStage:
+        stage = self.record_stage
+        assert isinstance(stage, WithholdingStage)
+        return stage
+
+    def assemble(self, record_set: RecordSet) -> SetAssembly:
+        self.assembled.extend(record_set.record_ids())
+        return SetAssembly(AssemblyStatus.INGESTED)
+
+
+class DroppingReportStage(ReportStage):
+    """A report stage that ends every record whose ID starts with ``drop``."""
+
+    def ingest(self, record: AgentRecord) -> None:
+        if record.agent_record_id.startswith("drop"):
+            self.terminal.add(record.agent_record_id)
+            return
+        super().ingest(record)
+
+
+class DroppingProcessor(ThresholdProcessor):
+    def build_record_stage(self) -> ReportStage:
+        return DroppingReportStage(self.scenario, self.context.report_type, ReportGrouping())
+
+
+class PairGrouping(ReportGrouping):
+    """Groups by ``metadata.group`` with slots from ``metadata.slot``; ready at two members."""
+
+    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
+        metadata = context.report.payload.get("metadata", {})
+        return metadata.get("group"), metadata.get("slot")
+
+    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
+        return GroupDecision.READY if len(members) >= 2 else GroupDecision.INCOMPLETE
+
+
+class PairProcessor(ReportedFeedbackProcessor):
+    """Trains pairs of reports. Reports whose ID starts with ``skip`` cannot train."""
+
+    exclusive_sources = True
+
+    def __init__(self) -> None:
+        super().__init__(ProcessorContext("s", {"batch_size": 1}))
+        self.fail_assembly = False
+
+    def report_grouping(self) -> ReportGrouping:
+        return PairGrouping()
+
+    def make_sample(self, context: ReportContext) -> TrainDataItem | SkippedReport:
+        if self.fail_assembly:
+            raise ValueError("broken training data")
+        if context.report.agent_record_id.startswith("skip"):
+            return SkippedReport("test")
+        return TaskItem(Path(context.report.agent_record_id))
+
+    def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+        return TrainingBatch(f"pairs:{batch_number}", items)
+
+
+def slotted(record_id: str, reference: str, slot: str) -> AgentRecord:
+    return report(record_id, reference, group="g", slot=slot)
 
 
 @pytest.mark.unit
@@ -92,29 +152,25 @@ def test_the_pass_through_stage_forms_one_set_per_record_in_arrival_order() -> N
 
 
 @pytest.mark.unit
-def test_the_feed_sends_instructions_to_the_processor_and_other_records_through_the_stage() -> None:
-    stage = WithholdingStage()
-    training_feed, processor = feed(stage)
-    training_feed.ingest(inference("i1"))
-    training_feed.ingest(inference("drop-1"))
-    training_feed.ingest(instruction("train-1"))
-    assert processor.ingested == ["i1", "train-1"]
+def test_a_processor_keeps_instructions_and_sends_other_records_through_its_stage() -> None:
+    processor = RecordingProcessor(ProcessorContext("s", training_mode="hybrid"))
+    processor.ingest(inference("i1"))
+    processor.ingest(inference("drop-1"))
+    processor.ingest(instruction("train-1"))
+    assert processor.assembled == ["i1"]
     assert processor.buffered_requests() == 1
-    assert training_feed.releasable_record_ids() == {"drop-1"}
+    assert processor.releasable_record_ids() == {"drop-1"}
 
 
 @pytest.mark.unit
-def test_the_feed_merges_background_work_and_status_and_closes_the_processor_after_a_failed_stage() -> None:
-    stage = WithholdingStage()
-    training_feed, processor = feed(stage)
-    assert not training_feed.derivation_pending()
-    stage.pending = True
-    assert training_feed.derivation_pending()
-    assert training_feed.status() == {"ready_units": 0, "batch_size": 1, "buffered_requests": 0, "ended_records": 0}
-    stage.fail_close = True
-    with pytest.raises(RuntimeError, match="stage close failed"):
-        training_feed.close()
-    assert processor.closed
+def test_a_processor_adds_its_stages_background_work_and_status_and_closes_it() -> None:
+    processor = RecordingProcessor(ProcessorContext("s", training_mode="hybrid"))
+    assert not processor.derivation_pending()
+    processor.stage.pending = True
+    assert processor.derivation_pending()
+    assert processor.status() == {"ready_units": 0, "batch_size": 1, "buffered_requests": 0, "ended_records": 0}
+    processor.close()
+    assert processor.stage.closed
 
 
 @pytest.mark.unit
@@ -122,13 +178,11 @@ def test_a_record_the_stage_ends_is_consumed_by_the_next_commit_and_then_release
     records = SQLiteRecordStore()
     for record in (inference("i1"), inference("drop-1"), report("r1", "i1")):
         records.append(record)
-    stage = WithholdingStage()
     trainer = Trainer.build(
         "s",
         records,
-        processor_factory=lambda context: ThresholdProcessor(context.with_config({"batch_size": 1})),
+        processor_factory=lambda context: DroppingProcessor(context.with_config({"batch_size": 1})),
         candidate_backend=CountingBackend(),
-        record_stage=stage,
     )
     batch = trainer.reserve_training_batch()
     assert batch is not None
@@ -137,52 +191,71 @@ def test_a_record_the_stage_ends_is_consumed_by_the_next_commit_and_then_release
     prepared = trainer.prepare_commit(execution.result)
     assert prepared.consumed_ids == {"i1", "r1", "drop-1"}
     trainer.commit(prepared)
-    assert stage.released == {"i1", "r1", "drop-1"} and not stage.ended
+    assert not trainer.processor.releasable_record_ids()
     assert "drop-1" in trainer.consumed_record_ids
 
 
 @pytest.mark.unit
 def test_the_trainer_reports_the_stages_background_work() -> None:
-    stage = WithholdingStage()
-    trainer = Trainer.build(
-        "s",
-        SQLiteRecordStore(),
-        processor_factory=lambda context: ThresholdProcessor(context.with_config({"batch_size": 1})),
-        record_stage=stage,
-    )
+    trainer = Trainer.build("s", SQLiteRecordStore(), processor_factory=RecordingProcessor)
+    processor = trainer.processor
+    assert isinstance(processor, RecordingProcessor)
     assert not trainer.derivation_pending()
-    stage.pending = True
+    processor.stage.pending = True
     assert trainer.derivation_pending()
 
 
 @pytest.mark.unit
-def test_a_processor_built_with_the_wrong_mode_closes_the_stage_too() -> None:
-    closed: list[str] = []
-
-    class ClosingStage(PassThroughStage):
-        def close(self) -> None:
-            closed.append("stage")
-
-    with pytest.raises(ValueError, match="training_mode"):
-        Trainer.build(
-            "s",
-            SQLiteRecordStore(),
-            processor_factory=lambda context: ThresholdProcessor(ProcessorContext("s")),
-            training_mode="manual",
-            record_stage=ClosingStage(),
-        )
-    assert closed == ["stage"]
+def test_a_retry_in_a_taken_slot_is_terminal_and_released() -> None:
+    processor = PairProcessor()
+    for record_id in ("i1", "i2", "i3"):
+        processor.ingest(inference(record_id))
+    processor.ingest(slotted("r1", "i1", "a"))
+    processor.ingest(slotted("r2", "i2", "a"))
+    processor.ingest(slotted("r3", "i3", "b"))
+    batch = processor.build_batch()
+    assert [str(item.task_path) for item in batch.items] == ["r1", "r3"]
+    assert {"r2", "i2"} <= processor.releasable_record_ids()
+    assert "r2" not in processor.samples
 
 
 @pytest.mark.unit
-def test_the_default_processor_assembly_takes_only_single_record_sets() -> None:
-    class Pair(RecordSet):
-        def record_ids(self) -> tuple[str, ...]:
-            return ("a", "b")
+def test_a_failed_assembly_keeps_the_report_and_leaves_its_slot_free() -> None:
+    processor = PairProcessor()
+    for record_id in ("i1", "i2"):
+        processor.ingest(inference(record_id))
+    processor.fail_assembly = True
+    with pytest.raises(ValueError, match="broken training data"):
+        processor.ingest(slotted("r1", "i1", "a"))
+    assert not processor.releasable_record_ids() & {"r1", "i1"}
+    processor.fail_assembly = False
+    processor.ingest(slotted("r1", "i1", "a"))
+    processor.ingest(slotted("r2", "i2", "b"))
+    assert [str(item.task_path) for item in processor.build_batch().items] == ["r1", "r2"]
 
-    processor = RecordingProcessor(ProcessorContext("s"))
-    with pytest.raises(TypeError, match="single-record sets"):
-        processor.assemble(Pair(unit_id="pair", arrival_index=1))
-    record = AgentRecord.create(scenario="s", request_type=RequestType.INFERENCE, payload={}, agent_record_id="i1")
-    processor.assemble(SingleRecordSet(unit_id="i1", arrival_index=1, record=record))
-    assert processor.ingested == ["i1"]
+
+@pytest.mark.unit
+def test_a_skipped_report_is_released_and_never_batched() -> None:
+    processor = PairProcessor()
+    processor.ingest(inference("i1"))
+    processor.ingest(slotted("skip-1", "i1", "a"))
+    assert {"skip-1", "i1"} <= processor.releasable_record_ids()
+    assert not processor.ready()
+
+
+@pytest.mark.unit
+def test_a_processor_that_defines_a_moved_grouping_hook_fails_at_import() -> None:
+    with pytest.raises(TypeError, match=r"moved to reef\.record2record\.ReportGrouping"):
+
+        class OldProcessor(ThresholdProcessor):
+            def grouping(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
+                return None, None
+
+
+@pytest.mark.unit
+def test_the_default_processor_assembly_keeps_nothing() -> None:
+    processor = DataProcessor(ProcessorContext("s"))
+    record_set = SingleRecordSet(unit_id="i1", arrival_index=1, record=inference("i1"))
+    assert processor.assemble(record_set) == SetAssembly(AssemblyStatus.INGESTED)
+    processor.ingest(inference("i1"))
+    assert not processor.ready() and not processor.releasable_record_ids()

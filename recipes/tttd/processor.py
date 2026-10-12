@@ -9,10 +9,73 @@ from dataclasses import replace
 from typing import Any
 
 from reef.core.trajectories import trajectory_reward
-from reef.train.processors.reported import GroupDecision, ReportContext, ReportedFeedbackProcessor, SampleAssembly
+from reef.record2record import GroupDecision, ReportContext, ReportGrouping
+from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
 logger = logging.getLogger(__name__)
+
+
+def inference_release_id(context: ReportContext) -> str | None:
+    """The release that served the report's first inference, if the record names one."""
+    inference = context.inferences[0]
+    return inference.artifact_ref.release_id if inference.artifact_ref is not None else None
+
+
+class TTTDGrouping(ReportGrouping):
+    """One TTTD step is one group, and its (group, rollout) coordinates are the slots.
+
+    A step is ready when every one of its ``groups_per_step`` x
+    ``rollouts_per_group`` slots is filled. A complete step whose reports span
+    releases is discarded wholesale, because mixed-version rewards are not
+    comparable.
+    """
+
+    def __init__(self, groups_per_step: int, rollouts_per_group: int) -> None:
+        self.groups_per_step = groups_per_step
+        self.rollouts_per_group = rollouts_per_group
+        self.failed_step_versions: dict[int, tuple[str, ...]] = {}
+
+    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
+        parsed: Any = context.parsed_report
+        return parsed.step, (parsed.group, parsed.rollout)
+
+    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
+        # 1. The barrier: a step batches only when every one of its
+        #    groups_per_step x rollouts_per_group slots is filled.
+        expected_count = self.groups_per_step * self.rollouts_per_group
+        if len(members) != expected_count:
+            return GroupDecision.INCOMPLETE
+        # 2. A step whose reports span releases is discarded
+        #    wholesale — mixed-version rewards are not comparable.
+        versions = {release_id for member in members if (release_id := inference_release_id(member)) is not None}
+        if len(versions) <= 1:
+            return GroupDecision.READY
+        if not isinstance(key, int):
+            raise TypeError(f"TTTD step key must be an integer, got {key!r}")
+        step = key
+        ordered_versions = tuple(sorted(versions))
+        self.failed_step_versions[step] = ordered_versions
+        logger.error(
+            "TTTD step %d failed because its %d reports span releases %s",
+            step,
+            expected_count,
+            list(ordered_versions),
+        )
+        return GroupDecision.DISCARD
+
+    def status(self) -> Mapping[str, Any]:
+        """Expose mixed-version steps that terminally violated TTTD's invariant."""
+        return {
+            "failed_steps": [
+                {
+                    "step": step,
+                    "reason": "mixed_release_ids",
+                    "release_ids": list(versions),
+                }
+                for step, versions in sorted(self.failed_step_versions.items())
+            ]
+        }
 
 
 class TTTDProcessor(ReportedFeedbackProcessor):
@@ -22,7 +85,7 @@ class TTTDProcessor(ReportedFeedbackProcessor):
     ``rollouts_per_group`` siblings from each parent.  A partially received
     group is not a valid relative-reward group, and groups from different
     policy steps must never be mixed.  The whole step is therefore one engine
-    group — its barrier is the ``decide_group`` rule, its (group, rollout)
+    group — its barrier is :class:`TTTDGrouping`, its (group, rollout)
     coordinates are candidate slots (a retried report at an occupied
     coordinate is terminal; the first durable report wins), and a step whose
     reports span releases is discarded wholesale with every row
@@ -48,7 +111,6 @@ class TTTDProcessor(ReportedFeedbackProcessor):
         if self.rollouts_per_group < 2:
             raise ValueError("rollouts_per_group must be at least two")
         self._assembly = SampleAssembly.from_config(context)
-        self._failed_step_versions: dict[int, tuple[str, ...]] = {}
         super().__init__(context.with_config({**config, "batch_size": 1}))
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
@@ -61,54 +123,17 @@ class TTTDProcessor(ReportedFeedbackProcessor):
                 f"this scenario trains on {self.groups_per_step}x{self.rollouts_per_group}"
             )
         sample = self._assembly.build(context, context.require_score())
-        inference = context.inferences[0]
-        release_id = inference.artifact_ref.release_id if inference.artifact_ref is not None else None
         return sample.with_metadata(
-            tttd={"step": parsed.step, "group": parsed.group, "rollout": parsed.rollout, "release_id": release_id}
+            tttd={
+                "step": parsed.step,
+                "group": parsed.group,
+                "rollout": parsed.rollout,
+                "release_id": inference_release_id(context),
+            }
         )
 
-    def grouping(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
-        parsed: Any = context.parsed_report
-        return parsed.step, (parsed.group, parsed.rollout)
-
-    def decide_group(self, key: Hashable, items: tuple[TrainDataItem, ...]) -> GroupDecision:
-        # 1. The barrier: a step batches only when every one of its
-        #    groups_per_step x rollouts_per_group slots is filled.
-        expected_count = self.groups_per_step * self.rollouts_per_group
-        if len(items) != expected_count:
-            return GroupDecision.INCOMPLETE
-        # 2. A step whose reports span releases is discarded
-        #    wholesale — mixed-version rewards are not comparable.
-        versions = {
-            item.metadata["tttd"]["release_id"] for item in items if item.metadata["tttd"]["release_id"] is not None
-        }
-        if len(versions) <= 1:
-            return GroupDecision.READY
-        if not isinstance(key, int):
-            raise TypeError(f"TTTD step key must be an integer, got {key!r}")
-        step = key
-        ordered_versions = tuple(sorted(versions))
-        self._failed_step_versions[step] = ordered_versions
-        logger.error(
-            "TTTD step %d failed because its %d reports span releases %s",
-            step,
-            expected_count,
-            list(ordered_versions),
-        )
-        return GroupDecision.DISCARD
-
-    def status(self) -> Mapping[str, Any]:
-        """Expose mixed-version steps that terminally violated TTTD's invariant."""
-        return {
-            "failed_steps": [
-                {
-                    "step": step,
-                    "reason": "mixed_release_ids",
-                    "release_ids": list(versions),
-                }
-                for step, versions in sorted(self._failed_step_versions.items())
-            ]
-        }
+    def report_grouping(self) -> TTTDGrouping:
+        return TTTDGrouping(self.groups_per_step, self.rollouts_per_group)
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         steps = {item.metadata["tttd"]["step"] for item in items}

@@ -26,7 +26,6 @@ from reef.core.tasks import (
     TaskPlayResult,
     TaskValidationResult,
 )
-from reef.core.trajectories import make_trajectory
 from reef.harness.client.tasks import TaskPlay
 from reef.inference.http import InferenceProxyRuntime
 from reef.recipe.errors import RecipeConfigError
@@ -37,9 +36,9 @@ from reef.record2dataset.generated_tasks import (
     TaskGroupObjective,
 )
 from reef.record2dataset.generated_tasks.processor import RoundJob, reported_task_name, rewards_of
+from reef.record2record import GroupDecision, ReportContext
 from reef.train.algos.registry import resolve_objective
-from reef.train.processors.reported import GroupDecision
-from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem, trajectory_groups
+from reef.train.types import ProcessorContext, TrainingBatch, trajectory_groups
 
 MODULE = "reef_service.test_generated_tasks"
 DESCRIPTION = "shell tasks with hidden state under /var and /etc"
@@ -145,11 +144,11 @@ def test_measurement_arms_and_reports_without_an_arm_are_released_not_trained() 
     assert p.ready() and len(p.build_batch().items) == 4
 
 
-def test_decide_group_waits_for_plays_per_task_episodes() -> None:
-    p = processor(plays_per_task=3)
-    one: tuple[TrajectoryItem, ...] = (make_trajectory((inference("a"),), 1.0),)
-    assert p.decide_group("t", one) is GroupDecision.INCOMPLETE
-    assert p.decide_group("t", one * 3) is GroupDecision.READY
+def test_a_task_group_waits_for_plays_per_task_episodes() -> None:
+    grouping = processor(plays_per_task=3).report_stage.grouping
+    one = (ReportContext(inference("a"), 1.0, (inference("a"),)),)
+    assert grouping.decide("t", one) is GroupDecision.INCOMPLETE
+    assert grouping.decide("t", one * 3) is GroupDecision.READY
 
 
 def test_the_assembly_spans_an_episodes_turns_and_realigns_the_think_scaffold() -> None:
