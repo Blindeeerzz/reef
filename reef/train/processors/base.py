@@ -8,7 +8,7 @@ computed from traffic).
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Hashable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -16,14 +16,7 @@ from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase
 from reef.core.training_request import TrainingRequest
 from reef.observability import ExperimentLogger
-from reef.record2record import (
-    AssemblyStatus,
-    PassThroughStage,
-    Record2RecordStage,
-    RecordSet,
-    SetAssembler,
-    SetAssembly,
-)
+from reef.record2record import AssemblyStatus, PassThroughStage, Record2RecordStage, RecordSet, SetAssembly
 from reef.train.types import ProcessorContext, TrainingBatch
 
 
@@ -35,7 +28,7 @@ class InstructionFailure:
     metrics: Mapping[str, Any] = field(default_factory=dict)
 
 
-class DataProcessor(SetAssembler):
+class DataProcessor:
     """The processor contract: turn records into typed training batches.
 
     Which base a recipe builds on is one question — how does its feedback
@@ -176,9 +169,19 @@ class DataProcessor(SetAssembler):
     def assemble(self, record_set: RecordSet) -> SetAssembly:
         """Make training data from one record set that the record-to-record stage formed.
 
-        The no-update default keeps nothing.
+        Raise on a broken training contract. The no-update default keeps nothing.
         """
         return SetAssembly(AssemblyStatus.INGESTED)
+
+    def forget_sets(self, set_ids: frozenset[Hashable]) -> None:
+        """Forget the training data of sets that the stage ended. The default keeps nothing."""
+        return
+
+    def assemble_formed(self) -> None:
+        """Assemble each set that the stage formed, give the results back, and forget the sets that ended."""
+        for record_set in self.record_stage.take_formed():
+            self.record_stage.settle(record_set, self.assemble(record_set))
+        self.forget_sets(self.record_stage.take_ended())
 
     def ingest(self, item: AgentRecord) -> None:
         """Read one record. Training instructions stay here; every other record goes through the record stage."""
@@ -190,7 +193,7 @@ class DataProcessor(SetAssembler):
                 self._training_requests.setdefault(request.id, request)
             return
         self.record_stage.ingest(item)
-        self.record_stage.assemble_formed(self)
+        self.assemble_formed()
 
     # ------------------------------------------------------------ batch cycle
     #
@@ -203,7 +206,7 @@ class DataProcessor(SetAssembler):
     def ready(self) -> bool:
         # Background work in the stage, such as judgments, forms sets without a new record.
         self.record_stage.poll(time.monotonic())
-        self.record_stage.assemble_formed(self)
+        self.assemble_formed()
         if self._pending is not None:
             return True
         if self.training_mode == "manual":

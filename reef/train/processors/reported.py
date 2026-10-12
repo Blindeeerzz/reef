@@ -164,7 +164,7 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
     def set_training_mode(self, training_mode: str) -> None:
         super().set_training_mode(training_mode)
         self.record_stage.limit_available(self.available_set_limit())
-        self.record_stage.forget_ended(self)
+        self.forget_sets(self.record_stage.take_ended())
 
     def available_set_limit(self) -> int | None:
         """Manual mode batches on instructions, not sets, so the held sets are bounded instead."""
@@ -191,7 +191,7 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
 
     def _consume_pending(self) -> frozenset[str]:
         consumed = self.record_stage.consume_reservation()
-        self.record_stage.forget_ended(self)
+        self.forget_sets(self.record_stage.take_ended())
         return consumed
 
 

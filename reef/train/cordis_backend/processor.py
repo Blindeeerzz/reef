@@ -103,5 +103,5 @@ class RecordDrivenTraceProcessor(DataProcessor):
 
     def _consume_pending(self) -> frozenset[str]:
         consumed = self.record_stage.consume_reservation()
-        self.record_stage.forget_ended(self)
+        self.forget_sets(self.record_stage.take_ended())
         return consumed

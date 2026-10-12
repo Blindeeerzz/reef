@@ -73,26 +73,15 @@ class SetAssembly:
     runtime_load_id: str | None = None
 
 
-class SetAssembler(ABC):
-    """Turn record sets into training data. A processor implements this interface."""
-
-    @abstractmethod
-    def assemble(self, record_set: RecordSet) -> SetAssembly:
-        """Make training data from one formed set. Raise on a broken training contract."""
-
-    def forget_sets(self, set_ids: frozenset[Hashable]) -> None:
-        """Forget the training data of sets that the stage ended. The default keeps nothing."""
-        return
-
-
 class Record2RecordStage(ABC):
     """Turn records into record sets for one processor, and decide which sets train and in what order.
 
     The processor gives the stage every record that it reads, except training
-    instructions, in append order. The stage forms record sets. The
-    processor assembles each formed set (``assemble_formed``). The stage holds
-    each assembled set in its pool until the processor reserves it for a
-    batch. The pool applies the stage's selection policy and eligibility checks.
+    instructions, in append order. The stage forms record sets
+    (``take_formed``). The processor assembles each formed set and gives the
+    result back (``settle``). The stage holds each assembled set in its pool
+    until the processor reserves it for a batch. The pool applies the stage's
+    selection policy and eligibility checks. The stage never calls the processor.
 
     A record that the stage ends, for example a record that can no longer
     train, appears in ``releasable_record_ids``. The trainer adds those IDs to
@@ -121,17 +110,14 @@ class Record2RecordStage(ABC):
         """Absorb background work, such as finished judgments. ``now`` is a monotonic time."""
         return
 
-    def assemble_formed(self, assembler: SetAssembler) -> None:
-        """Give each formed set to ``assembler``, and keep or end the set from the result."""
-        for record_set in self.take_formed():
-            assembly = assembler.assemble(record_set)
-            if assembly.status is AssemblyStatus.READY:
-                self.accept(record_set, assembly)
-            elif assembly.status is AssemblyStatus.REJECTED:
-                self.reject(record_set)
-            elif assembly.status is not AssemblyStatus.INGESTED:
-                raise TypeError("assemble must return a SetAssembly with an AssemblyStatus")
-        self.forget_ended(assembler)
+    def settle(self, record_set: RecordSet, assembly: SetAssembly) -> None:
+        """Keep or end a formed set from the processor's assembly result."""
+        if assembly.status is AssemblyStatus.READY:
+            self.accept(record_set, assembly)
+        elif assembly.status is AssemblyStatus.REJECTED:
+            self.reject(record_set)
+        elif assembly.status is not AssemblyStatus.INGESTED:
+            raise TypeError("an assembly result must have an AssemblyStatus")
 
     def accept(self, record_set: RecordSet, assembly: SetAssembly) -> None:
         """Hold an assembled set in the pool. The default stage never forms a set that it must hold."""
@@ -141,11 +127,10 @@ class Record2RecordStage(ABC):
         """End a set that cannot train. The default stage never forms a set that it must end."""
         raise NotImplementedError(f"{type(self).__name__} does not end rejected sets")
 
-    def forget_ended(self, assembler: SetAssembler) -> None:
-        """Tell ``assembler`` which formed sets ended since the last call."""
-        if self.ended_set_ids:
-            ended, self.ended_set_ids = frozenset(self.ended_set_ids), set()
-            assembler.forget_sets(ended)
+    def take_ended(self) -> frozenset[Hashable]:
+        """Return the IDs of the formed sets that ended since the last call. The processor forgets their data."""
+        ended, self.ended_set_ids = frozenset(self.ended_set_ids), set()
+        return ended
 
     # ---------------------------------------------------------- reservation
 

@@ -9,9 +9,10 @@ Entry point: ``Record2RecordStage`` in ``stage.py``.
 * Each processor has one stage, from ``DataProcessor.build_record_stage()``.
   The processor gives the stage every record except training instructions.
 * The stage forms ``RecordSet`` values: records that a processor uses
-  together. The processor assembles each set (``SetAssembler``). The stage
-  holds the assembled sets in its pool, drops the sets that can no longer
-  train, and gives the processor the next batch's sets in order.
+  together. The processor assembles each set and gives the result back
+  (``settle``). The stage holds the assembled sets in its pool, drops the sets
+  that can no longer train, and gives the processor the next batch's sets in
+  order. The stage never calls the processor.
 
 Stages:
 
@@ -64,7 +65,6 @@ from reef.record2record.stage import (
     PassThroughStage,
     Record2RecordStage,
     RecordSet,
-    SetAssembler,
     SetAssembly,
     SingleRecordSet,
     record_sets,
@@ -93,7 +93,6 @@ __all__ = [
     "ReportSet",
     "ReportStage",
     "SelectionPolicy",
-    "SetAssembler",
     "SetAssembly",
     "SingleRecordSet",
     "StalenessCheck",
