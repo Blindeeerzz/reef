@@ -365,7 +365,9 @@ class WeightTrainingRecipe(Recipe):
 
     ``max_staleness`` is the shared stale-sample admission window. Zero keeps
     exact-version training; a positive value admits same-incarnation samples
-    up to that lag before the existing training path runs.
+    up to that lag before the existing training path runs. The default
+    :meth:`build` also gives it to the processor as
+    ``ProcessorContext.max_staleness``.
 
     ``candidate_evaluation`` is framework-owned configuration derived from an
     optional top-level ``evaluation`` section. The plugin class it names builds one
@@ -506,9 +508,9 @@ class WeightTrainingRecipe(Recipe):
         """The config mapping the default :meth:`build` hands the processor.
 
         Defaults to this recipe's data config field values. The shared
-        ``max_staleness`` field configures the runtime and bridge, not data
-        retention, so it is not included in processor config. Override this
-        method to rename keys or add processor-only entries.
+        ``max_staleness`` field is not included: the default :meth:`build`
+        passes it as the typed ``ProcessorContext.max_staleness`` instead.
+        Override this method to rename keys or add processor-only entries.
         """
         return {
             name: getattr(self, name)
@@ -600,4 +602,5 @@ class WeightTrainingRecipe(Recipe):
             report_type=self.report_type,
             experiment_logger=experiment_logger,
             training_mode=self.training_mode,
+            max_staleness=self.max_staleness,
         )

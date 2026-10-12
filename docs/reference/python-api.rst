@@ -745,6 +745,13 @@ Every ``ingest()`` starts with ``catch_up(now)``, then uses ``track(record)``,
 instead of failing a training step. All correlation state must be
 reconstructible from replay.
 
+While no batch is out, the engine retires candidates that are more than
+``max_staleness`` versions behind the newest candidate, by record arrival. The
+recipe's ``max_staleness`` reaches the processor as
+``ProcessorContext.max_staleness``. With the default value 0, only candidates of
+the newest version stay. Runtime admission still checks each batch against the
+serving version.
+
 Task generation
 ~~~~~~~~~~~~~~~
 
