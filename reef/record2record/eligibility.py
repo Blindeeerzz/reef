@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from reef.record2record.selection import ExperienceUnit
+from reef.record2record.selection import BatchUnit
 from reef.runtime.interfaces import RuntimeLoadId
 
 
@@ -14,7 +14,7 @@ from reef.runtime.interfaces import RuntimeLoadId
 class IneligibleUnit:
     """A held unit that a check found unusable, and the reason."""
 
-    unit: ExperienceUnit
+    unit: BatchUnit
     reason: str
 
 
@@ -26,7 +26,7 @@ class EligibilityCheck(ABC):
     """
 
     @abstractmethod
-    def ineligible_units(self, units: Sequence[ExperienceUnit]) -> tuple[IneligibleUnit, ...]:
+    def ineligible_units(self, units: Sequence[BatchUnit]) -> tuple[IneligibleUnit, ...]:
         """Return the units in ``units`` that cannot train, each with a reason."""
 
 
@@ -54,7 +54,7 @@ class StalenessCheck(EligibilityCheck):
             raise ValueError("max_staleness must be a non-negative integer")
         self.max_staleness = max_staleness
 
-    def ineligible_units(self, units: Sequence[ExperienceUnit]) -> tuple[IneligibleUnit, ...]:
+    def ineligible_units(self, units: Sequence[BatchUnit]) -> tuple[IneligibleUnit, ...]:
         if not units:
             return ()
         newest = max(units, key=lambda unit: unit.arrival_index if unit.source_index is None else unit.source_index)

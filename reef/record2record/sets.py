@@ -6,14 +6,14 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from reef.core.records_types import AgentRecord
-from reef.record2record.selection import ExperienceUnit
+from reef.record2record.selection import BatchUnit
 
 
 @dataclass(frozen=True, kw_only=True)
-class RecordSet(ExperienceUnit, ABC):
+class RecordSet(BatchUnit, ABC):
     """Records that are used together, such as one record or a report with the records it references.
 
-    A record set is an ``ExperienceUnit``, so the buffer, the selection
+    A record set is a ``BatchUnit``, so the buffer, the selection
     policies, and the eligibility checks can hold and order it.
     """
 

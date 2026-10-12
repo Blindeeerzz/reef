@@ -9,7 +9,7 @@ from typing import Any, cast
 
 
 @dataclass(frozen=True, kw_only=True)
-class ExperienceUnit:
+class BatchUnit:
     """One unit that a processor can put in a batch: one sample, or one ready group.
 
     A processor subclasses this type to add its own data, such as the sample or
@@ -38,14 +38,14 @@ class SelectionPolicy(ABC):
     """
 
     @abstractmethod
-    def select(self, candidates: Sequence[ExperienceUnit], max_unit_count: int) -> tuple[ExperienceUnit, ...]:
+    def select(self, candidates: Sequence[BatchUnit], max_unit_count: int) -> tuple[BatchUnit, ...]:
         """Return at most ``max_unit_count`` units from ``candidates``, in batch order."""
 
 
 class ArrivalOrder(SelectionPolicy):
     """Take the oldest units first."""
 
-    def select(self, candidates: Sequence[ExperienceUnit], max_unit_count: int) -> tuple[ExperienceUnit, ...]:
+    def select(self, candidates: Sequence[BatchUnit], max_unit_count: int) -> tuple[BatchUnit, ...]:
         return tuple(sorted(candidates, key=lambda unit: unit.arrival_index)[:max_unit_count])
 
 
@@ -55,7 +55,7 @@ class GroupKeyOrder(SelectionPolicy):
     Group keys must be sortable, such as step indices.
     """
 
-    def select(self, candidates: Sequence[ExperienceUnit], max_unit_count: int) -> tuple[ExperienceUnit, ...]:
+    def select(self, candidates: Sequence[BatchUnit], max_unit_count: int) -> tuple[BatchUnit, ...]:
         ungrouped = sorted(
             (unit for unit in candidates if unit.group_key is None), key=lambda unit: unit.arrival_index
         )

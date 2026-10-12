@@ -4,9 +4,9 @@ Reef reuses recorded experience in two ways. It trains on records directly,
 and it turns records into runnable tasks (``reef.record2dataset``). Both need
 the same decisions about each record. This package owns those decisions:
 
-* ``ExperienceUnit``: one sample or one ready group. A processor subclasses it
+* ``BatchUnit``: one sample or one ready group. A processor subclasses it
   to add its own data, such as the sample or the reports of a group.
-* ``ExperienceBuffer``: the units that are held, and the reserved batch.
+* ``UnitBuffer``: the units that are held, and the reserved batch.
 * ``EligibilityCheck``: finds held units that can no longer train.
   ``StalenessCheck`` drops units that are more than ``max_staleness``
   versions behind the newest held unit.
@@ -22,16 +22,15 @@ RFC #765 describes the stage; the processor engines still own grouping and
 judging until it is complete.
 """
 
-from reef.record2record.buffer import ExperienceBuffer
+from reef.record2record.buffer import UnitBuffer
 from reef.record2record.eligibility import EligibilityCheck, IneligibleUnit, StalenessCheck
-from reef.record2record.selection import ArrivalOrder, ExperienceUnit, GroupKeyOrder, SelectionPolicy
+from reef.record2record.selection import ArrivalOrder, BatchUnit, GroupKeyOrder, SelectionPolicy
 from reef.record2record.worker import Failed, JobRunner, JudgingWorker, SupportsReceipt
 
 __all__ = [
     "ArrivalOrder",
+    "BatchUnit",
     "EligibilityCheck",
-    "ExperienceBuffer",
-    "ExperienceUnit",
     "Failed",
     "GroupKeyOrder",
     "IneligibleUnit",
@@ -40,4 +39,5 @@ __all__ = [
     "SelectionPolicy",
     "StalenessCheck",
     "SupportsReceipt",
+    "UnitBuffer",
 ]

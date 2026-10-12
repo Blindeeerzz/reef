@@ -1,4 +1,4 @@
-"""Experience buffer contracts: selection order, reservations, and eligibility checks."""
+"""Unit buffer contracts: selection order, reservations, and eligibility checks."""
 
 from __future__ import annotations
 
@@ -8,22 +8,22 @@ import pytest
 
 from reef.record2record import (
     ArrivalOrder,
+    BatchUnit,
     EligibilityCheck,
-    ExperienceBuffer,
-    ExperienceUnit,
     GroupKeyOrder,
     IneligibleUnit,
     SelectionPolicy,
     StalenessCheck,
+    UnitBuffer,
 )
 
 
-def unit(unit_id: str, arrival_index: int, group_key: int | None = None) -> ExperienceUnit:
-    return ExperienceUnit(unit_id=unit_id, arrival_index=arrival_index, group_key=group_key)
+def unit(unit_id: str, arrival_index: int, group_key: int | None = None) -> BatchUnit:
+    return BatchUnit(unit_id=unit_id, arrival_index=arrival_index, group_key=group_key)
 
 
 class ForeignUnit(SelectionPolicy):
-    def select(self, candidates: Sequence[ExperienceUnit], max_unit_count: int) -> tuple[ExperienceUnit, ...]:
+    def select(self, candidates: Sequence[BatchUnit], max_unit_count: int) -> tuple[BatchUnit, ...]:
         return (unit("not-held", 1),)
 
 
@@ -39,7 +39,7 @@ def test_group_key_order_takes_ungrouped_units_before_groups_in_key_order() -> N
 
 
 def test_a_reservation_does_not_change_until_it_is_consumed() -> None:
-    buffer = ExperienceBuffer()
+    buffer = UnitBuffer()
     for name in ("a", "b", "c"):
         buffer.put(unit(name, buffer.next_arrival_index()))
     reserved = buffer.reserve(2)
@@ -54,16 +54,16 @@ def test_a_reservation_does_not_change_until_it_is_consumed() -> None:
 
 def test_a_reservation_refuses_a_negative_count_and_units_the_buffer_does_not_hold() -> None:
     with pytest.raises(ValueError, match="max_unit_count must not be negative"):
-        ExperienceBuffer().reserve(-1)
-    buffer = ExperienceBuffer(ForeignUnit())
+        UnitBuffer().reserve(-1)
+    buffer = UnitBuffer(ForeignUnit())
     buffer.put(unit("held", buffer.next_arrival_index()))
     with pytest.raises(ValueError, match="does not hold"):
         buffer.reserve(1)
 
 
 def test_staleness_check_keeps_units_within_the_window_of_the_last_source_record() -> None:
-    def version(unit_id: str, runtime_load_id: str, source_index: int) -> ExperienceUnit:
-        return ExperienceUnit(
+    def version(unit_id: str, runtime_load_id: str, source_index: int) -> BatchUnit:
+        return BatchUnit(
             unit_id=unit_id,
             arrival_index=10 - source_index,
             runtime_load_id=runtime_load_id,
@@ -93,9 +93,9 @@ def test_staleness_check_keeps_units_within_the_window_of_the_last_source_record
 
 
 def test_staleness_check_compares_non_canonical_ids_by_equality() -> None:
-    late_judgment = ExperienceUnit(unit_id="late", arrival_index=3, runtime_load_id="v1", source_index=1)
-    newest = ExperienceUnit(unit_id="newest", arrival_index=2, runtime_load_id="v2", source_index=3)
-    same_version = ExperienceUnit(unit_id="same", arrival_index=1, runtime_load_id="v2", source_index=2)
+    late_judgment = BatchUnit(unit_id="late", arrival_index=3, runtime_load_id="v1", source_index=1)
+    newest = BatchUnit(unit_id="newest", arrival_index=2, runtime_load_id="v2", source_index=3)
+    same_version = BatchUnit(unit_id="same", arrival_index=1, runtime_load_id="v2", source_index=2)
     dropped = StalenessCheck(5).ineligible_units((late_judgment, newest, same_version))
     assert [(result.unit.unit_id, result.reason) for result in dropped] == [("late", "different_runtime_load_id")]
     with pytest.raises(ValueError, match="non-negative"):
@@ -103,15 +103,15 @@ def test_staleness_check_compares_non_canonical_ids_by_equality() -> None:
 
 
 def test_drop_ineligible_removes_and_returns_the_units_that_fail_each_check() -> None:
-    buffer = ExperienceBuffer(checks=(StalenessCheck(),))
+    buffer = UnitBuffer(checks=(StalenessCheck(),))
     for name, version in (("old", "e:1"), ("new", "e:2")):
-        buffer.put(ExperienceUnit(unit_id=name, arrival_index=buffer.next_arrival_index(), runtime_load_id=version))
+        buffer.put(BatchUnit(unit_id=name, arrival_index=buffer.next_arrival_index(), runtime_load_id=version))
     assert [result.unit.unit_id for result in buffer.drop_ineligible()] == ["old"]
     assert [held.unit_id for held in buffer.units()] == ["new"]
 
     class ForeignCheck(EligibilityCheck):
-        def ineligible_units(self, units: Sequence[ExperienceUnit]) -> tuple[IneligibleUnit, ...]:
+        def ineligible_units(self, units: Sequence[BatchUnit]) -> tuple[IneligibleUnit, ...]:
             return (IneligibleUnit(unit("not-held", 1), "foreign"),)
 
     with pytest.raises(ValueError, match="does not hold"):
-        ExperienceBuffer(checks=(ForeignCheck(),)).drop_ineligible()
+        UnitBuffer(checks=(ForeignCheck(),)).drop_ineligible()

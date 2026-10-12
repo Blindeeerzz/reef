@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from reef.core import AgentRecord, RequestType
 from reef.core.training_request import TrainingRequest
 from reef.core.trajectories import make_trajectory
-from reef.record2record import ExperienceBuffer, ExperienceUnit
+from reef.record2record import BatchUnit, UnitBuffer
 from reef.train.processors.base import DataProcessor
 from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, reported_task
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
@@ -33,7 +33,7 @@ class CordisProcessor(ReportedFeedbackProcessor):
 
     def make_training_batch(self, batch_number: int, request: TrainingRequest | None) -> TrainingBatch:
         if request is not None and self.training_mode == "manual":
-            self.experience_buffer.reserve(0)
+            self.unit_buffer.reserve(0)
             return TrainingBatch(request.id, ())
         # In hybrid an instruction takes the units an automatic batch would, none included; the base attaches it.
         return self._make_pending(batch_number)
@@ -48,17 +48,17 @@ class CordisProcessor(ReportedFeedbackProcessor):
 
 
 @dataclass(frozen=True, kw_only=True)
-class RecordUnit(ExperienceUnit):
-    """One inference record in the experience buffer; ``unit_id`` is the record's ID."""
+class RecordUnit(BatchUnit):
+    """One inference record in the unit buffer; ``unit_id`` is the record's ID."""
 
     record: AgentRecord
 
 
-def record_units(units: Sequence[ExperienceUnit]) -> tuple[RecordUnit, ...]:
+def record_units(units: Sequence[BatchUnit]) -> tuple[RecordUnit, ...]:
     """Return buffer units as record units. The record-driven engine puts only record units in its buffer."""
     selected = tuple(unit for unit in units if isinstance(unit, RecordUnit))
     if len(selected) != len(units):
-        raise TypeError("the record-driven experience buffer must hold only record units")
+        raise TypeError("the record-driven unit buffer must hold only record units")
     return selected
 
 
@@ -82,7 +82,7 @@ class RecordDrivenTraceProcessor(DataProcessor):
 
     def make_training_batch(self, batch_number: int, request: TrainingRequest | None) -> TrainingBatch:
         if request is not None and self.training_mode == "manual":
-            self.experience_buffer.reserve(0)
+            self.unit_buffer.reserve(0)
             return TrainingBatch(request.id, ())
         # In hybrid an instruction takes the records an automatic batch would, none included; the base attaches it.
         return self._make_pending(batch_number)
@@ -90,34 +90,32 @@ class RecordDrivenTraceProcessor(DataProcessor):
     def __init__(self, context: ProcessorContext) -> None:
         super().__init__(context)
         # Each inference record is one unit.
-        self.experience_buffer = ExperienceBuffer()
+        self.unit_buffer = UnitBuffer()
         self._released: set[str] = set()
 
     def ingest(self, item: AgentRecord) -> None:
         if item.request_type is RequestType.TRAIN:
             super().ingest(item)
         elif item.request_type is RequestType.INFERENCE:
-            index = self.experience_buffer.next_arrival_index()
-            self.experience_buffer.put(RecordUnit(unit_id=item.agent_record_id, arrival_index=index, record=item))
+            index = self.unit_buffer.next_arrival_index()
+            self.unit_buffer.put(RecordUnit(unit_id=item.agent_record_id, arrival_index=index, record=item))
         else:
             self._released.add(item.agent_record_id)
 
     def _ready_count(self) -> int:
-        return len(self.experience_buffer)
+        return len(self.unit_buffer)
 
     def _make_pending(self, batch_number: int) -> TrainingBatch:
-        selected = record_units(self.experience_buffer.reserve(self._batch_size))
+        selected = record_units(self.unit_buffer.reserve(self._batch_size))
         return TrainingBatch(
             f"{self.scenario}:harness_evolve:{batch_number}",
             tuple(make_trajectory((unit.record,)) for unit in selected),
         )
 
     def _consume_pending(self) -> frozenset[str]:
-        if self.experience_buffer.reserved is None:
+        if self.unit_buffer.reserved is None:
             raise RuntimeError("no pending trace batch to consume")
-        consumed = frozenset(
-            unit.record.agent_record_id for unit in record_units(self.experience_buffer.consume_reserved())
-        )
+        consumed = frozenset(unit.record.agent_record_id for unit in record_units(self.unit_buffer.consume_reserved()))
         self._released |= consumed
         return consumed
 

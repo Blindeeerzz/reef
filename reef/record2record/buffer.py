@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import Hashable, Sequence
 
 from reef.record2record.eligibility import EligibilityCheck, IneligibleUnit
-from reef.record2record.selection import ArrivalOrder, ExperienceUnit, SelectionPolicy
+from reef.record2record.selection import ArrivalOrder, BatchUnit, SelectionPolicy
 
 
-class ExperienceBuffer:
+class UnitBuffer:
     """Hold the units that a processor can batch, and its reserved batch.
 
     The processor adds and removes units. It also decides what a consumed unit
@@ -22,8 +22,8 @@ class ExperienceBuffer:
     def __init__(self, selection: SelectionPolicy | None = None, checks: Sequence[EligibilityCheck] = ()) -> None:
         self.selection = ArrivalOrder() if selection is None else selection
         self.checks = tuple(checks)
-        self.units_by_id: dict[Hashable, ExperienceUnit] = {}
-        self.reserved: tuple[ExperienceUnit, ...] | None = None
+        self.units_by_id: dict[Hashable, BatchUnit] = {}
+        self.reserved: tuple[BatchUnit, ...] | None = None
         self.arrival_count = 0
 
     def __len__(self) -> int:
@@ -37,15 +37,15 @@ class ExperienceBuffer:
         self.arrival_count += 1
         return self.arrival_count
 
-    def put(self, unit: ExperienceUnit) -> None:
+    def put(self, unit: BatchUnit) -> None:
         """Add the unit. If the buffer holds a unit with the same ``unit_id``, replace that unit."""
         self.units_by_id[unit.unit_id] = unit
 
-    def remove(self, unit_id: Hashable) -> ExperienceUnit | None:
+    def remove(self, unit_id: Hashable) -> BatchUnit | None:
         """Remove the unit and return it. Return None if the buffer does not hold it."""
         return self.units_by_id.pop(unit_id, None)
 
-    def units(self) -> tuple[ExperienceUnit, ...]:
+    def units(self) -> tuple[BatchUnit, ...]:
         """Return all units, in the order that the buffer received them."""
         return tuple(self.units_by_id.values())
 
@@ -64,22 +64,22 @@ class ExperienceBuffer:
                 dropped.append(result)
         return tuple(dropped)
 
-    def ordered_units(self) -> tuple[ExperienceUnit, ...]:
+    def ordered_units(self) -> tuple[BatchUnit, ...]:
         """Return all units, in the order of the selection policy."""
         return self.select(len(self.units_by_id))
 
-    def reserved_units(self) -> tuple[ExperienceUnit, ...]:
+    def reserved_units(self) -> tuple[BatchUnit, ...]:
         """Return the reserved units. Return an empty tuple if no batch is reserved."""
         return () if self.reserved is None else self.reserved
 
-    def reserve(self, max_unit_count: int) -> tuple[ExperienceUnit, ...]:
+    def reserve(self, max_unit_count: int) -> tuple[BatchUnit, ...]:
         """Select at most ``max_unit_count`` units as the next batch, and keep them reserved."""
         if max_unit_count < 0:
             raise ValueError("max_unit_count must not be negative")
         self.reserved = self.select(max_unit_count)
         return self.reserved
 
-    def consume_reserved(self) -> tuple[ExperienceUnit, ...]:
+    def consume_reserved(self) -> tuple[BatchUnit, ...]:
         """Remove the reserved units from the buffer, clear the reservation, and return the units.
 
         The result also includes a reserved unit that the processor removed
@@ -91,7 +91,7 @@ class ExperienceBuffer:
         self.reserved = None
         return consumed
 
-    def select(self, max_unit_count: int) -> tuple[ExperienceUnit, ...]:
+    def select(self, max_unit_count: int) -> tuple[BatchUnit, ...]:
         """Apply the selection policy, and make sure that it returned held units only, each one time."""
         selected = self.selection.select(self.units(), max_unit_count)
         selected_ids = [unit.unit_id for unit in selected]

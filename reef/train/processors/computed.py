@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from reef.core.records_types import AgentRecord
-from reef.record2record import ExperienceBuffer, ExperienceUnit, StalenessCheck
+from reef.record2record import BatchUnit, StalenessCheck, UnitBuffer
 from reef.record2record.worker import Failed, JobRunner, JudgingWorker, SupportsReceipt
 from reef.train.processors.base import DataProcessor
 from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem
@@ -57,18 +57,18 @@ __all__ = [
 
 
 @dataclass(frozen=True, kw_only=True)
-class CandidateUnit(ExperienceUnit):
-    """A judged record's sample in the experience buffer; ``unit_id`` is the record's receipt."""
+class CandidateUnit(BatchUnit):
+    """A judged record's sample in the unit buffer; ``unit_id`` is the record's receipt."""
 
     receipt: str
     sample: TrajectoryItem
 
 
-def candidate_units(units: Sequence[ExperienceUnit]) -> tuple[CandidateUnit, ...]:
+def candidate_units(units: Sequence[BatchUnit]) -> tuple[CandidateUnit, ...]:
     """Return buffer units as candidate units. The computed-feedback engine puts only candidate units in its buffer."""
     selected = tuple(unit for unit in units if isinstance(unit, CandidateUnit))
     if len(selected) != len(units):
-        raise TypeError("the computed-feedback experience buffer must hold only candidate units")
+        raise TypeError("the computed-feedback unit buffer must hold only candidate units")
     return selected
 
 
@@ -83,7 +83,7 @@ class ComputedFeedbackProcessor(DataProcessor, JobRunner, ABC):
     arrival, not judgment arrival) batch: continual serving advances the
     version every step, and stale pending candidates would deadlock the FIFO.
 
-    Candidates wait in an :class:`~reef.record2record.ExperienceBuffer` in
+    Candidates wait in an :class:`~reef.record2record.UnitBuffer` in
     the order that their judgments arrived. A ``StalenessCheck`` with the
     context's ``max_staleness`` drops candidates while no batch is out.
 
@@ -103,7 +103,7 @@ class ComputedFeedbackProcessor(DataProcessor, JobRunner, ABC):
         self._tracked: dict[str, AgentRecord] = {}
         self._in_flight: dict[str, AgentRecord] = {}
         #: Candidates by receipt, and the reserved batch.
-        self.experience_buffer = ExperienceBuffer(checks=(StalenessCheck(context.max_staleness),))
+        self.unit_buffer = UnitBuffer(checks=(StalenessCheck(context.max_staleness),))
         #: Terminal receipts: retired or trained, both releasable and never
         #: distinguished by anything that reads them.
         self._terminal: set[str] = set()
@@ -119,8 +119,8 @@ class ComputedFeedbackProcessor(DataProcessor, JobRunner, ABC):
             **super().operational_metrics(),
             "tracked_records": len(self._tracked),
             "judging_records": len(self._in_flight),
-            "unreserved_candidates": len(self.experience_buffer) - len(self.experience_buffer.reserved_units()),
-            "reserved_candidates": len(self.experience_buffer.reserved_units()),
+            "unreserved_candidates": len(self.unit_buffer) - len(self.unit_buffer.reserved_units()),
+            "reserved_candidates": len(self.unit_buffer.reserved_units()),
         }
 
     @abstractmethod
@@ -220,7 +220,7 @@ class ComputedFeedbackProcessor(DataProcessor, JobRunner, ABC):
             #    weight version by record arrival) — but never under an
             #    emitted-but-unacknowledged batch, whose samples reference the
             #    pending candidates.
-            buffer = self.experience_buffer
+            buffer = self.unit_buffer
             receipt = judgment.receipt
             buffer.put(
                 CandidateUnit(
@@ -248,14 +248,14 @@ class ComputedFeedbackProcessor(DataProcessor, JobRunner, ABC):
         return super().ready()
 
     def _ready_count(self) -> int:
-        return len(self.experience_buffer)
+        return len(self.unit_buffer)
 
     def _make_pending(self, batch_number: int) -> TrainingBatch:
-        units = candidate_units(self.experience_buffer.reserve(self._batch_size))
+        units = candidate_units(self.unit_buffer.reserve(self._batch_size))
         return self.make_batch(tuple(unit.sample for unit in units), batch_number)
 
     def _consume_pending(self) -> frozenset[str]:
-        consumed = frozenset(unit.receipt for unit in candidate_units(self.experience_buffer.consume_reserved()))
+        consumed = frozenset(unit.receipt for unit in candidate_units(self.unit_buffer.consume_reserved()))
         for receipt in consumed:
             self._arrival_order.pop(receipt, None)
             self._terminal.add(receipt)
@@ -275,7 +275,7 @@ class ComputedFeedbackProcessor(DataProcessor, JobRunner, ABC):
     # ---------------------------------------------------------- buffer release
 
     def releasable_record_ids(self) -> frozenset[str]:
-        candidates = frozenset(unit.receipt for unit in candidate_units(self.experience_buffer.units()))
+        candidates = frozenset(unit.receipt for unit in candidate_units(self.unit_buffer.units()))
         protected = frozenset(self._tracked) | frozenset(self._in_flight) | candidates
         return frozenset(self._terminal) - protected
 
@@ -284,5 +284,5 @@ class ComputedFeedbackProcessor(DataProcessor, JobRunner, ABC):
         for agent_record_id in agent_record_ids:
             self._tracked.pop(agent_record_id, None)
             self._in_flight.pop(agent_record_id, None)
-            self.experience_buffer.remove(agent_record_id)
+            self.unit_buffer.remove(agent_record_id)
             self._arrival_order.pop(agent_record_id, None)

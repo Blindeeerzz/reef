@@ -19,7 +19,7 @@ from typing import Any
 
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase, ReportValidationError, validate_report_payload
-from reef.record2record import ArrivalOrder, ExperienceBuffer, ExperienceUnit, GroupKeyOrder
+from reef.record2record import ArrivalOrder, BatchUnit, GroupKeyOrder, UnitBuffer
 from reef.train.processors.base import DataProcessor
 from reef.train.processors.common import (
     make_multi_turn_policy_trajectory,
@@ -82,17 +82,17 @@ class _PendingReport:
 
 
 @dataclass(frozen=True, kw_only=True)
-class ReportUnit(ExperienceUnit):
-    """A singleton report or a ready group in the experience buffer, with its reports in arrival order."""
+class ReportUnit(BatchUnit):
+    """A singleton report or a ready group in the unit buffer, with its reports in arrival order."""
 
     reports: tuple[_PendingReport, ...]
 
 
-def report_units(units: Sequence[ExperienceUnit]) -> tuple[ReportUnit, ...]:
+def report_units(units: Sequence[BatchUnit]) -> tuple[ReportUnit, ...]:
     """Return buffer units as report units. The reported-feedback engine puts only report units in its buffer."""
     selected = tuple(unit for unit in units if isinstance(unit, ReportUnit))
     if len(selected) != len(units):
-        raise TypeError("the reported-feedback experience buffer must hold only report units")
+        raise TypeError("the reported-feedback unit buffer must hold only report units")
     return selected
 
 
@@ -117,7 +117,7 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
     data failures propagate instead of silently dropping reports.
 
     The units for a batch are accepted singleton reports and ready groups. They
-    wait in an :class:`~reef.record2record.ExperienceBuffer`, in arrival
+    wait in an :class:`~reef.record2record.UnitBuffer`, in arrival
     order, or with ready groups in key order under ``ordered_groups``.
     """
 
@@ -147,7 +147,7 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
         self._groups: dict[Hashable, dict[Hashable, _PendingReport]] = {}  # group key → slot → buffered report
         self._discarded_groups: set[Hashable] = set()
         # Singleton reports and ready groups, plus the reserved batch.
-        self.experience_buffer = ExperienceBuffer(GroupKeyOrder() if self.ordered_groups else ArrivalOrder())
+        self.unit_buffer = UnitBuffer(GroupKeyOrder() if self.ordered_groups else ArrivalOrder())
         self._manual_limit_warned = False
 
     # ------------------------------------------------------- the recipe hooks
@@ -272,14 +272,14 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
             self._terminate(item)
             return
         pending = _PendingReport(
-            order=self.experience_buffer.next_arrival_index(),
+            order=self.unit_buffer.next_arrival_index(),
             item=replace(sample, source_agent_record_ids=(*item.references, item.agent_record_id)),
             report=item,
             group_key=key,
             slot=slot,
         )
         if key is None:
-            self.experience_buffer.put(
+            self.unit_buffer.put(
                 ReportUnit(unit_id=("report", item.agent_record_id), arrival_index=pending.order, reports=(pending,))
             )
         else:
@@ -298,7 +298,7 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
             return
         # The reserved batch is handed out until acknowledged, so its units stay put.
         reserved = self.reserved_report_ids()
-        for unit in report_units(self.experience_buffer.ordered_units()):
+        for unit in report_units(self.unit_buffer.ordered_units()):
             if self._ready_count() <= limit:
                 return
             if unit.reports[0].report.agent_record_id in reserved:
@@ -319,7 +319,7 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
         if unit.group_key is not None:
             self._discard_group(unit.group_key)
         else:
-            self.experience_buffer.remove(unit.unit_id)
+            self.unit_buffer.remove(unit.unit_id)
         for pending in unit.reports:
             report = self._reports.pop(pending.report.agent_record_id, None)
             if report is not None:
@@ -361,18 +361,18 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
         reports = self._group_reports(key)
         decision = self.decide_group(key, tuple(pending.item for pending in reports))
         if decision is GroupDecision.READY:
-            self.experience_buffer.put(
+            self.unit_buffer.put(
                 ReportUnit(unit_id=("group", key), arrival_index=reports[0].order, group_key=key, reports=reports)
             )
         elif decision is GroupDecision.INCOMPLETE:
-            self.experience_buffer.remove(("group", key))
+            self.unit_buffer.remove(("group", key))
         elif decision is GroupDecision.DISCARD:
             self._discard_group(key)
         else:
             raise TypeError("decide_group must return GroupDecision")
 
     def _discard_group(self, key: Hashable) -> None:
-        self.experience_buffer.remove(("group", key))
+        self.unit_buffer.remove(("group", key))
         self._discarded_groups.add(key)
         group = self._groups.pop(key)
         # Remove every member from the live set first, so the wholesale
@@ -391,27 +391,27 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
     # engine's half of the shared cycle in base.py is the three methods below.
 
     def _ready_count(self) -> int:
-        return len(self.experience_buffer)
+        return len(self.unit_buffer)
 
     def _make_pending(self, batch_number: int) -> TrainingBatch:
-        units = report_units(self.experience_buffer.reserve(self._batch_size))
+        units = report_units(self.unit_buffer.reserve(self._batch_size))
         return self.make_batch(tuple(pending.item for unit in units for pending in unit.reports), batch_number)
 
     def reserved_report_ids(self) -> set[str]:
         """Return the IDs of the reports in the reserved batch."""
         return {
             pending.report.agent_record_id
-            for unit in report_units(self.experience_buffer.reserved_units())
+            for unit in report_units(self.unit_buffer.reserved_units())
             for pending in unit.reports
         }
 
     def _consume_pending(self) -> frozenset[str]:
-        if self.experience_buffer.reserved is None:
+        if self.unit_buffer.reserved is None:
             raise RuntimeError("cannot consume a batch before reports are pending")
         consumed_reports: set[str] = set()
         trained_sources: set[str] = set()
         changed_groups: set[Hashable] = set()
-        consumed_units = report_units(self.experience_buffer.consume_reserved())
+        consumed_units = report_units(self.unit_buffer.consume_reserved())
         for pending in (pending for unit in consumed_units for pending in unit.reports):
             report_id = pending.report.agent_record_id
             self._consumed.add(report_id)
@@ -428,7 +428,7 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
                 self._refresh_group(key)
             else:
                 self._groups.pop(key)
-                self.experience_buffer.remove(("group", key))
+                self.unit_buffer.remove(("group", key))
         self._trained_sources.update(trained_sources)
         return frozenset(consumed_reports | trained_sources)
 
