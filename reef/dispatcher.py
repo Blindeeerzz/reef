@@ -173,8 +173,8 @@ class Dispatcher:
     """
 
     storage_retry_seconds: float = 5.0
-    # Poll cadence while a processor reports asynchronous derivation in flight
-    # (see DataProcessor.derivation_pending): its judgments land without a new
+    # Poll cadence while a trainer reports asynchronous derivation in flight
+    # (see Trainer.derivation_pending): its judgments land without a new
     # record ever setting the ready event, so readiness is re-checked on a
     # bounded interval instead of sleeping until the next accept.
     derivation_poll_seconds: float = 1.0
@@ -1112,9 +1112,7 @@ class Dispatcher:
         timeout: float | None = self.storage_retry_seconds if self._training.storage_status is not None else None
         for name in self._training_scenario_names():
             current = self._registry.get_optional(name)
-            if current is not None and any(
-                bound.trainer.processor.derivation_pending() for bound in current.component_trainers
-            ):
+            if current is not None and any(bound.trainer.derivation_pending() for bound in current.component_trainers):
                 timeout = (
                     self.derivation_poll_seconds if timeout is None else min(timeout, self.derivation_poll_seconds)
                 )

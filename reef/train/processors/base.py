@@ -15,6 +15,7 @@ from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase
 from reef.core.training_request import TrainingRequest
 from reef.observability import ExperimentLogger
+from reef.record2record.sets import RecordSet, SingleRecordSet
 from reef.train.types import ProcessorContext, TrainingBatch
 
 
@@ -160,6 +161,15 @@ class DataProcessor:
 
     #: The batch type ``build_batch`` returns; the trainer validates it.
     output_schema: type[TrainingBatch] = TrainingBatch
+
+    def assemble(self, record_set: RecordSet) -> None:
+        """Take one record set that the record-to-record stage formed.
+
+        The default stage forms one set per record, and this default ingests that record.
+        """
+        if not isinstance(record_set, SingleRecordSet):
+            raise TypeError(f"{type(self).__name__} takes single-record sets, not {type(record_set).__name__}")
+        self.ingest(record_set.record)
 
     def ingest(self, item: AgentRecord) -> None:
         if item.request_type is RequestType.TRAIN:
