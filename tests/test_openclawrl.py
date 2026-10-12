@@ -480,7 +480,7 @@ def _judge_one_turn(judge, teacher):
         response_token_count=1,
     )
     try:
-        return asyncio.run(processor.judge(job))
+        return asyncio.run(processor.judging.judge(job))
     finally:
         processor.close()
 

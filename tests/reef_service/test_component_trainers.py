@@ -25,7 +25,7 @@ from reef.dispatcher import Dispatcher
 from reef.observability import ExperimentTracker, NullExperimentLogger
 from reef.recipe import Recipe
 from reef.recipe.checkpoint_strategy import EveryNVersions
-from reef.record2record import GroupDecision, ReportContext, ReportGrouping
+from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping
 from reef.runtime.interfaces import RuntimeContractError
 from reef.scenario import Scenario, StaleTrainingResultError
 from reef.scenario.scenario import validate_component_trainers
@@ -1486,26 +1486,31 @@ class _JudgedAtOnce:
         return None
 
 
-class _RetiringRetriesProcessor(ComputedFeedbackProcessor):
+class _RetiringRetriesJudging(RecordJudging):
     """A turn is judged once its successor arrives, and a retry of a turn already seen is retired, as OpenClaw-RL
     retires a client's duplicate turn."""
 
-    def __init__(self, context: Any) -> None:
-        super().__init__(context, worker=_JudgedAtOnce())
-        self._seen: set[str] = set()
+    def __init__(self) -> None:
+        self.seen: set[str] = set()
 
-    def ingest(self, item: AgentRecord) -> None:
-        self.catch_up(time.monotonic())
+    def observe(self, item: AgentRecord, now: float, stage: JudgingStage) -> None:
         if item.payload.get("completes"):
-            self.dispatch(_Judgment(item.payload["completes"]))
-        if item.payload["turn"] in self._seen:
-            self.retire(item.agent_record_id)
+            stage.dispatch(_Judgment(item.payload["completes"]))
+        if item.payload["turn"] in self.seen:
+            stage.retire(item.agent_record_id)
             return
-        self._seen.add(item.payload["turn"])
-        self.track(item)
+        self.seen.add(item.payload["turn"])
+        stage.track(item)
 
-    async def judge(self, job: _Judgment) -> _Judgment:
+    async def judge(self, job: SupportsReceipt) -> SupportsReceipt:
         return job
+
+
+class _RetiringRetriesProcessor(ComputedFeedbackProcessor):
+    """Trains the judged turns of ``_RetiringRetriesJudging``."""
+
+    def __init__(self, context: Any) -> None:
+        super().__init__(context, judging=_RetiringRetriesJudging(), worker=_JudgedAtOnce())
 
     def make_sample(self, record: AgentRecord, judgment: _Judgment) -> Any:
         return policy_trajectory(

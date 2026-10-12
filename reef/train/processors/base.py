@@ -44,24 +44,20 @@ class DataProcessor(SetAssembler):
     * As **reports** referencing inference records → subclass
       :class:`~reef.train.processors.reported.ReportedFeedbackProcessor` and write
       ``make_sample`` (assemble feedback) and ``make_batch`` (what a batch looks like).
-      The engine owns everything between them — including ``ingest``, which
-      is where it calls your ``make_sample``, on the trainer's thread: a plain
-      method operating on data already in hand.
+      A grouped method also returns its ``ReportGrouping`` from
+      ``report_grouping``. The record-to-record stage owns everything between them.
     * **Computed from the traffic itself** — correlated across records,
       judged by a model, landing asynchronously → subclass
-      :class:`~reef.train.processors.computed.ComputedFeedbackProcessor` and write
-      ``ingest`` (the method's own correlation, built from the engine's
-      ``catch_up``/``dispatch``/``track``/``retire`` verbs), ``judge``,
-      ``make_sample``, and ``make_batch``; bulky machinery stays in the
-      method package. Here ``judge`` is an ``async def``: your ``ingest`` hands a
-      job to ``dispatch`` and a private worker thread awaits it, so it may
-      call models and take minutes without blocking serving.
+      :class:`~reef.train.processors.computed.ComputedFeedbackProcessor`, write
+      ``make_sample`` and ``make_batch``, and pass a ``RecordJudging`` (the
+      method's correlation in ``observe``, and its ``async def judge``). The
+      stage hands each completed record's job to a worker thread, so ``judge``
+      may call models and take minutes without blocking serving.
 
-    That is the whole difference between the two processors: feedback is
-    either reported explicitly or computed from correlated traffic. The
-    reported path calls synchronous ``make_sample`` inside ``ingest``; the computed
-    path awaits ``async def judge`` on its worker after recipe code dispatches
-    a job.
+    Every processor sends records through its record-to-record stage
+    (``build_record_stage``), which decides which records train and in what
+    order. The processor assembles the stage's record sets into samples and
+    batches.
 
     ``DataProcessor`` itself is never a recipe's processor. Instantiated
     bare it is the no-update default: it leaves records in storage
@@ -77,7 +73,7 @@ class DataProcessor(SetAssembler):
     synchronous: ``ingest``/``ready``/``build_batch`` run on the trainer's
     thread under its lock and must never block on network or model
     latency. Judging that calls models therefore runs on a background
-    thread — the computed-feedback processor owns one, starts it on demand, exchanges
+    thread — the judging stage owns one, starts it on demand, exchanges
     results through thread-safe queues, and releases it in :meth:`close`,
     the teardown hook the owning scenario guarantees to call when the
     processor is dropped (dispatcher shutdown and durable reload both go
@@ -232,6 +228,7 @@ class DataProcessor(SetAssembler):
                 self._pending = replace(
                     self._pending, batch_id=f"{self.scenario}:instruction:{request.id}", request=request
                 )
+            self.record_stage.mark_batch_out(True)
         return self._pending
 
     def make_training_batch(self, batch_number: int, request: TrainingRequest | None) -> TrainingBatch:
@@ -257,6 +254,7 @@ class DataProcessor(SetAssembler):
             self._consumed_requests.add(request_id)
             consumed = consumed | {request_id}
         self._pending = None
+        self.record_stage.mark_batch_out(False)
         return consumed
 
     def dropped(self, batch_id: str) -> None:
@@ -267,6 +265,7 @@ class DataProcessor(SetAssembler):
         if self._pending is None or self._pending.batch_id != batch_id:
             raise ValueError(f"unknown batch_id {batch_id!r}")
         self._pending = None
+        self.record_stage.mark_batch_out(False)
 
     def discard_request(self, request_id: str) -> frozenset[str]:
         """Consume one queued instruction without a batch; the committed row that names it is what recovery skips."""

@@ -603,7 +603,7 @@ def test_traffic_without_a_session_tag_says_so_instead_of_training_on_nothing(ca
             processor.ingest(_turn(f"t{i}", [{"role": "user", "content": f"homework {i}"}]))
         assert "x-reef-tag-session" in caplog.text  # the fallback announced itself
         caplog.clear()
-        processor.expire(time.monotonic() + 10_000.0)  # every session times out unbound
+        processor.judging.expire(time.monotonic() + 10_000.0)  # every session times out unbound
     assert "without ever binding" in caplog.text
     assert "x-reef-tag-session" in caplog.text
 
@@ -614,7 +614,7 @@ def test_a_tagged_run_stays_quiet(caplog) -> None:
     with caplog.at_level("WARNING"):
         processor.ingest(_turn("t1", Q1, session="hw-1"))
         processor.ingest(_turn("t2", Q2, session="hw-1"))
-        processor.expire(time.monotonic() + 10_000.0)
+        processor.judging.expire(time.monotonic() + 10_000.0)
     assert caplog.text == ""
 
 

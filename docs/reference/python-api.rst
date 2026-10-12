@@ -645,17 +645,21 @@ Processor
 
 .. code:: python
 
+   from reef.record2record import GroupDecision, RecordJudging, ReportContext, ReportGrouping
    from reef.train.processors import ComputedFeedbackProcessor, DistillProcessor, ReportedFeedbackProcessor
 
-A processor turns durable records into typed batches. Reef owns replay,
-retention, deduplication, pending batches, and exactly-once consumption; the
-method implements only the hooks below. They run synchronously on the trainer
-thread, so they must not block on network or model latency.
+A processor turns durable records into typed batches. Each processor owns a
+record-to-record stage (``reef.record2record``). The stage decides which
+records train and in what order: it groups reports, judges records, and drops
+records that can no longer train. The processor turns the stage's record sets
+into samples and batches. Reef owns replay, retention, deduplication, pending
+batches, and exactly-once consumption; the method implements only the hooks
+below. They run synchronously on the trainer thread, so they must not block on
+network or model latency.
 
 Reported feedback supplies a ``make_sample`` hook that assembles valid reports;
 computed feedback supplies an asynchronous ``judge`` that derives new feedback.
-Both engines own their buffering, reservations, retention, and replay. Reports
-must reference existing inference records in the same scenario.
+Reports must reference existing inference records in the same scenario.
 
 ``DataProcessor.training_mode`` selects automatic, instruction-triggered or
 combined batching on the same processor. Declare ``supported_training_modes`` and
@@ -680,16 +684,35 @@ Reported feedback
 
    * - Hook
      - Contract
-   * - ``make_sample(context) -> TrainDataItem``
-     - Assemble one valid report and its resolved inferences; raise on data errors.
+   * - ``make_sample(context) -> TrainDataItem | SkippedReport``
+     - Assemble one valid report and its resolved inferences; raise on data errors. Return
+       ``SkippedReport(reason)`` for a valid report that cannot train; the stage releases it.
    * - ``make_batch(items, batch_number) -> TrainingBatch``
      - Shape the flat tuple of selected training items into a batch.
-   * - ``grouping(context) -> (group_key, slot)``
+   * - ``report_grouping() -> ReportGrouping``
+     - Optional; the method's report policy. The default trains every report by itself.
+
+A ``ReportGrouping`` runs in the record-to-record stage and reads only records:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Method
+     - Contract
+   * - ``placement(context) -> (group_key, slot)``
      - Optional collection group and retry slot; defaults to an independent report.
-   * - ``decide_group(key, items) -> GroupDecision``
-     - Required when grouping supplies a group key; return READY, INCOMPLETE, or DISCARD.
+   * - ``decide(key, members) -> GroupDecision``
+     - Required when ``placement`` supplies a group key. ``members`` are the group's
+       ``ReportContext`` values in arrival order. Return READY, INCOMPLETE, or DISCARD.
    * - ``is_training_report(report) -> bool``
-     - Optional; ``False`` for a valid report that is not this method's training data. The engine releases it and never assembles it; its sources go with it only under ``exclusive_sources`` or when it references more than one inference.
+     - Optional; ``False`` for a valid report that is not this method's training data. The stage releases it and
+       never assembles it; its sources go with it only under ``exclusive_sources`` or when it references more than
+       one inference.
+   * - ``status() -> Mapping``
+     - Optional JSON-safe group outcomes, such as steps that can never train. The processor adds them to its status.
+
+A processor class that still defines ``grouping``, ``decide_group``, or
+``is_training_report`` raises ``TypeError`` when its module is imported.
 
 ``ReportContext`` carries ``report``, ordered ``inferences``, optional ``score``,
 and the recipe's ``parsed_report``. ``require_score()`` returns a finite reward or
@@ -697,8 +720,8 @@ raises if the training method cannot use the supplied feedback.
 
 ``make_sample`` returns a trajectory or task directly. The processor adds the
 report id and ordered references to ``source_agent_record_ids``. Grouping and
-consumption state stay private; recipes never receive buffered report objects.
-``grouping`` returns ``(None, None)`` by default. A group key collects reports,
+consumption state stay in the stage; recipes never receive buffered report objects.
+``placement`` returns ``(None, None)`` by default. A group key collects reports,
 and a slot deduplicates retries within that group (None uses the report id).
 This collection group differs from ``TrajectoryItem.group_id``: TTTD waits for
 a complete step, then trains several comparison groups within it.
@@ -717,35 +740,41 @@ Computed feedback
 ~~~~~~~~~~~~~~~~~
 
 Use this engine when later traffic completes an earlier record and judging it
-calls a model or another slow service.
+calls a model or another slow service. The recipe writes a ``RecordJudging``
+and passes it, with its worker, to ``ComputedFeedbackProcessor.__init__(context,
+*, judging, worker)``. The ``JudgingStage`` runs the judging.
 
-+---------------------------------------+-----------------------------------+
-| Hook                                  | Contract                          |
-+=======================================+===================================+
-| ``ingest(record)``                    | correlate records; must not block |
-+---------------------------------------+-----------------------------------+
-| ``async judge(job)``                  | slow judgment, on the processor's |
-|                                       | own worker                        |
-+---------------------------------------+-----------------------------------+
-| ``make_sample(record, judgment)``     | a ``TrajectoryItem``, or ``None`` |
-|                                       | to retire the record              |
-+---------------------------------------+-----------------------------------+
-| ``make_batch(samples, batch_number)`` | the declared batch type           |
-+---------------------------------------+-----------------------------------+
-| ``expire(now)``                       | optionally return receipts whose  |
-|                                       | completion window ended           |
-+---------------------------------------+-----------------------------------+
-| ``required_request_types``            | optionally restrict which record  |
-|                                       | types reach the processor         |
-+---------------------------------------+-----------------------------------+
++------------------------------------------+-----------------------------------+
+| Hook                                     | Contract                          |
++==========================================+===================================+
+| ``RecordJudging.observe(record, now,``   | correlate one record with the     |
+| ``stage)``                               | stage's verbs; must not block     |
++------------------------------------------+-----------------------------------+
+| ``async RecordJudging.judge(job)``       | slow judgment, on the worker      |
+|                                          | thread                            |
++------------------------------------------+-----------------------------------+
+| ``RecordJudging.expire(now)``            | optionally return receipts whose  |
+|                                          | completion window ended           |
++------------------------------------------+-----------------------------------+
+| ``make_sample(record, judgment)``        | a ``TrajectoryItem``, or ``None`` |
+|                                          | to retire the record              |
++------------------------------------------+-----------------------------------+
+| ``make_batch(samples, batch_number)``    | the declared batch type           |
++------------------------------------------+-----------------------------------+
+| ``required_request_types``               | optionally restrict which record  |
+|                                          | types reach the processor         |
++------------------------------------------+-----------------------------------+
 
-Every ``ingest()`` starts with ``catch_up(now)``, then uses ``track(record)``,
+Before each ``observe``, the stage retires expired records and absorbs finished
+judgments. ``observe`` then uses the stage's ``track(record)``,
 ``tracked_record(receipt)``, ``dispatch(job)``, ``retire(receipt)``, and
 ``abandon(receipt)``. A failed judgment or a ``None`` sample retires the record
 instead of failing a training step. All correlation state must be
-reconstructible from replay.
+reconstructible from replay. A processor class that still defines ``ingest``,
+``judge``, ``expire``, or the old engine verbs raises ``TypeError`` when its
+module is imported.
 
-While no batch is out, the engine retires candidates that are more than
+While no batch is out, the stage retires candidates that are more than
 ``max_staleness`` versions behind the newest candidate, by record arrival. The
 recipe's ``max_staleness`` reaches the processor as
 ``ProcessorContext.max_staleness``. With the default value 0, only candidates of

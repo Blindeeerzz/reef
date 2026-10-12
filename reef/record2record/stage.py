@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Hashable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from reef.core.records_types import AgentRecord
+from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase
 from reef.record2record.buffer import UnitBuffer
 from reef.record2record.eligibility import EligibilityCheck
@@ -106,6 +106,8 @@ class Record2RecordStage(ABC):
         self.pool = UnitBuffer(selection, checks)
         #: Formed sets that ended after assembly. The assembler forgets their training data.
         self.ended_set_ids: set[Hashable] = set()
+        #: Whether the processor handed out a batch that the trainer has not acknowledged or released yet.
+        self.batch_out = False
 
     @abstractmethod
     def ingest(self, record: AgentRecord) -> None:
@@ -150,6 +152,10 @@ class Record2RecordStage(ABC):
     def available_count(self) -> int:
         """Return the number of sets that a batch can use."""
         return len(self.pool)
+
+    def mark_batch_out(self, batch_out: bool) -> None:
+        """Record whether a batch is out. A stage does not drop held sets under a batch that is out."""
+        self.batch_out = batch_out
 
     def reserve(self, max_set_count: int) -> tuple[RecordSet, ...]:
         """Select at most ``max_set_count`` sets as the next batch, in batch order, and keep them reserved."""
@@ -226,8 +232,40 @@ class PassThroughStage(Record2RecordStage):
         return formed
 
 
-def with_runtime_load_id(record_set: RecordSet, assembly: SetAssembly) -> RecordSet:
-    """Return ``record_set`` with the runtime load ID of its assembled training data, when known."""
-    if assembly.runtime_load_id is None:
-        return record_set
-    return replace(record_set, runtime_load_id=assembly.runtime_load_id)
+class InferenceStage(Record2RecordStage):
+    """Hold each inference record as one set, in arrival order, and end every other record untouched."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.formed: list[RecordSet] = []
+        #: Records that ended: records that are not inferences, and trained inferences.
+        self.terminal: set[str] = set()
+
+    def ingest(self, record: AgentRecord) -> None:
+        if record.request_type is not RequestType.INFERENCE:
+            self.terminal.add(record.agent_record_id)
+            return
+        self.formed.append(
+            SingleRecordSet(
+                unit_id=record.agent_record_id, arrival_index=self.pool.next_arrival_index(), record=record
+            )
+        )
+
+    def take_formed(self) -> tuple[RecordSet, ...]:
+        formed, self.formed = tuple(self.formed), []
+        return formed
+
+    def accept(self, record_set: RecordSet, assembly: SetAssembly) -> None:
+        self.pool.put(record_set)
+
+    def mark_trained(self, trained_sets: tuple[RecordSet, ...]) -> frozenset[str]:
+        consumed = frozenset(record_id for record_set in trained_sets for record_id in record_set.record_ids())
+        self.terminal |= consumed
+        self.ended_set_ids.update(record_set.unit_id for record_set in trained_sets)
+        return consumed
+
+    def releasable_record_ids(self) -> frozenset[str]:
+        return frozenset(self.terminal)
+
+    def release_records(self, agent_record_ids: frozenset[str]) -> None:
+        self.terminal -= agent_record_ids

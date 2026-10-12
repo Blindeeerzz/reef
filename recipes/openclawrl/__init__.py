@@ -1,11 +1,13 @@
 """OpenClaw-RL (arXiv:2603.10165): one method, one package.
 
 - ``recipe`` — the OpenClaw-RL recipe class and its ``WeightTrainingSpec``.
-- ``processor`` — the computed-feedback processor: sessions correlated from
-  record tags or, as a fallback, matching traces; turns judged on a
-  processor-private PRM worker.
+- ``judging`` — the correlation and judge that run in the record-to-record
+  stage: sessions correlated from record tags or, as a fallback, matching
+  traces; turns judged on the stage's PRM worker.
+- ``processor`` — the computed-feedback processor: judged turns into samples
+  and batches, and the PRM record file.
 - ``sessions`` / ``turns`` / ``prm`` — the derivation machinery the
-  processor calls: how a session is recognized, what one turn's judgment
+  judging calls: how a session is recognized, what one turn's judgment
   gets and answers, what one PRM call does.
 - ``objective`` — the backend-agnostic training objective.
 - ``slime`` — the Slime loss family, its torch objective, and the frozen

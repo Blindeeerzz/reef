@@ -31,7 +31,7 @@ from reef.artifact import ArtifactRef
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportBase, TeacherContextReport
 from reef.record2dataset.generated_tasks.processor import GeneratedTaskProcessor
-from reef.record2record import GroupDecision, ReportContext, ReportGrouping
+from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.train import ProcessorContext, Trainer
 from reef.train.backend import CandidateBackend, PreparedStep
@@ -305,24 +305,27 @@ class ImmediateWorker:
         return None
 
 
-class ToyComputedProcessor(ComputedFeedbackProcessor):
+class ToyJudging(RecordJudging):
     """A record tracks itself; a record whose payload names ``completes`` finishes that receipt."""
 
-    def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context, worker=ImmediateWorker())
-
-    def ingest(self, item: AgentRecord) -> None:
-        self.catch_up(0.0)
+    def observe(self, item: AgentRecord, now: float, stage: JudgingStage) -> None:
         completes = item.payload.get("completes")
         if completes:
-            self.dispatch(ToyJob(completes))
+            stage.dispatch(ToyJob(completes))
         if item.payload.get("track"):
-            self.track(item)
+            stage.track(item)
         else:
-            self.retire(item.agent_record_id)
+            stage.retire(item.agent_record_id)
 
-    async def judge(self, job: ToyJob) -> ToyJudgment:
+    async def judge(self, job: SupportsReceipt) -> SupportsReceipt:
         raise AssertionError("the immediate worker judges without the coroutine")
+
+
+class ToyComputedProcessor(ComputedFeedbackProcessor):
+    """Trains the judged records of ``ToyJudging``."""
+
+    def __init__(self, context: ProcessorContext) -> None:
+        super().__init__(context, judging=ToyJudging(), worker=ImmediateWorker())
 
     def make_sample(self, record: AgentRecord, judgment: SupportsReceipt) -> TrajectoryItem | None:
         if not isinstance(judgment, ToyJudgment) or not judgment.good:

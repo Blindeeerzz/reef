@@ -3,8 +3,8 @@ Processors
 
 A processor is a scenario's batch builder: records in, one typed training
 batch out, with ownership of its in-memory buffers. Storage owns deletion. This page
-explains the two feedback engines, the task generation contract, and the path a
-record takes to a batch.
+explains the record-to-record stage, the two feedback engines, the task
+generation contract, and the path a record takes to a batch.
 
 .. page::
    :for: recipe authors choosing an engine, and anyone reading ``reef/train/processors/``
@@ -17,7 +17,9 @@ The contract
 The trainer drives four mutating methods on its own thread, under its lock;
 none may block:
 
-- ``ingest(record)``: one record arrives;
+- ``ingest(record)``: one record arrives. A TRAIN instruction stays in the
+  processor; every other record goes through the processor's record-to-record
+  stage (see below);
 - ``ready()``: is a batch available;
 - ``build_batch()``: produce it (the trainer validates it against ``output_schema``);
 - ``acknowledge(batch_id)``: the training step consumed that batch; returns
@@ -47,10 +49,49 @@ shaped for another component instead of failing it. A batch the backend dropped 
 announced through ``dropped()`` before its acknowledgement, for a processor
 that paces work on what actually trained.
 Nothing numeric lives here. Advantages and the loss family are the step
-objective's. The read-only ``status()`` hook is empty by default; a processor
-uses it only when a terminal outcome cannot become a batch and an external
-runner must stop waiting (TTTD reports a complete mixed-artifact step as an
-invariant failure).
+objective's. The read-only ``status()`` hook reports ``ready_units`` and
+``batch_size``. A report grouping adds an entry only when a terminal outcome
+cannot become a batch and an external runner must stop waiting (TTTD reports a
+complete mixed-artifact step as an invariant failure).
+
+The record-to-record stage
+--------------------------
+
+Each processor builds one ``Record2RecordStage`` (``reef.record2record``) in
+``build_record_stage()``. The stage decides which records train and in what
+order. The processor turns what the stage decides into samples and batches:
+
+1. The stage reads each record and forms record sets: a report with the
+   inference records that it references, or one judged record.
+2. The processor assembles each formed set (``assemble``). It returns
+   ``READY`` with the training data, or ``REJECTED`` when the set cannot train.
+3. The stage holds ready sets in its pool, places reports in their groups, and
+   drops sets that can no longer train. The selection policy orders the pool.
+4. ``build_batch`` reserves sets from the pool. ``acknowledge`` ends them as
+   trained and returns the IDs of the records that they consumed.
+
+A record that the stage ends, for example a report in a taken slot or a
+candidate that is too stale, appears in ``releasable_record_ids()``. The next
+commit names it, so the record never trains after a restart.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Stage
+     - Used by
+     - Decides
+   * - ``PassThroughStage``
+     - the bare ``DataProcessor`` and processors that keep records themselves
+     - nothing; each record goes to ``assemble`` by itself
+   * - ``ReportStage``
+     - ``ReportedFeedbackProcessor``
+     - report validation, groups and slots, the manual-mode limit, source release
+   * - ``JudgingStage``
+     - ``ComputedFeedbackProcessor``
+     - correlation, the judging worker, and the ``max_staleness`` check
+   * - ``InferenceStage``
+     - ``RecordDrivenTraceProcessor``
+     - one set per inference record; other records are released
 
 ``DataProcessor`` in ``base.py`` is concrete on purpose: bare, it is the
 no-update default that ingests for audit and never becomes ready. Recipes
@@ -77,7 +118,7 @@ implements one assembly hook:
    def make_training_batch(self, batch_number, request):
        if request is not None and self.training_mode == "manual":
            # Manual runs the instruction alone; harness needs no samples.
-           self.unit_buffer.reserve(0)
+           self.record_stage.reserve(0)
            return TrainingBatch(request.id, ())
        # Hybrid hands the instruction the units an automatic batch would take.
        return self._make_pending(batch_number)
@@ -107,7 +148,7 @@ as the reported-feedback engine does.
 Unsupported modes, or instruction assembly without an implementation, raise
 ``NotImplementedError``. An invalid mode name raises ``ValueError``.
 The default automatic assembly keeps the existing ``_make_pending`` hook;
-automatic processors and computed-feedback ``ingest`` implementations need no
+automatic processors and computed-feedback ``RecordJudging`` implementations need no
 mode-specific lifecycle methods or additional processor class.
 
 Changing training mode
@@ -151,22 +192,31 @@ A reported-feedback recipe implements:
 - ``make_batch(items, batch_number)``: assemble the flat tuple of selected
   training items into a batch. Consumption remains the engine's responsibility,
   including selected items that the recipe removes from training.
-- ``is_training_report(report)`` when another role's reports share the
-  scenario: return ``False`` for a valid report that is not this method's
-  training data (SPADE's Designer reports its own score there). The engine
-  releases such a report and never calls ``make_sample`` on it; its sources
-  go with it only under ``exclusive_sources`` or when it references more
-  than one inference, and a single referenced inference stays retained for
-  a report that trains on it. The default takes every report.
-- ``grouping(context)`` for grouped methods: return ``(group_key, slot)``.
-  The default ``(None, None)`` makes an independent sample. A None slot uses
-  the report id; repeated slots preserve the first accepted report.
-- ``decide_group(key, items)`` for grouped methods: return ``INCOMPLETE``,
-  ``READY``, or ``DISCARD``. The items are training data, without cache wrappers.
-  The collection group can span multiple training comparison groups, as in TTTD.
+- ``report_grouping()`` when the method groups or filters reports: return a
+  ``ReportGrouping``. The stage calls it on the trainer thread, and it reads
+  only records:
 
-The engine handles report-id deduplication, group-slot retries, reservations,
-consumption, and retention. A batch is ready in automatic mode after
+  - ``is_training_report(report)`` when another role's reports share the
+    scenario: return ``False`` for a valid report that is not this method's
+    training data (SPADE's Designer reports its own score there). The stage
+    releases such a report and never assembles it; its sources go with it
+    only under ``exclusive_sources`` or when it references more than one
+    inference, and a single referenced inference stays retained for a report
+    that trains on it. The default takes every report.
+  - ``placement(context)`` for grouped methods: return ``(group_key, slot)``.
+    The default ``(None, None)`` makes an independent sample. A None slot uses
+    the report id; repeated slots preserve the first accepted report.
+  - ``decide(key, members)`` for grouped methods: return ``INCOMPLETE``,
+    ``READY``, or ``DISCARD``. The members are the group's ``ReportContext``
+    values in arrival order. The collection group can span multiple training
+    comparison groups, as in TTTD.
+
+``make_sample`` can return ``SkippedReport(reason)`` for a valid report that
+cannot train, as Distill does for a teacher sequence that is too long. The
+stage releases the report.
+
+The stage handles report-id deduplication, group-slot retries, consumption,
+and retention; the processor keeps the reservation. A batch is ready in automatic mode after
 ``batch_size`` units accumulate; a unit is one sample or one complete group.
 The same batch remains reserved until acknowledged or released. Reports arriving
 later for already consumed sources cannot train those sources again.
@@ -179,11 +229,13 @@ protected and does not mark the report successfully processed.
 Computed feedback
 ~~~~~~~~~~~~~~~~~
 
-A computed-feedback recipe implements correlation in ``ingest`` using the
-engine's ``catch_up``, ``dispatch``, ``track``, and ``retire`` operations.
-It supplies ``async judge``, ``make_sample``, ``make_batch``, and ``expire`` for
-tracked records that time out. This path derives a new signal and is unchanged
-by the reported-feedback contract.
+A computed-feedback recipe writes a ``RecordJudging``: correlation in
+``observe(record, now, stage)`` with the stage's ``dispatch``, ``track``,
+``tracked_record``, and ``retire`` operations, ``async judge``, and ``expire``
+for tracked records that time out. The processor passes it, with the worker
+that runs ``judge``, to ``ComputedFeedbackProcessor.__init__``, and supplies
+``make_sample`` and ``make_batch``. The ``JudgingStage`` holds judged records
+and drops those more than ``max_staleness`` versions behind the newest one.
 
 Task generation contract
 ------------------------

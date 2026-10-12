@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 from reef_service._trajectories import policy_trajectory
@@ -16,6 +17,7 @@ from reef_service._trajectories import policy_trajectory
 from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Failed, SupportsReceipt
 from reef.core import AgentRecord, RequestType
 from reef.core.trajectories import source_record_id
+from reef.record2record import JudgingStage, RecordJudging
 from reef.train.processors.computed import ComputedFeedbackProcessor
 from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem
 
@@ -54,22 +56,27 @@ class _FakeWorker:
         self._judgments.append(judgment)
 
 
-class _ToyProcessor(ComputedFeedbackProcessor):
-    """A record tracks itself; a record whose payload names ``completes``
-    finishes that receipt. Samples are one-token stubs."""
+class _ToyJudging(RecordJudging):
+    """A record tracks itself; a record whose payload names ``completes`` finishes that receipt."""
 
-    def ingest(self, item: AgentRecord) -> None:
-        self.catch_up(time.monotonic())
+    def observe(self, item: AgentRecord, now: float, stage: JudgingStage) -> None:
         completes = item.payload.get("completes")
         if completes:
-            self.dispatch(_Job(completes))
+            stage.dispatch(_Job(completes))
         if item.payload.get("track"):
-            self.track(item)
+            stage.track(item)
         else:
-            self.retire(item.agent_record_id)
+            stage.retire(item.agent_record_id)
 
-    async def judge(self, job: _Job) -> _Judgment:
+    async def judge(self, job: SupportsReceipt) -> SupportsReceipt:
         return _Judgment(job.receipt)
+
+
+class _ToyProcessor(ComputedFeedbackProcessor):
+    """Trains the judged records of ``_ToyJudging``. Samples are one-token stubs."""
+
+    def __init__(self, context: ProcessorContext, *, worker: Any) -> None:
+        super().__init__(context, judging=_ToyJudging(), worker=worker)
 
     def make_sample(self, record: AgentRecord, judgment: _Judgment) -> TrajectoryItem | None:
         if not judgment.good:
@@ -200,7 +207,6 @@ class _Crashes(BackgroundJobRunner):
 def test_real_worker_runs_the_judge_coroutine() -> None:
     worker = BackgroundJobWorker(_Answers(), thread_name="test-jobs")
     assert worker.submit(_Job("r1"))
-    import time
 
     deadline = time.monotonic() + 10.0
     judgments: list = []
@@ -214,7 +220,6 @@ def test_real_worker_runs_the_judge_coroutine() -> None:
 def test_real_worker_resolves_a_crashing_judge_as_failed() -> None:
     worker = BackgroundJobWorker(_Crashes(), thread_name="test-jobs")
     assert worker.submit(_Job("r1"))
-    import time
 
     deadline = time.monotonic() + 10.0
     judgments: list = []

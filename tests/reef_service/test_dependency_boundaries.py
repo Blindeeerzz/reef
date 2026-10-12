@@ -544,7 +544,13 @@ def test_background_jobs_depend_only_on_the_standard_library() -> None:
 
 def test_record_to_record_stage_depends_only_on_contracts_below_training() -> None:
     # Record-to-task and the trainer both use this stage, so it never imports either of them.
-    allowed = ("reef.core", "reef.runtime.interfaces", "reef.observability", "reef.record2record")
+    allowed = (
+        "reef.core",
+        "reef.runtime.interfaces",
+        "reef.observability",
+        "reef.background_jobs",
+        "reef.record2record",
+    )
     for path in sorted((REPO_ROOT / "reef" / "record2record").rglob("*.py")):
         package = ".".join(path.parent.relative_to(REPO_ROOT).parts)
         for target in _imported_modules(ast.parse(path.read_text(encoding="utf-8")), package=package):

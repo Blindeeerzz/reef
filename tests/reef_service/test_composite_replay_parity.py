@@ -12,7 +12,6 @@ train the same and keep the same rows.
 
 from __future__ import annotations
 
-import time
 from collections.abc import Hashable
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,9 +21,10 @@ import pytest
 
 from recipes.tttd import TTTDGroupedRolloutReport, TTTDProcessor
 from reef.artifact import ArtifactRef, InMemoryRepositoryBackend
+from reef.background_jobs import SupportsReceipt
 from reef.core import AgentRecord, RequestType
 from reef.dispatcher import Dispatcher
-from reef.record2record import GroupDecision, ReportContext, ReportGrouping
+from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train import ComponentTrainer, Trainer
 from reef.train.processors.computed import ComputedFeedbackProcessor
@@ -35,31 +35,36 @@ from ._trajectories import policy_trajectory
 from .test_component_trainers import HARNESS, WEIGHTS, _ComponentBackend, _JudgedAtOnce, _Judgment, _TwoTrainerRecipe
 
 
-class _SessionProcessor(ComputedFeedbackProcessor):
+class _SessionJudging(RecordJudging):
     """OpenClawRL's tagged path: a turn equal to its session's last request is a client retry and retires; the
-    next turn of a session dispatches the one before it; reports retire; a turn marked declined is unusable."""
+    next turn of a session dispatches the one before it; reports retire."""
 
-    def __init__(self, context: Any) -> None:
-        super().__init__(context, worker=_JudgedAtOnce())
-        self._sessions: dict[str, tuple[str, int]] = {}
+    def __init__(self) -> None:
+        self.sessions: dict[str, tuple[str, int]] = {}
 
-    def ingest(self, item: AgentRecord) -> None:
-        self.catch_up(time.monotonic())
+    def observe(self, item: AgentRecord, now: float, stage: JudgingStage) -> None:
         if item.request_type is not RequestType.INFERENCE or "session" not in item.payload:
-            self.retire(item.agent_record_id)
+            stage.retire(item.agent_record_id)
             return
         session, key = item.payload["session"], int(item.payload["key"])
-        last = self._sessions.get(session)
+        last = self.sessions.get(session)
         if last is not None and last[1] == key:
-            self.retire(item.agent_record_id)
+            stage.retire(item.agent_record_id)
             return
-        if last is not None and self.tracked_record(last[0]) is not None:
-            self.dispatch(_Judgment(last[0]))
-        self._sessions[session] = (item.agent_record_id, key)
-        self.track(item)
+        if last is not None and stage.tracked_record(last[0]) is not None:
+            stage.dispatch(_Judgment(last[0]))
+        self.sessions[session] = (item.agent_record_id, key)
+        stage.track(item)
 
-    async def judge(self, job: _Judgment) -> _Judgment:
+    async def judge(self, job: SupportsReceipt) -> SupportsReceipt:
         return job
+
+
+class _SessionProcessor(ComputedFeedbackProcessor):
+    """Trains the judged turns of ``_SessionJudging``; a turn marked declined is unusable."""
+
+    def __init__(self, context: Any) -> None:
+        super().__init__(context, judging=_SessionJudging(), worker=_JudgedAtOnce())
 
     def make_sample(self, record: AgentRecord, judgment: _Judgment) -> Any:
         if record.payload.get("declined"):

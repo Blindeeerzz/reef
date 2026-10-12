@@ -1,6 +1,6 @@
 """Shared readers and sample builders both engines use.
 
-The report reader ``report_score`` reads the reported reward;
+The report reader ``report_score`` lives in ``reef.record2record``.
 ``recorded_request`` and ``recorded_response`` read the messages, tools and
 answer text of a recorded inference; the sample builders turn one inference
 record — or an ordered multi-call episode — into a ``TrajectoryItem`` with the

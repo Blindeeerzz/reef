@@ -1,0 +1,246 @@
+"""OpenClaw-RL's correlation and judge: every main turn is judged by its next state.
+
+Runs inside the record-to-record stage (:class:`~reef.record2record.JudgingStage`).
+``observe`` correlates main turns into sessions and hands each completed turn
+over for judgment; ``judge`` is upstream's combine dispatch.
+
+No proxy and no judgment on the wire: the method derives every verdict
+from the traffic the agent already produces. Correlation prefers a
+harness-stamped ``x-reef-tag-session`` and falls back to trace matching,
+which holds only for agents that resend their transcript each turn.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import collections
+import logging
+from collections.abc import Mapping
+from typing import Any
+
+from recipes.openclawrl.prm import (
+    append_hint_to_messages,
+    build_clients,
+    collect_hint_candidates,
+    render_response_fallback,
+)
+from recipes.openclawrl.sessions import DEFAULT_MAX_SESSIONS, SessionIndex
+from recipes.openclawrl.turns import TurnJob, TurnJudgment, main_turn_message, turn_job, turn_request_messages
+from reef.core.records_types import AgentRecord, RequestType
+from reef.record2record import JudgingStage, RecordJudging
+
+logger = logging.getLogger(__name__)
+
+# How often a run may repeat the "nothing is binding" warning, and how many
+# dead-on-arrival sessions it takes to raise it at all. A conversation whose
+# last turn never got a next state is ordinary; a run where those outnumber
+# the turns that did bind is a correlation failure.
+UNBOUND_WARN_INTERVAL_S = 300.0
+UNBOUND_WARN_FLOOR = 8
+
+
+def session_tag(payload: Any) -> str | None:
+    """The harness-declared conversation id (``x-reef-tag-session``), if any."""
+    metadata = payload.get("metadata") if isinstance(payload, dict) else None
+    tags = metadata.get("tags") if isinstance(metadata, dict) else None
+    value = tags.get("session") if isinstance(tags, dict) else None
+    return str(value).strip() or None if value is not None else None
+
+
+class OpenClawRLJudging(RecordJudging):
+    """Turns judged by their next state; terminal exclusions mirror upstream.
+
+    Side calls, retried turns, session-final turns, and reports retire
+    terminal instead of ever being judged. ``clients`` (PRM judge, directive
+    teacher, renderer) overrides the configured clients for tests.
+    """
+
+    def __init__(self, config: Mapping[str, Any], clients: tuple[Any, Any, Any] | None = None) -> None:
+        self.prm, self.teacher, self.renderer = clients if clients is not None else build_clients(config)
+        self.max_hint_candidates = max(1, int(config.get("prm_max_hint_candidates", 3)))
+        self.index = SessionIndex(
+            float(config.get("session_ttl_s", 900.0)),
+            max_sessions=int(config.get("max_open_sessions", DEFAULT_MAX_SESSIONS)),
+        )
+        # Correlation reports itself through the log, not the record file:
+        # the failure worth catching is "nothing ever bound", and a run in
+        # that state never produces the batch that would write a line.
+        self.warned_untagged = False
+        self.warned_evicted = False
+        self.last_unbound_warning = -UNBOUND_WARN_INTERVAL_S
+        # What the judge actually saw, since the processor last wrote the PRM record file.
+        self.judged: collections.Counter[str] = collections.Counter()
+
+    def observe(self, item: AgentRecord, now: float, stage: JudgingStage) -> None:
+        # 1. The stage has caught up: expiry ran before this read, so an
+        #    expired session can never capture this request as its successor.
+        # 2. Reports never train here; owning them keeps the store
+        #    compactable (nothing else would ever release them).
+        if item.request_type is not RequestType.INFERENCE:
+            stage.retire(item.agent_record_id)
+            return
+        # 3. Side calls (titles, compaction — no tools) never train.
+        payload = item.payload
+        if main_turn_message(payload) is None:
+            stage.retire(item.agent_record_id)
+            return
+        # 4. Correlate into a session: a retry is terminal; the request that
+        #    follows a turn delivers its next state — send that turn to the
+        #    judging worker. A harness-stamped ``session`` tag names the
+        #    conversation outright; without one this falls back to trace
+        #    matching, which only holds for agents that resend their whole
+        #    transcript every turn. Every main turn is judged against
+        #    whatever arrived next — a tool result is a next state, and its
+        #    role is an input to the judge rather than a filter.
+        observation = self.index.observe(
+            item.agent_record_id,
+            turn_request_messages(payload),
+            now,
+            session_tag=session_tag(payload),
+        )
+        if observation.duplicate:
+            stage.retire(item.agent_record_id)
+            return
+        if observation.binding is not None:
+            record = stage.tracked_record(observation.binding.receipt)
+            if record is not None:
+                stage.dispatch(turn_job(record, observation.binding))
+        # 5. This turn now awaits its own next state.
+        stage.track(item)
+
+    async def judge(self, job: TurnJob) -> TurnJudgment:
+        """Upstream combine dispatch: evaluative and directive judges per turn.
+
+        ┌────────────────┬──────────────┬──────────────────────────────────┐
+        │ hint accepted? │ eval = ±1?   │ judgment                         │
+        ├────────────────┼──────────────┼──────────────────────────────────┤
+        │ yes            │ yes          │ score=eval + teacher signal      │
+        │ yes            │ no           │ score=0.0 + teacher signal       │
+        │ no             │ yes          │ score=eval + un-enhanced anchor  │
+        │ no             │ no           │ terminal                         │
+        └────────────────┴──────────────┴──────────────────────────────────┘
+
+        Runs on the judging worker's thread, never the trainer's. The
+        un-enhanced anchor is upstream's RL-only convention
+        (``teacher_tokens_candidates = [un_enhanced]``): every RL sample
+        carries the frozen PRM's log-probs under the PLAIN prompt as a
+        single OPD candidate, so the distillation term keeps pulling the
+        policy toward the frozen base distribution on its top-K.
+        """
+        # 1. The judges and teacher see the same text upstream does: the
+        #    chat-template re-render of the FULL assistant turn (reasoning +
+        #    content + native tool calls); the visible render is the fallback.
+        response_text = None
+        if self.renderer is not None:
+            response_text = await asyncio.to_thread(
+                self.renderer.render,
+                list(job.request_messages),
+                dict(job.response_message),
+                tools=job.request_tools,
+            )
+        response_text = response_text or render_response_fallback(job.response_message)
+        # 2. Both PRM judges vote.
+        eval_score, hint_votes = await asyncio.gather(
+            self.prm.evaluate(response_text, job.next_state_text, job.next_state_role),
+            self.prm.evaluate_hint_votes(response_text, job.next_state_text, job.next_state_role),
+        )
+        # 3. The accepted hindsight hints, shortest first, capped.
+        candidates = collect_hint_candidates(hint_votes, max_cand=self.max_hint_candidates)
+        # 4. Every candidate ships as a TOKEN SEQUENCE — upstream's
+        #    ``teacher_tokens_candidates`` — for the train actor's Megatron
+        #    teacher pass; an RL-only turn ships the un-enhanced native ids
+        #    (the anchor, whose construction cannot fail). Without the
+        #    generation-time capture the turn cannot train regardless, so no
+        #    candidate is built for it.
+        messages = list(job.request_messages)
+        native_ok = bool(
+            job.native_tokens
+            and job.response_token_count
+            and 0 < job.response_token_count < len(job.native_tokens)
+            and job.topk_indices
+            and len(job.topk_indices) == job.response_token_count
+        )
+        teacher_cands: list[dict[str, Any]] = []
+        if candidates and messages and native_ok:
+            if job.native_tokens is None or job.response_token_count is None:
+                raise RuntimeError("native OpenClaw job lost its token capture")
+            for candidate in candidates:
+                enhanced = append_hint_to_messages(messages, candidate)
+                ids = await self.teacher.candidate_tokens(
+                    enhanced,
+                    tools=job.request_tools,
+                    native_tokens=job.native_tokens,
+                    response_token_count=job.response_token_count,
+                )
+                if ids is not None:
+                    teacher_cands.append({"hint": candidate, "teacher_tokens": ids})
+        if not teacher_cands and eval_score in (1.0, -1.0) and native_ok:
+            if job.native_tokens is None:
+                raise RuntimeError("native OpenClaw job lost its token capture")
+            teacher_cands.append({"hint": "", "teacher_tokens": [int(v) for v in job.native_tokens]})
+        # 5. The dispatch table decides.
+        has_rl = eval_score in (1.0, -1.0)
+        self.judged[f"next_state:{job.next_state_role}"] += 1
+        self.judged[f"eval:{eval_score:+.0f}" if has_rl else "eval:0"] += 1
+        self.judged["hint_accepted" if candidates else "hint_declined"] += 1
+        self.judged["anchor_only" if (not candidates and teacher_cands) else "teacher_cands"] += 1
+        if not has_rl and not teacher_cands:
+            self.judged["declined"] += 1
+            return TurnJudgment(job.receipt)
+        return TurnJudgment(job.receipt, score=eval_score if has_rl else 0.0, teacher_cands=tuple(teacher_cands))
+
+    def expire(self, now: float) -> tuple[str, ...]:
+        """Sessions idle past the TTL are over: drop them from the index and
+        retire the turn each was still holding.
+
+        Only a session's newest turn is ever unbound — every earlier one was
+        dispatched the moment its successor arrived — so what comes back is
+        one turn per dead session, a turn whose next state will never come.
+        Without this the index would grow for the life of the process and
+        those records would stay protected from compaction forever.
+        """
+        retired = self.index.expire(now)
+        self.warn_on_correlation(now)
+        return retired
+
+    def warn_on_correlation(self, now: float) -> None:
+        """Say out loud when correlation is producing nothing.
+
+        A turn that never binds is never judged and never trains, and it does
+        so without an error: the only symptom is a training set that stays
+        empty, which is invisible without reading this file. WARNING because
+        reef configures no logging and anything below it is discarded; rate
+        limited because this is reached once per record.
+        """
+        stats = self.index.stats
+        if stats.untagged and not self.warned_untagged:
+            self.warned_untagged = True
+            logger.warning(
+                "openclawrl: correlating by trace matching — this traffic carries no "
+                "x-reef-tag-session tag. Trace matching binds only agents that resend their "
+                "whole transcript on every request; an agent that keeps or rewrites its "
+                "history locally yields no trainable turns. Stamp x-reef-tag-session, stable "
+                "and unique per conversation, to correlate reliably."
+            )
+        if stats.evicted and not self.warned_evicted:
+            self.warned_evicted = True
+            logger.warning(
+                "openclawrl: the session table hit max_open_sessions and is evicting the least "
+                "recently active sessions (%d so far); their pending turns retire untrained. "
+                "Unmatched requests each open a session, so this usually means correlation is "
+                "failing rather than that the traffic has that many live conversations.",
+                stats.evicted,
+            )
+        if (
+            stats.dropped_unbound >= UNBOUND_WARN_FLOOR
+            and stats.dropped_unbound > stats.bound
+            and now - self.last_unbound_warning >= UNBOUND_WARN_INTERVAL_S
+        ):
+            self.last_unbound_warning = now
+            logger.warning(
+                "openclawrl: %d session(s) expired without ever binding a turn, against %d bound "
+                "turn(s). Unbound turns are never judged and never train — check that every "
+                "inference in a conversation carries the same x-reef-tag-session value.",
+                stats.dropped_unbound,
+                stats.bound,
+            )
