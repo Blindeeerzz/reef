@@ -57,9 +57,12 @@ complete mixed-artifact step as an invariant failure).
 The record-to-record stage
 --------------------------
 
-Each processor builds one ``Record2RecordStage`` (``reef.record2record``) in
-``build_record_stage()``. The stage decides which records train and in what
-order. The processor turns what the stage decides into samples and batches:
+Each processor has one ``Record2RecordStage`` (``reef.record2record``). The
+stage decides which records train and in what order. The processor turns what
+the stage decides into samples and batches. The recipe owns the stage's
+policy: ``WeightTrainingRecipe.build_record_stage(context)`` builds the stage,
+and ``build_processor`` passes it to the processor as ``record_stage``.
+Without one, the processor uses a default stage with no method policy.
 
 1. The stage reads each record and forms record sets: a report with the
    inference records that it references, or one judged record.
@@ -192,24 +195,28 @@ A reported-feedback recipe implements:
 - ``make_batch(items, batch_number)``: assemble the flat tuple of selected
   training items into a batch. Consumption remains the engine's responsibility,
   including selected items that the recipe removes from training.
-- ``report_grouping()`` when the method groups or filters reports: return a
-  ``ReportGrouping``. The stage calls it on the trainer thread, and it reads
-  only records:
 
-  - ``is_training_report(report)`` when another role's reports share the
-    scenario: return ``False`` for a valid report that is not this method's
-    training data (SPADE's Designer reports its own score there). The stage
-    releases such a report and never assembles it; its sources go with it
-    only under ``exclusive_sources`` or when it references more than one
-    inference, and a single referenced inference stays retained for a report
-    that trains on it. The default takes every report.
-  - ``placement(context)`` for grouped methods: return ``(group_key, slot)``.
-    The default ``(None, None)`` makes an independent sample. A None slot uses
-    the report id; repeated slots preserve the first accepted report.
-  - ``decide(key, members)`` for grouped methods: return ``INCOMPLETE``,
-    ``READY``, or ``DISCARD``. The members are the group's ``ReportContext``
-    values in arrival order. The collection group can span multiple training
-    comparison groups, as in TTTD.
+A recipe whose method groups or filters reports overrides
+``build_record_stage`` and returns a ``ReportStage`` with its
+``ReportGrouping``. ``exclusive_sources`` makes a terminal report own its
+referenced inference records outright, and ``ordered_groups`` batches ready
+groups in key order. The grouping runs on the trainer thread and reads only
+records:
+
+- ``is_training_report(report)`` when another role's reports share the
+  scenario: return ``False`` for a valid report that is not this method's
+  training data (SPADE's Designer reports its own score there). The stage
+  releases such a report and never assembles it; its sources go with it
+  only under ``exclusive_sources`` or when it references more than one
+  inference, and a single referenced inference stays retained for a report
+  that trains on it. The default takes every report.
+- ``placement(context)`` for grouped methods: return ``(group_key, slot)``.
+  The default ``(None, None)`` makes an independent sample. A None slot uses
+  the report id; repeated slots preserve the first accepted report.
+- ``decide(key, members)`` for grouped methods: return ``INCOMPLETE``,
+  ``READY``, or ``DISCARD``. The members are the group's ``ReportContext``
+  values in arrival order. The collection group can span multiple training
+  comparison groups, as in TTTD.
 
 ``make_sample`` can return ``SkippedReport(reason)`` for a valid report that
 cannot train, as Distill does for a teacher sequence that is too long. The
@@ -232,10 +239,11 @@ Computed feedback
 A computed-feedback recipe writes a ``RecordJudging``: correlation in
 ``observe(record, now, stage)`` with the stage's ``dispatch``, ``track``,
 ``tracked_record``, and ``retire`` operations, ``async judge``, and ``expire``
-for tracked records that time out. The processor passes it, with the worker
-that runs ``judge``, to ``ComputedFeedbackProcessor.__init__``, and supplies
-``make_sample`` and ``make_batch``. The ``JudgingStage`` holds judged records
-and drops those more than ``max_staleness`` versions behind the newest one.
+for tracked records that time out. The recipe's ``build_record_stage``
+returns a ``JudgingStage`` with the judging and the worker that runs
+``judge``. The processor receives that stage and supplies ``make_sample`` and
+``make_batch``. The stage holds judged records and drops those more than
+``max_staleness`` versions behind the newest one.
 
 Task generation contract
 ------------------------

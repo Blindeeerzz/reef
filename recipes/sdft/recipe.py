@@ -11,7 +11,10 @@ from reef.core.reports import ReportBase, TeacherContextReport
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.recipe.errors import RecipeConfigError
+from reef.record2record import ReportStage
 from reef.train.algos import StepScheduling
+from reef.train.processors.distill import distill_record_stage
+from reef.train.types import ProcessorContext
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -55,6 +58,9 @@ class SDFTRecipe(WeightTrainingRecipe):
             # Each sample is its own DP unit; the backend's configured step size applies.
             scheduling=StepScheduling(unit="sample"),
         )
+
+    def build_record_stage(self, context: ProcessorContext) -> ReportStage:
+        return distill_record_stage(context)
 
     def __post_init__(self) -> None:
         super().__post_init__()

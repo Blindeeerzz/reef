@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from recipes.tttd import TTTDGroupedRolloutReport, TTTDProcessor
+from recipes.tttd.recipe import tttd_record_stage
 from reef.artifact.memory import InMemoryRepositoryBackend
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportBase, ReportValidationError, ScoredRolloutReport, TeacherContextReport
@@ -246,13 +247,12 @@ def test_undeclared_recipe_keeps_open_ingress_via_anyreport() -> None:
 
 
 def test_tttd_raises_for_grid_mismatch_and_schema_violations() -> None:
-    processor = TTTDProcessor(
-        ProcessorContext(
-            "discovery",
-            {"groups_per_step": 2, "rollouts_per_group": 3},
-            report_type=TTTDGroupedRolloutReport,
-        )
+    context = ProcessorContext(
+        "discovery",
+        {"groups_per_step": 2, "rollouts_per_group": 3},
+        report_type=TTTDGroupedRolloutReport,
     )
+    processor = TTTDProcessor(context, record_stage=tttd_record_stage(context))
     processor.ingest(
         AgentRecord.create(
             scenario="discovery",

@@ -68,11 +68,8 @@ class RecordingProcessor(DataProcessor):
 
     supported_training_modes = frozenset({"auto", "manual", "hybrid"})
 
-    def build_record_stage(self) -> WithholdingStage:
-        return WithholdingStage()
-
     def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context)
+        super().__init__(context, record_stage=WithholdingStage())
         self.assembled: list[str] = []
 
     @property
@@ -97,8 +94,8 @@ class DroppingReportStage(ReportStage):
 
 
 class DroppingProcessor(ThresholdProcessor):
-    def build_record_stage(self) -> ReportStage:
-        return DroppingReportStage(self.scenario, self.context.report_type, ReportGrouping())
+    def __init__(self, context: ProcessorContext) -> None:
+        super().__init__(context, record_stage=DroppingReportStage(context.scenario, None, ReportGrouping()))
 
 
 class PairGrouping(ReportGrouping):
@@ -115,14 +112,10 @@ class PairGrouping(ReportGrouping):
 class PairProcessor(ReportedFeedbackProcessor):
     """Trains pairs of reports. Reports whose ID starts with ``skip`` cannot train."""
 
-    exclusive_sources = True
-
     def __init__(self) -> None:
-        super().__init__(ProcessorContext("s", {"batch_size": 1}))
+        stage = ReportStage("s", None, PairGrouping(), exclusive_sources=True)
+        super().__init__(ProcessorContext("s", {"batch_size": 1}), record_stage=stage)
         self.fail_assembly = False
-
-    def report_grouping(self) -> ReportGrouping:
-        return PairGrouping()
 
     def make_sample(self, context: ReportContext) -> TrainDataItem | SkippedReport:
         if self.fail_assembly:
@@ -244,12 +237,10 @@ def test_a_skipped_report_is_released_and_never_batched() -> None:
 
 
 @pytest.mark.unit
-def test_a_processor_that_defines_a_moved_grouping_hook_fails_at_import() -> None:
-    with pytest.raises(TypeError, match=r"moved to reef\.record2record\.ReportGrouping"):
-
-        class OldProcessor(ThresholdProcessor):
-            def grouping(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
-                return None, None
+@pytest.mark.parametrize("hook", ["grouping", "exclusive_sources"])
+def test_a_processor_that_defines_moved_report_policy_fails_at_import(hook: str) -> None:
+    with pytest.raises(TypeError, match=f"defines {hook}: the report policy moved to the recipe"):
+        type("OldProcessor", (ThresholdProcessor,), {hook: True})
 
 
 @pytest.mark.unit

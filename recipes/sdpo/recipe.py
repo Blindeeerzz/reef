@@ -3,17 +3,78 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Hashable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from recipes.sdpo.processor import SDPOProcessor
+from recipes.sdpo.processor import SDPOProcessor, sdpo_grid, sibling_request
 from recipes.sdpo.report import SDPOReport
 from reef.core.reports import ReportBase
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.recipe.errors import RecipeConfigError
+from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
 from reef.train.algos import StepScheduling
+from reef.train.types import ProcessorContext
+
+
+class SDPOGrouping(ReportGrouping):
+    """One sampling step is one group, and its (group, rollout) coordinates are the slots.
+
+    A step is ready when its grid is complete, it was sampled from one policy
+    release, and the rollouts of each question share one request. Otherwise the
+    complete step is discarded and listed in ``failed_steps``.
+    """
+
+    def __init__(self, groups_per_step: int, rollouts_per_group: int) -> None:
+        self.groups_per_step = groups_per_step
+        self.rollouts_per_group = rollouts_per_group
+        self.failed_steps: dict[int, str] = {}
+
+    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
+        parsed = context.parsed_report
+        if not isinstance(parsed, SDPOReport):
+            raise ValueError("SDPOProcessor requires the SDPOReport schema")
+        return parsed.step, (parsed.group, parsed.rollout)
+
+    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
+        if len(members) != self.groups_per_step * self.rollouts_per_group:
+            return GroupDecision.INCOMPLETE
+        if not isinstance(key, int):
+            raise TypeError("SDPO step must be an integer")
+        releases = {
+            None if member.inferences[0].artifact_ref is None else member.inferences[0].artifact_ref.release_id
+            for member in members
+        }
+        reason = ""
+        if None in releases or len(releases) != 1:
+            reason = "missing_or_mixed_release_ids"
+        reports = [(member, parsed) for member in members if isinstance(parsed := member.parsed_report, SDPOReport)]
+        for group in range(self.groups_per_step):
+            siblings = [sibling_request(member) for member, parsed in reports if parsed.group == group]
+            if any(request != siblings[0] for request in siblings):
+                reason = "different_requests_in_group"
+        if reason:
+            self.failed_steps[key] = reason
+            return GroupDecision.DISCARD
+        return GroupDecision.READY
+
+    def status(self) -> Mapping[str, Any]:
+        return {
+            "failed_steps": [{"step": step, "reason": reason} for step, reason in sorted(self.failed_steps.items())]
+        }
+
+
+def sdpo_record_stage(context: ProcessorContext) -> ReportStage:
+    """SDPO's record stage: one group per sampling step, in step order; a terminal report owns its source."""
+    groups_per_step, rollouts_per_group = sdpo_grid(context.config)
+    return ReportStage(
+        context.scenario,
+        context.report_type,
+        SDPOGrouping(groups_per_step, rollouts_per_group),
+        exclusive_sources=True,
+        ordered_groups=True,
+    )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -71,6 +132,9 @@ class SDPORecipe(WeightTrainingRecipe):
             # The grid is the optimizer step, however many rollouts it holds.
             scheduling=StepScheduling(unit="sample", batch_size="actual"),
         )
+
+    def build_record_stage(self, context: ProcessorContext) -> ReportStage:
+        return sdpo_record_stage(context)
 
     def __post_init__(self) -> None:
         super().__post_init__()

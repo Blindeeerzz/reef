@@ -23,6 +23,7 @@ from reef.recipe.checkpoint_strategy import CheckpointStrategy, EveryNVersions
 from reef.recipe.config import config_positive_int
 from reef.recipe.config_fields import config_field, parse_int, recipe_config_fields, resolve_config_field_values
 from reef.recipe.errors import RecipeConfigError
+from reef.record2record import Record2RecordStage
 from reef.runtime.interfaces import InferenceHandler, InferenceRuntime, MultimodalRelay, TrainingRuntime
 from reef.storage.records import RecordStore
 from reef.surface.base import AcceptAnyArtifact, Surface
@@ -518,8 +519,16 @@ class WeightTrainingRecipe(Recipe):
             if name not in ("max_staleness", "training_mode")
         }
 
+    def build_record_stage(self, context: ProcessorContext) -> Record2RecordStage | None:
+        """Build the record-to-record stage of one scenario: this method's grouping, judging, and eligibility.
+
+        ``context`` carries :meth:`processor_config`. Return ``None`` to use
+        the processor's default stage, which has no method policy.
+        """
+        return None
+
     def build_processor(self, context: ProcessorContext) -> DataProcessor:
-        """Build the processor of one scenario with :meth:`processor_config`.
+        """Build the processor of one scenario with :meth:`processor_config` and :meth:`build_record_stage`.
 
         Override this method to give the processor more than its config, for
         example a plugin built for the scenario.
@@ -527,7 +536,8 @@ class WeightTrainingRecipe(Recipe):
         processor_class = type(self).training_spec().processor
         if processor_class is None:
             raise TypeError(f"{type(self).__name__} declares no processor")
-        return processor_class(context.with_config(self.processor_config()))
+        configured = context.with_config(self.processor_config())
+        return processor_class(configured, record_stage=self.build_record_stage(configured))
 
     def build(
         self,

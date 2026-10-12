@@ -21,12 +21,12 @@ multi-turn assembly is on by default.
 from __future__ import annotations
 
 import logging
-from collections.abc import Hashable, Mapping
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
 from reef.core.trajectories import trajectory_reward
-from reef.record2record import GroupDecision, ReportContext, ReportGrouping
+from reef.record2record import ReportContext, ReportStage
 from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
@@ -66,45 +66,6 @@ def attempt_release_ids(context: ReportContext) -> set[str]:
     }
 
 
-class CoralGrouping(ReportGrouping):
-    """The siblings of one parent commit form one group, and each attempt's commit hash is its slot.
-
-    A group is ready once ``group_size`` siblings are present. A group whose
-    attempts span releases is discarded and listed in ``discarded_groups``.
-    """
-
-    def __init__(self, group_size: int) -> None:
-        self.group_size = group_size
-        self.mixed_release_groups: dict[str, tuple[str, ...]] = {}
-
-    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
-        return sibling_group(context)
-
-    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
-        if len(members) < self.group_size:
-            return GroupDecision.INCOMPLETE
-        versions = {release_id for member in members for release_id in attempt_release_ids(member)}
-        if len(versions) <= 1:
-            return GroupDecision.READY
-        ordered = tuple(sorted(versions))
-        self.mixed_release_groups[str(key)] = ordered
-        logger.error(
-            "CORAL sibling group %s discarded: %d attempts span releases %s",
-            key,
-            len(members),
-            list(ordered),
-        )
-        return GroupDecision.DISCARD
-
-    def status(self) -> Mapping[str, Any]:
-        return {
-            "discarded_groups": [
-                {"parent": parent, "reason": "mixed_release_ids", "release_ids": list(versions)}
-                for parent, versions in sorted(self.mixed_release_groups.items())
-            ],
-        }
-
-
 class CoralProcessor(ReportedFeedbackProcessor):
     """One CORAL sibling group = one grouped relative-reward training unit.
 
@@ -117,10 +78,8 @@ class CoralProcessor(ReportedFeedbackProcessor):
     """
 
     output_schema = TrainingBatch
-    exclusive_sources = True
-    ordered_groups = False  # sibling groups close in whatever order grading lands
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: ProcessorContext, *, record_stage: ReportStage | None = None) -> None:
         config = dict(context.config)
         self.group_size = int(config.get("group_size", 4))
         if self.group_size < 2:
@@ -128,7 +87,7 @@ class CoralProcessor(ReportedFeedbackProcessor):
         config.setdefault("accept_multi_turn_policy_samples", True)
         assembly_config = context.with_config(config)
         self._assembly = SampleAssembly.from_config(assembly_config)
-        super().__init__(context.with_config({**config, "batch_size": 1}))
+        super().__init__(context.with_config({**config, "batch_size": 1}), record_stage=record_stage)
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
         coral = coral_metadata(context)
@@ -141,9 +100,6 @@ class CoralProcessor(ReportedFeedbackProcessor):
         return sample.with_metadata(
             coral={**coral, "group": sibling_group(context)[0], "release_id": next(iter(release_ids), None)}
         )
-
-    def report_grouping(self) -> CoralGrouping:
-        return CoralGrouping(self.group_size)
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         parents = {item.metadata["coral"]["group"] for item in items}

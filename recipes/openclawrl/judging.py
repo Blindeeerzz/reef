@@ -26,8 +26,10 @@ from recipes.openclawrl.prm import (
 )
 from recipes.openclawrl.sessions import DEFAULT_MAX_SESSIONS, SessionIndex
 from recipes.openclawrl.turns import TurnJob, TurnJudgment, main_turn_message, turn_job, turn_request_messages
+from reef.background_jobs import BackgroundJobWorker
 from reef.core.records_types import AgentRecord, RequestType
 from reef.record2record import JudgingStage, RecordJudging
+from reef.train.types import ProcessorContext
 
 logger = logging.getLogger(__name__)
 
@@ -244,3 +246,22 @@ class OpenClawRLJudging(RecordJudging):
                 stats.dropped_unbound,
                 stats.bound,
             )
+
+
+def openclawrl_record_stage(
+    context: ProcessorContext,
+    *,
+    worker: BackgroundJobWorker | None = None,
+    clients: tuple[Any, Any, Any] | None = None,
+) -> JudgingStage:
+    """OpenClaw-RL's record stage: sessions correlated and turns judged on a PRM worker.
+
+    Without a ``worker``, the stage starts one when the config names a PRM
+    judge. ``clients`` overrides the configured clients for tests.
+    """
+    judging = OpenClawRLJudging(context.config, clients)
+    if worker is None and judging.prm is not None:
+        worker = BackgroundJobWorker(
+            judging, thread_name="openclawrl-judging", concurrency=int(context.config.get("prm_concurrency", 8))
+        )
+    return JudgingStage(judging, worker, max_staleness=context.max_staleness)

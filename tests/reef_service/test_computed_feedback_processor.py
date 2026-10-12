@@ -76,7 +76,9 @@ class _ToyProcessor(ComputedFeedbackProcessor):
     """Trains the judged records of ``_ToyJudging``. Samples are one-token stubs."""
 
     def __init__(self, context: ProcessorContext, *, worker: Any) -> None:
-        super().__init__(context, judging=_ToyJudging(), worker=worker)
+        super().__init__(
+            context, record_stage=JudgingStage(_ToyJudging(), worker, max_staleness=context.max_staleness)
+        )
 
     def make_sample(self, record: AgentRecord, judgment: _Judgment) -> TrajectoryItem | None:
         if not judgment.good:

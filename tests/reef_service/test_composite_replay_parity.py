@@ -20,11 +20,12 @@ from typing import Any
 import pytest
 
 from recipes.tttd import TTTDGroupedRolloutReport, TTTDProcessor
+from recipes.tttd.recipe import tttd_record_stage
 from reef.artifact import ArtifactRef, InMemoryRepositoryBackend
 from reef.background_jobs import SupportsReceipt
 from reef.core import AgentRecord, RequestType
 from reef.dispatcher import Dispatcher
-from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping
+from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train import ComponentTrainer, Trainer
 from reef.train.processors.computed import ComputedFeedbackProcessor
@@ -64,7 +65,8 @@ class _SessionProcessor(ComputedFeedbackProcessor):
     """Trains the judged turns of ``_SessionJudging``; a turn marked declined is unusable."""
 
     def __init__(self, context: Any) -> None:
-        super().__init__(context, judging=_SessionJudging(), worker=_JudgedAtOnce())
+        stage = JudgingStage(_SessionJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness)
+        super().__init__(context, record_stage=stage)
 
     def make_sample(self, record: AgentRecord, judgment: _Judgment) -> Any:
         if record.payload.get("declined"):
@@ -104,11 +106,11 @@ class _StepProcessor(ThresholdProcessor):
     """TTTD's shape: a step is one group of two (step, slot) reports, sources are exclusive, a step with a report
     marked mixed is discarded once complete, and a report that names no step is another role's and released."""
 
-    exclusive_sources = True
-    ordered_groups = True
-
-    def report_grouping(self) -> ReportGrouping:
-        return _StepGrouping()
+    def __init__(self, context: Any) -> None:
+        stage = ReportStage(
+            context.scenario, context.report_type, _StepGrouping(), exclusive_sources=True, ordered_groups=True
+        )
+        super().__init__(context, record_stage=stage)
 
 
 @dataclass(frozen=True)
@@ -121,7 +123,12 @@ class _Recipe(_TwoTrainerRecipe):
         def factory_for(component: str):
             cls = processors[component]
             if cls is TTTDProcessor:
-                return lambda context: cls(context.with_config({"groups_per_step": 1, "rollouts_per_group": 2}))
+
+                def tttd(context: Any) -> TTTDProcessor:
+                    configured = context.with_config({"groups_per_step": 1, "rollouts_per_group": 2})
+                    return TTTDProcessor(configured, record_stage=tttd_record_stage(configured))
+
+                return tttd
             return lambda context: cls(context.with_config({"batch_size": 1}))
 
         return tuple(

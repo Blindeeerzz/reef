@@ -36,6 +36,7 @@ from reef.record2dataset.generated_tasks import (
     TaskGroupObjective,
 )
 from reef.record2dataset.generated_tasks.processor import RoundJob, reported_task_name, rewards_of
+from reef.record2dataset.generated_tasks.recipe import task_group_record_stage
 from reef.record2record import GroupDecision, ReportContext
 from reef.train.algos.registry import resolve_objective
 from reef.train.types import ProcessorContext, TrainingBatch, trajectory_groups
@@ -79,7 +80,8 @@ def report(
 
 
 def processor(**config: object) -> GeneratedTaskProcessor:
-    return GeneratedTaskProcessor(ProcessorContext("tasks", {"tasks_per_step": 2, "plays_per_task": 2, **config}))
+    context = ProcessorContext("tasks", {"tasks_per_step": 2, "plays_per_task": 2, **config})
+    return GeneratedTaskProcessor(context, record_stage=task_group_record_stage(context))
 
 
 def played(processor: GeneratedTaskProcessor, task: str, index: int, score: float, **fields: Any) -> None:
@@ -340,22 +342,24 @@ def rounds(
 ) -> tuple[GeneratedTaskProcessor, StandInGenerator]:
     player = player if player is not None else StandInGenerator(tmp_path / "tasks")
     worker = worker if worker is not None else InlineWorker()
+    context = ProcessorContext(
+        "tasks",
+        {
+            "tasks_per_step": 2,
+            "plays_per_task": 2,
+            "rounds": 3,
+            "description": DESCRIPTION,
+            "state_dir": str(tmp_path / "state"),
+            "served_model": "Qwen/Qwen3-8B",
+            **config,
+        },
+    )
     built = GeneratedTaskProcessor(
-        ProcessorContext(
-            "tasks",
-            {
-                "tasks_per_step": 2,
-                "plays_per_task": 2,
-                "rounds": 3,
-                "description": DESCRIPTION,
-                "state_dir": str(tmp_path / "state"),
-                "served_model": "Qwen/Qwen3-8B",
-                **config,
-            },
-        ),
+        context,
         task_generator=task_generator,
         task_player=player,
         worker=worker,
+        record_stage=task_group_record_stage(context),
     )
     worker.processor = built
     return built, player

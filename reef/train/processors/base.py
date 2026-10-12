@@ -37,20 +37,22 @@ class DataProcessor:
     * As **reports** referencing inference records → subclass
       :class:`~reef.train.processors.reported.ReportedFeedbackProcessor` and write
       ``make_sample`` (assemble feedback) and ``make_batch`` (what a batch looks like).
-      A grouped method also returns its ``ReportGrouping`` from
-      ``report_grouping``. The record-to-record stage owns everything between them.
+      A grouped method's recipe gives the stage its ``ReportGrouping``. The
+      record-to-record stage owns everything between them.
     * **Computed from the traffic itself** — correlated across records,
       judged by a model, landing asynchronously → subclass
       :class:`~reef.train.processors.computed.ComputedFeedbackProcessor`, write
-      ``make_sample`` and ``make_batch``, and pass a ``RecordJudging`` (the
-      method's correlation in ``observe``, and its ``async def judge``). The
-      stage hands each completed record's job to a worker thread, so ``judge``
-      may call models and take minutes without blocking serving.
+      ``make_sample`` and ``make_batch``. The recipe gives the stage a
+      ``RecordJudging`` (the method's correlation in ``observe``, and its
+      ``async def judge``). The stage hands each completed record's job to a
+      worker thread, so ``judge`` may call models and take minutes without
+      blocking serving.
 
-    Every processor sends records through its record-to-record stage
-    (``build_record_stage``), which decides which records train and in what
-    order. The processor assembles the stage's record sets into samples and
-    batches.
+    Every processor sends records through its record-to-record stage, which
+    decides which records train and in what order. The recipe builds the
+    stage with its own policy (``WeightTrainingRecipe.build_record_stage``)
+    and passes it as ``record_stage``. The processor assembles the stage's
+    record sets into samples and batches.
 
     ``DataProcessor`` itself is never a recipe's processor. Instantiated
     bare it is the no-update default: it leaves records in storage
@@ -79,7 +81,7 @@ class DataProcessor:
     required_request_types: frozenset[RequestType] = frozenset({RequestType.INFERENCE, RequestType.REPORT})
     supported_training_modes: frozenset[str] = frozenset({"auto"})
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: ProcessorContext, *, record_stage: Record2RecordStage | None = None) -> None:
         self._context = context
         # The two modes that take an instruction go together: a recipe that cannot run one cannot run it in either.
         if not context.config.get("manual_enabled", True):
@@ -100,10 +102,10 @@ class DataProcessor:
         self._pending: TrainingBatch | None = None
         self._batch_number = 0
         #: The record-to-record stage that turns this processor's records into record sets.
-        self.record_stage = self.build_record_stage()
+        self.record_stage = self.default_record_stage() if record_stage is None else record_stage
 
-    def build_record_stage(self) -> Record2RecordStage:
-        """Return the record-to-record stage for this processor. The default passes each record through."""
+    def default_record_stage(self) -> Record2RecordStage:
+        """Return the stage to use when the recipe gives none. It has no method policy: each record passes through."""
         return PassThroughStage()
 
     @property

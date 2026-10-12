@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from reef.core.records_types import AgentRecord
+from reef.record2record import ReportStage
 from reef.train.processors.common import make_policy_trajectory
 from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
@@ -42,11 +43,10 @@ class SAOProcessor(ReportedFeedbackProcessor):
     """
 
     output_schema = TrainingBatch
-    exclusive_sources = True
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: ProcessorContext, *, record_stage: ReportStage | None = None) -> None:
         self._assembly = SampleAssembly.from_config(context, make_sample=make_sao_sample)
-        super().__init__(context)
+        super().__init__(context, record_stage=record_stage)
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
         sample = self._assembly.build(context, context.require_score())

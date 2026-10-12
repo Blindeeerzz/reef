@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 
 from reef.core import AgentRecord, RequestType
-from reef.core.reports import ReportValidationError
-from reef.record2record import GroupDecision, ReportContext, ReportGrouping
+from reef.core.reports import ReportBase, ReportValidationError
+from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
 from reef.train.processors.reported import ReportedFeedbackProcessor
 from reef.train.types import ProcessorContext, TaskItem, TrainDataItem, TrainingBatch
 
@@ -30,12 +30,32 @@ def report(record_id: str, *references: str, score: float = 1.0) -> AgentRecord:
     )
 
 
+def exclusive_stage(
+    context: ProcessorContext, grouping: ReportGrouping | None = None, *, ordered_groups: bool = False
+) -> ReportStage:
+    """A report stage in which a terminal report owns its sources."""
+    return ReportStage(
+        context.scenario,
+        context.report_type,
+        ReportGrouping() if grouping is None else grouping,
+        exclusive_sources=True,
+        ordered_groups=ordered_groups,
+    )
+
+
 class SampleProcessor(ReportedFeedbackProcessor):
     output_schema = TrainingBatch
-    exclusive_sources = True
 
-    def __init__(self, batch_size: int = 1) -> None:
-        super().__init__(ProcessorContext("math", {"batch_size": batch_size}))
+    def __init__(
+        self,
+        batch_size: int = 1,
+        *,
+        grouping: ReportGrouping | None = None,
+        ordered_groups: bool = False,
+        report_type: type[ReportBase] | None = None,
+    ) -> None:
+        context = ProcessorContext("math", {"batch_size": batch_size}, report_type=report_type)
+        super().__init__(context, record_stage=exclusive_stage(context, grouping, ordered_groups=ordered_groups))
         self.assembled: list[str] = []
         self.fail_assembly = False
 
@@ -66,8 +86,8 @@ class PairGrouping(ReportGrouping):
 
 
 class GroupProcessor(SampleProcessor):
-    def report_grouping(self) -> ReportGrouping:
-        return PairGrouping()
+    def __init__(self, batch_size: int = 1) -> None:
+        super().__init__(batch_size, grouping=PairGrouping())
 
     @property
     def grouping_policy(self) -> PairGrouping:
@@ -80,18 +100,10 @@ def test_a_report_shaped_for_another_component_is_released_not_raised() -> None:
     """Ingress of a scenario with several components admits what any accepts; this trainer keeps only its own."""
     from recipes.tttd.report import TTTDGroupedRolloutReport
 
-    class GridProcessor(SampleProcessor):
-        def __init__(self) -> None:
-            ReportedFeedbackProcessor.__init__(
-                self, ProcessorContext("math", {"batch_size": 1}, report_type=TTTDGroupedRolloutReport)
-            )
-            self.assembled = []
-            self.fail_assembly = False
-
     from reef.core.reports import ScoredRolloutReport
     from reef.recipe.composite import any_component_report
 
-    processor = GridProcessor()
+    processor = SampleProcessor(report_type=TTTDGroupedRolloutReport)
     processor.ingest(inference("i1"))
     processor.ingest(inference("i2"))
     # Alone, the processor refuses a report of another shape, as ingress would have.
@@ -297,13 +309,7 @@ def test_ordered_groups_can_coexist_with_singleton_samples() -> None:
         def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
             return GroupDecision.READY
 
-    class MixedProcessor(SampleProcessor):
-        ordered_groups = True
-
-        def report_grouping(self) -> ReportGrouping:
-            return PrefixGrouping()
-
-    processor = MixedProcessor(batch_size=3)
+    processor = SampleProcessor(batch_size=3, grouping=PrefixGrouping(), ordered_groups=True)
     for record_id in ("g-z", "g-a", "single"):
         processor.ingest(inference(f"source-{record_id}"))
         processor.ingest(report(record_id, f"source-{record_id}"))

@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Hashable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from recipes.sdpo.report import SDPOReport
 from reef.core.trajectories import trajectory_reward
-from reef.record2record import GroupDecision, ReportContext, ReportGrouping
+from reef.record2record import ReportContext, ReportStage
 from reef.train.processors.common import recorded_request, recorded_response
 from reef.train.processors.distill import DistillProcessor, normalize_messages_for_template
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
@@ -34,51 +34,13 @@ def sibling_request(context: ReportContext) -> tuple[list[Any], list[Any] | None
     return normalize_messages_for_template(messages), tools
 
 
-class SDPOGrouping(ReportGrouping):
-    """One sampling step is one group, and its (group, rollout) coordinates are the slots.
-
-    A step is ready when its grid is complete, it was sampled from one policy
-    release, and the rollouts of each question share one request. Otherwise the
-    complete step is discarded and listed in ``failed_steps``.
-    """
-
-    def __init__(self, groups_per_step: int, rollouts_per_group: int) -> None:
-        self.groups_per_step = groups_per_step
-        self.rollouts_per_group = rollouts_per_group
-        self.failed_steps: dict[int, str] = {}
-
-    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
-        parsed = context.parsed_report
-        if not isinstance(parsed, SDPOReport):
-            raise ValueError("SDPOProcessor requires the SDPOReport schema")
-        return parsed.step, (parsed.group, parsed.rollout)
-
-    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
-        if len(members) != self.groups_per_step * self.rollouts_per_group:
-            return GroupDecision.INCOMPLETE
-        if not isinstance(key, int):
-            raise TypeError("SDPO step must be an integer")
-        releases = {
-            None if member.inferences[0].artifact_ref is None else member.inferences[0].artifact_ref.release_id
-            for member in members
-        }
-        reason = ""
-        if None in releases or len(releases) != 1:
-            reason = "missing_or_mixed_release_ids"
-        reports = [(member, parsed) for member in members if isinstance(parsed := member.parsed_report, SDPOReport)]
-        for group in range(self.groups_per_step):
-            siblings = [sibling_request(member) for member, parsed in reports if parsed.group == group]
-            if any(request != siblings[0] for request in siblings):
-                reason = "different_requests_in_group"
-        if reason:
-            self.failed_steps[key] = reason
-            return GroupDecision.DISCARD
-        return GroupDecision.READY
-
-    def status(self) -> Mapping[str, Any]:
-        return {
-            "failed_steps": [{"step": step, "reason": reason} for step, reason in sorted(self.failed_steps.items())]
-        }
+def sdpo_grid(config: Mapping[str, Any]) -> tuple[int, int]:
+    """The sampling grid from the config: ``groups_per_step`` and ``rollouts_per_group``, checked."""
+    groups_per_step = int(config.get("groups_per_step", 32))
+    rollouts_per_group = int(config.get("rollouts_per_group", 8))
+    if groups_per_step <= 0 or rollouts_per_group < 2:
+        raise ValueError("SDPO needs positive groups_per_step and at least two rollouts_per_group")
+    return groups_per_step, rollouts_per_group
 
 
 class SDPOProcessor(DistillProcessor):
@@ -97,12 +59,10 @@ class SDPOProcessor(DistillProcessor):
     """
 
     batch_label = "sdpo"
-    ordered_groups = True
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: ProcessorContext, *, record_stage: ReportStage | None = None) -> None:
         config = dict(context.config)
-        self.groups_per_step = int(config.get("groups_per_step", 32))
-        self.rollouts_per_group = int(config.get("rollouts_per_group", 8))
+        self.groups_per_step, self.rollouts_per_group = sdpo_grid(config)
         self.max_teacher_prompt_tokens = int(config.get("max_teacher_prompt_tokens", 10240))
         self.success_reward_threshold = float(config.get("success_reward_threshold", 0.5))
         self.allow_own_success_as_demonstration = bool(config.get("allow_own_success_as_demonstration", False))
@@ -112,12 +72,10 @@ class SDPOProcessor(DistillProcessor):
             config.get("environment_feedback_only_without_solution", True)
         )
         self.enable_thinking = bool(config.get("enable_thinking", False))
-        if self.groups_per_step <= 0 or self.rollouts_per_group < 2:
-            raise ValueError("SDPO needs positive groups_per_step and at least two rollouts_per_group")
         if not math.isfinite(self.success_reward_threshold):
             raise ValueError("success_reward_threshold must be finite")
         # A batch is one unit: the whole step.
-        super().__init__(context.with_config({**config, "batch_size": 1}))
+        super().__init__(context.with_config({**config, "batch_size": 1}), record_stage=record_stage)
         if not 0 < self.max_teacher_prompt_tokens <= self._max_teacher_tokens:
             raise ValueError("SDPO needs 0 < max_teacher_prompt_tokens <= max_teacher_tokens")
 
@@ -146,9 +104,6 @@ class SDPOProcessor(DistillProcessor):
                 "feedback": parsed.teacher_context,
             }
         )
-
-    def report_grouping(self) -> SDPOGrouping:
-        return SDPOGrouping(self.groups_per_step, self.rollouts_per_group)
 
     def demonstration(self, sample: TrajectoryItem, samples: Sequence[TrajectoryItem]) -> str | None:
         """The response of the first successful sibling in rollout order, or None when the question has none."""

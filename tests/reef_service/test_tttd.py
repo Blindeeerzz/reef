@@ -10,6 +10,7 @@ from reef_service._trajectories import policy_trajectory
 
 from recipes.tttd import TTTDGroupedRolloutReport, TTTDProcessor
 from recipes.tttd.objective import TttdObjective
+from recipes.tttd.recipe import tttd_record_stage
 from reef.artifact import ArtifactRef
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportValidationError
@@ -77,17 +78,16 @@ def _report(step: int, group: int, rollout: int, score: float) -> AgentRecord:
 
 
 def _processor(experiment_logger=None) -> TTTDProcessor:
-    return TTTDProcessor(
-        ProcessorContext(
-            "discovery",
-            {
-                "groups_per_step": 2,
-                "rollouts_per_group": 3,
-            },
-            report_type=TTTDGroupedRolloutReport,
-            experiment_logger=experiment_logger or _ExperimentLogger(),
-        )
+    context = ProcessorContext(
+        "discovery",
+        {
+            "groups_per_step": 2,
+            "rollouts_per_group": 3,
+        },
+        report_type=TTTDGroupedRolloutReport,
+        experiment_logger=experiment_logger or _ExperimentLogger(),
     )
+    return TTTDProcessor(context, record_stage=tttd_record_stage(context))
 
 
 @pytest.mark.unit

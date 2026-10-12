@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from reef.record2record import ReportStage
 from reef.train.processors import DistillProcessor
 from reef.train.processors.distill import normalize_messages_for_template
 from reef.train.types import ProcessorContext
@@ -38,9 +39,9 @@ class SDFTProcessor(DistillProcessor):
 
     batch_label = "sdft"
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: ProcessorContext, *, record_stage: ReportStage | None = None) -> None:
         self._template = context_block_template(context.config)
-        super().__init__(context)
+        super().__init__(context, record_stage=record_stage)
 
     def teacher_request(
         self, messages: list[Any], tools: list[Any] | None, response: str, teacher_context: str

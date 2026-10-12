@@ -16,13 +16,12 @@ import json
 import logging
 import pathlib
 from dataclasses import asdict, replace
-from typing import Any
 
 from recipes.openclawrl.judging import OpenClawRLJudging
 from recipes.openclawrl.turns import TurnJudgment, validate_teacher_cands
-from reef.background_jobs import BackgroundJobWorker
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.trajectories import source_record_id, trajectory_reward
+from reef.record2record import JudgingStage
 from reef.train.processors.common import make_policy_trajectory
 from reef.train.processors.computed import ComputedFeedbackProcessor
 from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem, policy_row_violation
@@ -40,26 +39,16 @@ class OpenClawRLProcessor(ComputedFeedbackProcessor):
     output_schema = TrainingBatch
     required_request_types = frozenset({RequestType.INFERENCE, RequestType.REPORT})
 
-    def __init__(
-        self,
-        context: ProcessorContext,
-        *,
-        worker: BackgroundJobWorker | None = None,
-        clients: tuple[Any, Any, Any] | None = None,
-    ) -> None:
-        config = context.config
-        judging = OpenClawRLJudging(config, clients)
+    def __init__(self, context: ProcessorContext, *, record_stage: JudgingStage) -> None:
         # What the judge actually saw goes to the PRM record file, one line
         # per batch. Upstream persists this per turn; without it a batch mean
         # is the only visible number. A file, not a log line: reef configures
         # no logging, so anything below WARNING is discarded.
-        record_file = str(config.get("prm_record_file", "") or "").strip()
+        record_file = str(context.config.get("prm_record_file", "") or "").strip()
         self._record_path = pathlib.Path(record_file) if record_file else None
-        if worker is None and judging.prm is not None:
-            worker = BackgroundJobWorker(
-                judging, thread_name="openclawrl-judging", concurrency=int(config.get("prm_concurrency", 8))
-            )
-        super().__init__(context, judging=judging, worker=worker)
+        super().__init__(context, record_stage=record_stage)
+        if not isinstance(self.judging, OpenClawRLJudging):
+            raise TypeError("OpenClawRLProcessor needs a stage with OpenClawRLJudging")
 
     @property
     def openclawrl_judging(self) -> OpenClawRLJudging:

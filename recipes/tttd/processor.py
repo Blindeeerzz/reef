@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Hashable, Mapping
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
 from reef.core.trajectories import trajectory_reward
-from reef.record2record import GroupDecision, ReportContext, ReportGrouping
+from reef.record2record import ReportContext, ReportStage
 from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
@@ -22,60 +22,15 @@ def inference_release_id(context: ReportContext) -> str | None:
     return inference.artifact_ref.release_id if inference.artifact_ref is not None else None
 
 
-class TTTDGrouping(ReportGrouping):
-    """One TTTD step is one group, and its (group, rollout) coordinates are the slots.
-
-    A step is ready when every one of its ``groups_per_step`` x
-    ``rollouts_per_group`` slots is filled. A complete step whose reports span
-    releases is discarded wholesale, because mixed-version rewards are not
-    comparable.
-    """
-
-    def __init__(self, groups_per_step: int, rollouts_per_group: int) -> None:
-        self.groups_per_step = groups_per_step
-        self.rollouts_per_group = rollouts_per_group
-        self.failed_step_versions: dict[int, tuple[str, ...]] = {}
-
-    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
-        parsed: Any = context.parsed_report
-        return parsed.step, (parsed.group, parsed.rollout)
-
-    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
-        # 1. The barrier: a step batches only when every one of its
-        #    groups_per_step x rollouts_per_group slots is filled.
-        expected_count = self.groups_per_step * self.rollouts_per_group
-        if len(members) != expected_count:
-            return GroupDecision.INCOMPLETE
-        # 2. A step whose reports span releases is discarded
-        #    wholesale — mixed-version rewards are not comparable.
-        versions = {release_id for member in members if (release_id := inference_release_id(member)) is not None}
-        if len(versions) <= 1:
-            return GroupDecision.READY
-        if not isinstance(key, int):
-            raise TypeError(f"TTTD step key must be an integer, got {key!r}")
-        step = key
-        ordered_versions = tuple(sorted(versions))
-        self.failed_step_versions[step] = ordered_versions
-        logger.error(
-            "TTTD step %d failed because its %d reports span releases %s",
-            step,
-            expected_count,
-            list(ordered_versions),
-        )
-        return GroupDecision.DISCARD
-
-    def status(self) -> Mapping[str, Any]:
-        """Expose mixed-version steps that terminally violated TTTD's invariant."""
-        return {
-            "failed_steps": [
-                {
-                    "step": step,
-                    "reason": "mixed_release_ids",
-                    "release_ids": list(versions),
-                }
-                for step, versions in sorted(self.failed_step_versions.items())
-            ]
-        }
+def tttd_grid(config: Mapping[str, Any]) -> tuple[int, int]:
+    """The step grid from the config: ``groups_per_step`` and ``rollouts_per_group``, checked."""
+    groups_per_step = int(config.get("groups_per_step", 8))
+    rollouts_per_group = int(config.get("rollouts_per_group", 64))
+    if groups_per_step <= 0:
+        raise ValueError("groups_per_step must be positive")
+    if rollouts_per_group < 2:
+        raise ValueError("rollouts_per_group must be at least two")
+    return groups_per_step, rollouts_per_group
 
 
 class TTTDProcessor(ReportedFeedbackProcessor):
@@ -85,7 +40,7 @@ class TTTDProcessor(ReportedFeedbackProcessor):
     ``rollouts_per_group`` siblings from each parent.  A partially received
     group is not a valid relative-reward group, and groups from different
     policy steps must never be mixed.  The whole step is therefore one engine
-    group — its barrier is :class:`TTTDGrouping`, its (group, rollout)
+    group — its barrier is the recipe's ``TTTDGrouping``, its (group, rollout)
     coordinates are candidate slots (a retried report at an occupied
     coordinate is terminal; the first durable report wins), and a step whose
     reports span releases is discarded wholesale with every row
@@ -99,19 +54,12 @@ class TTTDProcessor(ReportedFeedbackProcessor):
     """
 
     output_schema = TrainingBatch
-    exclusive_sources = True
-    ordered_groups = True  # steps train in order
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: ProcessorContext, *, record_stage: ReportStage | None = None) -> None:
         config = dict(context.config)
-        self.groups_per_step = int(config.get("groups_per_step", 8))
-        self.rollouts_per_group = int(config.get("rollouts_per_group", 64))
-        if self.groups_per_step <= 0:
-            raise ValueError("groups_per_step must be positive")
-        if self.rollouts_per_group < 2:
-            raise ValueError("rollouts_per_group must be at least two")
+        self.groups_per_step, self.rollouts_per_group = tttd_grid(config)
         self._assembly = SampleAssembly.from_config(context)
-        super().__init__(context.with_config({**config, "batch_size": 1}))
+        super().__init__(context.with_config({**config, "batch_size": 1}), record_stage=record_stage)
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
         parsed: Any = context.parsed_report
@@ -131,9 +79,6 @@ class TTTDProcessor(ReportedFeedbackProcessor):
                 "release_id": inference_release_id(context),
             }
         )
-
-    def report_grouping(self) -> TTTDGrouping:
-        return TTTDGrouping(self.groups_per_step, self.rollouts_per_group)
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         steps = {item.metadata["tttd"]["step"] for item in items}

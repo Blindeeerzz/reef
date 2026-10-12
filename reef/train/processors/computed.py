@@ -51,26 +51,17 @@ __all__ = [
 class ComputedFeedbackProcessor(DataProcessor, ABC):
     """Assemble judged records into batches for computed-feedback recipes.
 
-    The recipe's ``judging`` and ``worker`` build the processor's
-    :class:`~reef.record2record.JudgingStage`. Judged sets wait in the order
-    that their judgments arrived. The stage drops sets more than the
-    context's ``max_staleness`` versions behind the newest one, by record
+    The recipe builds the :class:`~reef.record2record.JudgingStage` with its
+    ``RecordJudging`` and worker, and passes it as ``record_stage``. Judged
+    sets wait in the order that their judgments arrived. The stage drops sets
+    more than ``max_staleness`` versions behind the newest one, by record
     arrival, while no batch is out.
     """
 
-    def __init__(
-        self, context: ProcessorContext, *, judging: RecordJudging, worker: BackgroundJobWorker | None
-    ) -> None:
-        #: The method's correlation and judge, and the worker that runs the judge. No worker: records
-        #: track and expire, nothing is ever judged, everything can be released.
-        self.judging = judging
-        self.worker = worker
-        super().__init__(context)
+    def __init__(self, context: ProcessorContext, *, record_stage: JudgingStage) -> None:
+        super().__init__(context, record_stage=record_stage)
         #: Samples by receipt, until their record trains or ends.
         self.samples: dict[str, TrajectoryItem] = {}
-
-    def build_record_stage(self) -> JudgingStage:
-        return JudgingStage(self.judging, self.worker, max_staleness=self.context.max_staleness)
 
     @property
     def judging_stage(self) -> JudgingStage:
@@ -78,6 +69,11 @@ class ComputedFeedbackProcessor(DataProcessor, ABC):
         if not isinstance(stage, JudgingStage):
             raise TypeError(f"{type(self).__name__} needs a JudgingStage, not {type(stage).__name__}")
         return stage
+
+    @property
+    def judging(self) -> RecordJudging:
+        """The method's correlation and judge, which the stage runs."""
+        return self.judging_stage.judging
 
     # ------------------------------------------------------- the recipe hooks
 

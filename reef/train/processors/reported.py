@@ -18,6 +18,7 @@ from reef.core.records_types import AgentRecord, RequestType
 from reef.record2record import (
     AssemblyStatus,
     GroupDecision,
+    Record2RecordStage,
     RecordSet,
     ReportCandidate,
     ReportContext,
@@ -47,8 +48,9 @@ __all__ = [
     "accepted_by",
 ]
 
-#: Hooks that moved from the processor to ``ReportGrouping``. A subclass that still defines one fails at import.
-MOVED_REPORT_HOOKS = ("grouping", "decide_group", "is_training_report")
+#: Report policy that moved from the processor to the recipe's ``ReportStage``. A subclass that still
+#: defines one fails at import, because it would otherwise train with the default policy without an error.
+MOVED_REPORT_HOOKS = ("grouping", "decide_group", "is_training_report", "exclusive_sources", "ordered_groups")
 
 
 @dataclass(frozen=True)
@@ -61,25 +63,18 @@ class SkippedReport:
 class ReportedFeedbackProcessor(DataProcessor, ABC):
     """Assemble valid reports and their existing inference records into batches.
 
-    Recipes implement ``make_sample`` and ``make_batch``. A grouped method
-    also returns its :class:`~reef.record2record.ReportGrouping` from
-    ``report_grouping``. The record-to-record stage owns deduplication, group
-    slots, selection, consumption, and record release. Invalid references
-    raise immediately; training data failures propagate instead of silently
-    dropping reports.
-
-    The units for a batch are accepted singleton reports and ready groups, in
-    arrival order, or with ready groups in key order under ``ordered_groups``.
+    Recipes implement ``make_sample`` and ``make_batch``. The recipe's
+    :class:`~reef.record2record.ReportStage`, passed as ``record_stage``,
+    owns the report policy (its ``ReportGrouping``), deduplication, group
+    slots, selection, consumption, and record release. Without one, every
+    report trains by itself. Invalid references raise immediately; training
+    data failures propagate instead of silently dropping reports.
     """
 
     required_request_types = frozenset({RequestType.INFERENCE, RequestType.REPORT})
 
     #: The batch type ``make_batch`` returns; the trainer validates it.
     output_schema: type[TrainingBatch] = TrainingBatch
-    #: Whether a terminal report owns its referenced sources outright.
-    exclusive_sources: bool = False
-    #: Batch ready groups in group-key order instead of arrival order.
-    ordered_groups: bool = False
     #: Units held in manual mode beyond this many batches are released, oldest first.
     manual_unit_cap_batches: int = 4
 
@@ -88,13 +83,16 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
         moved = [name for name in MOVED_REPORT_HOOKS if name in vars(cls)]
         if moved:
             raise TypeError(
-                f"{cls.__name__} defines {', '.join(moved)}: these hooks moved to "
-                "reef.record2record.ReportGrouping (is_training_report, placement, decide). "
-                "Return the grouping from report_grouping()."
+                f"{cls.__name__} defines {', '.join(moved)}: the report policy moved to the recipe. "
+                "Build a reef.record2record.ReportStage with a ReportGrouping (is_training_report, "
+                "placement, decide) and exclusive_sources/ordered_groups in the recipe's "
+                "build_record_stage(), and pass it to the processor as record_stage."
             )
 
-    def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context)
+    def __init__(self, context: ProcessorContext, *, record_stage: Record2RecordStage | None = None) -> None:
+        super().__init__(context, record_stage=record_stage)
+        if not isinstance(self.record_stage, ReportStage):
+            raise TypeError(f"{type(self).__name__} needs a ReportStage, not {type(self.record_stage).__name__}")
         # The sample-assembly settings belong to every reported-feedback processor's config
         # surface: validate them here so a bad deployment fails at construction
         # even for recipes that never assemble a policy sample.
@@ -103,14 +101,8 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
         self.samples: dict[str, TrainDataItem] = {}
         self.record_stage.limit_available(self.available_set_limit())
 
-    def build_record_stage(self) -> ReportStage:
-        return ReportStage(
-            self.scenario,
-            self.context.report_type,
-            self.report_grouping(),
-            exclusive_sources=self.exclusive_sources,
-            ordered_groups=self.ordered_groups,
-        )
+    def default_record_stage(self) -> ReportStage:
+        return ReportStage(self.scenario, self.context.report_type, ReportGrouping())
 
     @property
     def report_stage(self) -> ReportStage:
@@ -120,10 +112,6 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
         return stage
 
     # ------------------------------------------------------- the recipe hooks
-
-    def report_grouping(self) -> ReportGrouping:
-        """Return this method's report policy. The default trains every report by itself."""
-        return ReportGrouping()
 
     @abstractmethod
     def make_sample(self, context: ReportContext) -> TrainDataItem | SkippedReport:

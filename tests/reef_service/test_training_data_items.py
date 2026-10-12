@@ -229,8 +229,6 @@ def test_report_processor_reserves_and_acknowledges_mixed_data():
     from reef.train.types import ProcessorContext
 
     class MixedProcessor(ReportedFeedbackProcessor):
-        exclusive_sources = True
-
         def make_sample(self, context):
             source = context.inferences[0]
             return (
@@ -242,7 +240,12 @@ def test_report_processor_reserves_and_acknowledges_mixed_data():
         def make_batch(self, items, batch_number):
             return TrainingBatch(str(batch_number), items)
 
-    processor = MixedProcessor(ProcessorContext("mixed", {"batch_size": 2}))
+    from reef.record2record import ReportGrouping, ReportStage
+
+    context = ProcessorContext("mixed", {"batch_size": 2})
+    processor = MixedProcessor(
+        context, record_stage=ReportStage("mixed", None, ReportGrouping(), exclusive_sources=True)
+    )
     for index, payload in enumerate(
         ({"messages": [{"role": "user", "content": "hi"}]}, {"task_path": "tasks/example"})
     ):

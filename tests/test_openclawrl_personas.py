@@ -16,6 +16,7 @@ from recipes.openclawrl.examples.openclawrl.user_sim.personas import (
     student_style_violations,
     student_violations,
 )
+from recipes.openclawrl.judging import openclawrl_record_stage
 
 CLEAN_REPLY = """Sure, here is the working.
 
@@ -140,7 +141,8 @@ def test_openclawrl_processor_drops_unfillable_stale_version_candidates() -> Non
     from reef.train.types import ProcessorContext
 
     worker = _FakeWorker()
-    processor = OpenClawRLProcessor(ProcessorContext("s", {"batch_size": 3}), worker=worker)
+    context = ProcessorContext("s", {"batch_size": 3})
+    processor = OpenClawRLProcessor(context, record_stage=openclawrl_record_stage(context, worker=worker))
     # Two stale leftovers from before a weight swap, then a fresh generation.
     _judged_turns(processor, worker, ["v1", "v1", "v2", "v2", "v2"])
 
@@ -156,7 +158,8 @@ def test_openclawrl_processor_keeps_single_version_queue_intact() -> None:
     from reef.train.types import ProcessorContext
 
     worker = _FakeWorker()
-    processor = OpenClawRLProcessor(ProcessorContext("s", {"batch_size": 3}), worker=worker)
+    context = ProcessorContext("s", {"batch_size": 3})
+    processor = OpenClawRLProcessor(context, record_stage=openclawrl_record_stage(context, worker=worker))
     _judged_turns(processor, worker, ["v1", "v1"])
     # All-one-version queue below batch size: nothing is dropped, not ready yet.
     assert not processor.ready()

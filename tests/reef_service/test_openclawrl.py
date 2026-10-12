@@ -10,6 +10,7 @@ from reef_service._trajectories import policy_trajectory
 from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
 from recipes.openclawrl import OpenClawRLProcessor, OpenClawRLRecipe
+from recipes.openclawrl.judging import openclawrl_record_stage
 from recipes.openclawrl.sessions import SessionIndex
 from recipes.openclawrl.turns import TurnJudgment
 from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, SupportsReceipt
@@ -92,7 +93,7 @@ def _successor(prior_messages, next_state: str):
 
 def _processor(batch_size: int = 1, *, worker=None, ttl_s: float = 900.0, clients=None, **config):
     context = ProcessorContext("s", {"batch_size": batch_size, "session_ttl_s": ttl_s, **config})
-    return OpenClawRLProcessor(context, worker=worker, clients=clients)
+    return OpenClawRLProcessor(context, record_stage=openclawrl_record_stage(context, worker=worker, clients=clients))
 
 
 Q1 = [{"role": "user", "content": "q1"}]
@@ -477,7 +478,7 @@ def test_the_prm_record_file_reports_the_judged_population(tmp_path) -> None:
     record = tmp_path / "prm-records.jsonl"
     worker = FakeWorker()
     context = ProcessorContext("s", {"batch_size": 1, "prm_record_file": str(record)})
-    processor = OpenClawRLProcessor(context, worker=worker)
+    processor = OpenClawRLProcessor(context, record_stage=openclawrl_record_stage(context, worker=worker))
     processor.ingest(_turn("t1", Q1))
     processor.ingest(_turn("t2", _successor(Q1, "that works")))
     worker.push(TurnJudgment("t1", score=1.0, teacher_cands=ANCHOR))

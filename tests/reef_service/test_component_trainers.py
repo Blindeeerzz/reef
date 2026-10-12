@@ -25,7 +25,7 @@ from reef.dispatcher import Dispatcher
 from reef.observability import ExperimentTracker, NullExperimentLogger
 from reef.recipe import Recipe
 from reef.recipe.checkpoint_strategy import EveryNVersions
-from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping
+from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
 from reef.runtime.interfaces import RuntimeContractError
 from reef.scenario import Scenario, StaleTrainingResultError
 from reef.scenario.scenario import validate_component_trainers
@@ -1229,8 +1229,8 @@ class _SlotGrouping(ReportGrouping):
 class _SlottedProcessor(ThresholdProcessor):
     """The threshold processor with ``_SlotGrouping``."""
 
-    def report_grouping(self) -> ReportGrouping:
-        return _SlotGrouping()
+    def __init__(self, context: Any) -> None:
+        super().__init__(context, record_stage=ReportStage(context.scenario, context.report_type, _SlotGrouping()))
 
 
 @dataclass(frozen=True)
@@ -1510,7 +1510,8 @@ class _RetiringRetriesProcessor(ComputedFeedbackProcessor):
     """Trains the judged turns of ``_RetiringRetriesJudging``."""
 
     def __init__(self, context: Any) -> None:
-        super().__init__(context, judging=_RetiringRetriesJudging(), worker=_JudgedAtOnce())
+        stage = JudgingStage(_RetiringRetriesJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness)
+        super().__init__(context, record_stage=stage)
 
     def make_sample(self, record: AgentRecord, judgment: _Judgment) -> Any:
         return policy_trajectory(

@@ -19,6 +19,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from reef.core.reports import TeacherContextReport
+from reef.record2record import ReportGrouping, ReportStage
 from reef.train.processors.common import flatten_content, recorded_request, recorded_response
 from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, SampleAssembly, SkippedReport
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
@@ -58,6 +59,11 @@ def normalize_tool_call(call: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def distill_record_stage(context: ProcessorContext) -> ReportStage:
+    """The record stage for distillation: every report trains by itself and owns its inference record."""
+    return ReportStage(context.scenario, context.report_type, ReportGrouping(), exclusive_sources=True)
+
+
 class DistillProcessor(ReportedFeedbackProcessor):
     """One report, one distillation sample: the student's policy tensors plus its teacher sequence.
 
@@ -74,10 +80,9 @@ class DistillProcessor(ReportedFeedbackProcessor):
     """
 
     output_schema = TrainingBatch
-    exclusive_sources = True
     batch_label = "teacher"
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: ProcessorContext, *, record_stage: ReportStage | None = None) -> None:
         config = context.config
         self._assembly = SampleAssembly.from_config(context)
         self._max_teacher_tokens = int(config.get("max_teacher_tokens", 0))
@@ -91,7 +96,7 @@ class DistillProcessor(ReportedFeedbackProcessor):
 
         self._tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
         self._overflow_count = 0
-        super().__init__(context)
+        super().__init__(context, record_stage=record_stage)
 
     def teacher_request(
         self, messages: list[Any], tools: list[Any] | None, response: str, teacher_context: str
@@ -185,4 +190,4 @@ class DistillProcessor(ReportedFeedbackProcessor):
         return TrainingBatch(f"{self.scenario}:{self.batch_label}:{batch_number}", items)
 
 
-__all__ = ["DistillProcessor", "normalize_messages_for_template", "normalize_tool_call"]
+__all__ = ["DistillProcessor", "distill_record_stage", "normalize_messages_for_template", "normalize_tool_call"]

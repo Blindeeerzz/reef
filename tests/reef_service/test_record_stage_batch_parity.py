@@ -25,19 +25,24 @@ import pytest
 from reef_service._trajectories import policy_trajectory
 
 from recipes.beta.coral.processor import CoralProcessor
+from recipes.beta.coral.recipe import coral_record_stage
 from recipes.sdpo import SDPOProcessor, SDPOReport
+from recipes.sdpo.recipe import sdpo_record_stage
 from recipes.tttd import TTTDGroupedRolloutReport, TTTDProcessor
+from recipes.tttd.recipe import tttd_record_stage
 from reef.artifact import ArtifactRef
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportBase, TeacherContextReport
 from reef.record2dataset.generated_tasks.processor import GeneratedTaskProcessor
-from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping
+from reef.record2dataset.generated_tasks.recipe import task_group_record_stage
+from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.train import ProcessorContext, Trainer
 from reef.train.backend import CandidateBackend, PreparedStep
 from reef.train.cordis_backend.processor import CordisProcessor
 from reef.train.processors import DataProcessor, DistillProcessor
 from reef.train.processors.computed import ComputedFeedbackProcessor, SupportsReceipt
+from reef.train.processors.distill import distill_record_stage
 from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import TaskItem, TrainDataItem, TrainingBatch, TrajectoryItem
 
@@ -252,14 +257,12 @@ class AnyGroupReady(SlotGrouping):
 class SlotGroupProcessor(ReportedFeedbackProcessor):
     """Trains the groups of ``SlotGrouping``."""
 
-    exclusive_sources = True
-
     def __init__(self, context: ProcessorContext) -> None:
         self.assembly = SampleAssembly.from_config(context)
-        super().__init__(context)
+        super().__init__(context, record_stage=self.slot_stage(context))
 
-    def report_grouping(self) -> ReportGrouping:
-        return SlotGrouping()
+    def slot_stage(self, context: ProcessorContext) -> ReportStage:
+        return ReportStage(context.scenario, context.report_type, SlotGrouping(), exclusive_sources=True)
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
         return self.assembly.build(context, context.require_score())
@@ -271,10 +274,38 @@ class SlotGroupProcessor(ReportedFeedbackProcessor):
 class OrderedMixProcessor(SlotGroupProcessor):
     """Reports with a ``metadata.group`` form groups that batch in key order after singletons."""
 
-    ordered_groups = True
+    def slot_stage(self, context: ProcessorContext) -> ReportStage:
+        return ReportStage(
+            context.scenario, context.report_type, AnyGroupReady(), exclusive_sources=True, ordered_groups=True
+        )
 
-    def report_grouping(self) -> ReportGrouping:
-        return AnyGroupReady()
+
+# Each recipe builds its processor's record stage. These processors build the same stage, as the recipe would.
+
+
+class RecipeTTTDProcessor(TTTDProcessor):
+    def __init__(self, context: ProcessorContext) -> None:
+        super().__init__(context, record_stage=tttd_record_stage(context))
+
+
+class RecipeSDPOProcessor(SDPOProcessor):
+    def __init__(self, context: ProcessorContext) -> None:
+        super().__init__(context, record_stage=sdpo_record_stage(context))
+
+
+class RecipeCoralProcessor(CoralProcessor):
+    def __init__(self, context: ProcessorContext) -> None:
+        super().__init__(context, record_stage=coral_record_stage(context))
+
+
+class RecipeGeneratedTaskProcessor(GeneratedTaskProcessor):
+    def __init__(self, context: ProcessorContext) -> None:
+        super().__init__(context, record_stage=task_group_record_stage(context))
+
+
+class RecipeDistillProcessor(DistillProcessor):
+    def __init__(self, context: ProcessorContext) -> None:
+        super().__init__(context, record_stage=distill_record_stage(context))
 
 
 @dataclass(frozen=True)
@@ -325,7 +356,8 @@ class ToyComputedProcessor(ComputedFeedbackProcessor):
     """Trains the judged records of ``ToyJudging``."""
 
     def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context, judging=ToyJudging(), worker=ImmediateWorker())
+        stage = JudgingStage(ToyJudging(), ImmediateWorker(), max_staleness=context.max_staleness)
+        super().__init__(context, record_stage=stage)
 
     def make_sample(self, record: AgentRecord, judgment: SupportsReceipt) -> TrajectoryItem | None:
         if not isinstance(judgment, ToyJudgment) or not judgment.good:
@@ -600,14 +632,14 @@ def streams() -> dict[str, tuple[StreamRun, list[Step]]]:
         "ungrouped_reload": (ungrouped_stream(), [*ungrouped_steps()[:5], RELOAD, *ungrouped_steps()[5:]]),
         "slots_and_discards": (StreamRun(SlotGroupProcessor, {"batch_size": 1}), slot_steps()),
         "ordered_groups": (StreamRun(OrderedMixProcessor, {"batch_size": 3}), ordered_steps()),
-        "tttd": (StreamRun(TTTDProcessor, tttd, TTTDGroupedRolloutReport), tttd_steps()),
-        "coral": (StreamRun(CoralProcessor, {"group_size": 2}), coral_steps()),
+        "tttd": (StreamRun(RecipeTTTDProcessor, tttd, TTTDGroupedRolloutReport), tttd_steps()),
+        "coral": (StreamRun(RecipeCoralProcessor, {"group_size": 2}), coral_steps()),
         "generated_tasks": (
-            StreamRun(GeneratedTaskProcessor, {"tasks_per_step": 2, "plays_per_task": 2}),
+            StreamRun(RecipeGeneratedTaskProcessor, {"tasks_per_step": 2, "plays_per_task": 2}),
             task_steps(),
         ),
-        "distill_overflow": (StreamRun(DistillProcessor, distill, TeacherContextReport), distill_steps()),
-        "sdpo": (StreamRun(SDPOProcessor, sdpo, SDPOReport), sdpo_steps()),
+        "distill_overflow": (StreamRun(RecipeDistillProcessor, distill, TeacherContextReport), distill_steps()),
+        "sdpo": (StreamRun(RecipeSDPOProcessor, sdpo, SDPOReport), sdpo_steps()),
         "computed_exact_version": (StreamRun(ToyComputedProcessor, {"batch_size": 2}), computed_steps()),
         "computed_window": (StreamRun(ToyComputedProcessor, {"batch_size": 2}, max_staleness=1), computed_steps()),
         "cordis_manual_cap": (

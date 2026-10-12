@@ -18,6 +18,7 @@ import pytest
 from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
 from recipes.sdpo import SDPOProcessor, SDPORecipe, SDPOReport
+from recipes.sdpo.recipe import sdpo_record_stage
 from recipes.sdpo.slime import SdpoAlgorithm, SdpoSettings
 from reef.core import AgentRecord, RequestType
 from reef.recipe.errors import RecipeConfigError
@@ -52,19 +53,18 @@ def tokenizer(monkeypatch: pytest.MonkeyPatch) -> SDPOTokenizer:
 
 
 def processor(**config: Any) -> SDPOProcessor:
-    return SDPOProcessor(
-        ProcessorContext(
-            "science",
-            {
-                "groups_per_step": 1,
-                "rollouts_per_group": 2,
-                "tokenizer_path": "/models/test",
-                "max_teacher_tokens": 18432,
-                **config,
-            },
-            SDPOReport,
-        )
+    context = ProcessorContext(
+        "science",
+        {
+            "groups_per_step": 1,
+            "rollouts_per_group": 2,
+            "tokenizer_path": "/models/test",
+            "max_teacher_tokens": 18432,
+            **config,
+        },
+        SDPOReport,
     )
+    return SDPOProcessor(context, record_stage=sdpo_record_stage(context))
 
 
 def ingest(

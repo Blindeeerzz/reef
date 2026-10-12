@@ -689,10 +689,11 @@ Reported feedback
        ``SkippedReport(reason)`` for a valid report that cannot train; the stage releases it.
    * - ``make_batch(items, batch_number) -> TrainingBatch``
      - Shape the flat tuple of selected training items into a batch.
-   * - ``report_grouping() -> ReportGrouping``
-     - Optional; the method's report policy. The default trains every report by itself.
-
-A ``ReportGrouping`` runs in the record-to-record stage and reads only records:
+The recipe owns the report policy. Its ``build_record_stage(context)`` returns
+``ReportStage(scenario, report_type, grouping, *, exclusive_sources=False,
+ordered_groups=False)``, and ``build_processor`` passes the stage to the
+processor as ``record_stage``. Without one, every report trains by itself. A
+``ReportGrouping`` runs in the record-to-record stage and reads only records:
 
 .. list-table::
    :header-rows: 1
@@ -711,8 +712,9 @@ A ``ReportGrouping`` runs in the record-to-record stage and reads only records:
    * - ``status() -> Mapping``
      - Optional JSON-safe group outcomes, such as steps that can never train. The processor adds them to its status.
 
-A processor class that still defines ``grouping``, ``decide_group``, or
-``is_training_report`` raises ``TypeError`` when its module is imported.
+A processor class that still defines ``grouping``, ``decide_group``,
+``is_training_report``, ``exclusive_sources``, or ``ordered_groups`` raises
+``TypeError`` when its module is imported.
 
 ``ReportContext`` carries ``report``, ordered ``inferences``, optional ``score``,
 and the recipe's ``parsed_report``. ``require_score()`` returns a finite reward or
@@ -728,9 +730,9 @@ a complete step, then trains several comparison groups within it.
 ``make_batch`` receives items in group/arrival order. Acknowledgement consumes
 all selected reports, even when the recipe omits constant-reward groups from
 its output. Reports arriving after reservation remain for a later batch.
-``output_schema`` declares the batch type, ``exclusive_sources`` controls source
-release for terminal group/duplicate reports, and ``ordered_groups`` orders ready
-groups by their keys.
+``output_schema`` declares the batch type. On the stage, ``exclusive_sources``
+controls source release for terminal group/duplicate reports, and
+``ordered_groups`` orders ready groups by their keys.
 
 There is no report-level ``judge``, ``WAIT``, ``NEVER``, or eligibility flag.
 Reference validation runs at admission; incomplete groups wait for more valid
@@ -740,9 +742,10 @@ Computed feedback
 ~~~~~~~~~~~~~~~~~
 
 Use this engine when later traffic completes an earlier record and judging it
-calls a model or another slow service. The recipe writes a ``RecordJudging``
-and passes it, with its worker, to ``ComputedFeedbackProcessor.__init__(context,
-*, judging, worker)``. The ``JudgingStage`` runs the judging.
+calls a model or another slow service. The recipe writes a ``RecordJudging``.
+Its ``build_record_stage`` returns ``JudgingStage(judging, worker, *,
+max_staleness)``, and the processor receives it as
+``ComputedFeedbackProcessor(context, *, record_stage)``.
 
 +------------------------------------------+-----------------------------------+
 | Hook                                     | Contract                          |

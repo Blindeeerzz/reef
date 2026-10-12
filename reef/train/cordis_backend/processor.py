@@ -70,7 +70,7 @@ class RecordDrivenTraceProcessor(DataProcessor):
         #: Trace samples by inference record ID, until the record trains.
         self.samples: dict[str, TrajectoryItem] = {}
 
-    def build_record_stage(self) -> InferenceStage:
+    def default_record_stage(self) -> InferenceStage:
         return InferenceStage()
 
     def make_training_batch(self, batch_number: int, request: TrainingRequest | None) -> TrainingBatch:

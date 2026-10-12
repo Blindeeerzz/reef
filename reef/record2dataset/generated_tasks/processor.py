@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Hashable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -39,7 +39,7 @@ from reef.core import AgentRecord
 from reef.core.tasks import GeneratedTask, TaskGenerationRequest, TaskGenerator, TaskPlayResult
 from reef.harness.client.tasks import TaskPlay
 from reef.record2dataset.client import DuplicateTask, Generator, HttpGenerator, TaskNameConflict
-from reef.record2record import GroupDecision, ReportContext, ReportGrouping
+from reef.record2record import ReportContext, ReportStage
 from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
@@ -108,30 +108,10 @@ class RoundOutcome(SupportsReceipt):
     error: str
 
 
-class TaskGroupGrouping(ReportGrouping):
-    """The training arm's episodes of one task form one group, ready at ``plays_per_task`` episodes.
-
-    Measurement arms and the generator's own reports share the scenario; only the training arm trains.
-    """
-
-    def __init__(self, plays_per_task: int) -> None:
-        self.plays_per_task = plays_per_task
-
-    def is_training_report(self, report: AgentRecord) -> bool:
-        return reported_arm(report) == TRAINING_ARM
-
-    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
-        return reported_task_name(context.report), None
-
-    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
-        return GroupDecision.READY if len(members) >= self.plays_per_task else GroupDecision.INCOMPLETE
-
-
 class GeneratedTaskProcessor(ReportedFeedbackProcessor, BackgroundJobRunner):
     """Groups the training arm's episodes by task and runs the rounds of task generation that produce them."""
 
     output_schema = TrainingBatch
-    exclusive_sources = True
 
     def __init__(
         self,
@@ -140,6 +120,7 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor, BackgroundJobRunner):
         task_generator: TaskGenerator | None = None,
         task_player: Generator | None = None,
         worker: BackgroundJobWorker | None = None,
+        record_stage: ReportStage | None = None,
     ) -> None:
         config = dict(context.config)
         self.tasks_per_step = int(config.get("tasks_per_step", DEFAULT_TASKS_PER_STEP))
@@ -153,7 +134,7 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor, BackgroundJobRunner):
         config.setdefault("scaffold_tolerance", DEFAULT_SCAFFOLD_TOLERANCE)
         self.assembly = SampleAssembly.from_config(context.with_config(config))
         # One unit of the batch is one complete task group.
-        super().__init__(context.with_config({**config, "batch_size": self.tasks_per_step}))
+        super().__init__(context.with_config({**config, "batch_size": self.tasks_per_step}), record_stage=record_stage)
 
         self.rounds = int(config.get("rounds", 0))
         self.batches_per_round = int(config.get("batches_per_round", DEFAULT_BATCHES_PER_ROUND))
@@ -201,9 +182,6 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor, BackgroundJobRunner):
         self.last_error = ""
 
     # ------------------------------------------------------- the reported half
-
-    def report_grouping(self) -> TaskGroupGrouping:
-        return TaskGroupGrouping(self.plays_per_task)
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
         task_name = reported_task_name(context.report)

@@ -21,7 +21,7 @@ from typing import Any
 
 from reef.core.records_types import AgentRecord
 from reef.core.trajectories import trajectory_reward
-from reef.record2record import GroupDecision, ReportContext, ReportGrouping
+from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
 from reef.train.algos import StepSignal, TrainingObjective
 from reef.train.algos.helpers import next_steps
 from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
@@ -67,16 +67,14 @@ class GroupedPolicyProcessor(ReportedFeedbackProcessor):
 
     def __init__(self, context: ProcessorContext) -> None:
         self._assembly = SampleAssembly.from_config(context)
-        super().__init__(context)
+        stage = ReportStage(context.scenario, context.report_type, ComparisonSetGrouping())
+        super().__init__(context, record_stage=stage)
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
         set_id = _comparison_set_id(context.report)
         if set_id is None:
             raise ValueError("grouped training requires metadata.comparison_set")
         return replace(self._assembly.build(context, context.require_score()), group_id=set_id)
-
-    def report_grouping(self) -> ReportGrouping:
-        return ComparisonSetGrouping()
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"{self.scenario}:grouped:{batch_number}", items)

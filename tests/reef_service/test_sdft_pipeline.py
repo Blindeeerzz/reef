@@ -29,6 +29,7 @@ from reef.recipe.errors import RecipeConfigError
 from reef.recipe.registry import build_recipe, recipe_class_for
 from reef.train import ProcessorContext
 from reef.train.algos import StepScheduling
+from reef.train.processors.distill import distill_record_stage
 from reef.train.slime_backend.data_builder import to_slime_rollout_data
 from reef.train.slime_backend.loss_families import resolve_loss_family
 from reef.train.slime_backend.reef_adapters.preparation import prepare_slime_step
@@ -112,11 +113,10 @@ def _report(
 
 
 def _processor(**config: Any) -> SDFTProcessor:
-    return SDFTProcessor(
-        ProcessorContext(
-            "science", {"batch_size": 1, "tokenizer_path": TOKENIZER_PATH, **config}, TeacherContextReport
-        )
+    context = ProcessorContext(
+        "science", {"batch_size": 1, "tokenizer_path": TOKENIZER_PATH, **config}, TeacherContextReport
     )
+    return SDFTProcessor(context, record_stage=distill_record_stage(context))
 
 
 # --- the teacher's request --------------------------------------------------

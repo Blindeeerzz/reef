@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Hashable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from reef.core.plugins import PluginConfigError, PluginReference
+from reef.core.records_types import AgentRecord
 from reef.core.reports import ReportBase, ScoredRolloutReport
 from reef.core.tasks import TaskGenerator
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
@@ -19,11 +20,44 @@ from reef.record2dataset.generated_tasks.processor import (
     DEFAULT_PLAYS_PER_TASK,
     DEFAULT_SCAFFOLD_TOLERANCE,
     DEFAULT_TASKS_PER_STEP,
+    TRAINING_ARM,
     GeneratedTaskProcessor,
+    reported_arm,
+    reported_task_name,
 )
+from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
 from reef.train.algos import StepScheduling
 from reef.train.processors.base import DataProcessor
 from reef.train.types import ProcessorContext
+
+
+class TaskGroupGrouping(ReportGrouping):
+    """The training arm's episodes of one task form one group, ready at ``plays_per_task`` episodes.
+
+    Measurement arms and the generator's own reports share the scenario; only the training arm trains.
+    """
+
+    def __init__(self, plays_per_task: int) -> None:
+        self.plays_per_task = plays_per_task
+
+    def is_training_report(self, report: AgentRecord) -> bool:
+        return reported_arm(report) == TRAINING_ARM
+
+    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
+        return reported_task_name(context.report), None
+
+    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
+        return GroupDecision.READY if len(members) >= self.plays_per_task else GroupDecision.INCOMPLETE
+
+
+def task_group_record_stage(context: ProcessorContext) -> ReportStage:
+    """The generated-task record stage: one group per task; a terminal report owns its sources."""
+    return ReportStage(
+        context.scenario,
+        context.report_type,
+        TaskGroupGrouping(int(context.config.get("plays_per_task", DEFAULT_PLAYS_PER_TASK))),
+        exclusive_sources=True,
+    )
 
 
 @dataclass(frozen=True)
@@ -116,6 +150,12 @@ class GeneratedTaskRecipe(WeightTrainingRecipe):
         """The scenario's round summaries: what a delete archives beside the record store."""
         return (Path(self.state_dir).expanduser() / scenario,) if self.state_dir else ()
 
+    def build_record_stage(self, context: ProcessorContext) -> ReportStage:
+        return task_group_record_stage(context)
+
     def build_processor(self, context: ProcessorContext) -> DataProcessor:
         task_generator = None if self.task_generation is None else self.task_generation.build(context.scenario)
-        return GeneratedTaskProcessor(context.with_config(self.processor_config()), task_generator=task_generator)
+        configured = context.with_config(self.processor_config())
+        return GeneratedTaskProcessor(
+            configured, task_generator=task_generator, record_stage=self.build_record_stage(configured)
+        )

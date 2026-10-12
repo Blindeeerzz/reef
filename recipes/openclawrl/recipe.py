@@ -5,11 +5,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from recipes.openclawrl.judging import openclawrl_record_stage
 from recipes.openclawrl.processor import OpenClawRLProcessor
 from recipes.openclawrl.sessions import DEFAULT_MAX_SESSIONS
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
+from reef.record2record import JudgingStage
 from reef.train.algos import StepScheduling
+from reef.train.types import ProcessorContext
 
 _logger = logging.getLogger(__name__)
 
@@ -69,6 +72,9 @@ class OpenClawRLRecipe(WeightTrainingRecipe):
             # Each turn-sample is its own rollout; the backend's configured step size applies.
             scheduling=StepScheduling(unit="sample"),
         )
+
+    def build_record_stage(self, context: ProcessorContext) -> JudgingStage:
+        return openclawrl_record_stage(context)
 
     def __post_init__(self) -> None:
         super().__post_init__()

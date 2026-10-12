@@ -11,6 +11,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 from reef_service._trajectories import policy_trajectory
 
+from recipes.openclawrl.judging import openclawrl_record_stage
 from recipes.openclawrl.prm import (
     append_hint_to_messages,
     build_hint_judge_messages,
@@ -467,7 +468,11 @@ class _FakeTeacher:
 def _judge_one_turn(judge, teacher):
     from reef.train.types import ProcessorContext
 
-    processor = OpenClawRLProcessor(ProcessorContext("s", {"batch_size": 1}), clients=(judge, teacher, None))
+    context = ProcessorContext("s", {"batch_size": 1})
+
+    processor = OpenClawRLProcessor(
+        context, record_stage=openclawrl_record_stage(context, clients=(judge, teacher, None))
+    )
     job = TurnJob(
         receipt="r1",
         request_messages=({"role": "user", "content": "do my homework"},),
@@ -572,7 +577,8 @@ def test_processor_attaches_topk_and_candidates() -> None:
         )
 
     worker = FakeWorker()
-    processor = OpenClawRLProcessor(ProcessorContext("s", {"batch_size": 2}), worker=worker)
+    context = ProcessorContext("s", {"batch_size": 2})
+    processor = OpenClawRLProcessor(context, record_stage=openclawrl_record_stage(context, worker=worker))
     # Two sessions with distinct prefixes; each first turn gets a successor.
     for index, opening in enumerate(["q-alpha", "q-beta"]):
         first = [{"role": "user", "content": opening}]
