@@ -26,9 +26,11 @@ from reef.recipe.config import recipe_config_from_mapping
 from reef.recipe.registry import build_recipe
 from reef.train.cordis_backend import Mutation
 from reef.train.cordis_backend.processor import CordisProcessor
-from reef.train.cordis_backend.strategies import resolve_episode_scorer, resolve_proposer
-from reef.train.evaluation.evaluators import AlwaysSelectPluginFactory
+from reef.train.evaluation.evaluators import BackendAlwaysSelectPlugin
+from reef.train.plugins import PluginReference
 from reef.train.types import ProcessorContext
+
+from ._strategies import resolve_episode_scorer, resolve_proposer
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2] / "recipes" / "skillclaw"
 
@@ -363,7 +365,7 @@ def test_example_yaml_boots_the_recipe_with_the_paper_wiring(example, tmp_path, 
     built = build_recipe(str(sections["implementation"]), {}, config=sections, runtime=runtime())
     assert type(built).__name__ == "SkillClawRecipe"
     assert built.name == "skillclaw"
-    assert isinstance(built.candidate_plugin, AlwaysSelectPluginFactory)
+    assert built.selection.plugin_class is BackendAlwaysSelectPlugin
     assert built.batch_size == 60
     assert [entry["id"] for entry in built.seed] == ["alpha"]
     assert built.seed[0]["config"]["name"] == "alpha"
@@ -463,7 +465,7 @@ def _dry_recipe(example: dict[str, ModuleType], tmp_path: Path, batch_size: int)
         ("[sieve] probe",),
         binary=str(make_binary(tmp_path)),
         seed=SEED,
-        candidate_plugin=AlwaysSelectPluginFactory(),
+        selection=PluginReference(BackendAlwaysSelectPlugin),
         batch_size=batch_size,
         runtime=runtime(),
     )

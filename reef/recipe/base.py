@@ -367,8 +367,8 @@ class WeightTrainingRecipe(Recipe):
     up to that lag before the existing training path runs.
 
     ``candidate_evaluation`` is framework-owned configuration derived from an
-    optional top-level ``evaluation`` section. Its dotted factory builds one
-    candidate evaluator per scenario, replacing the backend's default
+    optional top-level ``evaluation`` section. The plugin class it names builds one
+    candidate evaluator per scenario with ``from_config``, replacing the backend's default
     metrics-only evaluator and selection policy without changing the recipe's
     method-specific config fields.
 

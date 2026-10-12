@@ -327,7 +327,11 @@ def test_build_dispatcher_uses_the_recipe_name_for_a_dotted_reference(monkeypatc
 def test_build_dispatcher_passes_recipe_settings_to_a_dotted_reference(monkeypatch, tmp_path) -> None:
     module = tmp_path / "demo_evolution.py"
     module.write_text(
-        "def propose(nodes, samples, model):\n    return None\n\ndef evaluate(task, result):\n    return 0.0\n"
+        "from reef.train.cordis_backend.strategies import EpisodeScorer, Proposer\n\n"
+        "class Propose(Proposer):\n"
+        "    def propose(self, nodes, samples, models, **keywords):\n        return None\n\n"
+        "class Evaluate(EpisodeScorer):\n"
+        "    def score(self, task, result):\n        return 0.0\n"
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setattr(
@@ -341,8 +345,8 @@ def test_build_dispatcher_passes_recipe_settings_to_a_dotted_reference(monkeypat
             recipe="reef.recipe.cordis:CordisRecipe",
             recipe_settings={
                 "evolution": {
-                    "propose": "demo_evolution:propose",
-                    "evaluate": "demo_evolution:evaluate",
+                    "propose": "demo_evolution:Propose",
+                    "evaluate": "demo_evolution:Evaluate",
                     "tasks": ["task one"],
                     "adapter": "pi",
                 }
@@ -389,7 +393,7 @@ def test_build_dispatcher_injects_candidate_evaluation_into_weight_recipe(monkey
         lambda *args, **kwargs: lambda scenario: object(),
     )
     evaluation = {
-        "module": "reef_service._candidate_evaluation_plugin:CheckpointFactory",
+        "module": "reef_service._candidate_evaluation_plugin:CheckpointEvaluator",
         "config": {"score": 1.0, "threshold": 0.0},
     }
 
@@ -405,7 +409,7 @@ def test_build_dispatcher_injects_candidate_evaluation_into_weight_recipe(monkey
 
     recipe = dispatcher._recipe
     assert recipe.candidate_evaluation is not None
-    assert recipe.candidate_evaluation.module == evaluation["module"]
+    assert recipe.candidate_evaluation.plugin.plugin_class.__name__ == evaluation["module"].rpartition(":")[2]
 
 
 @pytest.mark.unit
