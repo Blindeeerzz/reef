@@ -19,7 +19,6 @@ OPD_DATA="${OPD_DATA:-/work/lora-small/data}"   # prepare_small.py's output
 OPD_CONFIG="${OPD_CONFIG:-$PWD/serve.lora-small.yaml}"
 OPD_STEPS="${OPD_STEPS:-30}"
 OPD_EVAL_EVERY="${OPD_EVAL_EVERY:-$OPD_STEPS}"   # evaluate every N updates; the default evaluates the final update only
-OPD_EVAL_START="${OPD_EVAL_START:-$OPD_EVAL_EVERY}"  # first evaluated update, for a run whose schedule changed after a resume
 OPD_EVAL_TOKENS="${OPD_EVAL_TOKENS:-64000}"      # 30720 for the Qwen3 pair, whose student window is 32768
 REEF_PORT="${REEF_PORT:-28994}"                  # serve.lora-small.yaml's reef.port
 REPO_ROOT="$(cd ../../../.. && pwd)"
@@ -69,4 +68,4 @@ python run.py --config "$OPD_CONFIG" --url "http://127.0.0.1:$REEF_PORT" \
   --train-tokens 16384 --eval-tokens "$OPD_EVAL_TOKENS" --eval-repeats "${OPD_EVAL_REPEATS:-16}" \
   --eval-every "$OPD_EVAL_EVERY" --concurrency 64 "$@"
 python analyze.py "$OPD_RUN_DIR/results" --final-step "$OPD_STEPS" --eval-every "$OPD_EVAL_EVERY" \
-  --eval-start "$OPD_EVAL_START" --target-improvement 0.03 --training-mode LoRA
+  --target-improvement 0.03 --training-mode LoRA

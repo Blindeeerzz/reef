@@ -43,18 +43,12 @@ def analyze(
     *,
     final_step: int = 200,
     eval_every: int = 20,
-    eval_start: int | None = None,
     questions: int = 30,
     repeats: int = 16,
     target_improvement: float = 0.10,
 ) -> dict:
     if final_step < 0 or eval_every <= 0:
         raise ValueError("Final step must be nonnegative and evaluation interval must be positive")
-    # A campaign resumed under a denser schedule has no evaluations before the change.
-    if eval_start is None:
-        eval_start = eval_every
-    if eval_start <= 0:
-        raise ValueError("First evaluated step must be positive")
     if not math.isfinite(target_improvement) or not 0 < target_improvement <= 1:
         raise ValueError("Target improvement must be finite and in (0, 1]")
     baseline, baseline_release = read_scores(results / "eval-0000.jsonl")
@@ -78,7 +72,7 @@ def analyze(
                 raise ValueError("Final checkpoint still identifies the baseline release")
     if final is None:
         raise ValueError(f"No evaluation for the predeclared final step {final_step}; acceptance is pending")
-    expected_steps = {0, final_step, *range(eval_start, final_step, eval_every)}
+    expected_steps = {0, final_step, *range(eval_every, final_step, eval_every)}
     observed_steps = [point["step"] for point in curve]
     missing = sorted(expected_steps - set(observed_steps))
     unexpected = sorted(set(observed_steps) - expected_steps)
@@ -93,7 +87,6 @@ def analyze(
     return {
         "final_step": final_step,
         "eval_every": eval_every,
-        "eval_start": eval_start,
         "questions": questions,
         "samples_per_question": repeats,
         "target_absolute_improvement": target_improvement,
@@ -111,9 +104,6 @@ def main() -> None:
     parser.add_argument("results", type=Path)
     parser.add_argument("--final-step", type=int, default=200)
     parser.add_argument("--eval-every", type=int, default=20)
-    parser.add_argument(
-        "--eval-start", type=int, default=None, help="first evaluated update; defaults to --eval-every"
-    )
     parser.add_argument("--target-improvement", type=float, default=0.10)
     parser.add_argument("--training-mode", choices=["full-parameter", "LoRA"], default="full-parameter")
     args = parser.parse_args()
@@ -121,7 +111,6 @@ def main() -> None:
         args.results,
         final_step=args.final_step,
         eval_every=args.eval_every,
-        eval_start=args.eval_start,
         target_improvement=args.target_improvement,
     )
     (args.results / "acceptance.json").write_text(json.dumps(report, indent=2) + "\n")
