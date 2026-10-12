@@ -6,8 +6,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from reef.record2record.selection import ExperienceUnit
 from reef.runtime.interfaces import RuntimeLoadId
-from reef.train.experience.selection import ExperienceUnit
 
 
 @dataclass(frozen=True)

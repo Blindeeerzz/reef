@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 import pytest
 
-from reef.train.experience import (
+from reef.record2record import (
     ArrivalOrder,
     EligibilityCheck,
     ExperienceBuffer,

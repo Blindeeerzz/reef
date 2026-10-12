@@ -15,7 +15,8 @@ from reef_service._trajectories import policy_trajectory
 
 from reef.core import AgentRecord, RequestType
 from reef.core.trajectories import source_record_id
-from reef.train.processors.computed import ComputedFeedbackProcessor, Failed, JudgingWorker, SupportsReceipt
+from reef.record2record import Failed, JobRunner, JudgingWorker, SupportsReceipt
+from reef.train.processors.computed import ComputedFeedbackProcessor
 from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem
 
 pytestmark = pytest.mark.unit
@@ -186,11 +187,18 @@ def test_close_propagates_to_the_worker() -> None:
     assert worker.closed
 
 
-def test_real_worker_runs_the_judge_coroutine() -> None:
-    async def judge(job):
+class _Answers(JobRunner):
+    async def run(self, job: SupportsReceipt) -> SupportsReceipt:
         return _Judgment(job.receipt)
 
-    worker = JudgingWorker(judge)
+
+class _Crashes(JobRunner):
+    async def run(self, job: SupportsReceipt) -> SupportsReceipt:
+        raise RuntimeError("boom")
+
+
+def test_real_worker_runs_the_judge_coroutine() -> None:
+    worker = JudgingWorker(_Answers())
     assert worker.submit(_Job("r1"))
     import time
 
@@ -204,10 +212,7 @@ def test_real_worker_runs_the_judge_coroutine() -> None:
 
 
 def test_real_worker_resolves_a_crashing_judge_as_failed() -> None:
-    async def judge(job):
-        raise RuntimeError("boom")
-
-    worker = JudgingWorker(judge)
+    worker = JudgingWorker(_Crashes())
     assert worker.submit(_Job("r1"))
     import time
 

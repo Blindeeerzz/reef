@@ -19,7 +19,7 @@ from typing import Any
 
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase, ReportValidationError, validate_report_payload
-from reef.train.experience import ArrivalOrder, ExperienceBuffer, ExperienceUnit, GroupKeyOrder
+from reef.record2record import ArrivalOrder, ExperienceBuffer, ExperienceUnit, GroupKeyOrder
 from reef.train.processors.base import DataProcessor
 from reef.train.processors.common import (
     make_multi_turn_policy_trajectory,
@@ -117,7 +117,7 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
     data failures propagate instead of silently dropping reports.
 
     The units for a batch are accepted singleton reports and ready groups. They
-    wait in an :class:`~reef.train.experience.ExperienceBuffer`, in arrival
+    wait in an :class:`~reef.record2record.ExperienceBuffer`, in arrival
     order, or with ready groups in key order under ``ordered_groups``.
     """
 

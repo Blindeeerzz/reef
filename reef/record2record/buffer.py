@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Hashable, Sequence
 
-from reef.train.experience.eligibility import EligibilityCheck, IneligibleUnit
-from reef.train.experience.selection import ArrivalOrder, ExperienceUnit, SelectionPolicy
+from reef.record2record.eligibility import EligibilityCheck, IneligibleUnit
+from reef.record2record.selection import ArrivalOrder, ExperienceUnit, SelectionPolicy
 
 
 class ExperienceBuffer:

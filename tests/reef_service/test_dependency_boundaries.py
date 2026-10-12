@@ -533,3 +533,15 @@ def test_task_generation_input_definition_does_not_depend_on_consumers() -> None
     imported = _imported_modules(ast.parse(inspect.getsource(module)), package="reef.core.tasks")
     for dependency in ("reef.train", "reef.record2dataset", "recipes"):
         assert _imports_of(imported, dependency) == []
+
+
+def test_record_to_record_stage_depends_only_on_contracts_below_training() -> None:
+    # Record-to-task and the trainer both use this stage, so it never imports either of them.
+    allowed = ("reef.core", "reef.runtime.interfaces", "reef.observability", "reef.record2record")
+    for path in sorted((REPO_ROOT / "reef" / "record2record").rglob("*.py")):
+        package = ".".join(path.parent.relative_to(REPO_ROOT).parts)
+        for target in _imported_modules(ast.parse(path.read_text(encoding="utf-8")), package=package):
+            if target == "reef" or target.startswith("reef."):
+                assert any(
+                    target == prefix or target.startswith(prefix + ".") for prefix in allowed
+                ), f"{path.relative_to(REPO_ROOT)} imports {target}"

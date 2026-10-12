@@ -30,42 +30,30 @@ record's exposure.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import queue
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from threading import Lock, Thread
 from typing import Any
 
 from reef.core.records_types import AgentRecord
-from reef.train.experience import ExperienceBuffer, ExperienceUnit, StalenessCheck
+from reef.record2record import ExperienceBuffer, ExperienceUnit, StalenessCheck
+from reef.record2record.worker import Failed, JobRunner, JudgingWorker, SupportsReceipt
 from reef.train.processors.base import DataProcessor
 from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem
 
 logger = logging.getLogger(__name__)
 
-#: How long ``close()`` lets in-flight judgments finish before cancelling.
-CLOSE_GRACE_S = 5.0
-
-
-@dataclass(frozen=True)
-class SupportsReceipt:
-    """What the engine needs of a recipe's job and of its judgment alike:
-    the receipt of the tracked record they concern.
-
-    The recipe defines both types; the engine only ever reads ``receipt``, so
-    this shared value is the base of both types and of :class:`Failed`.
-    """
-
-    receipt: str
-
-
-@dataclass(frozen=True)
-class Failed(SupportsReceipt):
-    """The worker's answer for a job whose judgment never finished."""
+# The worker types moved to reef.record2record.worker; recipes keep importing them from here.
+__all__ = [
+    "CandidateUnit",
+    "ComputedFeedbackProcessor",
+    "Failed",
+    "JudgingWorker",
+    "SupportsReceipt",
+    "candidate_units",
+]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -84,113 +72,7 @@ def candidate_units(units: Sequence[ExperienceUnit]) -> tuple[CandidateUnit, ...
     return selected
 
 
-class JudgingWorker:
-    """Judgments off the trainer thread: jobs in, judgments out, both queues.
-
-    The worker owns only execution — one daemon thread, an event loop, and
-    the two queues; what a judgment *is* stays the recipe's ``judge``
-    coroutine, handed in at construction. Faults degrade, never hang: a
-    failed or cancelled judgment resolves as :class:`Failed`, and a worker
-    whose event loop dies marks itself broken, resolves everything queued as
-    :class:`Failed`, and rejects new work so the engine retires records
-    directly.
-    """
-
-    def __init__(self, judge: Callable[[Any], Awaitable[SupportsReceipt]], *, concurrency: int = 8) -> None:
-        self._judge = judge
-        self._concurrency = max(1, concurrency)
-        self._jobs: queue.SimpleQueue[SupportsReceipt | None] = queue.SimpleQueue()
-        self._judgments: queue.SimpleQueue[SupportsReceipt] = queue.SimpleQueue()
-        self._thread: Thread | None = None
-        # Serializes submit against the broken/closed transitions so a job
-        # can never slip in after the final drain and leave its receipt
-        # unresolved.
-        self._gate = Lock()
-        self._broken = False
-        self._closed = False
-
-    def submit(self, job: SupportsReceipt) -> bool:
-        """Queue one job for judgment; ``False`` means it will never run."""
-        with self._gate:
-            if self._closed or self._broken:
-                return False
-            if self._thread is None:
-                self._thread = Thread(target=self._run, name="computed-feedback-judging", daemon=True)
-                self._thread.start()
-            self._jobs.put(job)
-            return True
-
-    def poll(self) -> list[SupportsReceipt]:
-        """Drain every finished judgment without blocking."""
-        judgments: list[SupportsReceipt] = []
-        try:
-            while True:
-                judgments.append(self._judgments.get_nowait())
-        except queue.Empty:
-            return judgments
-
-    def close(self) -> None:
-        """Stop accepting work, give in-flight judgments a bounded grace, join."""
-        with self._gate:
-            if self._closed:
-                return
-            self._closed = True
-        if self._thread is None:
-            return
-        self._jobs.put(None)
-        self._thread.join(timeout=CLOSE_GRACE_S + 10.0)
-
-    # ------------------------------------------------------------ worker side
-
-    def _run(self) -> None:
-        try:
-            asyncio.run(self._main())
-        except Exception:
-            logger.exception("judging worker failed; queued jobs resolve untrainable")
-        finally:
-            with self._gate:
-                self._broken = True
-            while True:  # no submit can race this drain: _broken is set
-                try:
-                    job = self._jobs.get_nowait()
-                except queue.Empty:
-                    break
-                if job is not None:
-                    self._judgments.put(Failed(job.receipt))
-
-    async def _main(self) -> None:
-        # At most ``concurrency`` jobs judge at once; the semaphore lives on
-        # this loop, like the rest of the worker's state.
-        semaphore = asyncio.Semaphore(self._concurrency)
-        loop = asyncio.get_running_loop()
-        tasks: set[asyncio.Task] = set()
-        while True:
-            job = await asyncio.to_thread(self._jobs.get)
-            if job is None:
-                break
-            task = loop.create_task(self._judge_one(job, semaphore))
-            tasks.add(task)
-            task.add_done_callback(tasks.discard)
-        if tasks:
-            # Whatever the grace period does not finish, asyncio.run cancels
-            # on the way out — and each judgment still resolves its receipt
-            # from its finally.
-            await asyncio.wait(tasks, timeout=CLOSE_GRACE_S)
-
-    async def _judge_one(self, job: SupportsReceipt, semaphore: asyncio.Semaphore) -> None:
-        resolved = False
-        try:
-            async with semaphore:
-                self._judgments.put(await self._judge(job))
-            resolved = True
-        except Exception:
-            logger.exception("judgment for receipt %s failed; record resolves untrainable", job.receipt)
-        finally:
-            if not resolved:  # exception or teardown cancellation
-                self._judgments.put(Failed(job.receipt))
-
-
-class ComputedFeedbackProcessor(DataProcessor, ABC):
+class ComputedFeedbackProcessor(DataProcessor, JobRunner, ABC):
     """Record lifecycle and batch cycle for computed-feedback recipes.
 
     Every ingested receipt sits in exactly one state: tracked
@@ -201,7 +83,7 @@ class ComputedFeedbackProcessor(DataProcessor, ABC):
     arrival, not judgment arrival) batch: continual serving advances the
     version every step, and stale pending candidates would deadlock the FIFO.
 
-    Candidates wait in an :class:`~reef.train.experience.ExperienceBuffer` in
+    Candidates wait in an :class:`~reef.record2record.ExperienceBuffer` in
     the order that their judgments arrived. A ``StalenessCheck`` with the
     context's ``max_staleness`` drops candidates while no batch is out.
 
@@ -256,6 +138,10 @@ class ComputedFeedbackProcessor(DataProcessor, ABC):
         minutes. It carries the ``receipt`` of the record it judges; that
         is all the engine reads of it.
         """
+
+    async def run(self, job: SupportsReceipt) -> SupportsReceipt:
+        """Run one job on the worker: the recipe's ``judge``."""
+        return await self.judge(job)
 
     @abstractmethod
     def make_sample(self, record: AgentRecord, judgment: Any) -> TrajectoryItem | None:

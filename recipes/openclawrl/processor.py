@@ -45,8 +45,9 @@ from recipes.openclawrl.turns import (
 )
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.trajectories import source_record_id, trajectory_reward
+from reef.record2record import JudgingWorker
 from reef.train.processors.common import make_policy_trajectory
-from reef.train.processors.computed import ComputedFeedbackProcessor, JudgingWorker
+from reef.train.processors.computed import ComputedFeedbackProcessor
 from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem, policy_row_violation
 
 logger = logging.getLogger(__name__)
@@ -111,7 +112,7 @@ class OpenClawRLProcessor(ComputedFeedbackProcessor):
         record_file = str(config.get("prm_record_file", "") or "").strip()
         self._record_path = pathlib.Path(record_file) if record_file else None
         if worker is None and self._prm is not None:
-            worker = JudgingWorker(self.judge, concurrency=int(config.get("prm_concurrency", 8)))
+            worker = JudgingWorker(self, concurrency=int(config.get("prm_concurrency", 8)))
         super().__init__(context, worker=worker)
 
     # ------------------------------------------------ the recipe's data path

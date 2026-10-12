@@ -14,10 +14,10 @@ from recipes.openclawrl.sessions import SessionIndex
 from recipes.openclawrl.turns import TurnJudgment
 from reef.core import AgentRecord, RequestType
 from reef.core.trajectories import source_record_id, trajectory_reward
+from reef.record2record import JobRunner, JudgingWorker, SupportsReceipt
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.surface import Surface, WeightInferenceHooks, WeightLoader
 from reef.train.algos import StepScheduling
-from reef.train.processors.computed import JudgingWorker
 from reef.train.runtime_backend import RuntimeCandidateBackend
 from reef.train.slime_backend.reef_adapters.preparation import prepare_slime_step
 from reef.train.types import ProcessorContext, TrainingBatch
@@ -411,8 +411,12 @@ def test_rejected_submission_retires_the_turn() -> None:
 
 @pytest.mark.unit
 def test_broken_worker_rejects_submissions() -> None:
-    worker = JudgingWorker(object())  # the judge never runs: broken first
-    worker._broken = True
+    class NeverRuns(JobRunner):
+        async def run(self, job: SupportsReceipt) -> SupportsReceipt:
+            raise AssertionError("a broken worker runs no job")
+
+    worker = JudgingWorker(NeverRuns())  # broken first
+    worker.broken = True
     from recipes.openclawrl.turns import TurnJob
 
     job = TurnJob(

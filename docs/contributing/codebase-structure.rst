@@ -65,46 +65,49 @@ coordinate serving, evolution, and state. ``reef/service`` also imports
 Concrete integrations may depend on shared contracts; shared contracts never
 import a concrete integration.
 
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| Package              | Owns                                                     | Does not own                               |
-+======================+==========================================================+============================================+
-| ``reef/core/``       | shared value types, wire shapes, artifact                | storage, I/O, runtime behavior             |
-|                      | identity, root errors                                    |                                            |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/service/``    | HTTP routes, auth, streaming, process                    | training methods or domain logic           |
-|                      | lifecycle                                                | tied to aiohttp                            |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/scenario/``   | scenario binding, commit ordering,                       | training algorithms, repository            |
-|                      | recovery, and lifecycle                                  | implementations                            |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/recipe/``     | the contract a method implements, dotted                 | external cookbook methods                  |
-|                      | resolution, runtime binding, and built-in Reefine        |                                            |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/train/``      | the trainer loop, processor engines, batch               | HTTP endpoints, deployment                 |
-|                      | types, backend integrations                              | configuration parsing                      |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/runtime/``    | backend-neutral runtime contracts, scheduling,           | concrete inference and training            |
-|                      | weight synchronization and publication coordination      | integrations                               |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/inference/``  | concrete inference backends, native engine control,      | training algorithms and publication        |
-|                      | request adaptation and weight reception                  | decisions                                  |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/surface/``   | delivering a published artifact to the                   | proposing, evaluating, or                   |
-|                      | process or client that uses it                           | selecting updates                          |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/artifact/``  | artifact bytes, repositories,                            | commit policy or delivery                   |
-|                      | materialization, release heads                           | behavior                                   |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/harness/``    | harness descriptors, tree rendering,                     | recipe policy, the release chain           |
-|                      | episodes, trajectories                                   |                                            |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``recipes/``         | one method per package: recipe, processor, objective,    | shared machinery, or another method        |
-|                      | and its runnable examples                                |                                            |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``tests/``           | repository-level tests grouped by responsibility         | tests hidden inside an integration subtree |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``docker/``          | container and GPU environment setup                      | Python dependency declarations             |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| Package                 | Owns                                                     | Does not own                               |
++=========================+==========================================================+============================================+
+| ``reef/core/``          | shared value types, wire shapes, artifact                | storage, I/O, runtime behavior             |
+|                         | identity, root errors                                    |                                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/service/``       | HTTP routes, auth, streaming, process                    | training methods or domain logic           |
+|                         | lifecycle                                                | tied to aiohttp                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/scenario/``      | scenario binding, commit ordering,                       | training algorithms, repository            |
+|                         | recovery, and lifecycle                                  | implementations                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/recipe/``        | the contract a method implements, dotted                 | external cookbook methods                  |
+|                         | resolution, runtime binding, and built-in Reefine        |                                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/train/``         | the trainer loop, processor engines, batch               | HTTP endpoints, deployment                 |
+|                         | types, backend integrations                              | configuration parsing                      |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/record2record/`` | which recorded experience is used: eligibility           | processors, record storage, task           |
+|                         | checks, selection order, held units, the job worker      | generation                                 |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/runtime/``       | backend-neutral runtime contracts, scheduling,           | concrete inference and training            |
+|                         | weight synchronization and publication coordination      | integrations                               |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/inference/``     | concrete inference backends, native engine control,      | training algorithms and publication        |
+|                         | request adaptation and weight reception                  | decisions                                  |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/surface/``       | delivering a published artifact to the                   | proposing, evaluating, or                  |
+|                         | process or client that uses it                           | selecting updates                          |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/artifact/``      | artifact bytes, repositories,                            | commit policy or delivery                  |
+|                         | materialization, release heads                           | behavior                                   |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/harness/``       | harness descriptors, tree rendering,                     | recipe policy, the release chain           |
+|                         | episodes, trajectories                                   |                                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``recipes/``            | one method per package: recipe, processor, objective,    | shared machinery, or another method        |
+|                         | and its runnable examples                                |                                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``tests/``              | repository-level tests grouped by responsibility         | tests hidden inside an integration subtree |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``docker/``             | container and GPU environment setup                      | Python dependency declarations             |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
 
 
 Package import direction

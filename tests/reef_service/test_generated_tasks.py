@@ -36,8 +36,8 @@ from reef.record2dataset.generated_tasks import (
     TaskGroupObjective,
 )
 from reef.record2dataset.generated_tasks.processor import RoundJob, reported_task_name, rewards_of
+from reef.record2record import Failed, JobRunner, JudgingWorker, SupportsReceipt
 from reef.train.algos.registry import resolve_objective
-from reef.train.processors.computed import Failed, JudgingWorker, SupportsReceipt
 from reef.train.processors.reported import GroupDecision
 from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem, trajectory_groups
 
@@ -262,17 +262,21 @@ def generated(round_number: int, *indices: int, hint: bool = True) -> tuple[Gene
     )
 
 
+class Unbound(JobRunner):
+    """The runner of a test worker that runs rounds itself; the real worker thread never calls it."""
+
+    async def run(self, job: SupportsReceipt) -> SupportsReceipt:
+        raise RuntimeError("no processor bound")
+
+
 class InlineWorker(JudgingWorker):
     """Runs each round the moment it is submitted, on this thread, so a test reads the outcome right away."""
 
     def __init__(self) -> None:
-        super().__init__(self.unbound, concurrency=1)
+        super().__init__(Unbound(), concurrency=1)
         self.processor: GeneratedTaskProcessor | None = None
         self.submitted: list[SupportsReceipt] = []
         self.outcomes: list[SupportsReceipt] = []
-
-    async def unbound(self, job: SupportsReceipt) -> SupportsReceipt:
-        raise RuntimeError("no processor bound")
 
     def submit(self, job: SupportsReceipt) -> bool:
         self.submitted.append(job)
@@ -298,14 +302,11 @@ class DeferredWorker(JudgingWorker):
     """Takes a round the moment it is submitted and runs it on ``finish``; the outcome lands on the next poll."""
 
     def __init__(self) -> None:
-        super().__init__(self.unbound, concurrency=1)
+        super().__init__(Unbound(), concurrency=1)
         self.processor: GeneratedTaskProcessor | None = None
         self.submitted: list[RoundJob] = []
         self.waiting: list[RoundJob] = []
         self.finished: list[SupportsReceipt] = []
-
-    async def unbound(self, job: SupportsReceipt) -> SupportsReceipt:
-        raise RuntimeError("no processor bound")
 
     def submit(self, job: SupportsReceipt) -> bool:
         if not isinstance(job, RoundJob):

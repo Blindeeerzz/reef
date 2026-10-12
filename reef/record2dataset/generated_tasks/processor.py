@@ -38,7 +38,7 @@ from reef.core import AgentRecord
 from reef.core.tasks import GeneratedTask, TaskGenerationRequest, TaskGenerator, TaskPlayResult
 from reef.harness.client.tasks import TaskPlay
 from reef.record2dataset.client import DuplicateTask, Generator, HttpGenerator, TaskNameConflict
-from reef.train.processors.computed import Failed, JudgingWorker, SupportsReceipt
+from reef.record2record import Failed, JobRunner, JudgingWorker, SupportsReceipt
 from reef.train.processors.reported import GroupDecision, ReportContext, ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
@@ -107,7 +107,7 @@ class RoundOutcome(SupportsReceipt):
     error: str
 
 
-class GeneratedTaskProcessor(ReportedFeedbackProcessor):
+class GeneratedTaskProcessor(ReportedFeedbackProcessor, JobRunner):
     """Groups the training arm's episodes by task and runs the rounds of task generation that produce them."""
 
     output_schema = TrainingBatch
@@ -162,7 +162,7 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor):
         self.task_player = task_player
         self.worker = worker
         if self.worker is None and self.rounds > 0:
-            self.worker = JudgingWorker(self.run_round, concurrency=1)
+            self.worker = JudgingWorker(self, concurrency=1)
         if self.task_generator is not None:
             logger.info("scenario %r generates tasks with %s", self.scenario, type(self.task_generator).__name__)
         recorded = recorded_rounds(self.state_dir) if self.state_dir is not None else ()
@@ -288,6 +288,12 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor):
             self.landed_empty = False
         else:
             self.last_error = "the round worker is closed or broken; no further round runs"
+
+    async def run(self, job: SupportsReceipt) -> SupportsReceipt:
+        """Run one job on the worker: a task-generation round."""
+        if not isinstance(job, RoundJob):
+            raise TypeError(f"the round worker takes RoundJob, not {type(job).__name__}")
+        return await self.run_round(job)
 
     async def run_round(self, job: RoundJob) -> RoundOutcome:
         """The worker's job: generate, validate, play, and send the results back; then the round's summary."""

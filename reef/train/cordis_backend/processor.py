@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from reef.core import AgentRecord, RequestType
 from reef.core.training_request import TrainingRequest
 from reef.core.trajectories import make_trajectory
-from reef.train.experience import ExperienceBuffer, ExperienceUnit
+from reef.record2record import ExperienceBuffer, ExperienceUnit
 from reef.train.processors.base import DataProcessor
 from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, reported_task
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
