@@ -1,4 +1,4 @@
-"""Shared parts that data processors use to hold, order, and reserve training units.
+"""Shared parts that the processor engines use to hold, order, and reserve training units.
 
 Each processor makes all policy decisions. It decides which records become
 units, when a unit is ready, which selection policy orders the units, and what
@@ -14,8 +14,9 @@ a consumed unit releases. This package supplies only the shared parts:
   ``ArrivalOrder`` takes the oldest first; ``GroupKeyOrder`` takes ungrouped
   units, then groups by key.
 
-To change the selection, a processor overrides ``selection_policy``. To change
-the checks, a processor that supports them overrides ``eligibility_checks``.
+These parts are internal to the processor engines; they are not a recipe
+extension contract. Each engine builds its buffer with a fixed selection policy
+and fixed checks.
 """
 
 from reef.train.experience.buffer import ExperienceBuffer

@@ -1,13 +1,11 @@
-"""Experience buffer contracts: selection order, reservations, eligibility checks, and the processor hooks."""
+"""Experience buffer contracts: selection order, reservations, and eligibility checks."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from pathlib import Path
 
 import pytest
 
-from reef.core import AgentRecord, RequestType
 from reef.train.experience import (
     ArrivalOrder,
     EligibilityCheck,
@@ -18,17 +16,10 @@ from reef.train.experience import (
     SelectionPolicy,
     StalenessCheck,
 )
-from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor
-from reef.train.types import ProcessorContext, TaskItem, TrainDataItem, TrainingBatch
 
 
 def unit(unit_id: str, arrival_index: int, group_key: int | None = None) -> ExperienceUnit:
     return ExperienceUnit(unit_id=unit_id, arrival_index=arrival_index, group_key=group_key)
-
-
-class NewestFirst(SelectionPolicy):
-    def select(self, candidates: Sequence[ExperienceUnit], max_unit_count: int) -> tuple[ExperienceUnit, ...]:
-        return tuple(sorted(candidates, key=lambda candidate: -candidate.arrival_index)[:max_unit_count])
 
 
 class ForeignUnit(SelectionPolicy):
@@ -68,38 +59,6 @@ def test_a_reservation_refuses_a_negative_count_and_units_the_buffer_does_not_ho
     buffer.put(unit("held", buffer.next_arrival_index()))
     with pytest.raises(ValueError, match="does not hold"):
         buffer.reserve(1)
-
-
-def test_a_processor_changes_its_batch_order_through_selection_policy() -> None:
-    class NewestFirstProcessor(ReportedFeedbackProcessor):
-        def selection_policy(self) -> SelectionPolicy:
-            return NewestFirst()
-
-        def make_sample(self, context: ReportContext) -> TrainDataItem:
-            return TaskItem(Path(context.report.agent_record_id))
-
-        def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
-            return TrainingBatch(f"batch:{batch_number}", items)
-
-    processor = NewestFirstProcessor(ProcessorContext("math", {"batch_size": 2}))
-    for index in (1, 2, 3):
-        processor.ingest(
-            AgentRecord.create(
-                scenario="math", request_type=RequestType.INFERENCE, payload={}, agent_record_id=f"i{index}"
-            )
-        )
-        processor.ingest(
-            AgentRecord.create(
-                scenario="math",
-                request_type=RequestType.REPORT,
-                payload={"score": 1.0, "references": [f"i{index}"]},
-                agent_record_id=f"r{index}",
-            )
-        )
-    batch = processor.build_batch()
-    assert [str(item.task_path) for item in batch.items] == ["r3", "r2"]
-    assert processor.acknowledge(batch.batch_id) == {"r3", "r2", "i3", "i2"}
-    assert processor.status()["ready_units"] == 1
 
 
 def test_staleness_check_keeps_units_within_the_window_of_the_last_source_record() -> None:

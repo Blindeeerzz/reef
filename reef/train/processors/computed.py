@@ -41,14 +41,7 @@ from threading import Lock, Thread
 from typing import Any
 
 from reef.core.records_types import AgentRecord
-from reef.train.experience import (
-    ArrivalOrder,
-    EligibilityCheck,
-    ExperienceBuffer,
-    ExperienceUnit,
-    SelectionPolicy,
-    StalenessCheck,
-)
+from reef.train.experience import ExperienceBuffer, ExperienceUnit, StalenessCheck
 from reef.train.processors.base import DataProcessor
 from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem
 
@@ -208,9 +201,9 @@ class ComputedFeedbackProcessor(DataProcessor, ABC):
     arrival, not judgment arrival) batch: continual serving advances the
     version every step, and stale pending candidates would deadlock the FIFO.
 
-    Candidates wait in an :class:`~reef.train.experience.ExperienceBuffer`.
-    ``selection_policy`` sets their batch order, and ``eligibility_checks``
-    sets which candidates are dropped.
+    Candidates wait in an :class:`~reef.train.experience.ExperienceBuffer` in
+    the order that their judgments arrived. A ``StalenessCheck`` with the
+    context's ``max_staleness`` drops candidates while no batch is out.
 
     The line, in reading order: the recipe's ``ingest`` (catch_up →
     dispatch → track), its ``judge`` on the worker, then here —
@@ -228,7 +221,7 @@ class ComputedFeedbackProcessor(DataProcessor, ABC):
         self._tracked: dict[str, AgentRecord] = {}
         self._in_flight: dict[str, AgentRecord] = {}
         #: Candidates by receipt, and the reserved batch.
-        self.experience_buffer = ExperienceBuffer(self.selection_policy(), self.eligibility_checks())
+        self.experience_buffer = ExperienceBuffer(checks=(StalenessCheck(context.max_staleness),))
         #: Terminal receipts: retired or trained, both releasable and never
         #: distinguished by anything that reads them.
         self._terminal: set[str] = set()
@@ -247,24 +240,6 @@ class ComputedFeedbackProcessor(DataProcessor, ABC):
             "unreserved_candidates": len(self.experience_buffer) - len(self.experience_buffer.reserved_units()),
             "reserved_candidates": len(self.experience_buffer.reserved_units()),
         }
-
-    def selection_policy(self) -> SelectionPolicy:
-        """Return the policy that puts candidates in batch order.
-
-        The constructor calls this method one time. The default policy takes
-        candidates in the order that their judgments arrived.
-        """
-        return ArrivalOrder()
-
-    def eligibility_checks(self) -> tuple[EligibilityCheck, ...]:
-        """Return the checks that drop candidates when no batch is out.
-
-        The constructor calls this method one time. The default drops
-        candidates that are more than ``context.max_staleness`` versions behind
-        the newest candidate, by record arrival. With the default
-        ``max_staleness`` 0, only the newest version stays.
-        """
-        return (StalenessCheck(self.context.max_staleness),)
 
     @abstractmethod
     def ingest(self, item: AgentRecord) -> None:

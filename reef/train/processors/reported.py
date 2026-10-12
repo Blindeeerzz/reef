@@ -19,7 +19,7 @@ from typing import Any
 
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase, ReportValidationError, validate_report_payload
-from reef.train.experience import ArrivalOrder, ExperienceBuffer, ExperienceUnit, GroupKeyOrder, SelectionPolicy
+from reef.train.experience import ArrivalOrder, ExperienceBuffer, ExperienceUnit, GroupKeyOrder
 from reef.train.processors.base import DataProcessor
 from reef.train.processors.common import (
     make_multi_turn_policy_trajectory,
@@ -117,8 +117,8 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
     data failures propagate instead of silently dropping reports.
 
     The units for a batch are accepted singleton reports and ready groups. They
-    wait in an :class:`~reef.train.experience.ExperienceBuffer`.
-    ``selection_policy`` sets their batch order.
+    wait in an :class:`~reef.train.experience.ExperienceBuffer`, in arrival
+    order, or with ready groups in key order under ``ordered_groups``.
     """
 
     required_request_types = frozenset({RequestType.INFERENCE, RequestType.REPORT})
@@ -147,7 +147,7 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
         self._groups: dict[Hashable, dict[Hashable, _PendingReport]] = {}  # group key → slot → buffered report
         self._discarded_groups: set[Hashable] = set()
         # Singleton reports and ready groups, plus the reserved batch.
-        self.experience_buffer = ExperienceBuffer(self.selection_policy())
+        self.experience_buffer = ExperienceBuffer(GroupKeyOrder() if self.ordered_groups else ArrivalOrder())
         self._manual_limit_warned = False
 
     # ------------------------------------------------------- the recipe hooks
@@ -169,19 +169,10 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
     output_schema: type[TrainingBatch] = TrainingBatch
     #: Whether a terminal report owns its referenced sources outright.
     exclusive_sources: bool = False
-    #: Batch ready groups in group-key order instead of arrival order; read by the default ``selection_policy``.
+    #: Batch ready groups in group-key order instead of arrival order.
     ordered_groups: bool = False
     #: Units held in manual mode beyond this many batches are released, oldest first.
     manual_unit_cap_batches: int = 4
-
-    def selection_policy(self) -> SelectionPolicy:
-        """Return the policy that puts singleton reports and ready groups in batch order.
-
-        The constructor calls this method one time. The default policy takes
-        units in arrival order. If ``ordered_groups`` is true, it takes groups
-        in key order.
-        """
-        return GroupKeyOrder() if self.ordered_groups else ArrivalOrder()
 
     @abstractmethod
     def make_sample(self, context: ReportContext) -> TrainDataItem:
