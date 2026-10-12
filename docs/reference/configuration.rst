@@ -1212,7 +1212,7 @@ place it on the host that has Docker.
    generator.host | 127.0.0.1 | bind address
    generator.port | 8910 | bind port
    generator.work-dir | ``<tasks-root>/.play`` | where the task player keeps trials
-   generator.agent | terminus-2 | the Harbor agent the task player runs, with ``{model}``, ``{base_url}`` and ``{api_key}`` placeholders
+   generator.agent | terminus-2 | the Harbor agent the task player runs, with ``{model}``, ``{base_url}`` and ``{api_key}`` placeholders. ``import_path: reef.record2task.generator.terminus:VerifiedTerminus2`` in place of ``name: terminus-2`` also scores an episode whose agent filled its context or lost its terminal, which Terminus 2 leaves without a reward
    generator.agent-host | an address of the host the task container can reach, for an agent that runs inside the container
    generator.harbor | ``harbor`` on PATH | the harbor command line for the oracle check
    generator.concurrency | 2 | episodes in flight per play request
