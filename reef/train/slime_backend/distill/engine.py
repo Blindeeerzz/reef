@@ -62,12 +62,32 @@ def log_prob_entry(value: Any) -> tuple[float, int]:
     return float(probability), int(token)
 
 
-def parse_teacher_scores(result: Any, tokens: Sequence[int], response_length: int, top_k: int) -> dict[str, Any]:
+def teacher_vocab_size(model_path: str) -> int:
+    """The teacher's vocabulary size from its HF config, ``text_config`` for multimodal models.
+
+    This is the size SGLang serves. Checkpoints pad it past the tokenizer's last id,
+    and the student samples from the padded rows too.
+    """
+    with open(os.path.join(model_path, "config.json"), encoding="utf-8") as handle:
+        config = json.load(handle)
+    text_config = config.get("text_config", config) if isinstance(config, Mapping) else None
+    vocab_size = text_config.get("vocab_size") if isinstance(text_config, Mapping) else None
+    if not isinstance(vocab_size, int) or isinstance(vocab_size, bool) or vocab_size <= 0:
+        raise ValueError("teacher config.json must declare a positive vocab_size")
+    return vocab_size
+
+
+def parse_teacher_scores(
+    result: Any, tokens: Sequence[int], response_length: int, top_k: int, vocab_size: int
+) -> dict[str, Any]:
     """Validate SGLang's prefill alignment, including its leading unscored token.
 
     We request from the last prompt token. SGLang returns that token with
     probability None, then exactly R scored response tokens. Requiring the
     IDs and row counts prevents silently shifting or truncating supervision.
+    The one id SGLang does not echo is the last row of the vocabulary: its
+    multimodal placeholder clip reports that row as 0 while the log-prob stays
+    the row's own, so a recorded ``vocab_size - 1`` accepts a returned 0.
     """
     if not isinstance(result, Mapping) or not isinstance(result.get("meta_info"), Mapping):
         raise ValueError("teacher response is missing meta_info")
@@ -92,7 +112,7 @@ def parse_teacher_scores(result: Any, tokens: Sequence[int], response_length: in
     selected_ids, selected_probs, sampled_probs = [], [], []
     for token, sample, entries in zip(tokens[-response_length:], sampled[1:], top_rows[1:], strict=True):
         probability, actual_token = log_prob_entry(sample)
-        if actual_token != token:
+        if actual_token != token and not (actual_token == 0 and token == vocab_size - 1):
             raise ValueError("teacher probability token IDs do not match the recorded response")
         if not isinstance(entries, list) or len(entries) != top_k:
             raise ValueError("teacher top-K row has the wrong number of entries")
@@ -111,6 +131,7 @@ class EngineTeacher:
 
     def __init__(self, settings: DistillSettings) -> None:
         self.settings = settings
+        self.vocab_size = teacher_vocab_size(settings.teacher_model_path)
 
     def score(self, tokens: list[int], response_length: int) -> dict[str, Any]:
         """Score exact IDs with a prefill-only request; HTTP errors fail the batch."""
@@ -132,7 +153,7 @@ class EngineTeacher:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with opener.open(request, timeout=self.settings.teacher_timeout) as response:
             result = json.load(response)
-        return parse_teacher_scores(result, tokens, response_length, self.settings.top_k)
+        return parse_teacher_scores(result, tokens, response_length, self.settings.top_k, self.vocab_size)
 
     def validate_model(self) -> None:
         """Refuse an endpoint serving a different model than the validated tokenizer."""

@@ -12,7 +12,7 @@ import pytest
 from reef.core.errors import DeployConfigError
 from reef.service.deploy.service_config import ServiceConfig
 from reef.train.slime_backend.distill.algorithm import DistillAlgorithm, DistillSettings, settings_from_args
-from reef.train.slime_backend.distill.engine import EngineTeacher, parse_teacher_scores
+from reef.train.slime_backend.distill.engine import EngineTeacher, parse_teacher_scores, teacher_vocab_size
 from reef.train.slime_backend.launch import driver_arguments
 from reef.train.slime_backend.teacher_deployment import teacher_service
 
@@ -29,6 +29,12 @@ def settings(**kwargs):
     )
 
 
+@pytest.fixture
+def teacher_path(tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "qwen3", "vocab_size": 8}))
+    return str(tmp_path)
+
+
 def scores():
     return {
         "meta_info": {
@@ -39,10 +45,10 @@ def scores():
     }
 
 
-def test_request_scores_exact_ids_without_generation():
+def test_request_scores_exact_ids_without_generation(teacher_path):
     response = io.BytesIO(json.dumps(scores()).encode())
     with patch("urllib.request.OpenerDirector.open", return_value=response) as opened:
-        result = EngineTeacher(settings()).score([1, 2, 3, 4], 2)
+        result = EngineTeacher(settings(teacher_model_path=teacher_path)).score([1, 2, 3, 4], 2)
     body = json.loads(opened.call_args.args[0].data)
     assert body["input_ids"] == [1, 2, 3, 4]
     assert body["sampling_params"]["max_new_tokens"] == 0
@@ -70,19 +76,40 @@ def test_malformed_scores_fail_instead_of_training_on_misaligned_rows(change):
     else:
         meta["input_token_logprobs"][0][0] = -1
     with pytest.raises(ValueError):
-        parse_teacher_scores(result, [1, 2, 3, 4], 2, 2)
+        parse_teacher_scores(result, [1, 2, 3, 4], 2, 2, 8)
 
 
-def test_partial_teacher_failure_leaves_batch_unchanged():
+@pytest.mark.parametrize("vocab_size", [8, 9])
+def test_last_padded_vocabulary_row_is_accepted_only_as_sglang_reports_it(vocab_size):
+    # The student sampled row 7 of an 8-row vocabulary; SGLang echoes that row as id 0.
+    result = scores()
+    result["meta_info"]["input_token_logprobs"][2][1] = 0
+    if vocab_size == 8:
+        parsed = parse_teacher_scores(result, [1, 2, 3, 7], 2, 2, vocab_size)
+        assert parsed["distill_teacher_sampled_log_probs"] == [-0.3, -0.5]
+    else:
+        with pytest.raises(ValueError, match="token IDs"):
+            parse_teacher_scores(result, [1, 2, 3, 7], 2, 2, vocab_size)
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_vocabulary_size_comes_from_the_text_config(tmp_path, nested):
+    text_config = {"model_type": "qwen3_5_text", "vocab_size": 248320}
+    config = {"model_type": "qwen3_5", "text_config": text_config} if nested else text_config
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    assert teacher_vocab_size(str(tmp_path)) == 248320
+
+
+def test_partial_teacher_failure_leaves_batch_unchanged(teacher_path):
     batch = {"teacher_tokens": [[1, 2, 3, 4], [1, 2, 3, 4]], "response_lengths": [2, 2]}
     original = copy.deepcopy(batch)
-    good = parse_teacher_scores(scores(), [1, 2, 3, 4], 2, 2)
+    good = parse_teacher_scores(scores(), [1, 2, 3, 4], 2, 2, 8)
     with (
         patch.object(EngineTeacher, "validate_model"),
         patch.object(EngineTeacher, "score", side_effect=[good, TimeoutError("deadline")]),
         pytest.raises(TimeoutError),
     ):
-        EngineTeacher(settings()).prepare(batch)
+        EngineTeacher(settings(teacher_model_path=teacher_path)).prepare(batch)
     assert batch == original
 
 
@@ -104,7 +131,7 @@ def test_unsupported_teacher_modes_fail_early(overrides):
         settings(**overrides)
 
 
-def test_family_flags_binding_and_worker_settings_preserve_engine():
+def test_family_flags_binding_and_worker_settings_preserve_engine(teacher_path):
     family = DistillAlgorithm()
     family.loss_family = "toy"
     parsed, remainder = family.parse_driver_options(
@@ -114,24 +141,24 @@ def test_family_flags_binding_and_worker_settings_preserve_engine():
             "--toy-teacher-url",
             "http://teacher:30001",
             "--toy-teacher-model-path",
-            "/models/teacher",
+            teacher_path,
             "--toy-top-k",
             "2",
             "--lr",
             "0.01",
         ]
     )
-    assert parsed == settings()
+    assert parsed == settings(teacher_model_path=teacher_path)
     assert remainder == ["--lr", "0.01"]
     args = SimpleNamespace()
     family.apply_driver_options(args, parsed)
-    assert settings_from_args(args) == settings()
+    assert settings_from_args(args) == settings(teacher_model_path=teacher_path)
     bound = family.bind(parsed)
     assert bound is not family
     batch = {"teacher_tokens": [[1, 2, 3, 4]], "response_lengths": [2]}
     with (
         patch.object(EngineTeacher, "validate_model"),
-        patch.object(EngineTeacher, "score", return_value=parse_teacher_scores(scores(), [1, 2, 3, 4], 2, 2)),
+        patch.object(EngineTeacher, "score", return_value=parse_teacher_scores(scores(), [1, 2, 3, 4], 2, 2, 8)),
     ):
         assert bound.prepare_rollout(batch)["perf/distill_teacher_time"] >= 0
     assert batch["distill_teacher_sampled_log_probs"] == [[-0.3, -0.5]]
@@ -161,13 +188,13 @@ def test_managed_teacher_rejects_identity_and_placement_overrides(flag):
 
 
 @pytest.mark.parametrize("actual", ["/wrong/model", None])
-def test_endpoint_identity_must_match_validated_model(actual):
+def test_endpoint_identity_must_match_validated_model(actual, teacher_path):
     response = io.BytesIO(json.dumps({"model_path": actual}).encode())
     with (
         patch("urllib.request.OpenerDirector.open", return_value=response),
         pytest.raises(ValueError, match="model_path"),
     ):
-        EngineTeacher(settings()).validate_model()
+        EngineTeacher(settings(teacher_model_path=teacher_path)).validate_model()
 
 
 def test_teacher_public_config_resolves_to_owned_dependency(tmp_path):
@@ -242,7 +269,7 @@ def test_engine_columns_match_native_actor_columns_on_identical_logits(monkeypat
         values, ids = probabilities[position].topk(2)
         meta["input_token_logprobs"].append([probabilities[position, token].item(), token, None])
         meta["input_top_logprobs"].append([[v, i, None] for v, i in zip(values.tolist(), ids.tolist(), strict=True)])
-    parsed = parse_teacher_scores({"meta_info": meta}, tokens, 2, 2)
+    parsed = parse_teacher_scores({"meta_info": meta}, tokens, 2, 2, 6)
     _, native = gather_teacher_topk(
         logits,
         args=SimpleNamespace(rollout_temperature=1.0, distill_top_k=2),
