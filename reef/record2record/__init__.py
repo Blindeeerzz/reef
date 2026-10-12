@@ -1,4 +1,4 @@
-"""Record to record: the shared stage that decides which recorded experience is used, and in what order.
+"""Record to record: the shared stage that decides which records Reef uses, and in what order.
 
 Reef reuses recorded experience in two ways. It trains on records directly,
 and it turns records into runnable tasks (``reef.record2dataset``). Both need
@@ -11,15 +11,15 @@ the same decisions about each record. This package owns those decisions:
   ``StalenessCheck`` drops units that are more than ``max_staleness``
   versions behind the newest held unit.
 * ``SelectionPolicy``: the order in which units go into a batch.
-  ``ArrivalOrder`` takes the oldest first; ``GroupKeyOrder`` takes ungrouped
+  ``ArrivalOrder`` takes the oldest first. ``GroupKeyOrder`` takes ungrouped
   units, then groups by key.
-* ``JudgingWorker``: runs a ``JobRunner``'s asynchronous jobs off the trainer
-  thread; a job that never finishes resolves as ``Failed``.
+* ``JudgingWorker``: runs the asynchronous jobs of a ``JobRunner`` off the
+  trainer thread. A job that never finishes resolves as ``Failed``.
 
 The package depends only on ``reef.core``, ``reef.runtime.interfaces``, and
 ``reef.observability``, so record-to-task and the trainer can both use it.
-RFC #765 describes the stage; the processor engines still own grouping and
-judging until it is complete.
+RFC #765 describes the stage. Until the RFC is complete, the processor
+engines still own grouping and judging.
 """
 
 from reef.record2record.buffer import UnitBuffer

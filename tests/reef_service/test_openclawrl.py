@@ -415,7 +415,7 @@ def test_broken_worker_rejects_submissions() -> None:
         async def run(self, job: SupportsReceipt) -> SupportsReceipt:
             raise AssertionError("a broken worker runs no job")
 
-    worker = JudgingWorker(NeverRuns())  # broken first
+    worker = JudgingWorker(NeverRuns())  # The worker is broken before it gets a job.
     worker.broken = True
     from recipes.openclawrl.turns import TurnJob
 

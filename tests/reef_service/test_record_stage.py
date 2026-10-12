@@ -20,7 +20,7 @@ from .test_record_stage_batch_parity import CountingBackend, inference, instruct
 
 
 class RecordingProcessor(DataProcessor):
-    """Keeps every record it ingests; never becomes ready."""
+    """Keeps every record that it ingests. It never becomes ready."""
 
     supported_training_modes = frozenset({"auto", "manual", "hybrid"})
 

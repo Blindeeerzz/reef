@@ -263,7 +263,7 @@ def generated(round_number: int, *indices: int, hint: bool = True) -> tuple[Gene
 
 
 class Unbound(JobRunner):
-    """The runner of a test worker that runs rounds itself; the real worker thread never calls it."""
+    """The runner of a test worker that runs rounds itself. The real worker thread never calls it."""
 
     async def run(self, job: SupportsReceipt) -> SupportsReceipt:
         raise RuntimeError("no processor bound")

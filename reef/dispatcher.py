@@ -173,10 +173,10 @@ class Dispatcher:
     """
 
     storage_retry_seconds: float = 5.0
-    # Poll cadence while a trainer reports asynchronous derivation in flight
-    # (see Trainer.derivation_pending): its judgments land without a new
-    # record ever setting the ready event, so readiness is re-checked on a
-    # bounded interval instead of sleeping until the next accept.
+    # Poll interval while a trainer reports background work (see
+    # Trainer.derivation_pending). A judgment can make a batch ready, but no
+    # new record sets the ready event. Thus the worker checks readiness at
+    # this interval, and does not wait for the next accept.
     derivation_poll_seconds: float = 1.0
     # One drain, plus one more after reloading the scenario from durable state.
     drain_attempts: int = 2

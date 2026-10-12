@@ -141,7 +141,7 @@ class Trainer:
         self._scenario = scenario
         self._records = records
         self._processor = processor
-        # Records reach the processor through the record-to-record stage; the default passes each one through.
+        # Records go through the record-to-record stage to the processor. The default stage passes each one through.
         self._feed = TrainingFeed(PassThroughStage() if record_stage is None else record_stage, processor)
         self._candidate_backend = candidate_backend
         if candidate_backend is None:
@@ -303,7 +303,7 @@ class Trainer:
     def derivation_pending(self) -> bool:
         """Whether background work in the stage or the processor can make a batch ready without a new record.
 
-        The training worker reads this between drains, without the trainer lock; it must not block.
+        The training worker reads this between drains, without the trainer lock. It must not block.
         """
         return self._feed.derivation_pending()
 

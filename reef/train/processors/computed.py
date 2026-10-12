@@ -45,7 +45,7 @@ from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem
 
 logger = logging.getLogger(__name__)
 
-# The worker types moved to reef.record2record.worker; recipes keep importing them from here.
+# The worker types moved to reef.record2record.worker. Recipes can still import them from here.
 __all__ = [
     "CandidateUnit",
     "ComputedFeedbackProcessor",
@@ -83,7 +83,7 @@ class ComputedFeedbackProcessor(DataProcessor, JobRunner, ABC):
     arrival, not judgment arrival) batch: continual serving advances the
     version every step, and stale pending candidates would deadlock the FIFO.
 
-    Candidates wait in an :class:`~reef.record2record.UnitBuffer` in
+    Candidates wait in a :class:`~reef.record2record.UnitBuffer` in
     the order that their judgments arrived. A ``StalenessCheck`` with the
     context's ``max_staleness`` drops candidates while no batch is out.
 

@@ -117,7 +117,7 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
     data failures propagate instead of silently dropping reports.
 
     The units for a batch are accepted singleton reports and ready groups. They
-    wait in an :class:`~reef.record2record.UnitBuffer`, in arrival
+    wait in a :class:`~reef.record2record.UnitBuffer`, in arrival
     order, or with ready groups in key order under ``ordered_groups``.
     """
 

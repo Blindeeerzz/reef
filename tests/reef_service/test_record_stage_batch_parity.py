@@ -1,14 +1,14 @@
 """Batch goldens for the record-to-record migration (RFC #765).
 
 Each stream appends records to a record store and drives a ``Trainer`` through
-reserve, execute, prepare-commit, and commit, as the dispatcher does. The test
-records every committed batch: its id, a stable digest of each item, and the
-record ids that the commit consumed and released.
+reserve, execute, prepare-commit, and commit, as the dispatcher does. For each
+committed batch, the test saves the batch ID, a stable digest of each item, and
+the record IDs that the commit consumed and released.
 
-The goldens in ``data/record_stage_batch_goldens.json`` were recorded on the
-processor engines before grouping, judging, eligibility, and selection moved
-into the record-to-record stage. The migration must keep them unchanged. Change
-a golden only for an intended behavior change, and say why in the pull request.
+The goldens in ``data/record_stage_batch_goldens.json`` come from the processor
+engines before grouping, judging, eligibility, and selection move into the
+record-to-record stage. The migration must keep them unchanged. Change a golden
+only for an intended behavior change, and give the reason in the pull request.
 """
 
 from __future__ import annotations

@@ -17,10 +17,10 @@ CLOSE_GRACE_S = 5.0
 
 @dataclass(frozen=True)
 class SupportsReceipt:
-    """What the worker needs of a job and of its result alike: the receipt they concern.
+    """The receipt of a job or of its result. The worker reads only this field.
 
-    The caller defines both types. The worker only reads ``receipt``, so this
-    shared value is the base of both types and of :class:`Failed`.
+    The caller defines the job and result types. Both types, and
+    :class:`Failed`, use this class as their base.
     """
 
     receipt: str
@@ -40,14 +40,16 @@ class JobRunner(ABC):
 
 
 class JudgingWorker:
-    """Jobs off the trainer thread: jobs in, results out, both queues.
+    """Run jobs off the trainer thread: jobs go in one queue, results come out of another.
 
-    The worker owns only execution — one daemon thread, an event loop, and
-    the two queues; what a job *does* stays the runner's ``run`` coroutine,
-    handed in at construction. Faults degrade, never hang: a failed or
-    cancelled job resolves as :class:`Failed`, and a worker whose event loop
-    dies marks itself broken, resolves everything queued as :class:`Failed`,
-    and rejects new work so the caller retires records directly.
+    The worker owns only execution: one daemon thread, an event loop, and the
+    two queues. The ``JobRunner`` that the caller gives at construction
+    decides what a job does.
+
+    A fault never makes the worker hang. A failed or cancelled job resolves as
+    :class:`Failed`. If the event loop stops, the worker marks itself broken
+    and resolves each queued job as :class:`Failed`. It then rejects new jobs,
+    so the caller must retire their records directly.
     """
 
     def __init__(self, runner: JobRunner, *, concurrency: int = 8) -> None:
@@ -56,15 +58,15 @@ class JudgingWorker:
         self.jobs: queue.SimpleQueue[SupportsReceipt | None] = queue.SimpleQueue()
         self.results: queue.SimpleQueue[SupportsReceipt] = queue.SimpleQueue()
         self.thread: Thread | None = None
-        # Serializes submit against the broken/closed transitions so a job
-        # can never slip in after the final drain and leave its receipt
+        # Lock submit against the change to broken or closed. Thus no job can
+        # enter the queue after the final drain and leave its receipt
         # unresolved.
         self.gate = Lock()
         self.broken = False
         self.closed = False
 
     def submit(self, job: SupportsReceipt) -> bool:
-        """Queue one job; ``False`` means it will never run."""
+        """Queue one job. Return ``False`` if the job will never run."""
         with self.gate:
             if self.closed or self.broken:
                 return False
@@ -75,7 +77,7 @@ class JudgingWorker:
             return True
 
     def poll(self) -> list[SupportsReceipt]:
-        """Drain every finished result without blocking."""
+        """Return every finished result without blocking."""
         judgments: list[SupportsReceipt] = []
         try:
             while True:
@@ -84,7 +86,7 @@ class JudgingWorker:
             return judgments
 
     def close(self) -> None:
-        """Stop accepting work, give in-flight jobs a bounded grace, join."""
+        """Stop accepting jobs, give running jobs a limited time to finish, and join the thread."""
         with self.gate:
             if self.closed:
                 return
@@ -104,7 +106,8 @@ class JudgingWorker:
         finally:
             with self.gate:
                 self.broken = True
-            while True:  # no submit can race this drain: broken is set
+            # ``broken`` is set, so no submit can add a job during this drain.
+            while True:
                 try:
                     job = self.jobs.get_nowait()
                 except queue.Empty:
@@ -113,8 +116,8 @@ class JudgingWorker:
                     self.results.put(Failed(job.receipt))
 
     async def run_jobs(self) -> None:
-        # At most ``concurrency`` jobs run at once; the semaphore lives on
-        # this loop, like the rest of the worker's state.
+        # At most ``concurrency`` jobs run at the same time. The semaphore
+        # belongs to this event loop, as does the rest of the worker state.
         semaphore = asyncio.Semaphore(self.concurrency)
         loop = asyncio.get_running_loop()
         tasks: set[asyncio.Task] = set()
@@ -126,9 +129,9 @@ class JudgingWorker:
             tasks.add(task)
             task.add_done_callback(tasks.discard)
         if tasks:
-            # Whatever the grace period does not finish, asyncio.run cancels
-            # on the way out — and each job still resolves its receipt
-            # from its finally.
+            # asyncio.run cancels the jobs that do not finish in the grace
+            # period. Each cancelled job still resolves its receipt in its
+            # finally block.
             await asyncio.wait(tasks, timeout=CLOSE_GRACE_S)
 
     async def run_one(self, job: SupportsReceipt, semaphore: asyncio.Semaphore) -> None:
@@ -140,5 +143,5 @@ class JudgingWorker:
         except Exception:
             logger.exception("judgment for receipt %s failed; record resolves untrainable", job.receipt)
         finally:
-            if not resolved:  # exception or teardown cancellation
+            if not resolved:  # an exception, or a cancellation at shutdown
                 self.results.put(Failed(job.receipt))

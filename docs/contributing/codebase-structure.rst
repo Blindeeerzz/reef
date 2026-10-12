@@ -83,8 +83,9 @@ import a concrete integration.
 | ``reef/train/``         | the trainer loop, processor engines, batch               | HTTP endpoints, deployment                 |
 |                         | types, backend integrations                              | configuration parsing                      |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/record2record/`` | which recorded experience is used: eligibility           | processors, record storage, task           |
-|                         | checks, selection order, held units, the job worker      | generation                                 |
+| ``reef/record2record/`` | which records Reef uses and in what order:               | processors, record storage, task           |
+|                         | eligibility checks, selection order, held units, the job | generation                                 |
+|                         | worker                                                   |                                            |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
 | ``reef/runtime/``       | backend-neutral runtime contracts, scheduling,           | concrete inference and training            |
 |                         | weight synchronization and publication coordination      | integrations                               |
