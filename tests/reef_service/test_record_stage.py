@@ -255,7 +255,7 @@ def test_a_processor_that_defines_a_moved_grouping_hook_fails_at_import() -> Non
 @pytest.mark.unit
 def test_the_default_processor_assembly_keeps_nothing() -> None:
     processor = DataProcessor(ProcessorContext("s"))
-    record_set = SingleRecordSet(unit_id="i1", arrival_index=1, record=inference("i1"))
+    record_set = SingleRecordSet(set_id="i1", arrival_index=1, record=inference("i1"))
     assert processor.assemble(record_set) == SetAssembly(AssemblyStatus.INGESTED)
     processor.ingest(inference("i1"))
     assert not processor.ready() and not processor.releasable_record_ids()

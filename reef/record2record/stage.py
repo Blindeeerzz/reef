@@ -13,41 +13,10 @@ from typing import Any
 
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase
-from reef.record2record.buffer import UnitBuffer
 from reef.record2record.eligibility import EligibilityCheck
+from reef.record2record.pool import RecordSetPool
 from reef.record2record.selection import SelectionPolicy
-from reef.record2record.units import BatchUnit
-
-
-@dataclass(frozen=True, kw_only=True)
-class RecordSet(BatchUnit, ABC):
-    """Records that are used together, such as one record or a report with the records it references.
-
-    A record set is a ``BatchUnit``, so the buffer, the selection
-    policies, and the eligibility checks can hold and order it.
-    """
-
-    @abstractmethod
-    def record_ids(self) -> tuple[str, ...]:
-        """Return the IDs of the records in the set."""
-
-
-@dataclass(frozen=True, kw_only=True)
-class SingleRecordSet(RecordSet):
-    """One record by itself. ``unit_id`` is the record's ID."""
-
-    record: AgentRecord
-
-    def record_ids(self) -> tuple[str, ...]:
-        return (self.record.agent_record_id,)
-
-
-def record_sets(units: Sequence[BatchUnit]) -> tuple[RecordSet, ...]:
-    """Return pool units as record sets. A stage puts only record sets in its pool."""
-    selected = tuple(unit for unit in units if isinstance(unit, RecordSet))
-    if len(selected) != len(units):
-        raise TypeError("a record-to-record pool must hold only record sets")
-    return selected
+from reef.record2record.sets import RecordSet, SingleRecordSet
 
 
 class AssemblyStatus(Enum):
@@ -92,7 +61,7 @@ class Record2RecordStage(ABC):
     """
 
     def __init__(self, selection: SelectionPolicy | None = None, checks: Sequence[EligibilityCheck] = ()) -> None:
-        self.pool = UnitBuffer(selection, checks)
+        self.pool = RecordSetPool(selection, checks)
         #: Formed sets that ended after assembly. The assembler forgets their training data.
         self.ended_set_ids: set[Hashable] = set()
         #: Whether the processor handed out a batch that the trainer has not acknowledged or released yet.
@@ -144,17 +113,17 @@ class Record2RecordStage(ABC):
 
     def reserve(self, max_set_count: int) -> tuple[RecordSet, ...]:
         """Select at most ``max_set_count`` sets as the next batch, in batch order, and keep them reserved."""
-        return record_sets(self.pool.reserve(max_set_count))
+        return self.pool.reserve(max_set_count)
 
     def reserved_sets(self) -> tuple[RecordSet, ...]:
         """Return the reserved sets. Return an empty tuple if no batch is reserved."""
-        return record_sets(self.pool.reserved_units())
+        return self.pool.reserved_sets()
 
     def consume_reservation(self) -> frozenset[str]:
         """End the reserved sets as trained, and return the IDs of the records that they consumed."""
         if self.pool.reserved is None:
             raise RuntimeError("cannot consume a batch before sets are reserved")
-        return self.mark_trained(record_sets(self.pool.consume_reserved()))
+        return self.mark_trained(self.pool.consume_reserved())
 
     def mark_trained(self, trained_sets: tuple[RecordSet, ...]) -> frozenset[str]:
         """End sets that a committed batch trained on, and return the IDs of their consumed records."""
@@ -209,7 +178,7 @@ class PassThroughStage(Record2RecordStage):
     def ingest(self, record: AgentRecord) -> None:
         self.arrival_count += 1
         self.formed.append(
-            SingleRecordSet(unit_id=record.agent_record_id, arrival_index=self.arrival_count, record=record)
+            SingleRecordSet(set_id=record.agent_record_id, arrival_index=self.arrival_count, record=record)
         )
 
     def take_formed(self) -> tuple[RecordSet, ...]:
@@ -231,9 +200,7 @@ class InferenceStage(Record2RecordStage):
             self.terminal.add(record.agent_record_id)
             return
         self.formed.append(
-            SingleRecordSet(
-                unit_id=record.agent_record_id, arrival_index=self.pool.next_arrival_index(), record=record
-            )
+            SingleRecordSet(set_id=record.agent_record_id, arrival_index=self.pool.next_arrival_index(), record=record)
         )
 
     def take_formed(self) -> tuple[RecordSet, ...]:
@@ -246,7 +213,7 @@ class InferenceStage(Record2RecordStage):
     def mark_trained(self, trained_sets: tuple[RecordSet, ...]) -> frozenset[str]:
         consumed = frozenset(record_id for record_set in trained_sets for record_id in record_set.record_ids())
         self.terminal |= consumed
-        self.ended_set_ids.update(record_set.unit_id for record_set in trained_sets)
+        self.ended_set_ids.update(record_set.set_id for record_set in trained_sets)
         return consumed
 
     def releasable_record_ids(self) -> frozenset[str]:

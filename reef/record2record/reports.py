@@ -21,7 +21,8 @@ from typing import Any
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase, ReportValidationError, validate_report_payload
 from reef.record2record.selection import ArrivalOrder, GroupKeyOrder
-from reef.record2record.stage import Record2RecordStage, RecordSet, SetAssembly, record_sets
+from reef.record2record.sets import RecordSet
+from reef.record2record.stage import Record2RecordStage, SetAssembly
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,7 @@ class ReportGrouping:
 
 @dataclass(frozen=True, kw_only=True)
 class ReportCandidate(RecordSet):
-    """One valid report and its inference records, before the processor assembles it. ``unit_id`` is the report ID."""
+    """One valid report and its inference records, before the processor assembles it. ``set_id`` is the report ID."""
 
     context: ReportContext
 
@@ -252,7 +253,7 @@ class ReportStage(Record2RecordStage):
         self.reports[record.agent_record_id] = record
         self.candidate_count += 1
         self.formed.append(
-            ReportCandidate(unit_id=record.agent_record_id, arrival_index=self.candidate_count, context=context)
+            ReportCandidate(set_id=record.agent_record_id, arrival_index=self.candidate_count, context=context)
         )
 
     def take_formed(self) -> tuple[ReportCandidate, ...]:
@@ -281,7 +282,7 @@ class ReportStage(Record2RecordStage):
         entry = ReportEntry(order=self.pool.next_arrival_index(), context=context, group_key=key, slot=slot)
         if key is None:
             self.pool.put(
-                ReportSet(unit_id=("report", report.agent_record_id), arrival_index=entry.order, entries=(entry,))
+                ReportSet(set_id=("report", report.agent_record_id), arrival_index=entry.order, entries=(entry,))
             )
         else:
             self.groups.setdefault(key, {})[slot] = entry
@@ -319,7 +320,7 @@ class ReportStage(Record2RecordStage):
         decision = self.grouping.decide(key, tuple(entry.context for entry in entries))
         if decision is GroupDecision.READY:
             self.pool.put(
-                ReportSet(unit_id=("group", key), arrival_index=entries[0].order, group_key=key, entries=entries)
+                ReportSet(set_id=("group", key), arrival_index=entries[0].order, group_key=key, entries=entries)
             )
         elif decision is GroupDecision.INCOMPLETE:
             self.pool.remove(("group", key))
@@ -369,14 +370,14 @@ class ReportStage(Record2RecordStage):
                 self.limit_warned = True
 
     def ordered_sets(self) -> tuple[RecordSet, ...]:
-        return record_sets(self.pool.ordered_units())
+        return self.pool.ordered_sets()
 
     def release_set(self, report_set: ReportSet) -> None:
         """Release a whole held group or singleton and its sources."""
         if report_set.group_key is not None:
             self.discard_group(report_set.group_key)
         else:
-            self.pool.remove(report_set.unit_id)
+            self.pool.remove(report_set.set_id)
         for entry in report_set.entries:
             report = self.reports.pop(entry.report_id, None)
             if report is not None:

@@ -98,7 +98,7 @@ class RecordDrivenTraceProcessor(DataProcessor):
         selected = self.record_stage.reserve(self._batch_size)
         return TrainingBatch(
             f"{self.scenario}:harness_evolve:{batch_number}",
-            tuple(self.samples[str(record_set.unit_id)] for record_set in selected),
+            tuple(self.samples[str(record_set.set_id)] for record_set in selected),
         )
 
     def _consume_pending(self) -> frozenset[str]:

@@ -24,7 +24,8 @@ from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Faile
 from reef.core.records_types import AgentRecord
 from reef.record2record.eligibility import StalenessCheck
 from reef.record2record.selection import ArrivalOrder
-from reef.record2record.stage import Record2RecordStage, RecordSet, SetAssembly, record_sets
+from reef.record2record.sets import RecordSet
+from reef.record2record.stage import Record2RecordStage, SetAssembly
 
 
 class RecordJudging(BackgroundJobRunner, ABC):
@@ -58,7 +59,7 @@ class RecordJudging(BackgroundJobRunner, ABC):
 
 @dataclass(frozen=True, kw_only=True)
 class JudgedSet(RecordSet):
-    """One judged record. ``unit_id`` is the record's receipt; ``source_index`` is its arrival order."""
+    """One judged record. ``set_id`` is the record's receipt; ``source_index`` is its arrival order."""
 
     record: AgentRecord
     judgment: SupportsReceipt
@@ -131,7 +132,7 @@ class JudgingStage(Record2RecordStage):
                 continue
             self.formed.append(
                 JudgedSet(
-                    unit_id=judgment.receipt,
+                    set_id=judgment.receipt,
                     arrival_index=self.pool.next_arrival_index(),
                     source_index=self.arrival_order[judgment.receipt],
                     record=record,
@@ -147,10 +148,10 @@ class JudgingStage(Record2RecordStage):
         self.pool.put(replace(record_set, runtime_load_id=assembly.runtime_load_id))
         # The eligibility checks never run under a batch that is out: its samples reference held sets.
         if not self.batch_out:
-            dropped_sets = judged_sets(record_sets(tuple(dropped.unit for dropped in self.pool.drop_ineligible())))
+            dropped_sets = judged_sets(tuple(dropped.record_set for dropped in self.pool.drop_ineligible()))
             for judged_set in dropped_sets:
                 self.retire(judged_set.receipt)
-                self.ended_set_ids.add(judged_set.unit_id)
+                self.ended_set_ids.add(judged_set.set_id)
 
     def reject(self, record_set: RecordSet) -> None:
         self.retire(judged_sets((record_set,))[0].receipt)
@@ -210,7 +211,7 @@ class JudgingStage(Record2RecordStage):
     # ---------------------------------------------------------------- release
 
     def releasable_record_ids(self) -> frozenset[str]:
-        held = frozenset(judged_set.receipt for judged_set in judged_sets(record_sets(self.pool.units())))
+        held = frozenset(judged_set.receipt for judged_set in judged_sets(self.pool.sets()))
         protected = frozenset(self.tracked) | frozenset(self.in_flight) | held
         return frozenset(self.terminal) - protected
 
@@ -223,7 +224,7 @@ class JudgingStage(Record2RecordStage):
             self.arrival_order.pop(agent_record_id, None)
 
     def operational_metrics(self) -> Mapping[str, float | int]:
-        reserved = len(self.pool.reserved_units())
+        reserved = len(self.pool.reserved_sets())
         return {
             "tracked_records": len(self.tracked),
             "judging_records": len(self.in_flight),

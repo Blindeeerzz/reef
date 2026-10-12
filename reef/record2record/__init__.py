@@ -28,9 +28,9 @@ Stages:
 
 Components of the pool:
 
-* ``BatchUnit`` (``units.py``): the base of ``RecordSet``, with the fields
-  that the pool, the selection policies, and the eligibility checks read.
-* ``UnitBuffer`` (``buffer.py``): the held sets, and the reserved batch.
+* ``RecordSet`` (``sets.py``): the base of every set, with the fields that the
+  pool, the selection policies, and the eligibility checks read.
+* ``RecordSetPool`` (``pool.py``): the held sets, and the reserved batch.
 * ``SelectionPolicy`` (``selection.py``): the order in which sets go into a
   batch. ``ArrivalOrder`` takes the oldest first. ``GroupKeyOrder`` takes
   ungrouped sets, then groups by key.
@@ -43,9 +43,9 @@ The package depends only on ``reef.core``, ``reef.runtime.interfaces``,
 the trainer can both use it.
 """
 
-from reef.record2record.buffer import UnitBuffer
-from reef.record2record.eligibility import EligibilityCheck, IneligibleUnit, StalenessCheck
+from reef.record2record.eligibility import EligibilityCheck, IneligibleSet, StalenessCheck
 from reef.record2record.judging import JudgedSet, JudgingStage, RecordJudging, judged_sets
+from reef.record2record.pool import RecordSetPool
 from reef.record2record.reports import (
     GroupDecision,
     ReportCandidate,
@@ -59,26 +59,16 @@ from reef.record2record.reports import (
     report_sets,
 )
 from reef.record2record.selection import ArrivalOrder, GroupKeyOrder, SelectionPolicy
-from reef.record2record.stage import (
-    AssemblyStatus,
-    InferenceStage,
-    PassThroughStage,
-    Record2RecordStage,
-    RecordSet,
-    SetAssembly,
-    SingleRecordSet,
-    record_sets,
-)
-from reef.record2record.units import BatchUnit
+from reef.record2record.sets import RecordSet, SingleRecordSet
+from reef.record2record.stage import AssemblyStatus, InferenceStage, PassThroughStage, Record2RecordStage, SetAssembly
 
 __all__ = [
     "ArrivalOrder",
     "AssemblyStatus",
-    "BatchUnit",
     "EligibilityCheck",
     "GroupDecision",
     "GroupKeyOrder",
-    "IneligibleUnit",
+    "IneligibleSet",
     "InferenceStage",
     "JudgedSet",
     "JudgingStage",
@@ -86,6 +76,7 @@ __all__ = [
     "Record2RecordStage",
     "RecordJudging",
     "RecordSet",
+    "RecordSetPool",
     "ReportCandidate",
     "ReportContext",
     "ReportEntry",
@@ -96,10 +87,8 @@ __all__ = [
     "SetAssembly",
     "SingleRecordSet",
     "StalenessCheck",
-    "UnitBuffer",
     "accepted_by",
     "judged_sets",
-    "record_sets",
     "report_score",
     "report_sets",
 ]
