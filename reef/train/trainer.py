@@ -27,7 +27,7 @@ from reef.core.reports import ReportBase
 from reef.core.training_request import TrainingRequest
 from reef.observability import ExperimentLogger, NullExperimentLogger
 from reef.observability.operations import OperationMetrics
-from reef.record2record.stage import PassThroughStage, RecordStage
+from reef.record2record.stage import PassThroughStage, Record2RecordStage
 from reef.storage.records import RecordStore
 from reef.train.backend import CandidateBackend, PreparedStep, StepExecution
 from reef.train.evaluation.evaluators import BackendAlwaysSelectPlugin
@@ -97,7 +97,7 @@ class Trainer:
         experiment_logger: ExperimentLogger | None = None,
         training_mode: str = "auto",
         max_staleness: int = 0,
-        record_stage: RecordStage | None = None,
+        record_stage: Record2RecordStage | None = None,
     ) -> Trainer:
         if candidate_backend is None and candidate_evaluator is not None:
             raise ValueError("candidate evaluation requires a candidate backend")
@@ -136,7 +136,7 @@ class Trainer:
         candidate_backend: CandidateBackend | None,
         candidate_evaluator: CandidateEvaluationPlugin | None,
         state: Mapping[str, Any],
-        record_stage: RecordStage | None = None,
+        record_stage: Record2RecordStage | None = None,
     ) -> None:
         self._scenario = scenario
         self._records = records

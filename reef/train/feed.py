@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from reef.core.records_types import AgentRecord, RequestType
-from reef.record2record.stage import RecordStage
+from reef.record2record.stage import Record2RecordStage
 from reef.train.processors.base import DataProcessor
 
 
@@ -20,7 +20,7 @@ class TrainingFeed:
     metrics. The trainer calls the feed under its lock.
     """
 
-    def __init__(self, stage: RecordStage, processor: DataProcessor) -> None:
+    def __init__(self, stage: Record2RecordStage, processor: DataProcessor) -> None:
         self.stage = stage
         self.processor = processor
 

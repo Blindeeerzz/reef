@@ -10,7 +10,7 @@ from reef.core.records_types import AgentRecord
 from reef.record2record.sets import RecordSet, SingleRecordSet
 
 
-class RecordStage(ABC):
+class Record2RecordStage(ABC):
     """Turn records into record sets for one trainer, and own what the stage decides about each record.
 
     The trainer gives the stage every record that its processor accepts,
@@ -57,7 +57,7 @@ class RecordStage(ABC):
         return
 
 
-class PassThroughStage(RecordStage):
+class PassThroughStage(Record2RecordStage):
     """Hand each record to the processor by itself, in arrival order, and decide nothing."""
 
     def __init__(self) -> None:

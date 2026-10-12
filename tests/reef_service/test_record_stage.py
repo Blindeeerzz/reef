@@ -9,7 +9,7 @@ import pytest
 
 from reef.core import AgentRecord, RequestType
 from reef.record2record.sets import RecordSet, SingleRecordSet
-from reef.record2record.stage import PassThroughStage, RecordStage
+from reef.record2record.stage import PassThroughStage, Record2RecordStage
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.train import ProcessorContext, Trainer
 from reef.train.feed import TrainingFeed
@@ -37,7 +37,7 @@ class RecordingProcessor(DataProcessor):
         self.closed = True
 
 
-class WithholdingStage(RecordStage):
+class WithholdingStage(Record2RecordStage):
     """Passes records through, except records whose ID starts with ``drop``: it ends those itself."""
 
     def __init__(self) -> None:
@@ -75,7 +75,7 @@ class WithholdingStage(RecordStage):
             raise RuntimeError("stage close failed")
 
 
-def feed(stage: RecordStage) -> tuple[TrainingFeed, RecordingProcessor]:
+def feed(stage: Record2RecordStage) -> tuple[TrainingFeed, RecordingProcessor]:
     processor = RecordingProcessor(ProcessorContext("s", training_mode="hybrid"))
     return TrainingFeed(stage, processor), processor
 
