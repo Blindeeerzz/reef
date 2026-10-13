@@ -419,7 +419,7 @@ def test_the_first_look_for_a_batch_runs_round_zero_end_to_end(tmp_path: Path) -
         3,
     )
     assert not looked(p)
-    assert not p.derivation_pending(), "the inline worker finished before ready() returned"
+    assert not p.background_jobs_running(), "the inline worker finished before ready() returned"
     status = p.status()["task_generation"]
     assert (status["next"], status["completed"], status["tasks_generated"], status["tasks_played"]) == (1, 1, 3, 3)
 
@@ -512,7 +512,7 @@ def test_batches_trained_while_a_round_runs_count_toward_the_next_one(tmp_path: 
     task_generator = ScriptedGenerator([generated(0, 0, 1), generated(1, 0, 1)])
     p, _ = rounds(tmp_path, task_generator, worker=worker, batches_per_round=2)
     assert not p.ready() and [job.round_number for job in worker.submitted] == [0]
-    assert p.derivation_pending() and p.status()["task_generation"]["in_flight"] == 0
+    assert p.background_jobs_running() and p.status()["task_generation"]["in_flight"] == 0
     for batch in range(2):
         for task in (f"t-{batch}-0", f"t-{batch}-1"):
             played(p, task, 0, 1.0)
@@ -534,8 +534,7 @@ def test_a_dropped_batch_does_not_count_toward_the_next_round(tmp_path: Path) ->
         played(p, task, 0, 1.0)
         played(p, task, 1, 0.0)
     batch_id = p.build_batch().batch_id
-    p.dropped(batch_id)
-    p.acknowledge(batch_id)
+    p.acknowledge(batch_id, trained=False)
     worker.finish()
     assert not p.ready(), "round 0 lands; the dropped batch trained nothing"
     assert [job.round_number for job in worker.submitted] == [0]
@@ -615,10 +614,10 @@ def test_the_real_worker_runs_a_round_off_the_trainers_thread(tmp_path: Path) ->
     try:
         assert not p.ready()
         deadline = time.monotonic() + 10.0
-        while p.derivation_pending() and time.monotonic() < deadline:
+        while p.background_jobs_running() and time.monotonic() < deadline:
             time.sleep(0.02)
             p.ready()
-        assert not p.derivation_pending() and p.status()["task_generation"]["completed"] == 1
+        assert not p.background_jobs_running() and p.status()["task_generation"]["completed"] == 1
         assert (tmp_path / "state" / "tasks" / "round-00000.json").is_file()
     finally:
         p.close()

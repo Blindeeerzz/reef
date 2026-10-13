@@ -2470,3 +2470,42 @@ def test_a_surface_built_with_the_flat_keywords_serves_one_component() -> None:
     assert replaced.names == (HARNESS,) and replaced.components[HARNESS].files is tree
     with pytest.raises(ValueError, match="per component"):
         Surface(components={WEIGHTS: ComponentSurface(), HARNESS: ComponentSurface()}, files=tree)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("pending", [False, True])
+def test_recorded_release_survives_backend_completion_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dispatchers: _Dispatchers, pending: bool
+) -> None:
+    dispatcher, backends = dispatchers.open()
+    scenario = _scenario(dispatcher, 1)
+    backend = backends[HARNESS]
+    backend.hold_next = pending
+    original_head = scenario.current_artifact_ref()
+    result = scenario.prepare_training_step(HARNESS)
+    assert result is not None
+    trainer = scenario.trainer_for(HARNESS)
+    original_state = dict(trainer.state)
+
+    def fail_completion(state: Mapping[str, object]) -> None:
+        raise OSError("backend completion unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(backend, "commit_applied", fail_completion)
+        with pytest.raises(OSError, match="backend completion unavailable"):
+            scenario.commit(result, component=HARNESS)
+    (record,) = scenario.store.history()
+    expected_head = original_head if pending else record.artifact_ref
+    assert scenario.current_artifact_ref() == expected_head
+    assert scenario.scenario_step == 0
+    assert trainer.state == original_state
+    assert trainer.pending_batch is not None
+
+    scenario.commit(result, component=HARNESS)
+    assert scenario.store.history() == (record,)
+    assert scenario.current_artifact_ref() == expected_head
+    assert scenario.scenario_step == 1
+    assert trainer.state == result.state
+    assert trainer.pending_batch is None
+    assert backend.prepared == backend.evaluated == 1
+    assert scenario.repository.resolve(record.artifact_ref).local_path.is_dir()

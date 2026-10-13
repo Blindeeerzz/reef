@@ -1,7 +1,7 @@
 """The training thread's wait policy: when may it sleep forever?
 
 Regression suite for a dropped wire: #289 introduced
-``derivation_pending`` (now ``TrainingPipeline.derivation_pending``) so judgments landing asynchronously
+``TrainingPipeline.background_jobs_running`` so judgments landing asynchronously
 wake the training thread on a bounded poll, but the dispatcher-side
 polling was lost in a merge and never reached main — on a quiet workload
 a landed judgment sat unabsorbed until the next record happened to
@@ -50,7 +50,7 @@ def _bind(
     runtime=None,
     last_committed_step: dict | None = None,
 ) -> None:
-    pipeline = SimpleNamespace(derivation_pending=lambda: pending, training_mode="auto")
+    pipeline = SimpleNamespace(background_jobs_running=lambda: pending, training_mode="auto")
     trainer = SimpleNamespace(
         pipeline=pipeline,
         fail_pending_instruction=lambda error: False,
@@ -88,13 +88,13 @@ def test_quiet_processor_sleeps_until_the_next_accept() -> None:
     assert dispatcher._training_wait_timeout() is None
 
 
-def test_pending_derivation_polls_on_a_bounded_interval() -> None:
+def test_running_background_jobs_poll_on_a_bounded_interval() -> None:
     # The regression: judgments land on the worker without a new record
     # ever setting the ready event; sleeping forever here stalls training
     # on a quiet workload.
     dispatcher = _dispatcher()
     _bind(dispatcher, pending=True)
-    assert dispatcher._training_wait_timeout() == dispatcher.derivation_poll_seconds
+    assert dispatcher._training_wait_timeout() == dispatcher.background_job_poll_seconds
 
 
 def test_blocked_storage_keeps_the_tighter_cadence() -> None:
@@ -102,7 +102,7 @@ def test_blocked_storage_keeps_the_tighter_cadence() -> None:
     _bind(dispatcher, pending=True)
     dispatcher._training.storage_status = {"state": "blocked"}
     assert dispatcher._training_wait_timeout() == min(
-        dispatcher.storage_retry_seconds, dispatcher.derivation_poll_seconds
+        dispatcher.storage_retry_seconds, dispatcher.background_job_poll_seconds
     )
 
 
