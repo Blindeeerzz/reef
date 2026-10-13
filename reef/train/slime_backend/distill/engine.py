@@ -159,7 +159,7 @@ class EngineTeacher:
         """Refuse an endpoint serving a different model than the validated tokenizer."""
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with opener.open(
-            self.settings.teacher_url.rstrip("/") + "/get_model_info", timeout=self.settings.teacher_timeout
+            self.settings.teacher_url.rstrip("/") + "/model_info", timeout=self.settings.teacher_timeout
         ) as response:
             info = json.load(response)
         actual = info.get("model_path") if isinstance(info, Mapping) else None
