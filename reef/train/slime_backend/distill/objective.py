@@ -49,6 +49,7 @@ import torch.distributed as dist
 from torch.utils.checkpoint import checkpoint
 
 from reef.train.slime_backend.distill.algorithm import DIVERGENCES, DistillSettings, settings_from_args
+from reef.train.slime_backend.distill.engine import ENGINE_TEACHER_BATCH_KEYS
 from reef.train.slime_backend.score_centering import settings_from_args as centering_settings_from_args
 from reef.train.slime_backend.score_centering.term import score_centering_term
 from reef.train.slime_backend.vocab_parallel import (
@@ -492,8 +493,6 @@ def distill_actor_pre_train(actor: Any, rollout_data: dict[str, Any]) -> None:
     if not rollout_data.get("teacher_tokens"):
         raise ValueError("every distill sample must carry teacher_tokens")
     if actor.args.distill_teacher_url:
-        from reef.train.slime_backend.distill.algorithm import ENGINE_TEACHER_BATCH_KEYS
-
         if any(
             len(rollout_data.get(key, ())) != len(rollout_data["teacher_tokens"]) for key in ENGINE_TEACHER_BATCH_KEYS
         ):

@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from reef.inference.http import PROVIDER_APIS
+from reef.runtime.deployment import http_readiness_command
 from reef.runtime.executor.arguments import native_arguments
 from reef.service.deploy.config_utils import DeployConfigError
 from reef.service.deploy.service_config import ServiceConfig, service_config_from_mapping
@@ -94,17 +95,6 @@ INFERENCE_COMMANDS = {
         ),
     ),
 }
-
-
-def http_readiness_command(python: str, endpoint: str) -> list[str]:
-    """Check HTTP readiness without a shell or an optional HTTP client."""
-    return [
-        python,
-        "-c",
-        "import sys, urllib.request; "
-        "urllib.request.build_opener(urllib.request.ProxyHandler({})).open(sys.argv[1], timeout=5).close()",
-        endpoint,
-    ]
 
 
 def prepare_inference(config: dict[str, Any], settings: ServiceConfig) -> dict[str, Any]:

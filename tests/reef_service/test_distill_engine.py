@@ -1,4 +1,4 @@
-"""Independent teacher request, alignment, failure and launch contracts."""
+"""Teacher engine request, alignment, failure and launch contracts."""
 
 import copy
 import io
@@ -13,8 +13,7 @@ from reef.core.errors import DeployConfigError
 from reef.service.deploy.service_config import ServiceConfig
 from reef.train.slime_backend.distill.algorithm import DistillAlgorithm, DistillSettings, settings_from_args
 from reef.train.slime_backend.distill.engine import EngineTeacher, parse_teacher_scores, teacher_vocab_size
-from reef.train.slime_backend.launch import driver_arguments
-from reef.train.slime_backend.teacher_deployment import teacher_service
+from reef.train.slime_backend.launch import driver_arguments, teacher_service
 
 
 def settings(**kwargs):
@@ -35,6 +34,10 @@ def teacher_path(tmp_path):
     return str(tmp_path)
 
 
+def engine_teacher(model_path):
+    return EngineTeacher(url="http://teacher:30001", model_path=model_path, timeout_seconds=300.0, top_k=2)
+
+
 def scores():
     return {
         "meta_info": {
@@ -48,7 +51,7 @@ def scores():
 def test_request_scores_exact_ids_without_generation(teacher_path):
     response = io.BytesIO(json.dumps(scores()).encode())
     with patch("urllib.request.OpenerDirector.open", return_value=response) as opened:
-        result = EngineTeacher(settings(teacher_model_path=teacher_path)).score([1, 2, 3, 4], 2)
+        result = engine_teacher(teacher_path).score([1, 2, 3, 4], 2)
     body = json.loads(opened.call_args.args[0].data)
     assert body["input_ids"] == [1, 2, 3, 4]
     assert body["sampling_params"]["max_new_tokens"] == 0
@@ -109,7 +112,7 @@ def test_partial_teacher_failure_leaves_batch_unchanged(teacher_path):
         patch.object(EngineTeacher, "score", side_effect=[good, TimeoutError("deadline")]),
         pytest.raises(TimeoutError),
     ):
-        EngineTeacher(settings(teacher_model_path=teacher_path)).prepare(batch)
+        engine_teacher(teacher_path).prepare(batch)
     assert batch == original
 
 
@@ -194,7 +197,7 @@ def test_endpoint_identity_must_match_validated_model(actual, teacher_path):
         patch("urllib.request.OpenerDirector.open", return_value=response),
         pytest.raises(ValueError, match="model_path"),
     ):
-        EngineTeacher(settings(teacher_model_path=teacher_path)).validate_model()
+        engine_teacher(teacher_path).validate_model()
 
 
 def test_teacher_public_config_resolves_to_owned_dependency(tmp_path):
@@ -221,7 +224,7 @@ def test_teacher_public_config_resolves_to_owned_dependency(tmp_path):
 def test_unsupported_training_backend_rejects_teacher():
     from reef.service.deploy.training import assemble_training_services
 
-    with pytest.raises(DeployConfigError, match="independent teacher"):
+    with pytest.raises(DeployConfigError, match="teacher engine"):
         assemble_training_services(
             {
                 "reef": {

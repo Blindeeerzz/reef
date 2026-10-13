@@ -77,16 +77,16 @@ class ServiceConfig:
         metadata=config_metadata("Native inference engine options.", public_path=("inference", "options")),
     )
     teacher_model_path: str | None = config_option(
-        None, public_path=("teacher", "model_path"), help="Independent frozen SGLang teacher HF model or directory."
+        None, public_path=("teacher", "model_path"), help="Teacher engine HF model or directory; frozen SGLang."
     )
     teacher_num_gpus: int = config_option(
-        1, public_path=("teacher", "num_gpus"), help="Dedicated teacher GPUs, also its tensor parallel size."
+        1, public_path=("teacher", "num_gpus"), help="Teacher engine GPUs, also its tensor parallel size."
     )
     teacher_port: int = config_option(
-        30001, public_path=("teacher", "port"), help="Independent teacher's internal HTTP port."
+        30001, public_path=("teacher", "port"), help="Teacher engine's internal HTTP port."
     )
     teacher_timeout: float = config_option(
-        300.0, public_path=("teacher", "timeout"), help="Per-sample teacher scoring deadline in seconds."
+        300.0, public_path=("teacher", "timeout"), help="Deadline of one teacher engine scoring request in seconds."
     )
     teacher_options: Mapping[str, Any] = field(
         default_factory=dict,
