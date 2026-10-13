@@ -1027,5 +1027,5 @@ def test_opd_example_trains_an_adapter_against_the_teacher_engine(monkeypatch, c
     assert "--opd-teacher=separate" in flags
     assert "--opd-top-k=1" in flags
     assert "--rollout-temperature=1.0" in flags
-    assert "--megatron-lora-rank=32" in flags
+    assert "--megatron-lora-rank=128" in flags
     assert not any(flag.startswith("--opd-teacher-checkpoint") for flag in flags)
