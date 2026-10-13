@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, TypedDict, cast
 
 from recipes.gepa.method import Feedback
-from reef.evaluation.episodes import EpisodeScorer
+from reef.evaluation.harness import EpisodeScorer
 from reef.harness.episodes.run import EpisodeResult
 
 # The Pi release the retained record ran and the example still targets; run.py

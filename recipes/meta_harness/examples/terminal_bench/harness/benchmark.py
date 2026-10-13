@@ -7,7 +7,7 @@ import math
 import subprocess
 from pathlib import Path
 
-from reef.evaluation.episodes import EpisodeScorer
+from reef.evaluation.harness import EpisodeScorer
 from reef.harness import EpisodeResult
 
 MANIFEST = json.loads(Path(__file__).with_name("tasks.json").read_text(encoding="utf-8"))

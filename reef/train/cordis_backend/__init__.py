@@ -24,7 +24,7 @@ of the training loop.
 """
 
 from reef.harness.tree.mutations import Mutation, MutationError
-from reef.train.cordis_backend.backend import CordisBackend, HarnessCandidate
+from reef.train.cordis_backend.backend import CordisBackend
 from reef.train.cordis_backend.contracts import StepProgress
 from reef.train.cordis_backend.manifest import FailureManifest, FailureRecord
 from reef.train.cordis_backend.processor import InferenceTasks, TraceBatches, TraceRecord2Record, TraceTasks
@@ -34,7 +34,6 @@ __all__ = [
     "CordisBackend",
     "FailureManifest",
     "FailureRecord",
-    "HarnessCandidate",
     "InferenceTasks",
     "Mutation",
     "MutationError",

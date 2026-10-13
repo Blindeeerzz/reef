@@ -13,12 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from reef.evaluation.episodes import RECORD_TEXT_CAP, EpisodeEvaluationWorker
-from reef.evaluation.harness import ScoreComparisonPlugin
+from reef.evaluation.harness import EpisodeEvaluationWorker, ScoreComparisonPlugin
 from reef.harness.adapters import get_adapter
 from reef.harness.episodes.executor import LocalExecutor
 from reef.harness.episodes.model_binding import ModelBindings
 from reef.harness.episodes.run import EpisodeError, TrajectoryKeepError, run_episode
+from reef.harness.tree.nodes import RECORD_TEXT_CAP
 from reef.harness.tree.render import render_composition
 from reef.recipe import RecipeConfigError
 from reef.recipe.cordis import CordisRecipe
@@ -594,7 +594,7 @@ def test_agent_work_sums_the_tokens_each_agents_steps_reported() -> None:
     """Per agent, the usage on the assistant messages and compactions of a
     native trajectory adds up beside the turn and tool counters, and the
     side's sum keeps every counter."""
-    from reef.evaluation.episodes import agent_work, sum_agents
+    from reef.harness.episodes.trajectory import agent_work, sum_agents
 
     trajectory = [
         {"type": "session", "data": {"agent": "root"}},

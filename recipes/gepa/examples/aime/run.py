@@ -47,7 +47,7 @@ from recipes.gepa.recipe import scenario_archive_path
 from reef.artifact.memory import InMemoryRepositoryBackend
 from reef.core.records_types import RequestType
 from reef.dispatcher import Dispatcher
-from reef.evaluation.workers import evaluation_selection
+from reef.evaluation.harness import evaluation_selection
 from reef.harness import render_composition, run_episode
 from reef.harness.adapters import get_adapter
 from reef.harness.episodes.model_binding import ModelBinding

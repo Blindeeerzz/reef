@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from reef.artifact import LiveWeightArtifactRef
-from reef.evaluation.episodes import FailureObservation
+from reef.evaluation.harness import FailureObservation
 from reef.harness.adapters import get_adapter
 from reef.storage.commit_log import CommitLog
 from reef.storage.commits import CommitRecord

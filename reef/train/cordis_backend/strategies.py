@@ -4,7 +4,7 @@ Each is a :class:`~reef.core.plugins.ConfiguredPlugin`. A deployment names
 the class (``evolution.propose``, ``evolution.promote``), and the recipe
 builds it with ``from_config``; Python callers may pass a built instance. The
 episode scorer that ``evolution.evaluate`` names is
-:class:`reef.evaluation.episodes.EpisodeScorer`.
+:class:`reef.evaluation.harness.EpisodeScorer`.
 """
 
 from __future__ import annotations

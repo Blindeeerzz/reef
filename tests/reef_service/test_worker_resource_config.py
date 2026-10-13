@@ -2,7 +2,7 @@
 
 import pytest
 
-from reef.evaluation.workers import evaluation_executor_config, evaluation_selection
+from reef.evaluation.harness import evaluation_executor_config, evaluation_selection
 from reef.inference.http import InferenceProxyRuntime
 from reef.recipe.cordis import CordisRecipe
 from reef.recipe.errors import RecipeConfigError

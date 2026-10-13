@@ -21,7 +21,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from reef.evaluation.episodes import FailureObservation
+from reef.evaluation.harness import FailureObservation
 
 MANIFEST_KIND = "reef-failure-manifest/1"
 

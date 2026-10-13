@@ -34,8 +34,8 @@ from typing import Any
 from reef.core.evaluation import CandidateEvaluationPlugin, EvaluationResult, SelectionDecision, UpdateCandidate
 from reef.core.plugins import ConfiguredPlugin
 from reef.core.trajectories import recorded_payload
-from reef.evaluation.episodes import EpisodeScorer
 from reef.evaluation.evaluators import BackendEvaluateMixin
+from reef.evaluation.harness import EpisodeScorer
 from reef.harness.adapters.descriptor import AdapterDescriptor
 from reef.harness.episodes.executor import EpisodeExecutor
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindings

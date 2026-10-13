@@ -16,7 +16,7 @@ import pytest
 
 from recipes.gepa.archive import Archive
 from recipes.gepa.method import GEPAProposer, ScoreFeedback
-from reef.evaluation.episodes import EpisodeEvaluationWorker, EpisodeScorer
+from reef.evaluation.harness import EpisodeEvaluationWorker, EpisodeScorer
 from reef.harness.adapters import get_adapter
 from reef.harness.episodes.e2b import E2BExecutor
 from reef.harness.episodes.executor import EpisodeTimeout, build_executor

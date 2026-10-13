@@ -26,7 +26,7 @@ from typing import Any
 from reef.core.prompts import untrusted_text
 from reef.core.requirements import parse_requires
 from reef.core.trajectories import recorded_payload
-from reef.evaluation.episodes import EpisodeScorer, verifier_reward
+from reef.evaluation.harness import EpisodeScorer, verifier_reward
 from reef.harness.adapters import get_adapter
 from reef.harness.adapters.harness_facts import harness_facts
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindings

@@ -9,12 +9,10 @@ shared contracts live in ``reef.core.evaluation`` and are re-exported here.
 Runtimes import those contracts directly; this package owns the built-in
 evaluators, selectors, and configuration machinery.
 
-Harness candidates are measured by running evaluation episodes:
-
-- ``episodes`` runs and scores one episode (``EpisodeScorer``, ``EpisodeEvaluationWorker``).
-- ``workers`` runs episodes in a worker pool on the selected executor.
-- ``harness`` runs the evaluation tasks on the candidate and current trees and
-  holds the ``score_comparison`` and ``floor`` selection policies.
+``harness`` measures harness candidates by running evaluation episodes. It
+holds ``HarnessCandidate``, its evaluator ``HarnessEpisodeEvaluator``, the
+``EpisodeScorer`` contract that a method supplies, and the ``score_comparison``
+and ``floor`` selection policies.
 """
 
 from reef.core.evaluation import (

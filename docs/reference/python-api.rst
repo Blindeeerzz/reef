@@ -1067,7 +1067,7 @@ publish or revert.
 .. code:: python
 
    from reef.evaluation import SelectionPlugin
-   from reef.evaluation.episodes import EpisodeScorer
+   from reef.evaluation.harness import EpisodeScorer
    from reef.train.cordis_backend import Proposer
 
    class MyProposer(Proposer):

@@ -37,7 +37,7 @@ from reef.harness.adapters.descriptor import NO_TOKEN_API_KEY, DescriptorError, 
 from reef.harness.episodes.model_binding import ModelBinding
 from reef.harness.episodes.run import EpisodeResult
 from reef.harness.episodes.version_check import version_check_entry
-from reef.harness.tree.render import render_composition
+from reef.harness.tree.render import render_composition, tree_files
 from reef.inference.http import InferenceProxyRuntime
 from reef.recipe import Recipe
 from reef.recipe.cordis import CordisRecipe
@@ -55,7 +55,7 @@ from reef.service.install_script import (
 from reef.service.request_service import RequestService
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train.cordis_backend import Mutation
-from reef.train.cordis_backend.backend import tree_files
+
 from ._strategies import resolve_episode_scorer, resolve_proposer
 from .test_harness_evolve_processor import harness_stages
 

@@ -144,8 +144,7 @@ def test_unsupported_component_launcher_is_rejected():
 
 
 def test_scorer_can_declare_gpu_needs_without_yaml(monkeypatch):
-    from reef.evaluation.episodes import EpisodeScorer
-    from reef.evaluation.workers import evaluation_selection
+    from reef.evaluation.harness import EpisodeScorer, evaluation_selection
 
     class GPUScorer(EpisodeScorer):
         def execution_requirements(self):

@@ -17,7 +17,7 @@ import time
 import weakref
 from collections import deque
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -25,9 +25,14 @@ from reef.artifact.artifact import Artifact
 from reef.core.evaluation import EvaluationResult, SelectionDecision, UpdateCandidate
 from reef.core.requirements import MAX_REQUIRES, merge_requires, parse_requires
 from reef.core.trajectories import recorded_payload, source_record_id
-from reef.evaluation.episodes import EpisodeScorer, FailureObservation, clip_record_text
-from reef.evaluation.harness import EVALUATION_SIDES, HarnessEpisodeEvaluation
-from reef.evaluation.workers import evaluation_selection
+from reef.evaluation.harness import (
+    EVALUATION_SIDES,
+    EpisodeScorer,
+    FailureObservation,
+    HarnessCandidate,
+    HarnessEpisodeEvaluator,
+    evaluation_selection,
+)
 from reef.harness.adapters.descriptor import AdapterDescriptor
 from reef.harness.compose import Context
 from reef.harness.compose.loader import EntryOptions, Loader
@@ -41,17 +46,18 @@ from reef.harness.tree.mutations import (
     _load_error,
     _loader_entries,
     _native_refusal,
-    _nodes_from,
     admit_mutations,
+    nodes_from_entries,
 )
 from reef.harness.tree.nodes import (
     ALWAYS_REVIEWED_KINDS,
     NODE_KINDS,
     RESERVED_ENTRY_IDS,
+    clip_record_text,
     directive_shaped,
     secret_shaped,
 )
-from reef.harness.tree.render import render_composition
+from reef.harness.tree.render import render_composition, tree_files
 from reef.runtime.executor import Executor
 from reef.runtime.executor.config import ExecutorSettings
 from reef.train.backend import STALE_RESULT_POLICIES, CandidateBackend, PreparedStep, StaleResultPolicy
@@ -63,37 +69,11 @@ from reef.train.cordis_backend.proposals import Proposal, ProposalInbox
 from reef.train.cordis_backend.strategies import AgentHost, Promoter, Proposer, ProposerCalls, StepProposal
 from reef.train.types import TrainingBatch, TrainStepResult, TrajectoryItem, trajectories
 
-
-@dataclass(frozen=True, kw_only=True)
-class HarnessCandidate(UpdateCandidate):
-    """One rendered harness mutation compared with the current composition."""
-
-    candidate_files: Mapping[str, str]
-    current_files: Mapping[str, str]
-    candidate_entries: tuple[Mapping[str, Any], ...]
-    current_entries: tuple[Mapping[str, Any], ...]
-    mutations: tuple[Mutation, ...]
-    #: Seed tasks, then promoted traffic prompts; the seed set when promotion is off.
-    evaluation_tasks: tuple[str, ...] = ()
-    #: Legacy constructor keyword; new candidates use evaluation_tasks.
-    gate_tasks: tuple[str, ...] = ()
-    #: The candidate is the rollback target, so selecting it rolls back.
-    recheck: bool = False
-    #: The inbox proposal these mutations came from, settled with the result; None for the method's own.
-    proposal_id: str | None = None
-    #: The step record directory claimed for it at prepare time; ``None`` with the record off.
-    record_dir: Path | None = None
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-
-
 #: The record file of an attempt directory that re-evaluated a kept candidate; it names the first attempt.
 RECORD_REEVALUATION_FILE = "reevaluation.json"
 #: The record files one step writes under its claimed directory (``<step>``, a retried step ``<step>-<attempt>``).
 RECORD_PROPOSER_FILE = "proposer.json"
 RECORD_MUTATIONS_FILE = "mutations.json"
-RECORD_EPISODES_DIR = "episodes"
 
 
 def _bounded(value: Any) -> Any:
@@ -365,13 +345,6 @@ def _budgeted_bindings(models: ModelBindings, calls: _StepCalls) -> ModelBinding
     )
 
 
-def tree_files(descriptor: AdapterDescriptor, entries: Sequence[Mapping[str, Any]]) -> dict[str, str]:
-    """The entries list as the file ``files.tree`` names, verbatim; empty for an adapter that declares none."""
-    if descriptor.tree_path is None:
-        return {}
-    return {descriptor.tree_path: json.dumps([dict(entry) for entry in entries], indent=2, sort_keys=True) + "\n"}
-
-
 class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgressReader):
     """Settle one proposal per step through episode pairs.
 
@@ -444,10 +417,6 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         self._tasks = tasks
         self._models = models
         self._model_resolver = model_resolver
-        # The served binding renders into episodes only. It is resolved once
-        # here so an adapter without a matching model_binding refuses boot,
-        # not the first step.
-        self._binding_nodes = models.served.compose_nodes(descriptor)
         if (
             isinstance(episode_timeout_s, bool)
             or not isinstance(episode_timeout_s, (int, float))
@@ -547,20 +516,24 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         self._agent_executor = agent_executor
         self._agent_timeout_s = float(agent_timeout_s)
         self._agent_trial_timeout_s = float(agent_trial_timeout_s)
-        self._episode_evaluation = HarnessEpisodeEvaluation(
+        # The served binding renders into episodes only. The evaluator resolves
+        # it here, so an adapter without a matching model_binding refuses boot,
+        # not the first step.
+        self._episode_evaluator = HarnessEpisodeEvaluator(
             descriptor=descriptor,
             scorer=score_episode,
+            tasks=tasks,
+            models=models,
             binary=self._binary,
             episode_timeout_s=float(episode_timeout_s),
+            episode_repeats=episode_repeats,
             executor=self._executor,
             forbid_residue=forbid_residue,
-            models=models,
-            episode_repeats=episode_repeats,
             worker_selection=worker_selection,
             worker_requirements=worker_requirements,
         )
         # Direct Python users should close explicitly; GC is a fallback only.
-        self._pool_finalizer = weakref.finalize(self, self._episode_evaluation.close)
+        self._pool_finalizer = weakref.finalize(self, self._episode_evaluator.close)
 
     def close(self) -> None:
         self._pool_finalizer()
@@ -648,7 +621,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         entries = [dict(shipped[str(entry.get("id"))]) if entry.get("id") in stale else entry for entry in entries]
         entries.extend(dict(shipped[entry_id]) for entry_id in stale if entry_id not in present)
         published = {
-            **render_composition(_nodes_from(entries), self._descriptor),
+            **render_composition(nodes_from_entries(entries), self._descriptor),
             **tree_files(self._descriptor, entries),
         }
         artifact = Artifact.local(_write_rendered_files(published))
@@ -704,7 +677,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         samples = trajectories(batch)
         if self._model_resolver is not None:
             self._models = self._model_resolver.resolve()
-            self._binding_nodes = self._models.served.compose_nodes(self._descriptor)
+            self._episode_evaluator.use_models(self._models)
         steps = int(state.get("steps", 0)) + 1
         entries = state.get("entries")
         if entries is not None:
@@ -944,31 +917,14 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         )
 
     def evaluate(self, candidate: UpdateCandidate, *, sides: Sequence[str] = EVALUATION_SIDES) -> EvaluationResult:
-        """Run the evaluation episodes of the named ``sides`` and return their scores.
-
-        The default runs the candidate and the current tree as pairs. A policy
-        that evaluates the candidate alone (a floor) passes ``("candidate",)``: no
-        current episode runs, ``current_scores`` is empty and the other
-        ``current_*`` keys are absent, and ``evaluation_sides`` records the choice.
-        """
+        """Run the evaluation episodes of the named ``sides`` with :class:`HarnessEpisodeEvaluator`."""
         candidate = self._require_harness_candidate(candidate)
-        sides = tuple(sides)
-        if not sides or any(side not in EVALUATION_SIDES for side in sides):
-            raise ValueError(f"sides must name one or both of {EVALUATION_SIDES}, got {sides!r}")
-        # Episodes run against the tree plus the model binding. The binding
-        # is appended at render time and never enters the candidate's files,
-        # so the published artifact carries no endpoint or credential.
-        entries = {"candidate": candidate.candidate_entries, "current": candidate.current_entries}
-        files = {side: self._render_for_episode(entries[side]) for side in sides}
-        # An older candidate carries no evaluation_tasks and falls back to the seed set.
-        evaluation_tasks = candidate.evaluation_tasks or candidate.gate_tasks or self._tasks
-        episodes_dir = None if candidate.record_dir is None else candidate.record_dir / RECORD_EPISODES_DIR
         progress = self._step_progress
         if progress is not None:
             # The evaluation's size for the page; the pool answers all at once, so no per-episode count is kept.
-            episodes_total = self._episode_evaluation.episode_count(len(evaluation_tasks), len(sides))
+            episodes_total = self._episode_evaluator.episode_count(candidate, len(tuple(sides)))
             self._step_progress = replace(progress, phase="evaluating", episodes_total=episodes_total)
-        return self._episode_evaluation.evaluate(files, evaluation_tasks, episodes_dir=episodes_dir)
+        return self._episode_evaluator.evaluate(candidate, sides=sides)
 
     def settle_step(
         self,
@@ -1243,18 +1199,13 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             "adapter_version": self._descriptor.install.version if self._descriptor.install else None,
         }
 
-    def _render_for_episode(self, entries: Sequence[Mapping[str, Any]]) -> dict[str, str]:
-        """The tree plus the model binding, and the entries list beside them where the adapter carries one."""
-        files = render_composition((*_nodes_from(entries), *self._binding_nodes), self._descriptor)
-        return {**files, **tree_files(self._descriptor, entries)}
-
     def _nodes(self) -> tuple[tuple[str, Any], ...]:
         """The enabled composition in tree order, as (kind, config) pairs."""
-        return _nodes_from(self._entries())
+        return nodes_from_entries(self._entries())
 
     @staticmethod
     def _nodes_from(entries: Sequence[Mapping[str, Any]]) -> tuple[tuple[str, Any], ...]:
-        return _nodes_from(entries)
+        return nodes_from_entries(entries)
 
     def _entries(self) -> list[EntryOptions]:
         """Live entry options in tree order."""

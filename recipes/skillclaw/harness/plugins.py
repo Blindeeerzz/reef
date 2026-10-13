@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from reef.evaluation.episodes import EpisodeScorer
+from reef.evaluation.harness import EpisodeScorer
 from reef.harness.episodes.model_binding import ModelBindings
 from reef.harness.episodes.run import EpisodeResult
 from reef.harness.tree.mutations import Mutation

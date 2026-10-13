@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from reef.evaluation.episodes import EpisodeScorer
+from reef.evaluation.harness import EpisodeScorer, HarnessCandidate
 from reef.harness.adapters import get_adapter
 from reef.harness.episodes.model_binding import ModelBinding
 from reef.runtime.executor import Executor, ExecutorConfig, WorkerSpec
 from reef.runtime.executor.config import executor_settings
 from reef.runtime.executor.requirements import ExecutionRequirements
-from reef.train.cordis_backend.backend import CordisBackend, HarnessCandidate
+from reef.train.cordis_backend.backend import CordisBackend
 
 from ._strategies import resolve_proposer
 
@@ -79,7 +79,7 @@ def test_evolution_explicit_ray_places_scorer_on_declared_ray_gpu(tmp_path):
             mutations=(),
             record_dir=tmp_path / "first-record",
         )
-        assert backend._episode_evaluation.worker_selection.settings.backend == "ray"
+        assert backend._episode_evaluator.worker_selection.settings.backend == "ray"
         result = backend.evaluate(candidate)
         assert result.metrics["candidate_scores"] == (1.0,)
         assert result.metrics["current_scores"] == (1.0,)

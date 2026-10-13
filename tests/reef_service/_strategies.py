@@ -8,7 +8,7 @@ when its signature names it (or takes ``**kwargs``), and the function declares
 
 import inspect
 
-from reef.evaluation.episodes import EpisodeScorer
+from reef.evaluation.harness import EpisodeScorer
 from reef.train.cordis_backend.strategies import Proposer
 
 

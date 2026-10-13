@@ -32,13 +32,14 @@ from reef_service.test_native_serve import (
     _wait,
 )
 
-from reef.evaluation.episodes import EpisodeEvaluationWorker, stage_path
+from reef.evaluation.harness import EpisodeEvaluationWorker
 from reef.harness.adapters import get_adapter
 from reef.harness.compose import Context, FiberState
 from reef.harness.compose.loader import Loader
 from reef.harness.episodes.executor import LocalExecutor
 from reef.harness.episodes.model_binding import ModelBinding
 from reef.harness.episodes.run import EpisodeResult
+from reef.harness.episodes.trajectory import stage_path
 from reef.harness.runners.native import LoadError, LoopModule, load_loop, run_loop, serve
 from reef.harness.runners.native.enforce import ToolFailed
 from reef.harness.runners.native.graph import LOOP_LOG_CHARS, TRANSITIONS_PER_STEP
@@ -54,9 +55,8 @@ from reef.harness.tree.nodes import (
     NODE_KINDS,
     validate_native_loop,
 )
-from reef.harness.tree.render import RenderError, render_composition, render_native_module
+from reef.harness.tree.render import RenderError, render_composition, render_native_module, tree_files
 from reef.train.cordis_backend import CordisBackend, Mutation
-from reef.train.cordis_backend.backend import tree_files
 
 from ._strategies import resolve_episode_scorer, resolve_proposer
 

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from reef.core.tasks import primary_reward
-from reef.evaluation.episodes import EpisodeScorer, VerifierRewardScorer, verifier_reward
+from reef.evaluation.harness import EpisodeScorer, VerifierRewardScorer, verifier_reward
 from reef.harness.episodes.run import EpisodeResult
 from reef.harness.runners.terminus.runner import trial_record
 
@@ -80,7 +80,7 @@ def test_an_older_row_without_the_rewards_mapping_still_scores() -> None:
 
 
 def test_the_scorer_resolves_from_its_class_reference() -> None:
-    scorer = EpisodeScorer.from_setting("reef.evaluation.episodes:VerifierRewardScorer", setting="evolution.evaluate")
+    scorer = EpisodeScorer.from_setting("reef.evaluation.harness:VerifierRewardScorer", setting="evolution.evaluate")
     assert isinstance(scorer, VerifierRewardScorer)
     assert scorer.score(TASK, episode(verifier({"reward": 0.5}))) == 0.5
 
