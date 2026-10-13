@@ -50,11 +50,9 @@ def _bind(
     runtime=None,
     last_committed_step: dict | None = None,
 ) -> None:
-    pipeline = SimpleNamespace(derivation_pending=lambda: pending)
+    pipeline = SimpleNamespace(derivation_pending=lambda: pending, training_mode="auto")
     trainer = SimpleNamespace(
         pipeline=pipeline,
-        derivation_pending=pipeline.derivation_pending,
-        training_mode="auto",
         fail_pending_instruction=lambda error: False,
         instruction_failures=dict,
         batch_ready=lambda: batch_ready,

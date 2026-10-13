@@ -428,7 +428,7 @@ class Dispatcher:
                 "scenario": scenario,
                 # The key keeps its name for callers; the value names the recipe's task-to-batch stage.
                 "processor": type(pipeline.task2batch).__name__,
-                "training_mode": current.trainer.training_mode,
+                "training_mode": current.trainer.pipeline.training_mode,
                 "status": dict(current.trainer.pipeline_status()),
                 "required_request_types": sorted(rt.value for rt in pipeline.required_request_types),
             }
@@ -1113,7 +1113,9 @@ class Dispatcher:
         timeout: float | None = self.storage_retry_seconds if self._training.storage_status is not None else None
         for name in self._training_scenario_names():
             current = self._registry.get_optional(name)
-            if current is not None and any(bound.trainer.derivation_pending() for bound in current.component_trainers):
+            if current is not None and any(
+                bound.trainer.pipeline.derivation_pending() for bound in current.component_trainers
+            ):
                 timeout = (
                     self.derivation_poll_seconds if timeout is None else min(timeout, self.derivation_poll_seconds)
                 )
@@ -1432,7 +1434,7 @@ class Dispatcher:
             "current_runtime_load_id": (runtime.current_runtime_load_id() if runtime is not None else None),
             "checkpoint_storage": storage_status,
             "batch_ready": batch_ready,
-            "training_mode": stepping_trainer.training_mode,
+            "training_mode": stepping_trainer.pipeline.training_mode,
             "processor": processor,
             "inference_admission": runtime.inference_admission_status if runtime is not None else None,
         }
@@ -1449,7 +1451,7 @@ class Dispatcher:
                 last = current.last_commit_for(bound.component)
                 components[str(bound.component)] = {
                     "batch_ready": bound.trainer.batch_ready(),
-                    "training_mode": bound.trainer.training_mode,
+                    "training_mode": bound.trainer.pipeline.training_mode,
                     "processor": dict(
                         stepping_pipeline_status
                         if bound.trainer is stepping_trainer

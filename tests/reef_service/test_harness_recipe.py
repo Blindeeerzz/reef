@@ -206,7 +206,7 @@ def test_build_returns_a_trainer_over_the_evolution_backend(tmp_path: Path) -> N
     built = recipe(tmp_path, lambda nodes, samples, model: None)
     trainer = built.build("demo", SQLiteRecordStore())
     assert isinstance(trainer, Trainer)
-    assert trainer.report_type is ScoredRolloutReport
+    assert trainer.pipeline.context.report_type is ScoredRolloutReport
 
 
 # -- mutation shape validation -------------------------------------------

@@ -118,7 +118,7 @@ def test_concrete_recipe_builds_its_processor_objective_and_report_type(
     else:
         assert isinstance(trainer.candidate_backend, RuntimeCandidateBackend)
         assert trainer.candidate_backend.objective == objective
-    assert trainer.report_type is report_type
+    assert trainer.pipeline.context.report_type is report_type
 
 
 def test_build_rejects_an_unknown_objective_before_any_training_step() -> None:

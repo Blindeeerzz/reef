@@ -183,7 +183,7 @@ class Trainer:
                 max(0.0, time.time() - oldest[0][1].created_at) if oldest else 0.0
             )
             values["training/reserved_batches"] = int(self._pending is not None)
-            values["training/auto_enabled"] = int(self.training_mode in {"auto", "hybrid"})
+            values["training/auto_enabled"] = int(self._pipeline.training_mode in {"auto", "hybrid"})
             pipeline_metrics = {**self._pipeline.status(), **self._pipeline.operational_metrics()}
             for name, value in pipeline_metrics.items():
                 if isinstance(value, (int, float)) and math.isfinite(value):
@@ -196,19 +196,10 @@ class Trainer:
     def scenario(self) -> str:
         return self._scenario
 
-    @property
-    def training_mode(self) -> str:
-        """The mode selected for subsequent batches."""
-        return self._pipeline.training_mode
-
     def set_training_mode(self, training_mode: str) -> None:
         """Serialize mode selection with record ingestion and batch reservation."""
         with self._lock:
             self._pipeline.set_training_mode(training_mode)
-
-    def supports_training_mode(self, training_mode: str) -> bool:
-        """Whether the pipeline can run in ``training_mode``."""
-        return training_mode in self._pipeline.supported_training_modes
 
     def pending_instructions(self) -> int:
         """Instructions accepted and not yet consumed: the ones the pipeline buffers plus those unread in storage."""
@@ -241,11 +232,6 @@ class Trainer:
     @property
     def pipeline(self) -> TrainingPipeline:
         return self._pipeline
-
-    @property
-    def report_type(self) -> type[ReportBase] | None:
-        """The report type selected by the recipe that built this trainer."""
-        return self._pipeline.context.report_type
 
     def admit_reports_of(self, report_type: type[ReportBase] | None) -> None:
         """Name the contract the scenario's ingress admits, when several trainers share one scenario."""
@@ -293,13 +279,6 @@ class Trainer:
         """Whether a reserved or buildable batch is waiting on the training thread."""
         with self._lock:
             return self._pending is not None or self._pipeline.ready()
-
-    def derivation_pending(self) -> bool:
-        """Whether background work in the stage or the pipeline can make a batch ready without a new record.
-
-        The training worker reads this between drains, without the trainer lock. It must not block.
-        """
-        return self._pipeline.derivation_pending()
 
     def pipeline_status(self) -> Mapping[str, Any]:
         """Return caller-visible pipeline state under the pipeline's lock."""

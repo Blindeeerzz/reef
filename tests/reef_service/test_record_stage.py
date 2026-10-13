@@ -233,9 +233,9 @@ def test_the_trainer_reports_the_stages_background_work() -> None:
     trainer = Trainer.build("s", SQLiteRecordStore(), pipeline_factory=RecordingPipeline)
     processor = trainer.pipeline
     assert isinstance(processor, RecordingPipeline)
-    assert not trainer.derivation_pending()
+    assert not trainer.pipeline.derivation_pending()
     processor.stage.pending = True
-    assert trainer.derivation_pending()
+    assert trainer.pipeline.derivation_pending()
 
 
 @pytest.mark.unit

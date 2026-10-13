@@ -1178,7 +1178,7 @@ def test_deployment_yaml_names_directories_that_exist_and_boots_its_named_recipe
     assert built.training_mode == "hybrid"
     records = SQLiteRecordStore()
     trainer = replace(built, binary=str(tmp_path / "fake-pi")).build("demo", records)
-    assert trainer.training_mode == "hybrid"
+    assert trainer.pipeline.training_mode == "hybrid"
     trainer.close()
     records.close()
 

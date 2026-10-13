@@ -609,7 +609,7 @@ def test_components_with_different_report_contracts_admit_what_any_of_them_accep
         True,
         True,
     ]
-    assert trainers[0].trainer.report_type is ScoredRolloutReport
+    assert trainers[0].trainer.pipeline.context.report_type is ScoredRolloutReport
 
 
 @pytest.mark.unit
@@ -1229,8 +1229,8 @@ def test_a_component_without_a_step_does_not_hold_the_training_mode(tmp_path: Pa
         assert scenario is not None
         assert dispatcher.set_training_mode("agent", "hybrid") == {"scenario": "agent", "training_mode": "hybrid"}
         assert scenario.training_mode == "hybrid"
-        assert scenario.trainer_for("harness").training_mode == "hybrid"
-        assert scenario.trainer_for("config").training_mode == "auto"
+        assert scenario.trainer_for("harness").pipeline.training_mode == "hybrid"
+        assert scenario.trainer_for("config").pipeline.training_mode == "auto"
     finally:
         dispatcher.close()
 
@@ -1331,8 +1331,8 @@ def test_a_composite_mode_is_every_components_mode_and_a_stepless_component_runs
         scenario = dispatcher.get_or_create_scenario("agent")
         assert scenario is not None
         assert scenario.training_mode == "hybrid"
-        assert scenario.trainer_for("harness").training_mode == "hybrid"
-        assert scenario.trainer_for("config").training_mode == "auto"
+        assert scenario.trainer_for("harness").pipeline.training_mode == "hybrid"
+        assert scenario.trainer_for("config").pipeline.training_mode == "auto"
     finally:
         dispatcher.close()
 

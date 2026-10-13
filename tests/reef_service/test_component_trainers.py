@@ -1666,7 +1666,7 @@ def test_training_mode_switches_every_trainer_or_none(dispatchers: _Dispatchers)
     scenario = _scenario(dispatcher)
     with pytest.raises(NotImplementedError, match=r"harness \(ThresholdBatches\)"):
         scenario.set_training_mode("hybrid")
-    assert [bound.trainer.training_mode for bound in scenario.component_trainers] == ["auto", "auto"]
+    assert [bound.trainer.pipeline.training_mode for bound in scenario.component_trainers] == ["auto", "auto"]
     with pytest.raises(ValueError, match="training_mode must be"):
         scenario.set_training_mode("bogus")
 

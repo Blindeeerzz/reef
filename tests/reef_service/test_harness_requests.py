@@ -91,7 +91,7 @@ def test_harness_command_switches_to_manual_and_commits_native_request(tmp_path,
             assert not (Path(scenario.trainer.candidate_backend.proposals.directory) / "requests").exists()
             response = await client.post("/reef/scenarios/ask-scenario/update", json={"training_mode": "auto"})
             assert response.status == 200
-            assert scenario.trainer.training_mode == "auto"
+            assert scenario.trainer.pipeline.training_mode == "auto"
         finally:
             await client.close()
 

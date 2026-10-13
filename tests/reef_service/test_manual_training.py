@@ -519,7 +519,7 @@ def test_switch_during_reserved_batch_keeps_original_acknowledgement(mode, dispa
         processor = trainer.pipeline
         trainer.set_training_mode(target)
         assert trainer.pipeline is processor
-        assert trainer.training_mode == target
+        assert trainer.pipeline.training_mode == target
         assert trainer.pending_batch is original
         if dispatched:
             assert trainer.reserve_training_batch() is original
@@ -588,10 +588,10 @@ def test_http_training_mode_updates_only_existing_supported_processors(tmp_path,
                 assert response.status == (200 if reads_requests else 501)
                 if reads_requests:
                     assert await response.json() == {"scenario": "s", "training_mode": mode}
-                assert scenario.trainer.training_mode == (mode if reads_requests else "auto")
+                assert scenario.trainer.pipeline.training_mode == (mode if reads_requests else "auto")
                 assert scenario.trainer.pipeline is processor
                 status = await (await client.get("/reef/status")).json()
-                assert status["scenarios"]["s"]["training_mode"] == scenario.trainer.training_mode
+                assert status["scenarios"]["s"]["training_mode"] == scenario.trainer.pipeline.training_mode
             for invalid in (
                 {},
                 {"training_mode": "bad"},
@@ -608,7 +608,7 @@ def test_http_training_mode_updates_only_existing_supported_processors(tmp_path,
             assert response.status == 404
             response = await client.post(url, json={"training_mode": "auto"})
             assert response.status == 200
-            assert scenario.trainer.training_mode == "auto"
+            assert scenario.trainer.pipeline.training_mode == "auto"
         finally:
             await client.close()
 
@@ -643,7 +643,7 @@ def test_http_mode_change_does_not_wait_for_running_proposer(tmp_path):
             assert response.status == 200
             assert not release.is_set()
             scenario = dispatcher.get_or_create_scenario("s")
-            assert scenario.trainer.training_mode == "auto"
+            assert scenario.trainer.pipeline.training_mode == "auto"
             assert scenario.trainer.pending_batch.request.text == "one"
         finally:
             release.set()
@@ -664,11 +664,11 @@ def test_mode_selection_survives_a_reload_and_resets_on_restart(tmp_path):
     try:
         scenario = dispatcher.get_or_create_scenario("s")
         assert dispatcher.set_training_mode("s", "manual") == {"scenario": "s", "training_mode": "manual"}
-        assert scenario.trainer.training_mode == "manual"
+        assert scenario.trainer.pipeline.training_mode == "manual"
         reloaded = dispatcher._registry.reload("s")
-        assert reloaded is not scenario and reloaded.trainer.training_mode == "manual"
+        assert reloaded is not scenario and reloaded.trainer.pipeline.training_mode == "manual"
         assert dispatcher.set_training_mode("s", "auto")["training_mode"] == "auto"
-        assert dispatcher._registry.reload("s").trainer.training_mode == "auto"
+        assert dispatcher._registry.reload("s").trainer.pipeline.training_mode == "auto"
         dispatcher.set_training_mode("s", "manual")
         dispatcher.accept_record(instruction("one"))
         assert _wait(lambda: _committed_skip(dispatcher, "one") == "no proposal")
@@ -679,7 +679,7 @@ def test_mode_selection_survives_a_reload_and_resets_on_restart(tmp_path):
     restarted = _dispatcher(tmp_path, _recipe(tmp_path, propose))
     try:
         loaded = restarted.get_or_create_scenario("s")
-        assert loaded.scenario_step == 1 and loaded.trainer.training_mode == "auto"
+        assert loaded.scenario_step == 1 and loaded.trainer.pipeline.training_mode == "auto"
     finally:
         restarted.close()
 
@@ -774,7 +774,7 @@ def test_a_failed_step_keeps_the_selected_mode_and_the_next_instruction_runs(tmp
         assert calls == ["one", "two"]
         assert _committed_row(dispatcher, "one")["error"] == "RuntimeError: poison proposer"
         current = dispatcher.get_or_create_scenario("s")
-        assert current is not scenario and current.trainer.training_mode == "manual"
+        assert current is not scenario and current.trainer.pipeline.training_mode == "manual"
         assert current.trainer.pending_instructions() == 0
     finally:
         release.set()
@@ -804,7 +804,7 @@ def test_a_failed_instruction_is_skipped_with_its_error_and_the_queue_moves_on(t
         assert current.trainer.pipeline_status()["buffered_requests"] == 0
         assert current.trainer.instruction_failures() == {}
         assert current.records.get("s", "poison") is not None
-        assert current.trainer.training_mode == "manual"
+        assert current.trainer.pipeline.training_mode == "manual"
     finally:
         release.set()
         dispatcher.close()
@@ -838,7 +838,7 @@ def test_hybrid_skips_a_failed_instruction_before_the_next_and_keeps_the_failure
         assert _committed_row(dispatcher, "poison")["error"] == "RuntimeError: poison proposer"
         current = dispatcher.get_or_create_scenario("s")
         assert current.trainer.pending_instructions() == 0
-        assert current.trainer.training_mode == "hybrid"
+        assert current.trainer.pipeline.training_mode == "hybrid"
         assert current.trainer.instruction_failures() == {}
         # With the queue empty, one failing exchange at batch_size 1 is an automatic step with no instruction.
         dispatcher.accept_record(inference("a"))
@@ -849,7 +849,7 @@ def test_hybrid_skips_a_failed_instruction_before_the_next_and_keeps_the_failure
         dispatcher.accept_record(instruction("after"))
         assert _wait(lambda: _committed_skip(dispatcher, "after") == "no proposal")
         assert calls[2:] == [(None, ("a",)), ("after", ())]
-        assert dispatcher.get_or_create_scenario("s").trainer.training_mode == "hybrid"
+        assert dispatcher.get_or_create_scenario("s").trainer.pipeline.training_mode == "hybrid"
     finally:
         release.set()
         dispatcher.close()
@@ -1037,7 +1037,7 @@ def test_the_dispatched_training_thread_skips_a_failed_instruction(tmp_path):
         assert calls == ["one"]
         assert _committed_row(dispatcher, "one")["error"] == "RuntimeError: dispatched step failed"
         current = dispatcher.get_or_create_scenario("s")
-        assert current is not scenario and current.trainer.training_mode == "manual"
+        assert current is not scenario and current.trainer.pipeline.training_mode == "manual"
         assert current.trainer.pending_instructions() == 0
     finally:
         dispatcher.close()
@@ -1133,7 +1133,7 @@ def test_hybrid_is_a_recipe_and_processor_mode_and_a_fourth_value_is_refused(tmp
     records = SQLiteRecordStore()
     try:
         trainer = recipe.build("s", records)
-        assert trainer.training_mode == "hybrid"
+        assert trainer.pipeline.training_mode == "hybrid"
         assert trainer.pipeline.training_mode == "hybrid"
         assert trainer.pipeline.status()["buffered_requests"] == 0
         trainer.close()
@@ -1166,7 +1166,7 @@ def test_hybrid_runs_a_queued_instruction_alone_when_no_units_are_held(processor
         trainer.commit(prepared)
         assert records.get("s", "alone") is not None
         assert trainer.run_once() is None
-        assert trainer.training_mode == "hybrid"
+        assert trainer.pipeline.training_mode == "hybrid"
     finally:
         trainer.close()
         records.close()
@@ -1261,7 +1261,7 @@ def test_hybrid_alternates_the_instruction_path_and_the_failure_path_without_a_m
         assert step() is None
         failure(records, "h")
         assert step() == (None, ["g", "h"])
-        assert trainer.training_mode == "hybrid"
+        assert trainer.pipeline.training_mode == "hybrid"
     finally:
         trainer.close()
         records.close()
@@ -1312,7 +1312,7 @@ def test_hybrid_runs_an_instruction_from_the_route_without_an_update_call(tmp_pa
         client = TestClient(TestServer(create_app(dispatcher)))
         await client.start_server()
         try:
-            assert dispatcher.get_or_create_scenario("s").trainer.training_mode == "hybrid"
+            assert dispatcher.get_or_create_scenario("s").trainer.pipeline.training_mode == "hybrid"
             body = {
                 "agent_record_id": "ask-1",
                 "text": "Prefer tests first",
@@ -1328,7 +1328,7 @@ def test_hybrid_runs_an_instruction_from_the_route_without_an_update_call(tmp_pa
             dispatcher.accept_record(report("a"))
             assert await asyncio.to_thread(_wait, lambda: len(seen) == 2)
             assert seen[1] == ((), ("a",))
-            assert dispatcher.get_or_create_scenario("s").trainer.training_mode == "hybrid"
+            assert dispatcher.get_or_create_scenario("s").trainer.pipeline.training_mode == "hybrid"
         finally:
             await client.close()
 
@@ -1353,7 +1353,7 @@ def test_the_proposal_route_refuses_in_manual_mode_and_admits_again_in_a_batchin
     inbox = tmp_path / "inbox" / "s"
 
     async def run():
-        assert dispatcher.get_or_create_scenario("s").trainer.training_mode == "manual"
+        assert dispatcher.get_or_create_scenario("s").trainer.pipeline.training_mode == "manual"
         client = TestClient(TestServer(create_app(dispatcher)))
         await client.start_server()
         try:
