@@ -6,9 +6,9 @@ import pytest
 from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
 from recipes.sao import SAORecipe
+from reef.evaluation import CandidateEvaluationConfig, build_candidate_evaluation
 from reef.recipe import RecipeConfigError
 from reef.storage.sqlite import SQLiteRecordStore
-from reef.train.evaluation import CandidateEvaluationConfig, build_candidate_evaluation
 
 PLUGIN = "reef_service._candidate_evaluation_plugin"
 

@@ -18,13 +18,13 @@ from reef.core.evaluation import (
     SelectionDecision,
     UpdateCandidate,
 )
-from reef.train.evaluation.config import (
+from reef.evaluation.config import (
     CandidateEvaluationConfig,
     CandidateEvaluationConfigError,
     ConfiguredEvaluationPlugin,
     build_candidate_evaluation,
 )
-from reef.train.evaluation.evaluators import (
+from reef.evaluation.evaluators import (
     AlwaysSelectMixin,
     BackendAlwaysSelectPlugin,
     BackendEvaluateMixin,

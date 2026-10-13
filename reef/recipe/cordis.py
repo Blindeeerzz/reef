@@ -28,6 +28,7 @@ from reef.core.model_metadata import ModelMetadata
 from reef.core.plugins import PluginConfigError, PluginReference
 from reef.core.reports import ScoredRolloutReport
 from reef.core.tasks import TaskSplitError, manifest_task_paths
+from reef.evaluation.evaluators import BackendAlwaysSelectPlugin, SelectionPlugin
 from reef.harness.adapters import get_adapter
 from reef.harness.adapters.descriptor import DescriptorError
 from reef.harness.episodes.e2b import E2BExecutor, deployment_owner
@@ -56,7 +57,6 @@ from reef.train.cordis_backend.backend import CordisBackend, FloorPlugin, ScoreC
 from reef.train.cordis_backend.execution import evaluation_selection, legacy_worker_settings
 from reef.train.cordis_backend.processor import TraceBatches, TraceRecord2Record, TraceTasks
 from reef.train.cordis_backend.strategies import EpisodeScorer, Promoter, Proposer
-from reef.train.evaluation.evaluators import BackendAlwaysSelectPlugin, SelectionPlugin
 from reef.train.pipeline import PipelineSpec
 from reef.train.trainer import Trainer
 
@@ -186,7 +186,7 @@ class CordisRecipe(Recipe):
     candidate-selection policy: ``score_comparison``, the default; ``floor``,
     which runs the candidate alone and selects it when every task scores at
     least ``floor_score``, default ``1.0``; ``always``;
-    or a reference to a :class:`~reef.train.evaluation.SelectionPlugin` class),
+    or a reference to a :class:`~reef.evaluation.SelectionPlugin` class),
     optional ``step_record_dir`` (a directory under which every scenario's
     steps write the proposer's model calls, the parsed proposal and each evaluation
     episode's trajectory files, so the decision is reconstructible; off by

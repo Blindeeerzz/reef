@@ -14,6 +14,13 @@ from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportValidationError
 from reef.core.trajectories import source_record_id, trajectory_reward
 from reef.dispatcher import Dispatcher
+from reef.evaluation import (
+    BackendEvaluateMixin,
+    CandidateEvaluationPlugin,
+    EvaluationResult,
+    SelectionDecision,
+    UpdateCandidate,
+)
 from reef.recipe import WeightTrainingRecipe
 from reef.record2record import ReportGrouping, ReportRecord2Record
 from reef.record2task.assembly import SampleAssemblySettings
@@ -22,13 +29,6 @@ from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
 from reef.train import PipelineContext, Trainer, TrainingPipeline
 from reef.train.algos import StepScheduling
 from reef.train.backend import CandidateBackend, PreparedStep
-from reef.train.evaluation import (
-    BackendEvaluateMixin,
-    CandidateEvaluationPlugin,
-    EvaluationResult,
-    SelectionDecision,
-    UpdateCandidate,
-)
 from reef.train.slime_backend.reef_adapters.preparation import prepare_slime_step
 from reef.train.types import TrainingBatch, TrainStepResult, TrajectoryItem, trajectory_groups
 

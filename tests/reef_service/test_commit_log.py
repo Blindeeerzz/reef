@@ -24,6 +24,7 @@ from reef.core import AgentRecord, RequestType
 from reef.core.errors import ReefError
 from reef.core.trajectories import source_record_id
 from reef.dispatcher import Dispatcher
+from reef.evaluation import EvaluationResult, SelectionDecision, UpdateCandidate
 from reef.harness.adapters import get_adapter
 from reef.harness.episodes.model_binding import ModelBinding
 from reef.recipe.base import Recipe
@@ -39,7 +40,6 @@ from reef.train import CandidateBackend, PreparedStep, Trainer, TrainStepResult
 from reef.train.algos import StepScheduling
 from reef.train.cordis_backend import CordisBackend, ScoreComparisonPlugin
 from reef.train.cordis_backend.processor import TraceBatches, TraceRecord2Record, TraceTasks
-from reef.train.evaluation import EvaluationResult, SelectionDecision, UpdateCandidate
 from reef.train.pipeline import TrainingPipeline
 
 from ._policy_recipe import TestPolicyRecipe

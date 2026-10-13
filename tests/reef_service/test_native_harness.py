@@ -19,6 +19,7 @@ import pytest
 from reef_service._trajectories import recorded_trajectory
 from reef_service.test_native_enforce import PROBE, _ConstantToolRun, require_nested_jail
 
+from reef.evaluation import BackendAlwaysSelectPlugin
 from reef.harness.adapters import available_adapters, get_adapter
 from reef.harness.episodes.executor import SandboxExecutor
 from reef.harness.episodes.model_binding import ModelBinding
@@ -47,7 +48,6 @@ from reef.harness.tree.nodes import NODE_KINDS
 from reef.harness.tree.render import RenderError, render_composition
 from reef.train.cordis_backend import CordisBackend, Mutation, ScoreComparisonPlugin
 from reef.train.cordis_backend.backend import tree_files
-from reef.train.evaluation import BackendAlwaysSelectPlugin
 from reef.train.types import TrainingBatch
 
 from ._strategies import resolve_episode_scorer, resolve_proposer

@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from reef.core import AgentRecord, RequestType
+from reef.evaluation import EvaluationResult, SelectionDecision, UpdateCandidate
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.train import (
     CandidateBackend,
@@ -17,7 +18,6 @@ from reef.train import (
     TrainingPipeline,
     TrainStepResult,
 )
-from reef.train.evaluation import EvaluationResult, SelectionDecision, UpdateCandidate
 
 
 @dataclass(frozen=True)

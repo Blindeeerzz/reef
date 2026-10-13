@@ -48,7 +48,8 @@ affected package's `__init__.py` docstring to find the owner of a change.
 | `reef/core/` | Shared value types, wire contracts, and errors |
 | `reef/dispatcher.py`, `reef/scenario/` | Coordination, scenario state, commit ordering, and recovery |
 | `reef/service/` | HTTP, authentication, streaming, and deployment |
-| `reef/recipe/`, `reef/train/` | Recipe contracts, built-in recipes, the training pipeline, training, evaluation, and backend integrations |
+| `reef/recipe/`, `reef/train/` | Recipe contracts, built-in recipes, the training pipeline, training, and backend integrations |
+| `reef/evaluation/` | Candidate evaluation: measuring a candidate and deciding whether it is published, built-in selection policies, and plugin configuration |
 | `reef/runtime/` | Backend-neutral runtime contracts, scheduling, and publication coordination |
 | `reef/inference/` | Concrete inference integrations, engine control, and weight reception |
 | `reef/surface/` | Delivery of published artifacts |

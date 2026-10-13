@@ -271,7 +271,7 @@ only when at least one task improves and none regresses.
 .. code:: python
 
    from reef import CandidateEvaluator, SelectionDecision
-   from reef.train.evaluation import SelectionPlugin
+   from reef.evaluation import SelectionPlugin
 
 
    class ParetoPlugin(SelectionPlugin):

@@ -20,6 +20,7 @@ from reef.core.errors import ReefError
 from reef.core.plugins import PluginReference
 from reef.core.reports import ScoredRolloutReport
 from reef.dispatcher import Dispatcher
+from reef.evaluation.evaluators import BackendAlwaysSelectPlugin
 from reef.harness.adapters import get_adapter
 from reef.harness.episodes.executor import LocalExecutor
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindingError, ModelBindings
@@ -42,7 +43,6 @@ from reef.train.cordis_backend import (
     ScoreComparisonPlugin,
 )
 from reef.train.cordis_backend.backend import EpisodeEvaluationWorker
-from reef.train.evaluation.evaluators import BackendAlwaysSelectPlugin
 from reef.train.trainer import Trainer
 from reef.train.types import NoArtifactPublication, SavedArtifactPublication, TrainingBatch, TrainStepResult
 
@@ -1132,7 +1132,7 @@ def test_recipe_resolves_selection_plugin(tmp_path, monkeypatch) -> None:
         "class Evaluate(EpisodeScorer):\n"
         "    def score(self, task, result):\n        return 0.0\n"
         "\n"
-        "from reef.train.evaluation import SelectionPlugin\n\n"
+        "from reef.evaluation import SelectionPlugin\n\n"
         "class DemoPlugin(SelectionPlugin):\n"
         "    def __init__(self, backend):\n"
         "        self._backend = backend\n\n"
@@ -1142,7 +1142,7 @@ def test_recipe_resolves_selection_plugin(tmp_path, monkeypatch) -> None:
         "    def evaluate(self, candidate):\n"
         "        return self._backend.evaluate(candidate)\n\n"
         "    def decide(self, candidate, evaluation):\n"
-        "        from reef.train.evaluation import SelectionDecision\n"
+        "        from reef.evaluation import SelectionDecision\n"
         "        return SelectionDecision('select', 'demo', '1', 'selected by demo', evaluation)\n"
     )
     monkeypatch.syspath_prepend(str(tmp_path))

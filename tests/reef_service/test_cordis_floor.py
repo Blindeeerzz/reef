@@ -17,6 +17,7 @@ import reef.train.cordis_backend.backend as reef_cordis_backend
 from reef.core.plugins import PluginReference
 from reef.core.requirements import REQUIRE_KINDS
 from reef.core.training_request import TrainingRequest
+from reef.evaluation import EvaluationResult, UpdateCandidate
 from reef.harness.adapters import get_adapter
 from reef.recipe import RecipeConfigError
 from reef.recipe.cordis import CordisRecipe
@@ -30,7 +31,6 @@ from reef.train.cordis_backend import (
 )
 from reef.train.cordis_backend.backend import RECORD_TEXT_CAP
 from reef.train.cordis_backend.manifest import FailureObservation, advance
-from reef.train.evaluation import EvaluationResult, UpdateCandidate
 from reef.train.types import NoArtifactPublication, SavedArtifactPublication, TrainingBatch
 
 from ._strategies import resolve_episode_scorer, resolve_proposer

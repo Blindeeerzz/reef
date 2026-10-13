@@ -24,6 +24,7 @@ from reef.core.components import RECORDS_COMPONENT
 from reef.core.errors import ReefError, ScenarioBusy
 from reef.core.requirements import required_by
 from reef.dispatcher import Dispatcher
+from reef.evaluation import EvaluationResult, UpdateCandidate
 from reef.observability import ExperimentTracker, NullExperimentLogger
 from reef.pipeline_context import PipelineContext
 from reef.recipe import Recipe
@@ -53,7 +54,6 @@ from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
 from reef.surface import ComponentSurface, Surface, TextFileTree
 from reef.task2batch import Task2Batch
 from reef.train import CandidateBackend, ComponentTrainer, PreparedStep, Trainer, TrainStepResult
-from reef.train.evaluation import EvaluationResult, UpdateCandidate
 from reef.train.pipeline import TrainingPipeline
 from reef.train.types import TrainDataItem, TrainingBatch
 
