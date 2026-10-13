@@ -806,6 +806,6 @@ def test_a_generator_setting_that_names_no_usable_generator_is_refused(generator
 
 
 def test_a_stage_without_from_config_cannot_be_named_in_the_pipeline_section() -> None:
-    recipe = generated_pipeline_recipe({}, {"record2record": {"module": "reef.record2record:JudgingStage"}})
-    with pytest.raises(RecipeConfigError, match="JudgingStage cannot be built from a deployment file"):
+    recipe = generated_pipeline_recipe({}, {"record2record": {"module": "reef.record2record:JudgingRecord2Record"}})
+    with pytest.raises(RecipeConfigError, match="JudgingRecord2Record cannot be built from a deployment file"):
         recipe.build_pipeline(PipelineContext("one"))

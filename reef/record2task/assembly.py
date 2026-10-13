@@ -1,6 +1,6 @@
 """Reported feedback: assemble a report and its inference records into a policy sample.
 
-The record-to-record stage (:class:`~reef.record2record.ReportStage`) forms a
+The record-to-record stage (:class:`~reef.record2record.ReportRecord2Record`) forms a
 set for each valid report that trains, and a recipe's
 :class:`~reef.record2task.ReportTasks` turns it into a task. ``SampleAssembly``
 is the shared assembly that those recipes use in ``make_sample``.

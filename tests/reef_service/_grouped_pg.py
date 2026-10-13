@@ -22,7 +22,7 @@ from typing import Any
 from reef.core.records_types import AgentRecord
 from reef.core.trajectories import trajectory_reward
 from reef.pipeline_context import PipelineContext
-from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
+from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportRecord2Record
 from reef.record2task import ReportTasks
 from reef.record2task.assembly import SampleAssembly
 from reef.task2batch import Task2Batch
@@ -88,7 +88,7 @@ def grouped_policy_pipeline(context: PipelineContext) -> TrainingPipeline:
     """Reports grouped by ``metadata.comparison_set``, two to a group."""
     return TrainingPipeline(
         context,
-        record2record=ReportStage(context.scenario, context.report_type, ComparisonSetGrouping()),
+        record2record=ReportRecord2Record(context.scenario, context.report_type, ComparisonSetGrouping()),
         record2task=ComparisonSetTasks(context),
         task2batch=GroupedPolicyBatches(context),
     )

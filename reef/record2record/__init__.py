@@ -19,14 +19,14 @@ Stages:
 
 * ``PassThroughRecord2Record`` (``base.py``): the default. It forms one set per
   record and decides nothing.
-* ``ReportStage`` (``reports.py``): reports and the inference records that
+* ``ReportRecord2Record`` (``reports.py``): reports and the inference records that
   they reference, alone or in groups. A recipe's ``ReportGrouping`` decides
   which reports train and how they form groups.
-* ``JudgingStage`` (``judging.py``): records that a model judges on a
+* ``JudgingRecord2Record`` (``judging.py``): records that a model judges on a
   background worker after later traffic completes them. A recipe's
   ``RecordJudging`` holds the correlation and the judge.
 * ``InferenceRecord2Record`` (``base.py``): one set per inference record.
-* ``RoundStage`` (``rounds.py``): a ``ReportStage`` that also forms a
+* ``RoundRecord2Record`` (``rounds.py``): a ``ReportRecord2Record`` that also forms a
   ``RoundRequest`` set each time a task-generation round is due. A recipe's
   ``RoundGrouping`` decides which reports are source sessions for the rounds.
 
@@ -55,7 +55,7 @@ from reef.record2record.base import (
     SetAssembly,
 )
 from reef.record2record.eligibility import EligibilityCheck, IneligibleSet, StalenessCheck
-from reef.record2record.judging import JudgedSet, JudgingStage, RecordJudging, judged_sets
+from reef.record2record.judging import JudgedSet, JudgingRecord2Record, RecordJudging, judged_sets
 from reef.record2record.pool import RecordSetPool
 from reef.record2record.reports import (
     GroupDecision,
@@ -63,13 +63,13 @@ from reef.record2record.reports import (
     ReportContext,
     ReportEntry,
     ReportGrouping,
+    ReportRecord2Record,
     ReportSet,
-    ReportStage,
     accepted_by,
     report_score,
     report_sets,
 )
-from reef.record2record.rounds import RoundGrouping, RoundRequest, RoundStage
+from reef.record2record.rounds import RoundGrouping, RoundRecord2Record, RoundRequest
 from reef.record2record.selection import ArrivalOrder, GroupKeyOrder, SelectionPolicy
 from reef.record2record.sets import RecordSet, SingleRecordSet
 
@@ -82,7 +82,7 @@ __all__ = [
     "IneligibleSet",
     "InferenceRecord2Record",
     "JudgedSet",
-    "JudgingStage",
+    "JudgingRecord2Record",
     "PassThroughRecord2Record",
     "Record2Record",
     "RecordJudging",
@@ -92,11 +92,11 @@ __all__ = [
     "ReportContext",
     "ReportEntry",
     "ReportGrouping",
+    "ReportRecord2Record",
     "ReportSet",
-    "ReportStage",
     "RoundGrouping",
+    "RoundRecord2Record",
     "RoundRequest",
-    "RoundStage",
     "SelectionPolicy",
     "SetAssembly",
     "SingleRecordSet",

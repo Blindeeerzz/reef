@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from reef.pipeline_context import PipelineContext
-from reef.record2record import ReportContext, ReportGrouping, ReportStage
+from reef.record2record import ReportContext, ReportGrouping, ReportRecord2Record
 from reef.record2task import ReportTasks
 from reef.record2task.assembly import SampleAssembly
 from reef.task2batch import Task2Batch
@@ -31,14 +31,14 @@ class ThresholdBatches(Task2Batch):
 def threshold_pipeline(
     context: PipelineContext,
     *,
-    record2record: ReportStage | None = None,
+    record2record: ReportRecord2Record | None = None,
     task2batch: Task2Batch | None = None,
 ) -> TrainingPipeline:
     """Every report by itself (or ``record2record``), one sample each, batched by ``ThresholdBatches`` (or ``task2batch``)."""
     return TrainingPipeline(
         context,
         record2record=(
-            ReportStage(context.scenario, context.report_type, ReportGrouping())
+            ReportRecord2Record(context.scenario, context.report_type, ReportGrouping())
             if record2record is None
             else record2record
         ),

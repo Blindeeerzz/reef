@@ -16,7 +16,7 @@ from reef.record2record import (
     RecordSet,
     ReportContext,
     ReportGrouping,
-    ReportStage,
+    ReportRecord2Record,
     SetAssembly,
     SingleRecordSet,
 )
@@ -31,7 +31,7 @@ from ._threshold_processor import threshold_pipeline
 from .test_record_stage_batch_parity import CountingBackend, inference, instruction, report
 
 
-class WithholdingStage(PassThroughRecord2Record):
+class WithholdingRecord2Record(PassThroughRecord2Record):
     """Passes records through, except records whose ID starts with ``drop``: it ends those itself."""
 
     def __init__(self) -> None:
@@ -95,16 +95,16 @@ class RecordingBatches(Task2Batch):
 
 
 class RecordingPipeline(TrainingPipeline):
-    """Sends records through ``WithholdingStage``, ``RecordingTasks``, and ``RecordingBatches``. It never becomes ready."""
+    """Sends records through ``WithholdingRecord2Record``, ``RecordingTasks``, and ``RecordingBatches``. It never becomes ready."""
 
     def __init__(self, context: PipelineContext) -> None:
-        self.stage = WithholdingStage()
+        self.stage = WithholdingRecord2Record()
         self.recording = RecordingTasks()
         self.batches = RecordingBatches(context)
         super().__init__(context, record2record=self.stage, record2task=self.recording, task2batch=self.batches)
 
 
-class DroppingReportStage(ReportStage):
+class DroppingReportRecord2Record(ReportRecord2Record):
     """A report stage that ends every record whose ID starts with ``drop``."""
 
     def ingest(self, record: AgentRecord) -> None:
@@ -115,7 +115,9 @@ class DroppingReportStage(ReportStage):
 
 
 def dropping_pipeline(context: PipelineContext) -> TrainingPipeline:
-    return threshold_pipeline(context, record2record=DroppingReportStage(context.scenario, None, ReportGrouping()))
+    return threshold_pipeline(
+        context, record2record=DroppingReportRecord2Record(context.scenario, None, ReportGrouping())
+    )
 
 
 class PairGrouping(ReportGrouping):
@@ -156,7 +158,7 @@ class PairPipeline(TrainingPipeline):
         self.pair_tasks = PairTasks()
         super().__init__(
             context,
-            record2record=ReportStage("s", None, PairGrouping(), exclusive_sources=True),
+            record2record=ReportRecord2Record("s", None, PairGrouping(), exclusive_sources=True),
             record2task=self.pair_tasks,
             task2batch=PairBatches(context),
         )

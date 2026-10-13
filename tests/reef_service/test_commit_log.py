@@ -28,7 +28,7 @@ from reef.harness.adapters import get_adapter
 from reef.harness.episodes.model_binding import ModelBinding
 from reef.recipe.base import Recipe
 from reef.recipe.checkpoint_strategy import CheckpointStrategy, EveryNVersions
-from reef.record2record import ReportGrouping, ReportStage
+from reef.record2record import ReportGrouping, ReportRecord2Record
 from reef.runtime.interfaces import ActivatedModel, ModelCandidate, PreparedTrainingStep
 from reef.storage.commit_log import RECORD_KIND, CommitLog, CommitLogError, CommitLogScenarioStore
 from reef.storage.commits import CommitRecord
@@ -603,7 +603,7 @@ class ProtectAllPipeline(TrainingPipeline):
     def __init__(self, context) -> None:
         super().__init__(
             context,
-            record2record=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+            record2record=ReportRecord2Record(context.scenario, context.report_type, ReportGrouping()),
             record2task=ThresholdTasks(context),
             task2batch=ThresholdBatches(context),
         )

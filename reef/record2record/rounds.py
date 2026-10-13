@@ -1,9 +1,9 @@
 """Round requests: the record stage decides when a task-generation round is due, and from which sessions.
 
 Task generation reads a description and, optionally, recorded sessions. Its
-record-to-task stage takes a record set: a ``RoundRequest``. ``RoundStage``
+record-to-task stage takes a record set: a ``RoundRequest``. ``RoundRecord2Record``
 forms one when the pipeline looks for a batch (``poll``) and a round is due.
-Otherwise it works as a ``ReportStage`` for the reports that the rounds' plays
+Otherwise it works as a ``ReportRecord2Record`` for the reports that the rounds' plays
 produce.
 
 A round is due when no round is running and one of these is true:
@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from reef.core.records_types import AgentRecord
 from reef.core.reports import ReportBase
 from reef.record2record.base import SetAssembly
-from reef.record2record.reports import ReportContext, ReportGrouping, ReportStage
+from reef.record2record.reports import ReportContext, ReportGrouping, ReportRecord2Record
 from reef.record2record.sets import RecordSet
 
 
@@ -54,7 +54,7 @@ class RoundRequest(RecordSet):
         )
 
 
-class RoundStage(ReportStage):
+class RoundRecord2Record(ReportRecord2Record):
     """A report stage that also forms a ``RoundRequest`` each time a task-generation round is due.
 
     The record-to-task stage starts a round from each request. It returns

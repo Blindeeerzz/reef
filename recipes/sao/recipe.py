@@ -12,13 +12,13 @@ from reef.pipeline_context import PipelineContext
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.recipe.errors import RecipeConfigError
-from reef.record2record import Record2Record, ReportGrouping, ReportStage
+from reef.record2record import Record2Record, ReportGrouping, ReportRecord2Record
 from reef.train.algos import StepScheduling
 
 
-def sao_record_stage(context: PipelineContext) -> ReportStage:
+def sao_record_stage(context: PipelineContext) -> ReportRecord2Record:
     """SAO's record stage: every rollout trains by itself, and a terminal report owns its sources."""
-    return ReportStage(context.scenario, context.report_type, ReportGrouping(), exclusive_sources=True)
+    return ReportRecord2Record(context.scenario, context.report_type, ReportGrouping(), exclusive_sources=True)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -62,7 +62,7 @@ class SAORecipe(WeightTrainingRecipe):
             scheduling=StepScheduling(unit="sample"),
         )
 
-    def build_record2record(self, context: PipelineContext) -> ReportStage:
+    def build_record2record(self, context: PipelineContext) -> ReportRecord2Record:
         return sao_record_stage(context)
 
     def build_record2task(self, context: PipelineContext, record2record: Record2Record) -> SAOTasks:

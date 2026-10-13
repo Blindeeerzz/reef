@@ -27,7 +27,7 @@ from recipes.beta.coral.processor import CoralBatches, CoralTasks, attempt_relea
 from reef.pipeline_context import PipelineContext
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
-from reef.record2record import GroupDecision, Record2Record, ReportContext, ReportGrouping, ReportStage
+from reef.record2record import GroupDecision, Record2Record, ReportContext, ReportGrouping, ReportRecord2Record
 from reef.train.algos import StepScheduling
 
 logger = logging.getLogger(__name__)
@@ -72,9 +72,9 @@ class CoralGrouping(ReportGrouping):
         }
 
 
-def coral_record_stage(context: PipelineContext) -> ReportStage:
+def coral_record_stage(context: PipelineContext) -> ReportRecord2Record:
     """CORAL's record stage: sibling groups in the order that they close; a terminal report owns its sources."""
-    return ReportStage(
+    return ReportRecord2Record(
         context.scenario,
         context.report_type,
         CoralGrouping(int(context.config.get("group_size", 4))),
@@ -97,7 +97,7 @@ class CoralRecipe(WeightTrainingRecipe):
             scheduling=StepScheduling(unit="sample", batch_size="actual"),
         )
 
-    def build_record2record(self, context: PipelineContext) -> ReportStage:
+    def build_record2record(self, context: PipelineContext) -> ReportRecord2Record:
         return coral_record_stage(context)
 
     def build_record2task(self, context: PipelineContext, record2record: Record2Record) -> CoralTasks:

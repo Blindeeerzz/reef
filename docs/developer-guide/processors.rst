@@ -118,14 +118,14 @@ names it, so the record never trains after a restart.
      - Decides
    * - ``PassThroughRecord2Record``
      - nothing; the default of a pipeline that trains no weights
-   * - ``ReportStage``
+   * - ``ReportRecord2Record``
      - report validation, groups and slots, the manual-mode limit, source release
-   * - ``JudgingStage``
+   * - ``JudgingRecord2Record``
      - correlation, the judging worker, and the ``max_staleness`` check
    * - ``InferenceRecord2Record``
      - one set per inference record; other records are released
-   * - ``RoundStage``
-     - a ``ReportStage`` that also forms a request when a task-generation round is due
+   * - ``RoundRecord2Record``
+     - a ``ReportRecord2Record`` that also forms a request when a task-generation round is due
 
 Training modes
 --------------
@@ -195,7 +195,7 @@ not a reason to discard the report.
 
 A reported-feedback recipe writes:
 
-- a ``ReportStage`` from ``build_record2record``, with its ``ReportGrouping``
+- a ``ReportRecord2Record`` from ``build_record2record``, with its ``ReportGrouping``
   (below);
 - ``make_sample(context) -> TrainDataItem`` on a ``ReportTasks`` subclass,
   from ``build_record2task``: assemble an ATIF trajectory or Harbor task
@@ -245,7 +245,7 @@ A computed-feedback recipe writes a ``RecordJudging``: correlation in
 ``observe(record, now, stage)`` with the stage's ``dispatch``, ``track``,
 ``tracked_record``, and ``retire`` operations, ``async judge``, and ``expire``
 for tracked records that time out. The recipe's ``build_record2record``
-returns a ``JudgingStage`` with the judging and the worker that runs
+returns a ``JudgingRecord2Record`` with the judging and the worker that runs
 ``judge``. Its ``build_record2task`` returns a ``JudgedTasks`` with
 ``make_sample(record, judgment)``, and its ``Task2Batch`` supplies
 ``make_batch``. The stage holds judged records and drops those more than
@@ -291,7 +291,7 @@ played: it failed validation, the generator service refused it, or the agent
 could not start on it.
 
 The recipe splits the rounds across its stages. The record stage
-(``GeneratedTaskRecord2Record``, a ``RoundStage``) decides when a round is due
+(``GeneratedTaskRecord2Record``, a ``RoundRecord2Record``) decides when a round is due
 and forms a ``RoundRequest`` record set. The record-to-task stage (``GeneratedTaskTasks``) runs one round
 at a time from each request, on its own ``BackgroundJobWorker``, outside the
 trainer lock. In each round it:

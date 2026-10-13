@@ -13,7 +13,7 @@ from reef.artifact import InMemoryRepositoryBackend
 from reef.core.reports import ScoredRolloutReport
 from reef.dispatcher import Dispatcher
 from reef.recipe import Recipe
-from reef.record2record import ReportGrouping, ReportStage
+from reef.record2record import ReportGrouping, ReportRecord2Record
 from reef.record2task import ReportTasks
 from reef.runtime.interfaces import InferenceHandler
 from reef.service.app import create_app
@@ -58,7 +58,7 @@ class FeedbackBatches(Task2Batch):
 def feedback_pipeline(context):
     return TrainingPipeline(
         context,
-        record2record=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+        record2record=ReportRecord2Record(context.scenario, context.report_type, ReportGrouping()),
         record2task=FeedbackTasks(),
         task2batch=FeedbackBatches(context),
     )

@@ -1420,7 +1420,7 @@ def test_recipe_selects_the_record_driven_processor(tmp_path: Path, monkeypatch)
     )
     assert reported.batch_policy == "reports"
     trainer = reported.build("demo", SQLiteRecordStore())
-    assert type(trainer.pipeline.record2record).__name__ == "ReportStage"
+    assert type(trainer.pipeline.record2record).__name__ == "ReportRecord2Record"
     assert type(trainer.pipeline.record2task).__name__ == "TraceTasks"
     assert type(trainer.pipeline.task2batch).__name__ == "TraceBatches"
 

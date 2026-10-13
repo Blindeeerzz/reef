@@ -1,6 +1,6 @@
 """The generated-task stages: rounds of generated tasks played here, their training episodes trained here.
 
-The record stage (``RoundStage``, built in ``recipe.py``) groups the task player's reports: every
+The record stage (``RoundRecord2Record``, built in ``recipe.py``) groups the task player's reports: every
 episode of the training arm names its task under ``metadata.task``, the episodes of one task form a
 group, and a group is complete at ``plays_per_task`` episodes. ``GeneratedTaskBatches`` batches
 ``tasks_per_step`` complete groups, in arrival order. ``GeneratedTaskTasks`` runs the rounds with the
@@ -46,8 +46,8 @@ from reef.record2record import (
     RecordSet,
     ReportContext,
     RoundGrouping,
+    RoundRecord2Record,
     RoundRequest,
-    RoundStage,
 )
 from reef.record2task import ReportTasks, TaskResult
 from reef.record2task.assembly import SampleAssembly
@@ -194,7 +194,7 @@ class TaskGroupGrouping(RoundGrouping):
         return all(inference_tags(inference).get(name) == value for inference in context.inferences)
 
 
-class GeneratedTaskRecord2Record(RoundStage):
+class GeneratedTaskRecord2Record(RoundRecord2Record):
     """The generated-task record stage: one group per task, and a round request every ``batches_per_round`` batches.
 
     Config: ``plays_per_task`` (the training plays of each task; a group is

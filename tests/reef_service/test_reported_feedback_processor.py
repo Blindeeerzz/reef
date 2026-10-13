@@ -11,7 +11,7 @@ import pytest
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportBase, ReportValidationError
 from reef.pipeline_context import PipelineContext
-from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
+from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportRecord2Record
 from reef.record2task import ReportTasks
 from reef.task2batch import Task2Batch
 from reef.train.pipeline import TrainingPipeline
@@ -35,9 +35,9 @@ def report(record_id: str, *references: str, score: float = 1.0) -> AgentRecord:
 
 def exclusive_stage(
     context: PipelineContext, grouping: ReportGrouping | None = None, *, ordered_groups: bool = False
-) -> ReportStage:
+) -> ReportRecord2Record:
     """A report stage in which a terminal report owns its sources."""
-    return ReportStage(
+    return ReportRecord2Record(
         context.scenario,
         context.report_type,
         ReportGrouping() if grouping is None else grouping,
@@ -123,7 +123,7 @@ class GroupPipeline(SamplePipeline):
     @property
     def grouping_policy(self) -> PairGrouping:
         stage = self.record2record
-        assert isinstance(stage, ReportStage)
+        assert isinstance(stage, ReportRecord2Record)
         grouping = stage.grouping
         assert isinstance(grouping, PairGrouping)
         return grouping

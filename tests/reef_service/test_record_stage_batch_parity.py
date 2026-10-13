@@ -37,7 +37,14 @@ from reef.background_jobs import SupportsReceipt
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportBase, TeacherContextReport
 from reef.recipe.generated_tasks.processor import GeneratedTaskBatches, GeneratedTaskRecord2Record, GeneratedTaskTasks
-from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
+from reef.record2record import (
+    GroupDecision,
+    JudgingRecord2Record,
+    RecordJudging,
+    ReportContext,
+    ReportGrouping,
+    ReportRecord2Record,
+)
 from reef.record2task import JudgedTasks, ReportTasks
 from reef.record2task.assembly import SampleAssembly
 from reef.record2task.distill import DistillTasks, distill_record_stage
@@ -281,7 +288,7 @@ class ThresholdPipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
-            record2record=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+            record2record=ReportRecord2Record(context.scenario, context.report_type, ReportGrouping()),
             record2task=ThresholdTasks(context),
             task2batch=ThresholdBatches(context),
         )
@@ -293,7 +300,9 @@ class SlotGroupPipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
-            record2record=ReportStage(context.scenario, context.report_type, SlotGrouping(), exclusive_sources=True),
+            record2record=ReportRecord2Record(
+                context.scenario, context.report_type, SlotGrouping(), exclusive_sources=True
+            ),
             record2task=AssembledTasks(context),
             task2batch=SlotBatches(context),
         )
@@ -305,7 +314,7 @@ class OrderedMixPipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
-            record2record=ReportStage(
+            record2record=ReportRecord2Record(
                 context.scenario, context.report_type, AnyGroupReady(), exclusive_sources=True, ordered_groups=True
             ),
             record2task=AssembledTasks(context),
@@ -370,7 +379,7 @@ class TracePipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
-            record2record=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+            record2record=ReportRecord2Record(context.scenario, context.report_type, ReportGrouping()),
             record2task=TraceTasks(),
             task2batch=TraceBatches(context),
         )
@@ -407,7 +416,7 @@ class ImmediateWorker:
 class ToyJudging(RecordJudging):
     """A record tracks itself; a record whose payload names ``completes`` finishes that receipt."""
 
-    def observe(self, item: AgentRecord, now: float, stage: JudgingStage) -> None:
+    def observe(self, item: AgentRecord, now: float, stage: JudgingRecord2Record) -> None:
         completes = item.payload.get("completes")
         if completes:
             stage.dispatch(ToyJob(completes))
@@ -445,7 +454,7 @@ class ToyComputedPipeline(TrainingPipeline):
     """Trains the judged records of ``ToyJudging``."""
 
     def __init__(self, context: PipelineContext) -> None:
-        stage = JudgingStage(ToyJudging(), ImmediateWorker(), max_staleness=context.max_staleness)
+        stage = JudgingRecord2Record(ToyJudging(), ImmediateWorker(), max_staleness=context.max_staleness)
         super().__init__(context, record2record=stage, record2task=ToyTasks(), task2batch=ToyBatches(context))
 
 

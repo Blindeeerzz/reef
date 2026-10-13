@@ -1,7 +1,7 @@
 """Focused unit tests for the computed-feedback pipeline's state machine.
 
 test_openclawrl pins the real recipe's behavior; these tests pin the
-mechanics of a pipeline with a ``JudgingStage`` and ``JudgedTasks`` with a
+mechanics of a pipeline with a ``JudgingRecord2Record`` and ``JudgedTasks`` with a
 toy recipe, where recipe policy cannot blur the state machine.
 """
 
@@ -18,7 +18,7 @@ from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Faile
 from reef.core import AgentRecord, RequestType
 from reef.core.trajectories import source_record_id
 from reef.pipeline_context import PipelineContext
-from reef.record2record import JudgingStage, RecordJudging
+from reef.record2record import JudgingRecord2Record, RecordJudging
 from reef.record2task import JudgedTasks
 from reef.task2batch import Task2Batch
 from reef.train.pipeline import TrainingPipeline
@@ -62,7 +62,7 @@ class _FakeWorker:
 class _ToyJudging(RecordJudging):
     """A record tracks itself; a record whose payload names ``completes`` finishes that receipt."""
 
-    def observe(self, item: AgentRecord, now: float, stage: JudgingStage) -> None:
+    def observe(self, item: AgentRecord, now: float, stage: JudgingRecord2Record) -> None:
         completes = item.payload.get("completes")
         if completes:
             stage.dispatch(_Job(completes))
@@ -104,7 +104,7 @@ class _ToyProcessor(TrainingPipeline):
     def __init__(self, context: PipelineContext, *, worker: Any) -> None:
         super().__init__(
             context,
-            record2record=JudgingStage(_ToyJudging(), worker, max_staleness=context.max_staleness),
+            record2record=JudgingRecord2Record(_ToyJudging(), worker, max_staleness=context.max_staleness),
             record2task=_ToyTasks(),
             task2batch=ToyBatches(context),
         )

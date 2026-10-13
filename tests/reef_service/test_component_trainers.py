@@ -27,7 +27,14 @@ from reef.observability import ExperimentTracker, NullExperimentLogger
 from reef.pipeline_context import PipelineContext
 from reef.recipe import Recipe
 from reef.recipe.checkpoint_strategy import EveryNVersions
-from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
+from reef.record2record import (
+    GroupDecision,
+    JudgingRecord2Record,
+    RecordJudging,
+    ReportContext,
+    ReportGrouping,
+    ReportRecord2Record,
+)
 from reef.record2task import JudgedTasks
 from reef.runtime.interfaces import RuntimeContractError
 from reef.scenario import Scenario, StaleTrainingResultError
@@ -1238,7 +1245,7 @@ class _SlottedRecipe(_TwoTrainerRecipe):
         if component == HARNESS:
             # The threshold pipeline with ``_SlotGrouping``.
             return threshold_pipeline(
-                context, record2record=ReportStage(context.scenario, context.report_type, _SlotGrouping())
+                context, record2record=ReportRecord2Record(context.scenario, context.report_type, _SlotGrouping())
             )
         return threshold_pipeline(context)
 
@@ -1495,7 +1502,7 @@ class _RetiringRetriesJudging(RecordJudging):
     def __init__(self) -> None:
         self.seen: set[str] = set()
 
-    def observe(self, item: AgentRecord, now: float, stage: JudgingStage) -> None:
+    def observe(self, item: AgentRecord, now: float, stage: JudgingRecord2Record) -> None:
         if item.payload.get("completes"):
             stage.dispatch(_Judgment(item.payload["completes"]))
         if item.payload["turn"] in self.seen:
@@ -1538,7 +1545,7 @@ class _ComputedWeightsRecipe(_TwoTrainerRecipe):
             # Trains the judged turns of ``_RetiringRetriesJudging``.
             return TrainingPipeline(
                 context,
-                record2record=JudgingStage(
+                record2record=JudgingRecord2Record(
                     _RetiringRetriesJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness
                 ),
                 record2task=_RetiringRetriesTasks(),

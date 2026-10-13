@@ -1,6 +1,6 @@
 """Report sets: reports and the inference records that they reference, alone or in groups.
 
-``ReportStage`` reads inference and report records. It validates each report,
+``ReportRecord2Record`` reads inference and report records. It validates each report,
 filters the reports that are not training data, and forms one
 ``ReportCandidate`` per report for the pipeline to assemble. It then places
 each assembled report in its group (``ReportGrouping``) and holds singleton
@@ -158,7 +158,7 @@ def report_sets(pool_sets: tuple[RecordSet, ...]) -> tuple[ReportSet, ...]:
     return selected
 
 
-class ReportStage(Record2Record):
+class ReportRecord2Record(Record2Record):
     """Form report sets, and hold singleton reports and ready groups until a batch uses them.
 
     Invalid references raise immediately. Deduplication, consumed-source

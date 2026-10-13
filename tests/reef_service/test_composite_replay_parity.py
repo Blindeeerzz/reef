@@ -27,7 +27,14 @@ from reef.background_jobs import SupportsReceipt
 from reef.core import AgentRecord, RequestType
 from reef.dispatcher import Dispatcher
 from reef.pipeline_context import PipelineContext
-from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
+from reef.record2record import (
+    GroupDecision,
+    JudgingRecord2Record,
+    RecordJudging,
+    ReportContext,
+    ReportGrouping,
+    ReportRecord2Record,
+)
 from reef.record2task import JudgedTasks
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.task2batch import Task2Batch
@@ -47,7 +54,7 @@ class _SessionJudging(RecordJudging):
     def __init__(self) -> None:
         self.sessions: dict[str, tuple[str, int]] = {}
 
-    def observe(self, item: AgentRecord, now: float, stage: JudgingStage) -> None:
+    def observe(self, item: AgentRecord, now: float, stage: JudgingRecord2Record) -> None:
         if item.request_type is not RequestType.INFERENCE or "session" not in item.payload:
             stage.retire(item.agent_record_id)
             return
@@ -92,7 +99,7 @@ def session_pipeline(context: PipelineContext) -> TrainingPipeline:
     """Trains the judged turns of ``_SessionJudging``; a turn marked declined is unusable."""
     return TrainingPipeline(
         context,
-        record2record=JudgingStage(_SessionJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness),
+        record2record=JudgingRecord2Record(_SessionJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness),
         record2task=_SessionTasks(),
         task2batch=SessionBatches(context),
     )
@@ -119,7 +126,7 @@ class _StepGrouping(ReportGrouping):
 def step_pipeline(context: PipelineContext) -> TrainingPipeline:
     """TTTD's shape: a step is one group of two (step, slot) reports, sources are exclusive, a step with a report
     marked mixed is discarded once complete, and a report that names no step is another role's and released."""
-    stage = ReportStage(
+    stage = ReportRecord2Record(
         context.scenario, context.report_type, _StepGrouping(), exclusive_sources=True, ordered_groups=True
     )
     return threshold_pipeline(context, record2record=stage)

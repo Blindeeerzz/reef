@@ -21,7 +21,7 @@ from typing import Any
 from reef.core.batches import TrajectoryItem
 from reef.core.reports import TeacherContextReport
 from reef.pipeline_context import PipelineContext
-from reef.record2record import ReportContext, ReportGrouping, ReportStage
+from reef.record2record import ReportContext, ReportGrouping, ReportRecord2Record
 from reef.record2task import ReportTasks, SkippedReport
 from reef.record2task.assembly import SampleAssembly
 from reef.record2task.samples import flatten_content, recorded_request, recorded_response
@@ -61,9 +61,9 @@ def normalize_tool_call(call: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def distill_record_stage(context: PipelineContext) -> ReportStage:
+def distill_record_stage(context: PipelineContext) -> ReportRecord2Record:
     """The record stage for distillation: every report trains by itself and owns its inference record."""
-    return ReportStage(context.scenario, context.report_type, ReportGrouping(), exclusive_sources=True)
+    return ReportRecord2Record(context.scenario, context.report_type, ReportGrouping(), exclusive_sources=True)
 
 
 def teacher_tokens_limit(config: Mapping[str, Any]) -> int:

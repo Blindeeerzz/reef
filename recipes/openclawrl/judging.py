@@ -1,6 +1,6 @@
 """OpenClaw-RL's correlation and judge: every main turn is judged by its next state.
 
-Runs inside the record-to-record stage (:class:`~reef.record2record.JudgingStage`).
+Runs inside the record-to-record stage (:class:`~reef.record2record.JudgingRecord2Record`).
 ``observe`` correlates main turns into sessions and hands each completed turn
 over for judgment; ``judge`` is upstream's combine dispatch.
 
@@ -29,7 +29,7 @@ from recipes.openclawrl.turns import TurnJob, TurnJudgment, main_turn_message, t
 from reef.background_jobs import BackgroundJobWorker
 from reef.core.records_types import AgentRecord, RequestType
 from reef.pipeline_context import PipelineContext
-from reef.record2record import JudgingStage, RecordJudging
+from reef.record2record import JudgingRecord2Record, RecordJudging
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ class OpenClawRLJudging(RecordJudging):
         # What the judge actually saw, since the processor last wrote the PRM record file.
         self.judged: collections.Counter[str] = collections.Counter()
 
-    def observe(self, item: AgentRecord, now: float, stage: JudgingStage) -> None:
+    def observe(self, item: AgentRecord, now: float, stage: JudgingRecord2Record) -> None:
         # 1. The stage has caught up: expiry ran before this read, so an
         #    expired session can never capture this request as its successor.
         # 2. Reports never train here; owning them keeps the store
@@ -253,7 +253,7 @@ def openclawrl_record_stage(
     *,
     worker: BackgroundJobWorker | None = None,
     clients: tuple[Any, Any, Any] | None = None,
-) -> JudgingStage:
+) -> JudgingRecord2Record:
     """OpenClaw-RL's record stage: sessions correlated and turns judged on a PRM worker.
 
     Without a ``worker``, the stage starts one when the config names a PRM
@@ -264,4 +264,4 @@ def openclawrl_record_stage(
         worker = BackgroundJobWorker(
             judging, thread_name="openclawrl-judging", concurrency=int(context.config.get("prm_concurrency", 8))
         )
-    return JudgingStage(judging, worker, max_staleness=context.max_staleness)
+    return JudgingRecord2Record(judging, worker, max_staleness=context.max_staleness)

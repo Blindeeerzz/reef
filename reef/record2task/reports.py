@@ -1,6 +1,6 @@
 """Reports as tasks: one valid report and its inference records become one task.
 
-The record stage (:class:`~reef.record2record.ReportStage`) forms a
+The record stage (:class:`~reef.record2record.ReportRecord2Record`) forms a
 ``ReportCandidate`` for each valid report that trains. A recipe's
 ``ReportTasks`` assembles it in ``make_sample``.
 """

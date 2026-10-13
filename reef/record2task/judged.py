@@ -1,6 +1,6 @@
 """Judged records as tasks: one record that the judging stage judged becomes one task.
 
-The record stage (:class:`~reef.record2record.JudgingStage`) forms a
+The record stage (:class:`~reef.record2record.JudgingRecord2Record`) forms a
 ``JudgedSet`` for each judged record. A recipe's ``JudgedTasks`` assembles it
 in ``make_sample``.
 """

@@ -11,7 +11,7 @@ from recipes.openclawrl.sessions import DEFAULT_MAX_SESSIONS
 from reef.pipeline_context import PipelineContext
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
-from reef.record2record import JudgingStage, Record2Record
+from reef.record2record import JudgingRecord2Record, Record2Record
 from reef.record2task import Record2Task
 from reef.train.algos import StepScheduling
 
@@ -74,7 +74,7 @@ class OpenClawRLRecipe(WeightTrainingRecipe):
             scheduling=StepScheduling(unit="sample"),
         )
 
-    def build_record2record(self, context: PipelineContext) -> JudgingStage:
+    def build_record2record(self, context: PipelineContext) -> JudgingRecord2Record:
         return openclawrl_record_stage(context)
 
     def build_record2task(self, context: PipelineContext, record2record: Record2Record) -> OpenClawRLTasks:
@@ -84,8 +84,8 @@ class OpenClawRLRecipe(WeightTrainingRecipe):
         self, context: PipelineContext, record2record: Record2Record, record2task: Record2Task
     ) -> OpenClawRLBatches:
         # The batches write what the stage's judging saw, so both share one judging.
-        if not isinstance(record2record, JudgingStage):
-            raise TypeError(f"OpenClaw-RL batches need a JudgingStage, not {type(record2record).__name__}")
+        if not isinstance(record2record, JudgingRecord2Record):
+            raise TypeError(f"OpenClaw-RL batches need a JudgingRecord2Record, not {type(record2record).__name__}")
         return OpenClawRLBatches(context, record2record.judging)
 
     def __post_init__(self) -> None:

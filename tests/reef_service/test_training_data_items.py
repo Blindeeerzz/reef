@@ -243,12 +243,12 @@ def test_report_processor_reserves_and_acknowledges_mixed_data():
         def make_batch(self, tasks, batch_number):
             return TrainingBatch(str(batch_number), tasks)
 
-    from reef.record2record import ReportGrouping, ReportStage
+    from reef.record2record import ReportGrouping, ReportRecord2Record
 
     context = PipelineContext("mixed", {"batch_size": 2})
     processor = TrainingPipeline(
         context,
-        record2record=ReportStage("mixed", None, ReportGrouping(), exclusive_sources=True),
+        record2record=ReportRecord2Record("mixed", None, ReportGrouping(), exclusive_sources=True),
         record2task=MixedTasks(),
         task2batch=MixedBatches(context),
     )

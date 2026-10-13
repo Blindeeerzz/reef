@@ -10,7 +10,7 @@ from reef.record2record import (
     RecordSet,
     ReportContext,
     ReportGrouping,
-    ReportStage,
+    ReportRecord2Record,
     SingleRecordSet,
 )
 from reef.record2task import Record2Task, ReportTasks, TaskResult
@@ -78,7 +78,7 @@ def trace_pipeline(context: PipelineContext, batch_policy: str) -> TrainingPipel
         )
     return TrainingPipeline(
         context,
-        record2record=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+        record2record=ReportRecord2Record(context.scenario, context.report_type, ReportGrouping()),
         record2task=TraceTasks(),
         task2batch=TraceBatches(context),
     )

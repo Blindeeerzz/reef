@@ -18,7 +18,7 @@ from reef.core.reports import ReportValidationError
 from reef.core.trajectories import source_record_id, trajectory_reward
 from reef.dispatcher import Dispatcher
 from reef.recipe import WeightTrainingRecipe
-from reef.record2record import ReportGrouping, ReportStage
+from reef.record2record import ReportGrouping, ReportRecord2Record
 from reef.runtime.interfaces import ActivatedModel, ModelCandidate, PreparedTrainingStep
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
 from reef.train import PipelineContext, Trainer, TrainingPipeline
@@ -293,7 +293,7 @@ def test_cookbook_processors_assemble_before_rejecting_multi_turn_reports(
     tasks = TTTDTasks(context) if processor_type is TTTDBatches else SAOTasks(context)
     processor = TrainingPipeline(
         context,
-        record2record=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+        record2record=ReportRecord2Record(context.scenario, context.report_type, ReportGrouping()),
         record2task=tasks,
         task2batch=processor_type(context),
     )
@@ -468,7 +468,7 @@ def test_trainer_tells_the_processor_a_dropped_batch_before_acknowledging_it() -
     def noting_pipeline(context: PipelineContext) -> NotingPipeline:
         return NotingPipeline(
             context,
-            record2record=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+            record2record=ReportRecord2Record(context.scenario, context.report_type, ReportGrouping()),
             record2task=ThresholdTasks(context),
             task2batch=ThresholdBatches(context),
         )

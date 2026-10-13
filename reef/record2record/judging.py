@@ -2,7 +2,7 @@
 
 A computed-feedback method makes its training signal from the traffic itself.
 A record only becomes judgeable when some later record completes it, and the
-judgment calls models, so it runs on a background worker. ``JudgingStage``
+judgment calls models, so it runs on a background worker. ``JudgingRecord2Record``
 owns the record lifecycle around that: tracked (awaiting later traffic), in
 flight (judging), then a judged set, or terminal. A recipe writes the
 correlation and the judge as a ``RecordJudging``.
@@ -37,7 +37,7 @@ class RecordJudging(BackgroundJobRunner, ABC):
     """
 
     @abstractmethod
-    def observe(self, record: AgentRecord, now: float, stage: JudgingStage) -> None:
+    def observe(self, record: AgentRecord, now: float, stage: JudgingRecord2Record) -> None:
         """Correlate one record, with the stage's verbs: ``dispatch``, ``track``, ``retire``, and ``tracked_record``.
 
         The stage has already retired expired records and absorbed finished
@@ -80,7 +80,7 @@ def judged_sets(pool_sets: tuple[RecordSet, ...]) -> tuple[JudgedSet, ...]:
     return selected
 
 
-class JudgingStage(Record2Record):
+class JudgingRecord2Record(Record2Record):
     """Judge records on a background worker, and hold the judged sets until a batch uses them.
 
     Every record is in exactly one state: tracked, in flight, held in the

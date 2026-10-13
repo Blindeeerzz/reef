@@ -645,7 +645,7 @@ Pipeline stages
 
 .. code:: python
 
-   from reef.record2record import GroupDecision, RecordJudging, ReportContext, ReportGrouping, ReportStage
+   from reef.record2record import GroupDecision, RecordJudging, ReportContext, ReportGrouping, ReportRecord2Record
    from reef.record2task import JudgedTasks, ReportTasks, SkippedReport
    from reef.task2batch import DistillBatches, Task2Batch
 
@@ -713,8 +713,8 @@ A reported-feedback recipe implements these hooks:
      - Shape the flat tuple of selected tasks into a batch.
 
 The recipe owns the report policy. Its ``build_record2record(context)`` returns
-``ReportStage(scenario, report_type, grouping, *, exclusive_sources=False,
-ordered_groups=False)``; ``ReportStage(scenario, report_type, ReportGrouping())``
+``ReportRecord2Record(scenario, report_type, grouping, *, exclusive_sources=False,
+ordered_groups=False)``; ``ReportRecord2Record(scenario, report_type, ReportGrouping())``
 trains every report by itself. A ``ReportGrouping`` runs in the
 record-to-record stage and reads only records:
 
@@ -762,7 +762,7 @@ Computed feedback
 
 Use this engine when later traffic completes an earlier record and judging it
 calls a model or another slow service. The recipe writes a ``RecordJudging``.
-Its ``build_record2record`` returns ``JudgingStage(judging, worker, *,
+Its ``build_record2record`` returns ``JudgingRecord2Record(judging, worker, *,
 max_staleness)``, its ``build_record2task`` returns a ``JudgedTasks``, and its
 ``Task2Batch`` shapes the judged samples into batches.
 
