@@ -92,7 +92,7 @@ class CompositeRecipe(Recipe):
 
     components: Mapping[str, Recipe] = field(default_factory=dict)
     name: str = "composite"
-    #: The versioned deployment layout keeps ``components`` under ``recipe.config``.
+    #: A deployment file keeps ``components`` under ``recipe.config``.
     config_sections: ClassVar[tuple[str, ...]] = ("components",)
 
     def __post_init__(self) -> None:

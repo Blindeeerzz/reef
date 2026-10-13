@@ -202,7 +202,6 @@ tree. The ``pipeline`` section sets the batch size:
 
 .. code:: yaml
 
-   schema-version: 2
    recipe:
      implementation: reef.recipe.cordis:CordisRecipe
      config:
@@ -241,7 +240,6 @@ processes. ``reef serve -c`` reads a deployment config. The one in
 
 .. code:: yaml
 
-   schema-version: 2
    recipe:
      implementation: <name>  # resolves to recipes/<name>.yaml
    reef:
