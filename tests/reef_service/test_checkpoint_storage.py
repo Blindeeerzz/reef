@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from reef.runtime import recovery as durable_io
+from reef.train.slime_backend.reef_adapters.arguments import SlimeArguments
+from reef.train.slime_backend.reef_adapters.preflight import prepare_checkpoint_storage
 from reef.train.slime_backend.reef_adapters.training_job import storage as checkpoint_storage
 from reef.train.slime_backend.reef_adapters.training_job.storage import (
     CheckpointStorage,
@@ -447,3 +449,220 @@ class TestCheckpointStorage:
 
         assert plan["blocked"]
         assert "invalid checkpoint catalog" in " ".join(plan["reasons"])
+
+
+INTERRUPTED_JOB_ID = "b" * 64
+TROUBLESHOOTING_ENTRY = "'A restart fails with ambiguous training job' in the troubleshooting guide"
+DOCUMENTED_RECOVERY = (
+    f"{TROUBLESHOOTING_ENTRY} gives a manual recovery for this state, "
+    "which applies only if all of its conditions hold, including that the job for rollout 0 was committed"
+)
+NO_DOCUMENTED_RECOVERY = f"{TROUBLESHOOTING_ENTRY} gives no manual recovery for this state"
+
+
+_LOAD_SAME_AS_SAVE = object()
+
+
+def checkpoint_args(
+    storage: CheckpointStorage, megatron_lora_rank: int = 0, *, load: str | None | object = _LOAD_SAME_AS_SAVE
+) -> SlimeArguments:
+    # Happy-path recovery needs ``--load`` on the same root as ``--save``.
+    resolved_load = str(storage.megatron_root) if load is _LOAD_SAME_AS_SAVE else load
+    return SlimeArguments(
+        save_hf=storage.hf_template,
+        save=str(storage.megatron_root),
+        use_critic=False,
+        hf_checkpoint=None,
+        load=resolved_load,
+        megatron_lora_rank=megatron_lora_rank,
+        critic_save_interval=1,
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("written", "tracker", "megatron_lora_rank", "tracker_state", "documented"),
+    [
+        ((), "0", 0, "names iteration 0", True),
+        (("megatron",), "0", 0, "names iteration 0", False),
+        (("megatron", "hf", "record"), "1", 0, "names iteration 1", False),
+        ((), "1", 0, "names iteration 1", False),
+        (("megatron",), "", 0, "is unreadable: ''", False),
+        ((), None, 0, "is missing", False),
+        ((), "0", 8, "names iteration 0", False),
+    ],
+    ids=[
+        "saved-nothing",
+        "rollout-files-present",
+        "tracker-names-the-rollout",
+        "tracker-names-the-rollout-without-its-files",
+        "tracker-unreadable",
+        "tracker-missing",
+        "per-scenario-lora",
+    ],
+)
+def test_preflight_lists_what_a_killed_running_job_left(
+    tmp_path: Path,
+    written: tuple[str, ...],
+    tracker: str | None,
+    megatron_lora_rank: int,
+    tracker_state: str,
+    documented: bool,
+) -> None:
+    storage = _storage(tmp_path)
+    _complete(storage, 0)
+    hf, megatron = storage.pair_paths(1)
+    record = storage._record_path(1)
+    tracker_path = storage.megatron_root / "latest_checkpointed_iteration.txt"
+    if "megatron" in written:
+        _write_bytes(megatron, 60)
+    if "hf" in written:
+        _write_bytes(hf, 40)
+    if tracker is None:
+        tracker_path.unlink()
+    else:
+        tracker_path.write_text(tracker, encoding="utf-8")
+    if "record" in written:
+        storage.complete(INTERRUPTED_JOB_ID, 1, reward=None)
+    durable_io.write_marker(
+        storage.marker_path,
+        {"status": "RUNNING", "job_id": INTERRUPTED_JOB_ID, "rollout_id": 1, "scenario_step": 1},
+    )
+
+    with pytest.raises(RuntimeError) as refusal:
+        prepare_checkpoint_storage(checkpoint_args(storage, megatron_lora_rank), RetentionConfig())
+
+    message = str(refusal.value)
+    paths = [str(path) for path, name in ((hf, "hf"), (megatron, "megatron"), (record, "record")) if name in written]
+    lora_state = f"yes (--megatron-lora-rank {megatron_lora_rank})" if megatron_lora_rank else "no"
+    assert message.startswith(
+        f"ambiguous training job {INTERRUPTED_JOB_ID}: {storage.marker_path} is RUNNING for rollout 1; "
+        f"Megatron's tracker {tracker_path} {tracker_state}; paths for rollout 1: {', '.join(paths) or 'none'}; "
+        f"per-scenario LoRA: {lora_state}; "
+    )
+    assert (DOCUMENTED_RECOVERY in message) == documented
+    assert (NO_DOCUMENTED_RECOVERY in message) != documented
+    assert message.endswith(f"restore {storage.root} from a copy; the entry says which copy")
+
+
+@pytest.mark.unit
+def test_preflight_names_a_tracker_it_cannot_read(tmp_path: Path) -> None:
+    storage = _storage(tmp_path)
+    _complete(storage, 0)
+    tracker_path = storage.megatron_root / "latest_checkpointed_iteration.txt"
+    tracker_path.unlink()
+    tracker_path.mkdir()
+    durable_io.write_marker(
+        storage.marker_path,
+        {"status": "RUNNING", "job_id": INTERRUPTED_JOB_ID, "rollout_id": 1, "scenario_step": 1},
+    )
+
+    with pytest.raises(RuntimeError) as refusal:
+        prepare_checkpoint_storage(checkpoint_args(storage), RetentionConfig())
+
+    message = str(refusal.value)
+    assert message.startswith(f"ambiguous training job {INTERRUPTED_JOB_ID}: ")
+    assert f"Megatron's tracker {tracker_path} is unreadable: " in message
+    assert NO_DOCUMENTED_RECOVERY in message
+
+
+def committed_marker(storage: CheckpointStorage, rollout_id: int = 0, **overrides) -> dict:
+    return {
+        "status": "COMPLETE",
+        "job_id": f"job-{rollout_id}",
+        "rollout_id": rollout_id,
+        "checkpoint_path": str(storage.pair_paths(rollout_id)[0]),
+        "runtime_load_id": f"load-{rollout_id}",
+        "commit_acknowledged": True,
+        **overrides,
+    }
+
+
+def write_running(storage: CheckpointStorage, committed: dict | None, **overrides) -> dict:
+    running = {
+        "status": "RUNNING",
+        "job_id": INTERRUPTED_JOB_ID,
+        "rollout_id": 1,
+        "scenario_step": 1,
+        "parent_runtime_load_id": "load-0",
+        **overrides,
+    }
+    if committed is not None:
+        running[durable_io.COMMITTED_MARKER_KEY] = committed
+    durable_io.write_marker(storage.marker_path, running)
+    return running
+
+
+@pytest.mark.unit
+def test_preflight_restores_the_committed_marker_when_the_killed_job_saved_nothing(tmp_path: Path, capsys) -> None:
+    storage = _storage(tmp_path)
+    _complete(storage, 0)
+    committed = committed_marker(storage)
+    write_running(storage, committed)
+
+    prepare_checkpoint_storage(checkpoint_args(storage), RetentionConfig())
+
+    assert durable_io.read_marker(storage.marker_path) == committed
+    assert INTERRUPTED_JOB_ID in capsys.readouterr().err
+    # The restored state is the documented manual recovery's, so a second start passes too.
+    prepare_checkpoint_storage(checkpoint_args(storage), RetentionConfig())
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "case",
+    [
+        "no-committed-marker",
+        "commit-not-acknowledged",
+        "per-scenario-lora",
+        "rollout-files-present",
+        "tracker-names-the-rollout",
+        "committed-marker-for-another-rollout",
+        "parent-load-differs",
+        "record-names-another-job",
+        "newer-record",
+        "load-unset",
+        "load-other-checkpoint",
+    ],
+)
+def test_preflight_keeps_refusing_states_it_cannot_prove_safe(tmp_path: Path, case: str) -> None:
+    storage = _storage(tmp_path)
+    _complete(storage, 0)
+    committed = committed_marker(storage)
+    running_overrides: dict = {}
+    megatron_lora_rank = 0
+    load: str | None | object = _LOAD_SAME_AS_SAVE
+    tracker_path = storage.megatron_root / "latest_checkpointed_iteration.txt"
+    if case == "no-committed-marker":
+        committed = None
+    elif case == "commit-not-acknowledged":
+        committed["commit_acknowledged"] = False
+    elif case == "per-scenario-lora":
+        megatron_lora_rank = 8
+    elif case == "rollout-files-present":
+        _write_bytes(storage.pair_paths(1)[1], 60)
+    elif case == "tracker-names-the-rollout":
+        tracker_path.write_text("1", encoding="utf-8")
+    elif case == "committed-marker-for-another-rollout":
+        committed["rollout_id"] = 2
+    elif case == "parent-load-differs":
+        running_overrides["parent_runtime_load_id"] = "load-other"
+    elif case == "record-names-another-job":
+        committed["job_id"] = "job-rejected"
+    elif case == "newer-record":
+        storage.records_root.joinpath(f"{5:020d}.json").write_text(
+            storage._record_path(0).read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    elif case == "load-unset":
+        load = None
+    elif case == "load-other-checkpoint":
+        other = tmp_path / "other-megatron"
+        other.mkdir()
+        (other / "latest_checkpointed_iteration.txt").write_text("0", encoding="utf-8")
+        load = str(other)
+    running = write_running(storage, committed, **running_overrides)
+
+    with pytest.raises(RuntimeError, match=f"ambiguous training job {INTERRUPTED_JOB_ID}"):
+        prepare_checkpoint_storage(checkpoint_args(storage, megatron_lora_rank, load=load), RetentionConfig())
+
+    assert durable_io.read_marker(storage.marker_path) == running
