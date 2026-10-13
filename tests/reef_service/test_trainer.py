@@ -461,16 +461,13 @@ def test_trainer_reserves_batch_and_commits_backend_preparation() -> None:
 
 
 @pytest.mark.unit
-def test_trainer_tells_the_processor_a_dropped_batch_before_acknowledging_it() -> None:
+def test_trainer_acknowledges_a_dropped_batch_as_not_trained() -> None:
     events: list[str] = []
 
     class NotingPipeline(TrainingPipeline):
-        def dropped(self, batch_id: str) -> None:
-            events.append(f"dropped {batch_id}")
-
-        def acknowledge(self, batch_id: str) -> frozenset[str]:
-            events.append(f"acknowledged {batch_id}")
-            return super().acknowledge(batch_id)
+        def acknowledge(self, batch_id: str, *, trained: bool = True) -> frozenset[str]:
+            events.append(f"acknowledged {batch_id} trained={trained}")
+            return super().acknowledge(batch_id, trained=trained)
 
     def noting_pipeline(context: PipelineContext) -> NotingPipeline:
         return NotingPipeline(
@@ -492,7 +489,7 @@ def test_trainer_tells_the_processor_a_dropped_batch_before_acknowledging_it() -
     batch = trainer.reserve_training_batch()
     assert batch is not None
     trainer.reject_pending({"reason": "stale"})
-    assert events == [f"dropped {batch.batch_id}", f"acknowledged {batch.batch_id}"]
+    assert events == [f"acknowledged {batch.batch_id} trained=False"]
     assert trainer.reserve_training_batch() is None, "the dropped batch is consumed"
 
 

@@ -534,8 +534,7 @@ def test_a_dropped_batch_does_not_count_toward_the_next_round(tmp_path: Path) ->
         played(p, task, 0, 1.0)
         played(p, task, 1, 0.0)
     batch_id = p.build_batch().batch_id
-    p.dropped(batch_id)
-    p.acknowledge(batch_id)
+    p.acknowledge(batch_id, trained=False)
     worker.finish()
     assert not p.ready(), "round 0 lands; the dropped batch trained nothing"
     assert [job.round_number for job in worker.submitted] == [0]
