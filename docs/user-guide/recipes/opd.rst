@@ -74,11 +74,3 @@ layout and token ids; a larger model with only the same tokenizer is not
 supported by this loader. The teacher copy takes additional host memory and
 reuses the actor's GPUs without an optimizer update. In LoRA mode the
 student's adapter is cleared while the teacher's weights are loaded.
-
-Math example
-------------
-
-The `math example <../../../recipes/opd/examples/math/README.md>`__ distils
-Qwen3.5-9B into Qwen3.5-9B-Base after OpenThoughts3 SFT and evaluates on
-AIME'24, the model pair of the updated cookbook; the original write-up used
-Qwen3-8B. The page documents the protocol and the deployment configurations.
