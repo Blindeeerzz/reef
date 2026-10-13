@@ -26,6 +26,7 @@ from reef.observability import ExperimentTracker, NullExperimentLogger
 from reef.recipe import Recipe
 from reef.recipe.checkpoint_strategy import EveryNVersions
 from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
+from reef.record2task import JudgedTasks
 from reef.runtime.interfaces import RuntimeContractError
 from reef.scenario import Scenario, StaleTrainingResultError
 from reef.scenario.scenario import validate_component_trainers
@@ -43,7 +44,7 @@ from reef.surface import ComponentSurface, Surface, TextFileTree
 from reef.train import CandidateBackend, ComponentTrainer, PreparedStep, Trainer, TrainStepResult
 from reef.train.evaluation import EvaluationResult, UpdateCandidate
 from reef.train.processors.base import DataProcessor
-from reef.train.processors.computed import ComputedFeedbackProcessor, JudgedTasks, SupportsReceipt
+from reef.train.processors.computed import ComputedFeedbackProcessor, SupportsReceipt
 from reef.train.types import TrainingBatch
 
 from ._threshold_processor import ThresholdProcessor

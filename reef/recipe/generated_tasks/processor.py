@@ -38,10 +38,10 @@ from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Faile
 from reef.core import AgentRecord
 from reef.core.tasks import GeneratedTask, TaskGenerationRequest, TaskGenerator, TaskPlayResult
 from reef.harness.client.tasks import TaskPlay
-from reef.record2dataset.client import DuplicateTask, Generator, HttpGenerator, TaskNameConflict
 from reef.record2record import RecordSet, ReportContext, RoundRequest, RoundStage
-from reef.train.processors.base import TaskResult
-from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks, SampleAssembly
+from reef.record2task import ReportTasks, TaskResult
+from reef.record2task.generator.client import DuplicateTask, Generator, HttpGenerator, TaskNameConflict
+from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 logger = logging.getLogger(__name__)

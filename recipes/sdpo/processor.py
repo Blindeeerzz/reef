@@ -17,7 +17,7 @@ from typing import Any
 from recipes.sdpo.report import SDPOReport
 from reef.core.trajectories import trajectory_reward
 from reef.record2record import ReportContext, ReportStage
-from reef.train.processors.base import Record2Task
+from reef.record2task import Record2Task, ReportTasks
 from reef.train.processors.common import recorded_request, recorded_response
 from reef.train.processors.distill import (
     TeacherRenderer,
@@ -25,7 +25,7 @@ from reef.train.processors.distill import (
     recorded_sample,
     teacher_tokens_limit,
 )
-from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks, SampleAssembly
+from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
 #: The reference's reprompt strings (``sdpo.yaml`` at the pin), used verbatim.

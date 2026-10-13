@@ -18,7 +18,8 @@ from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Faile
 from reef.core import AgentRecord, RequestType
 from reef.core.trajectories import source_record_id
 from reef.record2record import JudgingStage, RecordJudging
-from reef.train.processors.computed import ComputedFeedbackProcessor, JudgedTasks
+from reef.record2task import JudgedTasks
+from reef.train.processors.computed import ComputedFeedbackProcessor
 from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem
 
 pytestmark = pytest.mark.unit

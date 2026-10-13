@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from reef.core.records_types import AgentRecord
+from reef.record2task import ReportTasks
 from reef.train.processors.common import make_policy_trajectory
-from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, ReportTasks, SampleAssembly
+from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 

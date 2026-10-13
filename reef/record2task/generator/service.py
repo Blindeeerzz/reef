@@ -53,7 +53,7 @@ from reef.core.tasks import (
 )
 from reef.core.tasks.harbor import TASK_NAME_PATTERN
 from reef.harness.client.tasks import TaskPlay, TaskPlayer
-from reef.record2dataset.designer import (
+from reef.record2task.generator.designer import (
     Designer,
     DesignerError,
     DesignerReplyError,
@@ -61,7 +61,7 @@ from reef.record2dataset.designer import (
     designer_messages,
     parse_harbor_reply,
 )
-from reef.record2dataset.harbor import (
+from reef.record2task.generator.harbor import (
     GeneratedHarborTask,
     HarborRuns,
     OracleResult,
@@ -70,7 +70,7 @@ from reef.record2dataset.harbor import (
     oracle_check,
     split_generation,
 )
-from reef.record2dataset.wire import (
+from reef.record2task.generator.wire import (
     WireError,
     checked_object,
     checked_string,
@@ -401,7 +401,7 @@ class JobRunner:
                 raise RuntimeError("the job runner is closed")
             self._jobs[job.id] = job
             if self._thread is None:
-                self._thread = threading.Thread(target=self._run, name="record2dataset-jobs", daemon=True)
+                self._thread = threading.Thread(target=self._run, name="generator-jobs", daemon=True)
                 self._thread.start()
         self._queue.put(job)
         return job

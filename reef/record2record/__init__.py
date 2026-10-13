@@ -1,7 +1,7 @@
 """Record to record: the shared stage that decides which records Reef uses, and in what order.
 
 Reef uses records in two ways. It trains on records directly, and it turns
-records into runnable tasks (``reef.record2dataset``). Both need the same
+records into runnable tasks (``reef.recipe.generated_tasks``). Both need the same
 decisions about each record. This package owns those decisions.
 
 Entry point: ``Record2RecordStage`` in ``stage.py``.

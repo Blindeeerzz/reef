@@ -35,17 +35,18 @@ from recipes.tttd.recipe import tttd_record_stage
 from reef.artifact import ArtifactRef
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportBase, TeacherContextReport
-from reef.record2dataset.generated_tasks.processor import GeneratedTaskProcessor, GeneratedTaskTasks
-from reef.record2dataset.generated_tasks.recipe import task_group_record_stage
+from reef.recipe.generated_tasks.processor import GeneratedTaskProcessor, GeneratedTaskTasks
+from reef.recipe.generated_tasks.recipe import task_group_record_stage
 from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
+from reef.record2task import JudgedTasks, ReportTasks
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.train import ProcessorContext, Trainer
 from reef.train.backend import CandidateBackend, PreparedStep
 from reef.train.cordis_backend.processor import CordisProcessor
 from reef.train.processors import DataProcessor, DistillProcessor
-from reef.train.processors.computed import ComputedFeedbackProcessor, JudgedTasks, SupportsReceipt
+from reef.train.processors.computed import ComputedFeedbackProcessor, SupportsReceipt
 from reef.train.processors.distill import DistillTasks, distill_record_stage
-from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks, SampleAssembly
+from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import TaskItem, TrainDataItem, TrainingBatch, TrajectoryItem
 
 from ._threshold_processor import ThresholdProcessor

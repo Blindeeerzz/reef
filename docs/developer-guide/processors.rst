@@ -257,7 +257,7 @@ Task generation contract
 A deployment can train on tasks that a task generator makes. The deployment
 names a ``TaskGenerator`` class in its ``task-generation`` section and selects
 the built-in generated-task recipe,
-``reef.record2dataset.generated_tasks:GeneratedTaskRecipe``. The recipe does not
+``reef.recipe.generated_tasks:GeneratedTaskRecipe``. The recipe does not
 depend on the generator's method, so a team can replace the generator without
 a new recipe. SPADE (``recipes/beta/spade``) is one generator.
 
@@ -321,7 +321,7 @@ it has to ``record_results``. A summary of each round goes to
 record-to-task stage continues with the next round. ``GET /reef/status`` shows the generator, the
 round, the task counts, and the last error under ``task_generation``.
 
-Container operations run in the generator service, ``reef.record2dataset``.
+Container operations run in the generator service, ``reef.record2task.generator``.
 The processor calls this service over HTTP. The ``generator`` deployment
 section configures the service that ``reef serve`` starts.
 See `generator configuration

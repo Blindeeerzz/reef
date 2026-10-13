@@ -531,7 +531,7 @@ def test_training_backends_never_import_inference_implementations() -> None:
 def test_task_generation_input_definition_does_not_depend_on_consumers() -> None:
     module = importlib.import_module("reef.core.tasks.generation")
     imported = _imported_modules(ast.parse(inspect.getsource(module)), package="reef.core.tasks")
-    for dependency in ("reef.train", "reef.record2dataset", "recipes"):
+    for dependency in ("reef.train", "reef.record2task.generator", "recipes"):
         assert _imports_of(imported, dependency) == []
 
 
@@ -554,6 +554,19 @@ def test_record_to_record_stage_depends_only_on_contracts_below_training() -> No
     for path in sorted((REPO_ROOT / "reef" / "record2record").rglob("*.py")):
         package = ".".join(path.parent.relative_to(REPO_ROOT).parts)
         for target in _imported_modules(ast.parse(path.read_text(encoding="utf-8")), package=package):
+            if target == "reef" or target.startswith("reef."):
+                assert any(
+                    target == prefix or target.startswith(prefix + ".") for prefix in allowed
+                ), f"{path.relative_to(REPO_ROOT)} imports {target}"
+
+
+def test_record_to_task_contract_depends_only_on_the_record_stage() -> None:
+    # The trainer and the recipes import the contract, so it never imports them or the generator service.
+    allowed = ("reef.core", "reef.record2record", "reef.record2task")
+    for path in sorted((REPO_ROOT / "reef" / "record2task").glob("*.py")):
+        for target in _imported_modules(ast.parse(path.read_text(encoding="utf-8")), package="reef.record2task"):
+            if target.startswith("reef.record2task.generator"):
+                raise AssertionError(f"{path.relative_to(REPO_ROOT)} imports the generator service: {target}")
             if target == "reef" or target.startswith("reef."):
                 assert any(
                     target == prefix or target.startswith(prefix + ".") for prefix in allowed

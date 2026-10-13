@@ -27,8 +27,8 @@ from typing import Any
 
 from reef.core.trajectories import trajectory_reward
 from reef.record2record import ReportContext, ReportStage
-from reef.train.processors.base import Record2Task
-from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks, SampleAssembly
+from reef.record2task import Record2Task, ReportTasks
+from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
 logger = logging.getLogger(__name__)

@@ -1,16 +1,15 @@
-"""The record-to-task and task-to-batch contracts.
+"""The task-to-batch contract: tasks become batches.
 
-A record set from the record-to-record stage becomes tasks (``Record2Task``),
-and tasks become batches (``DataProcessor``, the task-to-batch stage). A task
-is a ``TrainDataItem``. The two engines that implement both for recipes live
-beside this module: ``reported`` (feedback received in a report) and
-``computed`` (feedback computed from traffic).
+A record set from the record-to-record stage becomes tasks
+(:class:`~reef.record2task.Record2Task`), and ``DataProcessor`` shapes the
+tasks into batches. A task is a ``TrainDataItem``. The two engines that
+implement it for recipes live beside this module: ``reported`` (feedback
+received in a report) and ``computed`` (feedback computed from traffic).
 """
 
 from __future__ import annotations
 
 import time
-from abc import ABC, abstractmethod
 from collections.abc import Hashable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -19,7 +18,8 @@ from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase
 from reef.core.training_request import TrainingRequest
 from reef.observability import ExperimentLogger
-from reef.record2record import AssemblyStatus, PassThroughStage, Record2RecordStage, RecordSet, SetAssembly
+from reef.record2record import AssemblyStatus, PassThroughStage, Record2RecordStage
+from reef.record2task import NoTasks, Record2Task
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch
 
 
@@ -29,59 +29,6 @@ class InstructionFailure:
 
     error: str
     metrics: Mapping[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class TaskResult:
-    """The tasks made from one record set, and what the record stage does with the set."""
-
-    assembly: SetAssembly
-    tasks: tuple[TrainDataItem, ...] = ()
-
-    @classmethod
-    def ready(cls, tasks: tuple[TrainDataItem, ...], runtime_load_id: str | None = None) -> TaskResult:
-        """The set trains as ``tasks``. ``runtime_load_id`` is the version of their data, when known."""
-        return cls(SetAssembly(AssemblyStatus.READY, runtime_load_id), tasks)
-
-    @classmethod
-    def skipped(cls) -> TaskResult:
-        """The set cannot train. The record stage ends its records."""
-        return cls(SetAssembly(AssemblyStatus.REJECTED))
-
-
-class Record2Task(ABC):
-    """The record-to-task stage: turn one record set into tasks.
-
-    Runs on the trainer thread without network or model calls. Raise on a
-    broken training contract.
-    """
-
-    @abstractmethod
-    def make_tasks(self, record_set: RecordSet) -> TaskResult:
-        """Return the tasks of ``record_set``, or a skip."""
-
-    def status(self) -> Mapping[str, Any]:
-        """Return JSON-safe state that the processor adds to its status."""
-        return {}
-
-    def operational_metrics(self) -> Mapping[str, float | int]:
-        """Return numeric state that the processor adds to its metrics."""
-        return {}
-
-    def derivation_pending(self) -> bool:
-        """Return True while background work, such as a running round, can change what trains."""
-        return False
-
-    def close(self) -> None:
-        """Release resources that the stage owns. Calling it more than one time is safe."""
-        return
-
-
-class NoTasks(Record2Task):
-    """Make no tasks. The record stage forgets each set; the no-update default."""
-
-    def make_tasks(self, record_set: RecordSet) -> TaskResult:
-        return TaskResult(SetAssembly(AssemblyStatus.INGESTED))
 
 
 class DataProcessor:

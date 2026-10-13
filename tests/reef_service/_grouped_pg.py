@@ -22,9 +22,10 @@ from typing import Any
 from reef.core.records_types import AgentRecord
 from reef.core.trajectories import trajectory_reward
 from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
+from reef.record2task import ReportTasks
 from reef.train.algos import StepSignal, TrainingObjective
 from reef.train.algos.helpers import next_steps
-from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks, SampleAssembly
+from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectory_groups
 
 GROUPED_PG_OBJECTIVE = "reef_service._grouped_pg:GroupedPolicyObjective"

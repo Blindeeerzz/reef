@@ -12,12 +12,12 @@ generator's method:
   importance sampling loss.
 - ``recipe``: the configuration that binds them.
 
-The recipe lives beside the generator service because it plays tasks through it.
+The recipe plays tasks through the generator service (``reef.record2task.generator``).
 """
 
-from reef.record2dataset.generated_tasks.objective import TaskGroupObjective
-from reef.record2dataset.generated_tasks.processor import GeneratedTaskProcessor, GeneratedTaskTasks
-from reef.record2dataset.generated_tasks.recipe import GeneratedTaskRecipe, TaskGenerationConfig
+from reef.recipe.generated_tasks.objective import TaskGroupObjective
+from reef.recipe.generated_tasks.processor import GeneratedTaskProcessor, GeneratedTaskTasks
+from reef.recipe.generated_tasks.recipe import GeneratedTaskRecipe, TaskGenerationConfig
 
 __all__ = [
     "GeneratedTaskProcessor",

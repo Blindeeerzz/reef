@@ -11,7 +11,8 @@ import pytest
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportBase, ReportValidationError
 from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
-from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks
+from reef.record2task import ReportTasks
+from reef.train.processors.reported import ReportedFeedbackProcessor
 from reef.train.types import ProcessorContext, TaskItem, TrainDataItem, TrainingBatch
 
 
@@ -123,7 +124,6 @@ class GroupProcessor(SampleProcessor):
 def test_a_report_shaped_for_another_component_is_released_not_raised() -> None:
     """Ingress of a scenario with several components admits what any accepts; this trainer keeps only its own."""
     from recipes.tttd.report import TTTDGroupedRolloutReport
-
     from reef.core.reports import ScoredRolloutReport
     from reef.recipe.composite import any_component_report
 

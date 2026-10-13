@@ -22,7 +22,7 @@ from reef.service.deploy.service_config import ServiceConfig
 
 OPENCLAWRL_RECIPE = "recipes.openclawrl.recipe:OpenClawRLRecipe"
 SAO_RECIPE = "recipes.sao.recipe:SAORecipe"
-GENERATED_TASK_RECIPE = "reef.record2dataset.generated_tasks:GeneratedTaskRecipe"
+GENERATED_TASK_RECIPE = "reef.recipe.generated_tasks:GeneratedTaskRecipe"
 
 
 def test_configured_handler_rejects_a_function() -> None:

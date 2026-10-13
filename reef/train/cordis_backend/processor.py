@@ -6,8 +6,9 @@ from reef.core import RequestType
 from reef.core.training_request import TrainingRequest
 from reef.core.trajectories import make_trajectory
 from reef.record2record import InferenceStage, RecordSet, SingleRecordSet
-from reef.train.processors.base import DataProcessor, Record2Task, TaskResult
-from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, ReportTasks, reported_task
+from reef.record2task import Record2Task, ReportTasks, TaskResult
+from reef.train.processors.base import DataProcessor
+from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, reported_task
 from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem
 
 

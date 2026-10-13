@@ -78,13 +78,18 @@ import a concrete integration.
 |                         | recovery, and lifecycle                                  | implementations                            |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
 | ``reef/recipe/``        | the contract a method implements, dotted                 | external cookbook methods                  |
-|                         | resolution, runtime binding, and built-in Reefine        |                                            |
+|                         | resolution, runtime binding, and the built-in Reefine    |                                            |
+|                         | and generated-task recipes                               |                                            |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
 | ``reef/train/``         | the trainer loop, processor engines, batch               | HTTP endpoints, deployment                 |
 |                         | types, backend integrations                              | configuration parsing                      |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
 | ``reef/record2record/`` | which records Reef uses and in what order: report        | sample and batch assembly, record storage, |
 |                         | grouping, judging, eligibility checks, selection order   | task generation                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/record2task/``   | turning a record set into tasks (``Record2Task``,        | which records train, batch shape,          |
+|                         | ``ReportTasks``, ``JudgedTasks``), and the generator     | training loops                             |
+|                         | service that writes, checks, and plays Harbor tasks      |                                            |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
 | ``reef/runtime/``       | backend-neutral runtime contracts, scheduling,           | concrete inference and training            |
 |                         | weight synchronization and publication coordination      | integrations                               |
@@ -246,12 +251,12 @@ The extension points those packages expose are in `Python API
   ``ScenarioStore`` combines a ``RecordStore`` with committed scenario state;
   ``ScenarioStorage`` owns archival and retention.
 - Does it turn a designer's replies into Harbor tasks, check them with Harbor
-  or play them with an agent? Put it in ``reef/record2dataset/``, the
+  or play them with an agent? Put it in ``reef/record2task/generator/``, the
   generator service ``reef serve`` starts beside the HTTP service from a
-  ``generator`` section; ``reef/service/deploy/generator.py`` assembles that
-  child. The built-in generated-task recipe, which plays generated tasks
+  ``generator`` section. ``reef/service/deploy/generator.py`` assembles that
+  child, and ``reef/service/deploy/generator_process.py`` runs it. The built-in generated-task recipe, which plays generated tasks
   through that service and trains on them, is in
-  ``reef/record2dataset/generated_tasks/``. The ``TaskGenerator`` contract is in
+  ``reef/recipe/generated_tasks/``. The ``TaskGenerator`` contract is in
   ``reef/core/tasks/``. What a method asks the designer for, and what it does
   with the results, stays in the method's task generator under ``recipes/``.
 - Does it implement storage? Put it in ``reef/storage/``. ``sql_records.py``
@@ -274,9 +279,12 @@ The extension points those packages expose are in `Python API
   the shared composition engine lives in ``reef/harness/compose/``. It derives
   from cordis 4.0.0-rc.8; see ``reef/harness/compose/UPSTREAM.md``. ``reef/train/slime_backend/`` is the
   weights counterpart.
-- Does it turn records and feedback into a batch or step signal? Put it in
-  ``reef/train/processors/`` or ``reef/train/algos/``. A recipe selects and
-  binds that machinery; it should not reimplement it.
+- Does it decide which records train, or in which groups? Put it in
+  ``reef/record2record/``. Does it turn one record set into tasks? Put the
+  shared contract in ``reef/record2task/``. Does it shape tasks into a batch
+  or a step signal? Put it in ``reef/train/processors/`` or
+  ``reef/train/algos/``. A recipe selects and binds that machinery; it should
+  not reimplement it.
 - Is it HTTP-specific? Keep the aiohttp adapter in ``reef/service/routes/``
   and put transport-independent behavior in a service or domain object.
 - Does it orchestrate a benchmark, task, grader, or external environment?

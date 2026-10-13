@@ -1,4 +1,4 @@
-"""Run the generator service from the deployment ``reef serve`` resolved, or from a deployment file."""
+"""Run the generator service (``reef.record2task.generator``) from the deployment ``reef serve`` resolved, or from a file."""
 
 from __future__ import annotations
 
@@ -10,9 +10,15 @@ from pathlib import Path
 
 from aiohttp import web
 
-from reef.record2dataset.designer import ReefDesigner
-from reef.record2dataset.harbor import HarborRuns
-from reef.record2dataset.service import GeneratorService, HarborChecks, JobRunner, ReefTaskPlays, readiness_probes
+from reef.record2task.generator.designer import ReefDesigner
+from reef.record2task.generator.harbor import HarborRuns
+from reef.record2task.generator.service import (
+    GeneratorService,
+    HarborChecks,
+    JobRunner,
+    ReefTaskPlays,
+    readiness_probes,
+)
 from reef.service.deploy.config_utils import DeployConfigError, load_config
 from reef.service.deploy.generator import GeneratorSettings, generator_settings
 from reef.service.deploy.inference import local_service_url
@@ -54,7 +60,7 @@ def generator_service(settings: ServiceConfig, generator: GeneratorSettings) -> 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m reef.record2dataset",
+        prog="python -m reef.service.deploy.generator_process",
         description="The generator service: writes, checks and plays Harbor tasks for a task generating processor.",
     )
     parser.add_argument(

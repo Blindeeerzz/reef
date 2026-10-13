@@ -21,9 +21,9 @@ from reef.core.tasks import (
     read_split_manifest,
     write_harbor_task,
 )
-from reef.record2dataset import TaskNameConflict
-from reef.record2dataset.generated_tasks import GeneratedTaskTasks
-from reef.record2dataset.generated_tasks.processor import RoundJob
+from reef.recipe.generated_tasks import GeneratedTaskTasks
+from reef.recipe.generated_tasks.processor import RoundJob
+from reef.record2task.generator import TaskNameConflict
 from reef.train.types import ProcessorContext
 
 DESCRIPTION = "shell tasks with hidden state under /var and /etc"

@@ -173,7 +173,7 @@ play. SPADE is a task generator. The deployment selects it in the
 ``task-generation`` section, and the built-in generated-task recipe plays the
 tasks and trains on them (see `the task-generation section
 <../reference/configuration.rst#the-task-generation-section>`__). Writing,
-checking and playing tasks is Reef's (``reef.record2dataset``, the generator
+checking and playing tasks is Reef's (``reef.record2task.generator``, the generator
 service ``reef serve`` starts beside the HTTP service). The package holds the
 method: the Designer's adversarial experience section, the hint arm each task
 asks for, and the hint based regret reported against the Designer's receipt.

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from reef.record2record import ReportStage
-from reef.train.processors.base import Record2Task
-from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, ReportTasks, SampleAssembly
+from reef.record2task import Record2Task, ReportTasks
+from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 

@@ -29,20 +29,20 @@ from reef.core.tasks import (
 from reef.harness.client.tasks import TaskPlay
 from reef.inference.http import InferenceProxyRuntime
 from reef.recipe.errors import RecipeConfigError
-from reef.record2dataset.generated_tasks import (
+from reef.recipe.generated_tasks import (
     GeneratedTaskProcessor,
     GeneratedTaskRecipe,
     TaskGenerationConfig,
     TaskGroupObjective,
 )
-from reef.record2dataset.generated_tasks.processor import (
+from reef.recipe.generated_tasks.processor import (
     GeneratedTaskTasks,
     RoundJob,
     episode_assembly,
     reported_task_name,
     rewards_of,
 )
-from reef.record2dataset.generated_tasks.recipe import task_group_record_stage
+from reef.recipe.generated_tasks.recipe import task_group_record_stage
 from reef.record2record import GroupDecision, ReportContext
 from reef.train.algos.registry import resolve_objective
 from reef.train.types import ProcessorContext, TrainingBatch, trajectory_groups
@@ -666,7 +666,7 @@ def test_the_section_selects_a_generator_class_built_once_for_each_scenario(tmp_
     ("setting", "message"),
     [
         (f"{MODULE}:ScriptedGenerator.missing", "cannot import task-generation"),
-        ("reef.record2dataset.generated_tasks:GeneratedTaskRecipe", "must name a class that inherits TaskGenerator"),
+        ("reef.recipe.generated_tasks:GeneratedTaskRecipe", "must name a class that inherits TaskGenerator"),
         ("reef.core.tasks:TaskGenerator", "names an abstract class"),
     ],
 )

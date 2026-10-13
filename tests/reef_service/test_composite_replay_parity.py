@@ -27,9 +27,10 @@ from reef.background_jobs import SupportsReceipt
 from reef.core import AgentRecord, RequestType
 from reef.dispatcher import Dispatcher
 from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
+from reef.record2task import JudgedTasks
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train import ComponentTrainer, Trainer
-from reef.train.processors.computed import ComputedFeedbackProcessor, JudgedTasks
+from reef.train.processors.computed import ComputedFeedbackProcessor
 from reef.train.types import TrainingBatch
 
 from ._threshold_processor import ThresholdProcessor

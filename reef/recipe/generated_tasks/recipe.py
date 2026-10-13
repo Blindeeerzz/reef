@@ -14,8 +14,8 @@ from reef.core.tasks import TaskGenerator
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.recipe.errors import RecipeConfigError
-from reef.record2dataset.generated_tasks.objective import TaskGroupObjective
-from reef.record2dataset.generated_tasks.processor import (
+from reef.recipe.generated_tasks.objective import TaskGroupObjective
+from reef.recipe.generated_tasks.processor import (
     DEFAULT_BATCHES_PER_ROUND,
     DEFAULT_PLAYS_PER_TASK,
     DEFAULT_SCAFFOLD_TOLERANCE,

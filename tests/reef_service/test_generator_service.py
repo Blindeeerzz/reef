@@ -23,7 +23,8 @@ from reef.core import AgentRecord, RequestType
 from reef.core.artifact_ref import LiveWeightArtifactRef
 from reef.core.tasks import HarborTask, TaskGenerationRequest, read_harbor_task, read_split_manifest
 from reef.harness.client.tasks import TaskPlay
-from reef.record2dataset import (
+from reef.recipe.generated_tasks import GeneratedTaskTasks
+from reef.record2task.generator import (
     Designer,
     DesignerAnswer,
     DesignerError,
@@ -43,9 +44,8 @@ from reef.record2dataset import (
     TaskPlays,
     readiness_probes,
 )
-from reef.record2dataset.generated_tasks import GeneratedTaskTasks
-from reef.record2dataset.service import CLOSE_GRACE_S, DockerProbe, HarborProbe, ModuleProbe
-from reef.record2dataset.wire import (
+from reef.record2task.generator.service import CLOSE_GRACE_S, DockerProbe, HarborProbe, ModuleProbe
+from reef.record2task.generator.wire import (
     WireError,
     designer_request_document,
     play_document,
@@ -535,7 +535,7 @@ def test_healthz_is_503_naming_what_is_missing_and_200_once_every_probe_passes(
     async def body(generator: HttpGenerator) -> object:
         return [await generator.request("GET", "/healthz") for _ in range(2)]
 
-    with caplog.at_level(logging.WARNING, logger="reef.record2dataset.service"):
+    with caplog.at_level(logging.WARNING, logger="reef.record2task.generator.service"):
         first, second = run_with(built, body)
     assert (
         first

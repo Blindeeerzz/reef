@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from reef.record2dataset import __main__ as generator_main
 from reef.runtime.executor.config import ExecutorSettings, role_executor_settings, select_executor
+from reef.service.deploy import generator_process as generator_main
 from reef.service.deploy.config_utils import DeployConfigError
 from reef.service.deploy.execution import service_executor_selection, validate_services
 from reef.service.deploy.generator import attach_generator_service, generator_service, generator_settings
@@ -36,7 +36,7 @@ def test_the_generator_is_started_before_the_http_service_which_depends_on_it() 
     assert generator == {
         "name": "generator",
         "role": "generator",
-        "command": [sys.executable, "-m", "reef.record2dataset"],
+        "command": [sys.executable, "-m", "reef.service.deploy.generator_process"],
         "endpoint": "http://{host}:8911",
         "ready": generator["ready"],
         "ready_timeout": 90,
@@ -129,7 +129,7 @@ def test_the_spade_example_selects_the_generated_task_recipe_and_the_spade_gener
     resolved, _ = resolve_deployment_config(yaml.safe_load(example.read_text()), None, example)
     assert [service["name"] for service in resolved["services"]] == ["generator", "reef"]
     settings = service_config_from_mapping(resolved)
-    assert settings.recipe == "reef.record2dataset.generated_tasks:GeneratedTaskRecipe"
+    assert settings.recipe == "reef.recipe.generated_tasks:GeneratedTaskRecipe"
     assert settings.recipe_settings["rounds"] == 20 and settings.recipe_settings["plays_per_task"] == 4
     assert settings.task_generation_settings is not None
     assert settings.task_generation_settings["module"] == "recipes.beta.spade:SpadeTaskGenerator"

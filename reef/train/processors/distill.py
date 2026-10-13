@@ -20,14 +20,9 @@ from typing import Any
 
 from reef.core.reports import TeacherContextReport
 from reef.record2record import ReportGrouping, ReportStage
+from reef.record2task import ReportTasks, SkippedReport
 from reef.train.processors.common import flatten_content, recorded_request, recorded_response
-from reef.train.processors.reported import (
-    ReportContext,
-    ReportedFeedbackProcessor,
-    ReportTasks,
-    SampleAssembly,
-    SkippedReport,
-)
+from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 logger = logging.getLogger(__name__)

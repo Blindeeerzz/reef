@@ -225,7 +225,8 @@ def test_request_only_batch_preserves_manual_training_contract():
 
 
 def test_report_processor_reserves_and_acknowledges_mixed_data():
-    from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks
+    from reef.record2task import ReportTasks
+    from reef.train.processors.reported import ReportedFeedbackProcessor
     from reef.train.types import ProcessorContext
 
     class MixedTasks(ReportTasks):

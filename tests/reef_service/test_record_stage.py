@@ -20,11 +20,11 @@ from reef.record2record import (
     SetAssembly,
     SingleRecordSet,
 )
+from reef.record2task import Record2Task, ReportTasks, SkippedReport, TaskResult
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.train import ProcessorContext, Trainer
 from reef.train.processors import DataProcessor
-from reef.train.processors.base import Record2Task, TaskResult
-from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks, SkippedReport
+from reef.train.processors.reported import ReportedFeedbackProcessor
 from reef.train.types import TaskItem, TrainDataItem, TrainingBatch
 
 from ._threshold_processor import ThresholdProcessor

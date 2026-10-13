@@ -11,7 +11,7 @@ import pytest
 from reef_service.test_task_player import StandInReef
 
 from reef.core.tasks import TaskGenerationRequest
-from reef.record2dataset import (
+from reef.record2task.generator import (
     DesignerError,
     DesignerReplyError,
     DesignerRequest,
@@ -20,7 +20,7 @@ from reef.record2dataset import (
     designer_prompt,
     parse_harbor_reply,
 )
-from reef.record2dataset.wire import designer_request_document
+from reef.record2task.generator.wire import designer_request_document
 
 pytestmark = pytest.mark.unit
 

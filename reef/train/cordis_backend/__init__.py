@@ -38,14 +38,7 @@ from reef.train.cordis_backend.backend import (
 from reef.train.cordis_backend.contracts import StepProgress
 from reef.train.cordis_backend.manifest import FailureManifest, FailureObservation, FailureRecord
 from reef.train.cordis_backend.processor import CordisProcessor
-from reef.train.cordis_backend.strategies import (
-    EpisodeScorer,
-    Promoter,
-    Proposer,
-    StepProposal,
-    VerifierRewardScorer,
-    untrusted_text,
-)
+from reef.train.cordis_backend.strategies import EpisodeScorer, Promoter, Proposer, StepProposal, VerifierRewardScorer
 
 __all__ = [
     "CordisBackend",
@@ -66,5 +59,4 @@ __all__ = [
     "StepProgress",
     "StepProposal",
     "VerifierRewardScorer",
-    "untrusted_text",
 ]

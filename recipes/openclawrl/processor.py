@@ -22,8 +22,9 @@ from recipes.openclawrl.turns import TurnJudgment, validate_teacher_cands
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.trajectories import source_record_id, trajectory_reward
 from reef.record2record import JudgingStage
+from reef.record2task import JudgedTasks
 from reef.train.processors.common import make_policy_trajectory
-from reef.train.processors.computed import ComputedFeedbackProcessor, JudgedTasks
+from reef.train.processors.computed import ComputedFeedbackProcessor
 from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem, policy_row_violation
 
 logger = logging.getLogger(__name__)

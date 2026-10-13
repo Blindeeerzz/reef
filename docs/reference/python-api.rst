@@ -657,10 +657,11 @@ batches, and exactly-once consumption; the method implements only the hooks
 below. They run synchronously on the trainer thread, so they must not block on
 network or model latency.
 
-Each processor also receives a record-to-task stage (``Record2Task``) as
-``record2task``. It turns each record set into tasks (``TrainDataItem``
-values). The recipe builds it in ``build_record2task(context)``. Reported
-feedback supplies a ``make_sample`` hook that assembles valid reports;
+Each processor also receives a record-to-task stage
+(``reef.record2task.Record2Task``) as ``record2task``. It turns each record set
+into tasks (``TrainDataItem`` values). The recipe builds it in
+``build_record2task(context)``. Reported feedback supplies a ``make_sample``
+hook on ``reef.record2task.ReportTasks`` that assembles valid reports;
 computed feedback supplies an asynchronous ``judge`` that derives new feedback.
 Reports must reference existing inference records in the same scenario.
 
@@ -806,7 +807,7 @@ Task generation
 
 ``async record_results(results: tuple[TaskPlayResult, ...])`` is optional. The
 default keeps nothing. The built-in generated-task recipe,
-``reef.record2dataset.generated_tasks:GeneratedTaskRecipe``, calls these methods.
+``reef.recipe.generated_tasks:GeneratedTaskRecipe``, calls these methods.
 See `Processors <../developer-guide/processors.rst#task-generation-contract>`__
 for the round and its failure behavior.
 

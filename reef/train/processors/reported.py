@@ -12,28 +12,27 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 from reef.core.records_types import AgentRecord, RequestType
 from reef.record2record import (
     GroupDecision,
     Record2RecordStage,
-    RecordSet,
-    ReportCandidate,
     ReportContext,
     ReportGrouping,
     ReportStage,
     accepted_by,
     report_sets,
 )
-from reef.train.processors.base import DataProcessor, Record2Task, TaskResult
+from reef.record2task import Record2Task
+from reef.train.processors.base import DataProcessor
 from reef.train.processors.common import (
     make_multi_turn_policy_trajectory,
     make_policy_trajectory,
     sample_assembly_config_fields,
 )
-from reef.train.types import ProcessorContext, TaskItem, TrainDataItem, TrainingBatch, TrajectoryItem
+from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 logger = logging.getLogger(__name__)
 
@@ -41,53 +40,14 @@ __all__ = [
     "GroupDecision",
     "ReportContext",
     "ReportGrouping",
-    "ReportTasks",
     "ReportedFeedbackProcessor",
     "SampleAssembly",
-    "SkippedReport",
     "accepted_by",
 ]
 
 #: Report policy that moved from the processor to the recipe's ``ReportStage``. A subclass that still
 #: defines one fails at import, because it would otherwise train with the default policy without an error.
 MOVED_REPORT_HOOKS = ("grouping", "decide_group", "is_training_report", "exclusive_sources", "ordered_groups")
-
-
-@dataclass(frozen=True)
-class SkippedReport:
-    """``make_sample`` returns this for a valid report that cannot train. The stage releases the report."""
-
-    reason: str
-
-
-class ReportTasks(Record2Task, ABC):
-    """Turn one valid report and its inference records into one task.
-
-    A recipe implements ``make_sample``. The stage attaches the report ID and
-    its ordered references to the task's ``source_agent_record_ids``.
-    """
-
-    @abstractmethod
-    def make_sample(self, context: ReportContext) -> TrainDataItem | SkippedReport:
-        """Assemble valid feedback into data; raise on a broken training contract.
-
-        Runs on the trainer thread without network or model calls. Return
-        ``SkippedReport`` for a valid report that cannot train.
-        """
-
-    def make_tasks(self, record_set: RecordSet) -> TaskResult:
-        if not isinstance(record_set, ReportCandidate):
-            raise TypeError(
-                f"{type(self).__name__} makes tasks from report candidates, not {type(record_set).__name__}"
-            )
-        context = record_set.context
-        sample = self.make_sample(context)
-        if isinstance(sample, SkippedReport):
-            return TaskResult.skipped()
-        if not isinstance(sample, (TrajectoryItem, TaskItem)):
-            raise TypeError(f"{type(self).__name__}.make_sample must return a TrainDataItem")
-        report_id = context.report.agent_record_id
-        return TaskResult.ready((replace(sample, source_agent_record_ids=(*context.references, report_id)),))
 
 
 class ReportedFeedbackProcessor(DataProcessor, ABC):

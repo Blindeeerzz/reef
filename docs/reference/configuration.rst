@@ -1147,7 +1147,7 @@ The ``task-generation`` section
 -------------------------------
 
 Only the built-in generated-task recipe,
-``reef.record2dataset.generated_tasks:GeneratedTaskRecipe``, reads this section.
+``reef.recipe.generated_tasks:GeneratedTaskRecipe``, reads this section.
 Another weight-training recipe refuses it, and a deployment that pairs it with
 a recipe that trains no weights fails at startup. When present, Reef calls the
 named class's ``from_config`` method once for each scenario.
@@ -1160,7 +1160,7 @@ named class's ``from_config`` method once for each scenario.
 .. code:: yaml
 
    recipe:
-     implementation: reef.record2dataset.generated_tasks:GeneratedTaskRecipe
+     implementation: reef.recipe.generated_tasks:GeneratedTaskRecipe
      config:
        generator-url: ${endpoints.generator}
        rounds: 20
@@ -1201,7 +1201,7 @@ The ``generator`` section
 -------------------------
 
 Absent by default. When present, ``reef serve`` starts the generator service
-(``python -m reef.record2dataset``) before the HTTP service, which depends on
+(``python -m reef.service.deploy.generator_process``) before the HTTP service, which depends on
 it, and publishes its address as ``${endpoints.generator}`` for the recipe to
 consume. The generator writes, checks and plays Harbor tasks for the
 generated-task recipe and for a task generator such as SPADE, under the same
@@ -1240,7 +1240,7 @@ The generator reads the resolved deployment through ``REEF_CONFIG`` like the
 other children: the Reef address from ``reef.host`` and ``reef.port``, the
 token from ``reef.token``, and the served model from ``inference.model-path``
 or ``inference.upstream-model``. Without ``reef serve``,
-``python -m reef.record2dataset -c serve.yaml`` runs it from the same file.
+``python -m reef.service.deploy.generator_process -c serve.yaml`` runs it from the same file.
 
 Experiment tracking
 -------------------

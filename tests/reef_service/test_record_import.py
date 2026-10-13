@@ -7,22 +7,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-
 from aiohttp.test_utils import TestClient, TestServer
 
 from reef.artifact import InMemoryRepositoryBackend
 from reef.core.reports import ScoredRolloutReport
 from reef.dispatcher import Dispatcher
 from reef.recipe import Recipe
+from reef.record2task import ReportTasks
 from reef.runtime.interfaces import InferenceHandler
 from reef.service.app import create_app
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train import PreparedStep, Trainer, TrainingBatch
-from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks
+from reef.train.processors.reported import ReportedFeedbackProcessor
 from reef.train.types import TaskItem
 
 from .test_reef_trainer_contracts import ExampleBackend
-
 
 HEADERS = {"x-reef-scenario": "s", "Authorization": "Bearer import-test-token"}
 
