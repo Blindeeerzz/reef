@@ -11,8 +11,8 @@ On-policy distillation from a separate frozen teacher as a Reef weight-training 
 
 ```text
 opd/
-  recipe.py          OPDRecipe: training spec, loss family "opd"; its report contract is TeacherContextReport
-  processor.py       the shared DistillProcessor reading the recorded prompt and response ids as the teacher sequence
+  recipe.py          OPDRecipe: training spec, loss family "opd", and its stages; its report contract is TeacherContextReport
+  processor.py       OPDTasks and OPDBatches: the recorded prompt and response ids as the teacher sequence
   objective.py       selects the opd loss; one optimizer step per batch
   slime/             the loss family: OPD's defaults on the Slime backend's distillation base
 ```
@@ -20,6 +20,49 @@ opd/
 ## The teacher
 
 `--opd-teacher=separate` names a checkpoint (`--opd-teacher-checkpoint`) that the teacher pass swaps into the actor's model layout, so teacher and student must share the architecture, parallel layout and token ids. `--opd-top-k=1` selects the base's sampled-token reverse-KL estimator: the loss uses the teacher's log-probability of the student's sampled token, normalized over the full vocabulary, with the score-function gradient. The other divergences and representations of the base are reachable through the inherited `--opd-*` flags; changing them changes the method.
+
+## Teacher engine
+
+For a larger teacher with the same token ids, the deployment's `teacher`
+section serves the teacher on its own frozen SGLang process with its own Ray
+GPUs, and the bridge scores each recorded sequence there instead of swapping a
+checkpoint into the actor:
+
+```yaml
+teacher:
+  model-path: Qwen/Qwen3-32B
+  num-gpus: 2
+  port: 30001
+  options:
+    dtype: bfloat16
+    context-length: 32768
+    chunked-prefill-size: 2048
+    mem-fraction-static: 0.80
+training:
+  options:
+    opd-teacher: separate
+    opd-top-k: 1
+    rollout-temperature: 1.0
+```
+
+`num-gpus` is both the teacher's GPU budget and its tensor parallel size, on
+top of the student's training and inference GPUs; its context limit must
+cover the teacher prefix plus the recorded response. Drop
+`opd-teacher-checkpoint`. Set the student's Megatron `vocab-size` to the
+checkpoint's `vocab_size`, the embedding rows including the padding beyond
+the tokenizer (151936 for Qwen3): the student samples from the padded rows
+too, and the bridge scores them like any other token.
+
+The bridge sends the exact recorded ids to the engine's `/generate` with zero
+output tokens, sixteen requests at a time, checks every returned response id,
+and fills the teacher probability columns before the optimizer step;
+`perf/distill_teacher_time` is the scoring wall time in seconds. A vocabulary
+or decoder mismatch, an endpoint serving another model, a missing row or a
+timeout fails the step. The engine path supports the sampled reverse KL and
+teacher-selected top-K objectives at rollout temperature 1; the exact
+full-vocabulary and student-selected top-K representations stay on the
+checkpoint teacher. Engine log-probs come from bf16 kernels rather than the
+trainer's, a small constant bias for a frozen teacher.
 
 ## Where the rest is documented
 
