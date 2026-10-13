@@ -32,8 +32,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from reef.core.tasks import HarborTask, TaskSplit, split_by_source
-from reef.harness.episodes.trajectory import primary_reward
+from reef.core.tasks import HarborTask, TaskSplit, primary_reward, split_by_source
 from reef.record2task.generator.designer import SKILL_PATTERN, HarborReply
 
 DEFAULT_VERIFIER_TIMEOUT_S = 300
