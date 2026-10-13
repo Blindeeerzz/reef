@@ -91,9 +91,9 @@ import a concrete integration.
 |                         | ``ReportTasks``, ``JudgedTasks``), and the generator     | training loops                             |
 |                         | service that writes, checks, and plays Harbor tasks      |                                            |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/evaluation/``    | candidate evaluation: whether a candidate is published,  | proposing candidates, training loops,      |
-|                         | built-in selection policies, and the ``evaluation``      | artifact publication                       |
-|                         | plugin configuration                                     |                                            |
+| ``reef/evaluation/``    | candidate evaluation: running and scoring evaluation     | proposing candidates, training loops,      |
+|                         | episodes, built-in selection policies, and the           | artifact publication                       |
+|                         | ``evaluation`` plugin configuration                      |                                            |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
 | ``reef/task2batch/``    | shaping the tasks of the selected record sets into one   | which records train, the training loop,    |
 |                         | batch (``Task2Batch``)                                   | step signals                               |
@@ -155,7 +155,7 @@ package's own submodules and third-party libraries):
    * - ``harness``
      - ``runtime``, ``core``
    * - ``evaluation``
-     - ``runtime``, ``core``
+     - ``harness``, ``runtime``, ``core``
    * - ``train``
      - ``evaluation``, ``harness``, ``inference``, ``runtime``, ``surface``, ``artifact``, ``storage``, ``observability``, ``core``
    * - ``recipe``

@@ -142,7 +142,8 @@ This method adds a rules node the first time a batch contains a failure:
 
 .. code:: python
 
-   from reef.train.cordis_backend import EpisodeScorer, Mutation, Proposer
+   from reef.evaluation.episodes import EpisodeScorer
+   from reef.train.cordis_backend import Mutation, Proposer
 
    RULE = "State the final answer alone on the last line.\n"
    EXPECTED = {"[fib]": "2880067194370816120"}

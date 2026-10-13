@@ -6,6 +6,7 @@ import logging
 from dataclasses import replace
 from threading import Lock
 
+from reef.evaluation.episodes import EpisodeScorer
 from reef.harness.episodes.model_binding import ModelBindings
 from reef.runtime.executor import Executor, ExecutorConfig, WorkerSpec
 from reef.runtime.executor.config import (
@@ -17,7 +18,6 @@ from reef.runtime.executor.config import (
 )
 from reef.runtime.executor.ray import RayExecutor
 from reef.runtime.executor.requirements import ExecutionRequirements
-from reef.train.cordis_backend.strategies import EpisodeScorer
 
 
 class EvaluationWorkerPool:

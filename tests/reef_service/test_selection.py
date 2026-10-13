@@ -25,9 +25,9 @@ from reef.evaluation import (
     SelectionDecision,
     UpdateCandidate,
 )
+from reef.evaluation.harness import FloorMixin, FloorPlugin, ScoreComparisonMixin, ScoreComparisonPlugin
 from reef.runtime.interfaces import ActivatedModel, ModelCandidate
 from reef.train.backend import CandidateBackend
-from reef.train.cordis_backend import FloorMixin, FloorPlugin, ScoreComparisonMixin, ScoreComparisonPlugin
 
 
 class DecideOnlyBackend(CandidateEvaluator):

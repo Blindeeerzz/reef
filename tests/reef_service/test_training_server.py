@@ -340,7 +340,8 @@ def test_build_dispatcher_uses_the_recipe_name_for_a_dotted_reference(monkeypatc
 def test_build_dispatcher_passes_recipe_settings_to_a_dotted_reference(monkeypatch, tmp_path) -> None:
     module = tmp_path / "demo_evolution.py"
     module.write_text(
-        "from reef.train.cordis_backend.strategies import EpisodeScorer, Proposer\n\n"
+        "from reef.evaluation.episodes import EpisodeScorer\n"
+        "from reef.train.cordis_backend.strategies import Proposer\n\n"
         "class Propose(Proposer):\n"
         "    def propose(self, nodes, samples, models, **keywords):\n        return None\n\n"
         "class Evaluate(EpisodeScorer):\n"

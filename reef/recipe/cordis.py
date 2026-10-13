@@ -28,7 +28,10 @@ from reef.core.model_metadata import ModelMetadata
 from reef.core.plugins import PluginConfigError, PluginReference
 from reef.core.reports import ScoredRolloutReport
 from reef.core.tasks import TaskSplitError, manifest_task_paths
+from reef.evaluation.episodes import EpisodeScorer
 from reef.evaluation.evaluators import BackendAlwaysSelectPlugin, SelectionPlugin
+from reef.evaluation.harness import FloorPlugin, ScoreComparisonPlugin
+from reef.evaluation.workers import evaluation_selection, legacy_worker_settings
 from reef.harness.adapters import get_adapter
 from reef.harness.adapters.descriptor import DescriptorError
 from reef.harness.episodes.e2b import E2BExecutor, deployment_owner
@@ -53,10 +56,9 @@ from reef.storage.records import RecordStore
 from reef.surface.base import Surface
 from reef.surface.harnesses import create_harness_surface
 from reef.train.backend import STALE_RESULT_POLICIES, StaleResultPolicy
-from reef.train.cordis_backend.backend import CordisBackend, FloorPlugin, ScoreComparisonPlugin, tree_files
-from reef.train.cordis_backend.execution import evaluation_selection, legacy_worker_settings
+from reef.train.cordis_backend.backend import CordisBackend, tree_files
 from reef.train.cordis_backend.processor import TraceBatches, TraceRecord2Record, TraceTasks
-from reef.train.cordis_backend.strategies import EpisodeScorer, Promoter, Proposer
+from reef.train.cordis_backend.strategies import Promoter, Proposer
 from reef.train.pipeline import PipelineSpec
 from reef.train.trainer import Trainer
 
