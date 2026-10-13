@@ -240,9 +240,6 @@ scoring runs on the actor. An unsupported combination fails validation. Engine
 log-probs come from the engine's bf16 kernels rather than the trainer's; for a
 frozen teacher that is a small constant bias.
 
-``recipes/opd/examples/math/serve.teacher-engine.yaml`` shows a Qwen3-4B-Base
-student after SFT with a Qwen3-32B teacher on eight GPUs.
-
 Score centering
 ---------------
 
