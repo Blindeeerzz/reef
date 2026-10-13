@@ -25,8 +25,9 @@ Stages:
   background worker after later traffic completes them. A recipe's
   ``RecordJudging`` holds the correlation and the judge.
 * ``InferenceStage`` (``stage.py``): one set per inference record.
-* ``RoundStage`` (``rounds.py``): a ``ReportStage`` that also forms an empty
-  ``RoundRequest`` set each time a task-generation round is due.
+* ``RoundStage`` (``rounds.py``): a ``ReportStage`` that also forms a
+  ``RoundRequest`` set each time a task-generation round is due. A recipe's
+  ``RoundGrouping`` decides which reports are source sessions for the rounds.
 
 Components of the pool:
 
@@ -60,7 +61,7 @@ from reef.record2record.reports import (
     report_score,
     report_sets,
 )
-from reef.record2record.rounds import RoundRequest, RoundStage
+from reef.record2record.rounds import RoundGrouping, RoundRequest, RoundStage
 from reef.record2record.selection import ArrivalOrder, GroupKeyOrder, SelectionPolicy
 from reef.record2record.sets import RecordSet, SingleRecordSet
 from reef.record2record.stage import AssemblyStatus, InferenceStage, PassThroughStage, Record2RecordStage, SetAssembly
@@ -86,6 +87,7 @@ __all__ = [
     "ReportGrouping",
     "ReportSet",
     "ReportStage",
+    "RoundGrouping",
     "RoundRequest",
     "RoundStage",
     "SelectionPolicy",

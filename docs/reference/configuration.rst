@@ -1190,9 +1190,16 @@ The generated-task recipe reads these ``recipe.config`` fields:
    recipe.config.rounds | 0 | rounds of task generation; 0 generates nothing and trains on the training arm's reports only
    recipe.config.batches-per-round | 1 | acknowledged batches after which the next round starts
    recipe.config.description | what the tasks are about; every generation request carries it. Required with rounds.
+   recipe.config.source-records-per-round | 0 | recorded sessions that each round gives the generator, at most; 0 generates from the description only
+   recipe.config.source-tag | the ``name=value`` tag that marks a source session: each of its model calls carries the header ``x-reef-tag-<name>: <value>``. Required when ``source-records-per-round`` is above 0.
    recipe.config.generator-url | the generator service, ``${endpoints.generator}``. Required with rounds.
    recipe.config.state-dir | where each scenario keeps its round summaries. Required with rounds.
    recipe.config.served-model | the model the task player asks for; the deployment's by default
+
+A source session is a report, without a training arm, whose inference
+records all carry ``source-tag``. The generator service accepts at most
+512 KiB of records and files in one request, so keep
+``source-records-per-round`` small when the sessions are long.
 
 The recipe trains with the ``task_group`` objective on Tinker's
 ``importance_sampling`` loss, so it requires the ``tinker`` training backend.

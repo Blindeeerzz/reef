@@ -8,7 +8,7 @@ deployment's :class:`~reef.core.tasks.TaskGenerator`.
 
 One round is one job on a private worker, off the trainer's thread:
 
-1. Ask the generator for tasks.
+1. Ask the generator for tasks, with the round's source sessions when the record stage gave any.
 2. Validate each task with the generator.
 3. Write each valid task through the generator service and play it: ``plays_per_task`` times on the
    training arm, then each measurement arm the generator asked for.
@@ -95,9 +95,22 @@ def recorded_rounds(state_dir: Path) -> tuple[int, ...]:
 
 @dataclass(frozen=True)
 class RoundJob(SupportsReceipt):
-    """One round to run; the receipt names it."""
+    """One round to run, with its source sessions' records; the receipt names it."""
 
     round_number: int
+    source_records: tuple[AgentRecord, ...] = ()
+
+
+def session_records(sessions: tuple[ReportContext, ...]) -> tuple[AgentRecord, ...]:
+    """The records of the source sessions for the generator: each session's inference records, then its report.
+
+    Sessions that share an inference record send it once.
+    """
+    records: dict[str, AgentRecord] = {}
+    for session in sessions:
+        for record in (*session.inferences, session.report):
+            records.setdefault(record.agent_record_id, record)
+    return tuple(records.values())
 
 
 @dataclass(frozen=True)
@@ -126,7 +139,8 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
     """The record-to-task stage of generated tasks: played episodes as tasks, and rounds from round requests.
 
     A ``RoundRequest`` from the record stage starts one round on the worker.
-    The round generates tasks, validates them, has the generator service play
+    The request's source sessions go to the generator as the request's
+    ``source_records``. The round generates tasks, validates them, has the generator service play
     them, and sends the results to the generator; the plays come back as
     records. This stage owns the worker, the round numbers, and the round
     summaries under ``state_dir/<scenario>``; a restart reads them to continue
@@ -194,7 +208,11 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             return super().make_tasks(record_set)
         if self.worker is None or self.next_round >= self.rounds:
             return TaskResult.skipped()
-        job = RoundJob(receipt=f"round-{self.next_round:05d}", round_number=self.next_round)
+        job = RoundJob(
+            receipt=f"round-{self.next_round:05d}",
+            round_number=self.next_round,
+            source_records=session_records(record_set.sources),
+        )
         if not self.worker.submit(job):
             self.last_error = "the round worker is closed or broken; no further round runs"
             return TaskResult.skipped()
@@ -269,7 +287,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         error = ""
         # The generator is a deployment's plugin: whatever it raises stops the round, and what ran is kept.
         try:
-            generated = await self.task_generator.generate(TaskGenerationRequest((), self.description))
+            generated = await self.task_generator.generate(TaskGenerationRequest(job.source_records, self.description))
             for item in generated:
                 if any(arm.name == TRAINING_ARM for arm in item.measurement_arms):
                     refusal = f"the measurement arm {TRAINING_ARM!r} has the name of the training arm"
@@ -288,7 +306,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         except Exception as exc:
             error = error or str(exc) or type(exc).__name__
             logger.exception("the task generator did not take the results of round %d", job.round_number)
-        self.write_round_summary(job.round_number, tuple(results), error)
+        self.write_round_summary(job.round_number, tuple(results), error, job.source_records)
         return RoundOutcome(receipt=job.receipt, round_number=job.round_number, results=tuple(results), error=error)
 
     async def played(self, item: GeneratedTask, round_number: int) -> TaskPlayResult:
@@ -335,14 +353,21 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             measurement_rewards[arm.name] = rewards_of(plays)
         return TaskPlayResult(task, rewards_of(training), measurement_rewards)
 
-    def write_round_summary(self, round_number: int, results: tuple[TaskPlayResult, ...], error: str) -> Path:
-        """Keep each task's result and the round's error; a restart counts these files."""
+    def write_round_summary(
+        self,
+        round_number: int,
+        results: tuple[TaskPlayResult, ...],
+        error: str,
+        source_records: tuple[AgentRecord, ...] = (),
+    ) -> Path:
+        """Keep each task's result, the round's error, and its source records' IDs; a restart counts these files."""
         if self.state_dir is None:
             raise RuntimeError("a round summary needs a state_dir")
         self.state_dir.mkdir(parents=True, exist_ok=True)
         document = {
             "round": round_number,
             "error": error,
+            "source_record_ids": [record.agent_record_id for record in source_records],
             "tasks": [
                 {
                     "name": result.task.name,

@@ -26,19 +26,42 @@ from reef.recipe.generated_tasks.processor import (
     reported_arm,
     reported_task_name,
 )
-from reef.record2record import GroupDecision, ReportContext, ReportGrouping, RoundStage
+from reef.record2record import GroupDecision, ReportContext, RoundGrouping, RoundStage
 from reef.train.algos import StepScheduling
 from reef.train.types import ProcessorContext
 
 
-class TaskGroupGrouping(ReportGrouping):
+def source_tag_of(setting: str) -> tuple[str, str] | None:
+    """Read ``source_tag`` as a tag name and value: ``"source=session"`` is the tag ``x-reef-tag-source: session``.
+
+    An empty setting selects no source sessions.
+    """
+    if not setting:
+        return None
+    name, separator, value = setting.partition("=")
+    if not separator or not name.strip() or not value:
+        raise ValueError("source_tag must be name=value, the x-reef-tag-<name> header that marks a source session")
+    # The service keeps tag names in lower case.
+    return name.strip().lower(), value
+
+
+def inference_tags(record: AgentRecord) -> Mapping[str, object]:
+    """The ``x-reef-tag-*`` pairs that the service keeps under an inference record's ``metadata.tags``."""
+    metadata = record.payload.get("metadata")
+    tags = metadata.get("tags") if isinstance(metadata, Mapping) else None
+    return tags if isinstance(tags, Mapping) else {}
+
+
+class TaskGroupGrouping(RoundGrouping):
     """The training arm's episodes of one task form one group, ready at ``plays_per_task`` episodes.
 
     Measurement arms and the generator's own reports share the scenario; only the training arm trains.
+    A source session is a report whose inference records all carry ``source_tag``.
     """
 
-    def __init__(self, plays_per_task: int) -> None:
+    def __init__(self, plays_per_task: int, source_tag: tuple[str, str] | None = None) -> None:
         self.plays_per_task = plays_per_task
+        self.source_tag = source_tag
 
     def is_training_report(self, report: AgentRecord) -> bool:
         return reported_arm(report) == TRAINING_ARM
@@ -49,17 +72,27 @@ class TaskGroupGrouping(ReportGrouping):
     def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
         return GroupDecision.READY if len(members) >= self.plays_per_task else GroupDecision.INCOMPLETE
 
+    def is_source_report(self, context: ReportContext) -> bool:
+        if self.source_tag is None or not context.inferences:
+            return False
+        name, value = self.source_tag
+        return all(inference_tags(inference).get(name) == value for inference in context.inferences)
+
 
 def task_group_record_stage(context: ProcessorContext) -> RoundStage:
     """The generated-task record stage: one group per task, and a round request every ``batches_per_round`` batches.
 
-    A terminal report owns its sources.
+    Each request takes at most ``source_records_per_round`` source sessions. A terminal report owns its sources.
     """
+    config = context.config
     return RoundStage(
         context.scenario,
         context.report_type,
-        TaskGroupGrouping(int(context.config.get("plays_per_task", DEFAULT_PLAYS_PER_TASK))),
-        batches_per_round=int(context.config.get("batches_per_round", DEFAULT_BATCHES_PER_ROUND)),
+        TaskGroupGrouping(
+            int(config.get("plays_per_task", DEFAULT_PLAYS_PER_TASK)), source_tag_of(str(config.get("source_tag", "")))
+        ),
+        batches_per_round=int(config.get("batches_per_round", DEFAULT_BATCHES_PER_ROUND)),
+        sources_per_round=int(config.get("source_records_per_round", 0)),
         exclusive_sources=True,
     )
 
@@ -88,6 +121,10 @@ class GeneratedTaskRecipe(WeightTrainingRecipe):
     processor runs that many rounds: ``generator_url`` names the generator service that ``reef serve``
     starts from the deployment's ``generator`` section, ``description`` says what the tasks are about,
     and ``state_dir`` keeps a summary of each round, in one directory for each scenario.
+
+    With ``source_records_per_round`` above zero, each round also gives the generator at most that many
+    recorded sessions: reports whose inference records carry ``source_tag`` (``name=value``, the
+    ``x-reef-tag-<name>`` header).
     """
 
     name: str = "generated-tasks"
@@ -100,6 +137,8 @@ class GeneratedTaskRecipe(WeightTrainingRecipe):
     rounds: int = config_field(0)
     batches_per_round: int = config_field(DEFAULT_BATCHES_PER_ROUND)
     description: str = config_field("")
+    source_tag: str = config_field("")
+    source_records_per_round: int = config_field(0)
     state_dir: str = config_field("")
     served_model: str = config_field("")
     task_generation: TaskGenerationConfig | None = field(default=None, repr=False, compare=False)
@@ -149,6 +188,11 @@ class GeneratedTaskRecipe(WeightTrainingRecipe):
                 )
             if not self.description.strip() or not self.state_dir:
                 raise ValueError("rounds need a description and a state_dir")
+        if self.source_records_per_round < 0:
+            raise ValueError("source_records_per_round must be non-negative")
+        if self.source_records_per_round > 0 and not self.source_tag:
+            raise ValueError("source_records_per_round needs a source_tag that marks the source sessions")
+        source_tag_of(self.source_tag)
 
     def scenario_state_dirs(self, scenario: str) -> tuple[Path, ...]:
         """The scenario's round summaries: what a delete archives beside the record store."""

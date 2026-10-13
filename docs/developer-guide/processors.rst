@@ -289,13 +289,13 @@ played: it failed validation, the generator service refused it, or the agent
 could not start on it.
 
 The recipe splits the rounds across its stages. The record stage
-(``RoundStage``) decides when a round is due and forms an empty
-``RoundRequest`` record set. The record-to-task stage
-(``GeneratedTaskTasks``) runs one round at a time from each request, on its
-own ``BackgroundJobWorker``, outside the trainer lock. In each round it:
+(``RoundStage``) decides when a round is due and forms a ``RoundRequest``
+record set. The record-to-task stage (``GeneratedTaskTasks``) runs one round
+at a time from each request, on its own ``BackgroundJobWorker``, outside the
+trainer lock. In each round it:
 
-1. Asks the generator for tasks with the configured ``description``. The
-   request has no source records.
+1. Asks the generator for tasks with the configured ``description`` and the
+   request's source sessions.
 2. Validates each task with the generator.
 3. Writes each valid task through the generator service and plays it
    ``plays-per-task`` times on the training arm, then plays each measurement arm.
@@ -311,13 +311,25 @@ task group, on Tinker's ``importance_sampling`` loss. The record stage
 releases the reports of measurement arms and reports without an arm, such as a
 generator's own reports, without assembling them.
 
+A round can also generate tasks from recorded sessions. Set
+``source-records-per-round`` above 0 and ``source-tag`` to a ``name=value``
+tag. A report without a training arm, whose inference records all carry the
+header ``x-reef-tag-<name>: <value>``, is a source session. The record stage
+holds source sessions in arrival order. Each request takes at most
+``source-records-per-round`` of them, and a request without a waiting session
+has none. The generator receives each session's inference records and then
+its report as ``source_records``. The record stage keeps a session's records
+until its round finishes, then releases them. A session that arrives after the
+last round is released at once. A restart before the release can use a
+session again.
+
 The first round starts when the processor first looks for a batch. The next
 round starts after ``batches-per-round`` batches trained since the previous
 round started; a batch that the backend dropped as stale does not count. A
 round that played no task is followed at once. An exception from the
 generator stops the round. The record-to-task stage still sends the results
 it has to ``record_results``. A summary of each round goes to
-``state-dir/<scenario>/round-<round>.json``. After a restart, the
+``state-dir/<scenario>/round-<round>.json``, with the IDs of its source records. After a restart, the
 record-to-task stage continues with the next round. ``GET /reef/status`` shows the generator, the
 round, the task counts, and the last error under ``task_generation``.
 

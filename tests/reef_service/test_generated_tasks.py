@@ -583,6 +583,86 @@ def test_the_real_worker_runs_a_round_off_the_trainers_thread(tmp_path: Path) ->
         p.close()
 
 
+# --------------------------------------------------------------------------------------- source sessions
+
+SOURCES = {"source_tag": "Source=session", "source_records_per_round": 2}
+
+
+def session(name: str, tags: Mapping[str, str]) -> tuple[AgentRecord, AgentRecord]:
+    """A recorded session: one tagged model call and the report on it, without a task or an arm."""
+    call = inference(f"rec-{name}")
+    call = AgentRecord.create(
+        scenario="tasks",
+        request_type=RequestType.INFERENCE,
+        payload={**call.payload, "metadata": {"tags": dict(tags)}},
+        agent_record_id=call.agent_record_id,
+    )
+    return call, report(f"rep-{name}", call.agent_record_id, None, 0.5, arm=None)
+
+
+def sessions(p: GeneratedTaskProcessor, *names: str, tags: Mapping[str, str] | None = None) -> None:
+    for name in names:
+        for record in session(name, {"source": "session"} if tags is None else tags):
+            p.ingest(record)
+
+
+def source_ids(request: TaskGenerationRequest) -> list[str]:
+    return [record.agent_record_id for record in request.source_records]
+
+
+def test_each_round_gives_the_generator_at_most_its_share_of_tagged_sessions(tmp_path: Path) -> None:
+    task_generator = ScriptedGenerator()
+    p, _ = rounds(tmp_path, task_generator, **SOURCES)
+    sessions(p, "a", "b", "c")
+    sessions(p, "untagged", tags={"source": "other"})
+    for _ in range(3):
+        looked(p)
+    # Each round played no task, so the next one followed at once.
+    assert [source_ids(request) for request in task_generator.requests] == [
+        ["rec-a", "rep-a", "rec-b", "rep-b"],
+        ["rec-c", "rep-c"],
+        [],
+    ]
+    assert all(request.description == DESCRIPTION for request in task_generator.requests)
+    assert summary(tmp_path, 0)["source_record_ids"] == ["rec-a", "rep-a", "rec-b", "rep-b"]
+    assert summary(tmp_path, 2)["source_record_ids"] == []
+
+
+def test_a_source_sessions_records_stay_until_the_round_that_uses_it_finishes(tmp_path: Path) -> None:
+    worker = DeferredWorker()
+    p, _ = rounds(tmp_path, ScriptedGenerator(), worker=worker, **SOURCES)
+    sessions(p, "a")
+    sessions(p, "untagged", tags={})
+    assert {"rec-untagged", "rep-untagged"} <= p.releasable_record_ids(), "an untagged session is released"
+    assert not {"rec-a", "rep-a"} & p.releasable_record_ids()
+    assert p.operational_metrics()["waiting_source_sessions"] == 1
+    p.ready()
+    assert [record.agent_record_id for record in worker.submitted[0].source_records] == ["rec-a", "rep-a"]
+    assert not {"rec-a", "rep-a"} & p.releasable_record_ids(), "the round runs"
+    worker.finish()
+    p.ready()
+    assert {"rec-a", "rep-a"} <= p.releasable_record_ids()
+
+
+def test_without_a_share_of_sessions_the_rounds_read_only_the_description(tmp_path: Path) -> None:
+    task_generator = ScriptedGenerator()
+    p, _ = rounds(tmp_path, task_generator, rounds=1, source_tag="source=session")
+    sessions(p, "a")
+    assert {"rec-a", "rep-a"} <= p.releasable_record_ids()
+    looked(p)
+    assert task_generator.requests == [TaskGenerationRequest((), DESCRIPTION)]
+
+
+def test_no_session_waits_once_the_rounds_are_over(tmp_path: Path) -> None:
+    task_generator = ScriptedGenerator()
+    p, _ = rounds(tmp_path, task_generator, rounds=1, **SOURCES)
+    for _ in range(3):
+        looked(p)
+    sessions(p, "late")
+    assert {"rec-late", "rep-late"} <= p.releasable_record_ids()
+    assert len(task_generator.requests) == 1
+
+
 @pytest.mark.parametrize(
     ("config", "message"),
     [
@@ -631,6 +711,10 @@ def test_the_recipe_binds_the_processor_the_objective_and_its_schedule() -> None
         training_recipe(scaffold_tolerance=-1)
     with pytest.raises(ValueError, match="task-generation section"):
         training_recipe(rounds=2)
+    with pytest.raises(ValueError, match="needs a source_tag"):
+        training_recipe(source_records_per_round=1)
+    with pytest.raises(ValueError, match="name=value"):
+        training_recipe(source_tag="session")
 
 
 def test_the_section_selects_a_generator_class_built_once_for_each_scenario(tmp_path: Path) -> None:

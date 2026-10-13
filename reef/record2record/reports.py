@@ -219,11 +219,13 @@ class ReportStage(Record2RecordStage):
         validate_report_payload(record.payload)
         if not record.references or len(set(record.references)) != len(record.references):
             raise ReportValidationError("report references must be non-empty and unique")
-        if any(ref in self.trained_sources for ref in record.references) or not self.grouping.is_training_report(
-            record
-        ):
+        if any(ref in self.trained_sources for ref in record.references):
             self.seen_reports.add(record.agent_record_id)
             self.terminate(record)
+            return
+        if not self.grouping.is_training_report(record):
+            self.seen_reports.add(record.agent_record_id)
+            self.handle_other_report(record)
             return
         parsed_report: ReportBase | None = None
         if self.report_type is not None:
@@ -255,6 +257,10 @@ class ReportStage(Record2RecordStage):
         self.formed.append(
             ReportCandidate(set_id=record.agent_record_id, arrival_index=self.candidate_count, context=context)
         )
+
+    def handle_other_report(self, report: AgentRecord) -> None:
+        """End a valid report that this method does not train on. A subclass can keep it for another use."""
+        self.terminate(report)
 
     def take_formed(self) -> tuple[RecordSet, ...]:
         formed: tuple[RecordSet, ...] = tuple(self.formed)
