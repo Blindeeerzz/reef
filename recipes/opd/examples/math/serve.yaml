@@ -11,7 +11,9 @@ reef:
   token: ${REEF_TOKEN}
 inference:
   model-path: ${OPD_MODEL_PATH:?}
-  timeout-s: 3600
+  # A 30720-token evaluation response can wait over an hour behind the other requests when the KV
+  # cache is full, so the request deadline covers that queue and the full decode.
+  timeout-s: 10800
   num-gpus: 4
   tensor-parallel-size: 1
   options:

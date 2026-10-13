@@ -447,7 +447,7 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--concurrency", type=int, default=32)
-    parser.add_argument("--timeout", type=float, default=7200)
+    parser.add_argument("--timeout", type=float, default=14400)
     args = parser.parse_args()
     if (
         args.steps < 0
