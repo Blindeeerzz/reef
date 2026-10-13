@@ -52,8 +52,8 @@ Surrounding changes
 ~~~~~~~~~~~~~~~~~~~
 
 - Add dotted-resolution and configuration tests in
-  ``tests/recipe/test_reef_recipes.py`` and
-  ``tests/recipe/test_recipe_config_fields.py``.
+  ``tests/reef_recipe/test_reef_recipes.py`` and
+  ``tests/reef_recipe/test_recipe_config_fields.py``.
 - Add method behavior tests under ``tests/recipes/<method>/``. Add an integration
   contract when the method calls into a concrete backend.
 - Put every runnable configuration beside its method under

@@ -13,10 +13,10 @@ module before adding another. Keep new test modules out of the `tests/` root.
 | `slime_backend/`, `tinker_backend/` | Contracts specific to a training backend |
 | `record2record/`, `record2task/`, `task2batch/` | The corresponding stages of the training pipeline |
 | `evaluation/`, `harness/`, `observability/` | Candidate evaluation, harness execution, and tracking |
-| `recipe/` | Shared recipe contracts and built-in recipes from `reef/recipe/` |
+| `reef_recipe/` | Shared recipe contracts and built-in recipes from `reef/recipe/` |
 | `recipes/<recipe>/` | Cookbook methods and their examples; use the method name for beta recipes too |
 | `reef_service/` | HTTP contracts, deployment, and service workflows across components |
-| `cli/`, `client/` | CLI behavior and the separate Reef client |
+| `cli/`, `reef_client/` | CLI behavior and the separate `reef_client` package |
 | `contributing/` | Repository policy, documentation, and checks across shipped examples |
 | `plugin_contracts/`, `packaging/` | Plugin boundaries and installed-package verification |
 | `smoke/` | Opt-in runs against real harnesses and external services |

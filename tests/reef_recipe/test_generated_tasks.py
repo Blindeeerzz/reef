@@ -48,7 +48,7 @@ from reef.train.algos.registry import resolve_objective
 from reef.train.pipeline import TrainingPipeline
 from reef.train.types import TrainingBatch, trajectory_groups
 
-MODULE = "tests.recipe.test_generated_tasks"
+MODULE = "tests.reef_recipe.test_generated_tasks"
 DESCRIPTION = "shell tasks with hidden state under /var and /etc"
 
 # ------------------------------------------------------------------------------------------- the reported half

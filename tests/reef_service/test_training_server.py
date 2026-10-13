@@ -452,7 +452,7 @@ def test_build_dispatcher_hands_the_pipeline_section_to_the_recipe(monkeypatch, 
         "factory",
         lambda *args, **kwargs: lambda scenario: object(),
     )
-    generator = {"module": "tests.recipe.test_generated_tasks:ScriptedGenerator", "config": {"count": 1}}
+    generator = {"module": "tests.reef_recipe.test_generated_tasks:ScriptedGenerator", "config": {"count": 1}}
     pipeline = {
         "record2record": {"module": "reef.recipe.generated_tasks:GeneratedTaskRecord2Record", "config": {}},
         "record2task": {
@@ -503,7 +503,9 @@ def test_build_dispatcher_rejects_a_pipeline_section_it_cannot_use(
         deploy.build_dispatcher(
             _settings(
                 recipe=recipe,
-                pipeline_settings={"record2task": {"module": "tests.recipe.test_generated_tasks:ScriptedGenerator"}},
+                pipeline_settings={
+                    "record2task": {"module": "tests.reef_recipe.test_generated_tasks:ScriptedGenerator"}
+                },
                 agent_record_dir=str(tmp_path / "agent-record"),
             ),
             connector=lambda **kwargs: stub_runtimes(),

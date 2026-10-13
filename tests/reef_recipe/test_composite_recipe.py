@@ -199,8 +199,8 @@ def test_composite_recipe_builds_from_config() -> None:
             "implementation": "reef.recipe.composite:CompositeRecipe",
             "model": {"path": "served-model"},
             "components": {
-                "harness": {"implementation": "tests.recipe.test_composite_recipe:_TreeRecipe"},
-                "config": {"implementation": "tests.recipe.test_composite_recipe:_ConfigRecipe"},
+                "harness": {"implementation": "tests.reef_recipe.test_composite_recipe:_TreeRecipe"},
+                "config": {"implementation": "tests.reef_recipe.test_composite_recipe:_ConfigRecipe"},
             },
         },
     )
@@ -215,8 +215,8 @@ def test_composite_recipe_builds_from_config() -> None:
                 "implementation": "x",
                 "model": {"path": "served-model"},
                 "components": {
-                    "step": {"implementation": "tests.recipe.test_composite_recipe:_TreeRecipe"},
-                    "config": {"implementation": "tests.recipe.test_composite_recipe:_ConfigRecipe"},
+                    "step": {"implementation": "tests.reef_recipe.test_composite_recipe:_TreeRecipe"},
+                    "config": {"implementation": "tests.reef_recipe.test_composite_recipe:_ConfigRecipe"},
                 },
             },
         )
@@ -231,10 +231,10 @@ def test_composite_recipe_builds_from_config() -> None:
                 "model": {"path": "m"},
                 "components": {
                     "harness": {
-                        "implementation": "tests.recipe.test_composite_recipe:_TreeRecipe",
+                        "implementation": "tests.reef_recipe.test_composite_recipe:_TreeRecipe",
                         "config": {"training_mode": "manual"},
                     },
-                    "config": {"implementation": "tests.recipe.test_composite_recipe:_ConfigRecipe"},
+                    "config": {"implementation": "tests.reef_recipe.test_composite_recipe:_ConfigRecipe"},
                 },
             },
         )
@@ -242,7 +242,7 @@ def test_composite_recipe_builds_from_config() -> None:
 
 _WEIGHTS_AND_HARNESS = {
     "weights": {"implementation": "recipes.sao.recipe:SAORecipe"},
-    "harness": {"implementation": "tests.recipe.test_composite_recipe:_TreeRecipe"},
+    "harness": {"implementation": "tests.reef_recipe.test_composite_recipe:_TreeRecipe"},
 }
 _LOCAL_TRAINING = "tests.support._training_deployment:LocalDeployment"
 
@@ -368,7 +368,10 @@ def test_deployment_treats_a_composite_with_a_weight_component_as_training(tmp_p
 
 @pytest.mark.unit
 def test_composite_recipe_reads_components_from_the_file_layout() -> None:
-    harness = {"implementation": "tests.recipe.test_composite_recipe:_TreeRecipe", "config": {"training-mode": "auto"}}
+    harness = {
+        "implementation": "tests.reef_recipe.test_composite_recipe:_TreeRecipe",
+        "config": {"training-mode": "auto"},
+    }
 
     def file_layout(harness_section: Any) -> dict[str, Any]:
         return {
@@ -377,7 +380,7 @@ def test_composite_recipe_reads_components_from_the_file_layout() -> None:
                 "config": {
                     "components": {
                         "harness": harness_section,
-                        "config": {"implementation": "tests.recipe.test_composite_recipe:_ConfigRecipe"},
+                        "config": {"implementation": "tests.reef_recipe.test_composite_recipe:_ConfigRecipe"},
                     }
                 },
             },
@@ -407,8 +410,8 @@ def test_composite_recipe_reads_components_from_the_file_layout() -> None:
 @pytest.mark.unit
 def test_composite_recipe_refuses_a_checkpoint_cadence() -> None:
     components = {
-        "harness": {"implementation": "tests.recipe.test_composite_recipe:_TreeRecipe"},
-        "config": {"implementation": "tests.recipe.test_composite_recipe:_ConfigRecipe"},
+        "harness": {"implementation": "tests.reef_recipe.test_composite_recipe:_TreeRecipe"},
+        "config": {"implementation": "tests.reef_recipe.test_composite_recipe:_ConfigRecipe"},
     }
     base = {"implementation": "reef.recipe.composite:CompositeRecipe", "model": {"path": "served-model"}}
     with pytest.raises(RecipeConfigError, match=r"artifact\.checkpoint_every_n_versions has no effect"):
@@ -458,8 +461,8 @@ def test_composite_recipe_shares_one_runtime_resolved_from_the_environment() -> 
             "implementation": "reef.recipe.composite:CompositeRecipe",
             "model": {"path": "served-model"},
             "components": {
-                "harness": {"implementation": "tests.recipe.test_composite_recipe:_TreeRecipe"},
-                "config": {"implementation": "tests.recipe.test_composite_recipe:_ConfigRecipe"},
+                "harness": {"implementation": "tests.reef_recipe.test_composite_recipe:_TreeRecipe"},
+                "config": {"implementation": "tests.reef_recipe.test_composite_recipe:_ConfigRecipe"},
             },
         },
     )
@@ -1219,10 +1222,10 @@ def test_a_component_config_that_is_not_an_object_is_refused_under_a_composite_m
                 "data": {"training_mode": "hybrid"},
                 "components": {
                     "harness": {
-                        "implementation": "tests.recipe.test_composite_recipe:_HybridTreeRecipe",
+                        "implementation": "tests.reef_recipe.test_composite_recipe:_HybridTreeRecipe",
                         "config": component_config,
                     },
-                    "config": {"implementation": "tests.recipe.test_composite_recipe:_ConfigRecipe"},
+                    "config": {"implementation": "tests.reef_recipe.test_composite_recipe:_ConfigRecipe"},
                 },
             },
         )
@@ -1332,8 +1335,8 @@ def test_a_composite_mode_is_every_components_mode_and_a_stepless_component_runs
             "model": {"path": "served-model"},
             "data": {"training_mode": "hybrid"},
             "components": {
-                "harness": {"implementation": "tests.recipe.test_composite_recipe:_HybridTreeRecipe"},
-                "config": {"implementation": "tests.recipe.test_composite_recipe:_ConfigRecipe"},
+                "harness": {"implementation": "tests.reef_recipe.test_composite_recipe:_HybridTreeRecipe"},
+                "config": {"implementation": "tests.reef_recipe.test_composite_recipe:_ConfigRecipe"},
             },
         },
     )
@@ -1364,10 +1367,10 @@ def test_a_composite_reads_the_hyphenated_mode_and_a_component_agreeing_in_it() 
             "data": {"training-mode": "hybrid"},
             "components": {
                 "harness": {
-                    "implementation": "tests.recipe.test_composite_recipe:_HybridTreeRecipe",
+                    "implementation": "tests.reef_recipe.test_composite_recipe:_HybridTreeRecipe",
                     "config": {"training-mode": "hybrid"},
                 },
-                "config": {"implementation": "tests.recipe.test_composite_recipe:_ConfigRecipe"},
+                "config": {"implementation": "tests.reef_recipe.test_composite_recipe:_ConfigRecipe"},
             },
         },
     )
