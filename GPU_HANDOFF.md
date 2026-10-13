@@ -49,8 +49,8 @@ This branch has the fix: `reef.record2task.generator.e2b_environment.E2BTaskEnvi
 
 **Data**, in parts. The user copies each archive to you. Check each archive's `SHA256SUMS` first.
 1. **Now:** `r2d-handoff-1.tar.gz`
-   - `dryrun/`: 8 A1 tasks for the Slime dry run, with their 9B rewards from the user's measurements;
-   - `eval/swe-together/`: 47 strict and 15 capped tasks, with our verifier fixes already applied, and `oracle.jsonl`.
+   - `dryrun/`: 5 AES tasks from the user's pilot, for the Slime dry run. They are not in the training pools. `rewards.jsonl` gives 9B's rewards on 4 plays of each; each was solved 1 to 3 times.
+   - `eval/swe-together/`: 47 strict and 15 capped tasks (the sets in `eval-sets.json`), `verifier_fixes.py`, and our earlier oracle results. Its `README.md` says how to use them.
 2. **When generation finishes:** `r2d-handoff-2.tar.gz`. It holds `train/A1-aes/` and `train/A2-spade/`: Harbor task folders, `manifest.json` (the train split, at least 100 tasks each), `generation.jsonl` (per task: the source session, the check results, the `gpt-6-luna` rewards, and the 9B rewards where measured) and `DATASHEET.md`.
 3. **Later:** `r2d-handoff-3.tar.gz`, with 300 tasks per arm for the scaling point.
 
@@ -79,7 +79,7 @@ SWE-bench Verified is not in an archive. Use Harbor's registry dataset `swebench
    - Use PPO-style clipping (`eps_clip` 0.2, `eps_clip_high` 0.28) and no KL term. Full fine-tuning is less stable than Tinker's LoRA. Write this reason in a short comment.
 3. Follow `AGENTS.md` strictly: its Python design rules, its naming rules and its writing style.
 4. Add contract tests next to the existing ones (`tests/reef_service/test_slime_algorithm_contract.py`).
-5. **Dry run on the GPUs:** Qwen3.5-4B, the Slime backend, the recipe with `rounds: 0`, 2 steps on 4 of the `dryrun/` tasks × 4 plays in E2B. Pick tasks whose 9B rewards are mixed, so the groups are not constant. The run must show:
+5. **Dry run on the GPUs:** Qwen3.5-4B, the Slime backend, the recipe with `rounds: 0`, 2 steps on 4 of the `dryrun/` tasks × 4 plays in E2B. Their 9B rewards are mixed, so most groups are not constant. The run must show:
    - a finite loss and a non-zero gradient norm;
    - a weight update, and the new weights served for the next plays;
    - every multi-turn episode assembled into token rows, with none dropped.
@@ -88,7 +88,7 @@ SWE-bench Verified is not in an archive. Use Harbor's registry dataset `swebench
 
 ## Step 2: Evaluation sets and the base models (no training data needed)
 
-1. Prepare SWE-Together (47 strict, 15 capped) and all 500 SWE-bench Verified tasks for E2B.
+1. Prepare SWE-Together (47 strict, 15 capped) and all 500 SWE-bench Verified tasks for E2B. For SWE-Together, then call `verifier_fixes.apply_verify_fixes(copy)` on each prepared copy. The fixes change only `tests/`, so every model is graded alike.
 2. Run each task's oracle once in E2B. This also builds and caches each task's E2B template. A task whose oracle fails is excluded from every model's score alike. Write the list with the reason for each task.
 3. Evaluate A0, the base 9B and 4B, as Step 6 describes.
 
@@ -142,6 +142,7 @@ SWE-bench Verified is not in an archive. Use Harbor's registry dataset `swebench
 ## Step 6: Evaluation
 
 - Use the same agent JSON and settings as the training plays, in E2B. Serve each model through an OpenAI-compatible endpoint.
+- **Never report an evaluation play to a training scenario.** The task player's command line always reports its plays. For evaluation, run Harbor directly against the served model, or use the Python `TaskPlayer(..., is_reporting=False)` in a separate scenario.
 - **SWE-Together:** the 47 strict tasks, 3 plays each. Report the mean reward and pass@1. Report the 15 capped tasks separately. For reference, the base 9B scored **0.191** mean reward on the strict set (served by Tinker).
 - **SWE-bench Verified:** all 500 tasks (`swebench-verified@1.0`) less the oracle failures. 1 play each. Report pass@1.
 - **Checkpoints to evaluate:** the base model, the final checkpoint, and the best checkpoint on SWE-Together. Choose by SWE-Together only. Report SWE-bench Verified for the chosen one.
