@@ -279,6 +279,45 @@ class Campaign:
         temporary.replace(self.output / "metrics.jsonl")
         print(json.dumps(metric), flush=True)
 
+    def reuse_baseline(self, questions: list[Question]) -> None:
+        """Take step 0 from an earlier campaign's evaluation of the same initial weights, seeds and budget.
+
+        The reused rows keep their own release id, so ``analyze.py`` still sees
+        a baseline release distinct from every trained checkpoint.
+        """
+        target = self.output / "eval-0000.jsonl"
+        metric_path = self.output / "eval-0000.metrics.json"
+        if metric_path.exists():
+            if json.loads(metric_path.read_text()).get("reused_from") != str(self.args.baseline_eval):
+                raise ValueError("eval-0000 was not reused from the configured --baseline-eval")
+            return
+        rows = [json.loads(line) for line in self.args.baseline_eval.read_text().splitlines() if line.strip()]
+        expected = {(q.id, self.args.seed + repeat) for q in questions for repeat in range(self.args.eval_repeats)}
+        if {(row["question_id"], row["seed"]) for row in rows} != expected or len(rows) != len(expected):
+            raise ValueError("--baseline-eval does not cover exactly this campaign's evaluation questions and seeds")
+        if len({row["release_id"] for row in rows}) != 1 or any(not row.get("receipt") for row in rows):
+            raise ValueError("--baseline-eval must hold one release's complete, receipted predictions")
+        target.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        metric = {
+            "step": 0,
+            "release_id": rows[0]["release_id"],
+            "accuracy": sum(row["correct"] for row in rows) / len(rows),
+            "samples": len(rows),
+            "questions": len(questions),
+            "elapsed_s": 0.0,
+            "elapsed_scope": "reused",
+            "truncated": sum(row["finish_reason"] == "length" for row in rows),
+            "reused_from": str(self.args.baseline_eval),
+        }
+        write_json(metric_path, metric)
+        temporary = self.output / "metrics.jsonl.tmp"
+        with temporary.open("w") as handle:
+            handle.write(json.dumps(metric) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(self.output / "metrics.jsonl")
+        print(json.dumps(metric), flush=True)
+
     def verify_update(self, step: int, rows: list[dict[str, Any]], history: list[dict[str, Any]]) -> None:
         result = self.client.get(
             f"/reef/scenarios/{quote(self.args.scenario, safe='')}/commits?after_step={step - 1}&limit=1"
@@ -313,15 +352,23 @@ class Campaign:
             raise RuntimeError("Use a fresh scenario, or --resume with its original output directory")
         if len(history) > self.args.steps + 1:
             raise RuntimeError("Scenario has more updates than the declared campaign")
-        if self.args.resume and not history and any(path.stat().st_size for path in self.output.glob("*-*.jsonl")):
-            raise RuntimeError("Saved samples exist but their Reef scenario is missing")
+        if self.args.resume and not history:
+            saved = [path for path in self.output.glob("*-*.jsonl") if path.stat().st_size]
+            if self.args.baseline_eval is not None:
+                # The reused baseline belongs to an earlier scenario by design.
+                saved = [path for path in saved if path.name != "eval-0000.jsonl"]
+            if saved:
+                raise RuntimeError("Saved samples exist but their Reef scenario is missing")
         evaluation = load_questions(self.args.eval_data)
         training = load_questions(self.args.train_data) if self.args.steps else []
         if self.args.steps * self.args.prompts_per_step > len(training):
             raise ValueError("Not enough unique prompts for the requested schedule")
-        self.evaluate(
-            evaluation, 0, release_id=history[0]["release_id"] if history else None, allow_new=len(history) <= 1
-        )
+        if self.args.baseline_eval is not None:
+            self.reuse_baseline(evaluation)
+        else:
+            self.evaluate(
+                evaluation, 0, release_id=history[0]["release_id"] if history else None, allow_new=len(history) <= 1
+            )
         for step in range(1, self.args.steps + 1):
             history = self.history()
             if len(history) < step:
@@ -383,6 +430,12 @@ def main() -> None:
     parser.add_argument("--eval-tokens", type=int, default=64000)
     parser.add_argument("--eval-repeats", type=int, default=16)
     parser.add_argument("--eval-every", type=int, default=20)
+    parser.add_argument(
+        "--baseline-eval",
+        type=Path,
+        default=None,
+        help="An earlier campaign's eval-0000.jsonl of the same initial weights, seeds and budget; skips the step-0 evaluation",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--concurrency", type=int, default=32)
     parser.add_argument("--timeout", type=float, default=7200)

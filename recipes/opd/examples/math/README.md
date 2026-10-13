@@ -27,8 +27,11 @@ and acceptance report land here when it completes.
   revision `273e685cf58c09149986e058e4a1a391d45c6b7e`: Qwen3-8B-Base after 750
   steps of batch 255 on the 103,760 complete solutions of
   `knowledge-distillation/openthoughts3_math` at learning rate 5e-6. The
-  weights are used as published; OPD trains a fresh rank/alpha 32 adapter on
-  the MLP down and attention output projections.
+  weights are used as published; OPD trains a fresh rank/alpha 128 adapter on
+  every attention and MLP projection, the adapter shape of the reference
+  recipe. The checkpoint ships a plain ChatML template; the run serves it
+  with the teacher's Qwen3 template, which renders a single-turn prompt
+  identically, so student and teacher read the same ids.
 - Teacher: `Qwen/Qwen3-32B`, revision `9216db5781bf21249d130ec9da846c4624c16137`,
   frozen on its own TP2 SGLang engine. It scores the student's exact recorded
   prompt and response ids; no template is rendered and nothing is retokenized.
@@ -100,8 +103,11 @@ for `/healthz`, runs the campaign and writes `acceptance.json` and
 `prepare.py`'s output (default `/work/data`); `OPD_STEPS`, `OPD_EVAL_EVERY`,
 `OPD_EVAL_TOKENS` and `OPD_EVAL_REPEATS` change the schedule and budgets;
 `REEF_PORT` and `REEF_SCENARIO` must belong to this experiment. Further
-arguments go to `run.py`. `OPD_STEPS=1 OPD_EVAL_REPEATS=1` makes a stack check;
-label such a result an integration check.
+arguments go to `run.py`: `--baseline-eval <earlier eval-0000.jsonl>` reuses
+the step-0 evaluation of an earlier campaign that started from the same
+weights, seeds and budget instead of repeating it, and records where it came
+from. `OPD_STEPS=1 OPD_EVAL_REPEATS=1` makes a stack check; label such a result
+an integration check.
 
 The driver collects a complete batch before submitting any training report,
 checks that every response came from one release, then waits for exactly one

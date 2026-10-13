@@ -252,6 +252,7 @@ def campaign_args(tmp_path):
         concurrency=1,
         timeout=1,
         resume=False,
+        baseline_eval=None,
     )
 
 
@@ -402,3 +403,53 @@ def test_prompt_pool_is_seeded_and_disjoint_from_evaluation_and_openthoughts3():
     assert ids != [str(index) for index in range(30)]
     with pytest.raises(ValueError, match="disjoint prompts"):
         select_prompts(prompts, [], 42)
+
+
+def test_baseline_eval_reuses_an_earlier_evaluation_without_calling_the_service(monkeypatch, campaign_args, tmp_path):
+    from recipes.opd.examples.math import run
+
+    service = CampaignService()
+    monkeypatch.setattr(run, "ReefClient", lambda *args, **kwargs: service)
+    earlier = tmp_path / "earlier-eval-0000.jsonl"
+    rows = [
+        {
+            "question_id": "e0",
+            "seed": seed,
+            "receipt": f"old-receipt-{seed}",
+            "release_id": "old-r0",
+            "correct": seed == 0,
+            "finish_reason": "stop",
+            "usage": {"completion_tokens": 5},
+        }
+        for seed in range(2)
+    ]
+    earlier.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    campaign_args.baseline_eval = earlier
+    campaign_args.steps = 0
+    Campaign(campaign_args).run()
+    assert service.inference_calls == 0
+    metrics = [json.loads(line) for line in (campaign_args.output / "metrics.jsonl").read_text().splitlines()]
+    assert metrics == [
+        {
+            "step": 0,
+            "release_id": "old-r0",
+            "accuracy": 0.5,
+            "samples": 2,
+            "questions": 1,
+            "elapsed_s": 0.0,
+            "elapsed_scope": "reused",
+            "truncated": 0,
+            "reused_from": str(earlier),
+        }
+    ]
+    assert (campaign_args.output / "eval-0000.jsonl").read_text() == earlier.read_text()
+    # Repeating is read-only; a baseline for other seeds is refused before any request.
+    campaign_args.resume = True
+    Campaign(campaign_args).run()
+    assert service.inference_calls == 0
+    earlier.write_text(json.dumps({**rows[0], "seed": 7}) + "\n" + json.dumps(rows[1]) + "\n")
+    campaign_args.resume = False
+    campaign_args.output = tmp_path / "results-2"
+    with pytest.raises(ValueError, match="questions and seeds"):
+        Campaign(campaign_args).run()
+    assert service.inference_calls == 0
