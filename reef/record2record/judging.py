@@ -201,8 +201,8 @@ class JudgingRecord2Record(Record2Record):
 
     # --------------------------------------------------------- background work
 
-    def derivation_pending(self) -> bool:
-        """Poll while judgments are in flight. Expiry only retires records, so it waits for the next ``ready``."""
+    def background_jobs_running(self) -> bool:
+        """Return True while judgments run. An expiry only retires records, so it waits for the next ``ready``."""
         return bool(self.in_flight)
 
     def close(self) -> None:

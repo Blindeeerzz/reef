@@ -53,7 +53,7 @@ class WithholdingRecord2Record(PassThroughRecord2Record):
         self.released |= agent_record_ids
         self.ended -= agent_record_ids
 
-    def derivation_pending(self) -> bool:
+    def background_jobs_running(self) -> bool:
         return self.pending
 
     def status(self) -> Mapping[str, Any]:
@@ -174,7 +174,7 @@ def test_the_pass_through_stage_forms_one_set_per_record_in_arrival_order() -> N
     assert [record_set.record_ids() for record_set in formed] == [("i1",), ("r1",), ("i2",)]
     assert [record_set.arrival_index for record_set in formed] == [1, 2, 3]
     assert stage.take_formed() == ()
-    assert stage.releasable_record_ids() == frozenset() and not stage.derivation_pending()
+    assert stage.releasable_record_ids() == frozenset() and not stage.background_jobs_running()
 
 
 @pytest.mark.unit
@@ -191,9 +191,9 @@ def test_the_pipeline_keeps_instructions_and_sends_other_records_through_its_sta
 @pytest.mark.unit
 def test_the_pipeline_adds_its_stages_background_work_and_status_and_closes_them() -> None:
     processor = RecordingPipeline(PipelineContext("s", training_mode="hybrid"))
-    assert not processor.derivation_pending()
+    assert not processor.background_jobs_running()
     processor.stage.pending = True
-    assert processor.derivation_pending()
+    assert processor.background_jobs_running()
     assert processor.status() == {
         "ready_units": 0,
         "batch_size": 1,
@@ -232,9 +232,9 @@ def test_the_trainer_reports_the_stages_background_work() -> None:
     trainer = Trainer.build("s", SQLiteRecordStore(), pipeline_factory=RecordingPipeline)
     processor = trainer.pipeline
     assert isinstance(processor, RecordingPipeline)
-    assert not trainer.pipeline.derivation_pending()
+    assert not trainer.pipeline.background_jobs_running()
     processor.stage.pending = True
-    assert trainer.pipeline.derivation_pending()
+    assert trainer.pipeline.background_jobs_running()
 
 
 @pytest.mark.unit

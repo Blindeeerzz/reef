@@ -186,7 +186,7 @@ def test_session_ttl_flushes_the_final_turn_terminal() -> None:
     assert not processor.ready()  # catches up: the TTL pass runs
     decision = processor.releasable_record_ids()
     assert "t1" in decision
-    assert not processor.derivation_pending()
+    assert not processor.background_jobs_running()
 
 
 @pytest.mark.unit
@@ -232,14 +232,14 @@ def test_correlate_only_mode_never_trains_and_releases_everything() -> None:
 
 
 @pytest.mark.unit
-def test_derivation_pending_and_close_propagation() -> None:
+def test_background_jobs_running_and_close_propagation() -> None:
     worker = FakeWorker()
     processor = _processor(worker=worker)
-    assert not processor.derivation_pending()
+    assert not processor.background_jobs_running()
     processor.ingest(_turn("t1", Q1))
-    assert not processor.derivation_pending()  # an idle tracked turn does not keep the training thread polling
+    assert not processor.background_jobs_running()  # an idle tracked turn does not keep the training thread polling
     processor.ingest(_turn("t2", _successor(Q1, "ok")))
-    assert processor.derivation_pending()  # t1 in flight
+    assert processor.background_jobs_running()  # the judgment of t1 runs
     processor.close()
     assert worker.closed
 
