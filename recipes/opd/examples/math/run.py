@@ -373,20 +373,27 @@ class Campaign:
             )
         for step in range(1, self.args.steps + 1):
             history = self.history()
-            if len(history) < step:
-                raise RuntimeError("Scenario lost a previously completed training release")
             batch = training[(step - 1) * self.args.prompts_per_step : step * self.args.prompts_per_step]
             work = [
                 (q, self.args.seed + step * self.args.samples_per_prompt + sample, False)
                 for q in batch
                 for sample in range(self.args.samples_per_prompt)
             ]
-            rows = self.collect(
-                work,
-                f"train-{step:04d}.jsonl",
-                release_id=history[step - 1]["release_id"],
-                allow_new=len(history) == step,
-            )
+            if not history and step == 1 and self.args.baseline_eval is not None:
+                # The reused baseline made no request, so this batch opens the scenario at its initial release.
+                rows = self.collect(work, f"train-{step:04d}.jsonl")
+                history = self.history()
+                if len(history) != 1 or history[0]["release_id"] != rows[0]["release_id"]:
+                    raise RuntimeError("The first batch did not open the scenario at its initial release")
+            else:
+                if len(history) < step:
+                    raise RuntimeError("Scenario lost a previously completed training release")
+                rows = self.collect(
+                    work,
+                    f"train-{step:04d}.jsonl",
+                    release_id=history[step - 1]["release_id"],
+                    allow_new=len(history) == step,
+                )
             if len(history) == step:
                 for row in rows:
                     self.client.report(
