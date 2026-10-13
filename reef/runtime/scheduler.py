@@ -69,6 +69,35 @@ from reef.runtime.recovery import (
 #: Job states that hold an activated candidate Reef still has to commit or finish.
 COMMIT_PENDING_STATES = frozenset({"UPDATING_WEIGHTS", *PUBLISHED_STATES})
 
+
+@dataclass(frozen=True)
+class CommittedTrainingStep:
+    """Scenario commit information used to finish its matching runtime job."""
+
+    step: int
+    training_job_id: str | None
+    without_job_id: bool = False
+
+    def __post_init__(self) -> None:
+        if self.training_job_id is not None and (
+            not isinstance(self.training_job_id, str) or not self.training_job_id
+        ):
+            raise TrainingRuntimeError("committed_training_job_id must be a non-empty string or None")
+        if not isinstance(self.without_job_id, bool):
+            raise TrainingRuntimeError("committed_training_without_job_id must be a boolean")
+
+    def matches(self, job_step: int, job_id: str, *, status: str, acknowledged: bool) -> bool:
+        """Match a durable identity, or the exact next training step of an older bridge.
+
+        A different component can advance the scenario while a job runs. Its
+        higher step alone never confirms this job. Only old COMPLETE markers
+        without an acknowledgement permit the legacy next-step match.
+        """
+        if self.training_job_id is not None:
+            return self.step > job_step and self.training_job_id == job_id
+        return self.without_job_id and status == "COMPLETE" and not acknowledged and self.step == job_step + 1
+
+
 # -- Staleness admission ------------------------------------------------------
 
 
@@ -719,17 +748,12 @@ class RuntimeScheduler:
         committed_training_without_job_id: bool = False,
     ) -> None:
         """Reconcile a backend journal only against the owning scenario commit."""
-        if committed_training_job_id is not None and (
-            not isinstance(committed_training_job_id, str) or not committed_training_job_id
-        ):
-            raise TrainingRuntimeError("committed_training_job_id must be a non-empty string or None")
-        if not isinstance(committed_training_without_job_id, bool):
-            raise TrainingRuntimeError("committed_training_without_job_id must be a boolean")
+        committed = CommittedTrainingStep(scenario_step, committed_training_job_id, committed_training_without_job_id)
         scenario = scenario if self.training_runtime.concurrent_training_scenarios else None
         training_job = self.training_runtime.training_job_status()
         if training_job is None:
             if committed_training_job_id is not None:
-                self._finish_committed_training_job(committed_training_job_id)
+                self.finish_committed_training_job(committed_training_job_id)
             return
         status = training_job["status"]
         if self._sync_inference_admission(training_job):
@@ -752,31 +776,29 @@ class RuntimeScheduler:
         if "scenario_step" not in training_job and not marker_in_flight(training_job):
             # A settled job an earlier release recorded without its scenario step has nothing left to finish.
             return
-        job_scenario_step, training_job_id = _pending_job_identity(training_job)
+        job_scenario_step, training_job_id = pending_job_identity(training_job)
         if status == "UPDATING_WEIGHTS":
             with self.operations.measure("weight_sync"):
                 self.inference_runtime.resume_weight_update(training_job_id)
-        if (
-            status == "COMPLETE"
-            and training_job.get("commit_acknowledged") is not True
-            and scenario_step == job_scenario_step + 1
-            and committed_training_job_id is None
-            and committed_training_without_job_id
+        if committed.matches(
+            job_scenario_step,
+            training_job_id,
+            status=status,
+            acknowledged=training_job.get("commit_acknowledged") is True,
         ):
-            # Older bridges resumed before Reef committed and could not write
-            # their job identity into the old commit schema. The exact
-            # next-step training record is the strongest durable migration
-            # proof available; rollback/non-training commits are excluded.
-            self._finish_committed_training_job(training_job_id)
-            return
-        if scenario_step > job_scenario_step and committed_training_job_id == training_job_id:
-            self._finish_committed_training_job(training_job_id)
+            self.finish_committed_training_job(training_job_id)
 
     def acknowledge_commit(self, scenario_step: int, training_job_id: str, *, scenario: str | None = None) -> None:
         """Release a selected update only after its matching durable commit."""
         self.recover_pending_step(scenario_step, scenario=scenario, committed_training_job_id=training_job_id)
 
-    def _finish_committed_training_job(self, training_job_id: str) -> None:
+    def finish_committed_training_job(self, training_job_id: str) -> None:
+        """Finish both runtime acknowledgements before exposing the published identity and reopening admission.
+
+        The caller has matched this job to its scenario commit. If either
+        acknowledgement fails, admission stays closed and recovery repeats the
+        same job's completion without training or activating another candidate.
+        """
         self.inference_runtime.acknowledge_publication(training_job_id)
         self.training_runtime.commit_candidate(training_job_id)
         self.inference_runtime.mark_published()
@@ -809,7 +831,7 @@ class RuntimeScheduler:
         return result
 
 
-def _pending_job_identity(training_job: Mapping[str, Any]) -> tuple[int, str]:
+def pending_job_identity(training_job: Mapping[str, Any]) -> tuple[int, str]:
     job_scenario_step = training_job.get("scenario_step")
     training_job_id = training_job.get("training_job_id")
     if (
