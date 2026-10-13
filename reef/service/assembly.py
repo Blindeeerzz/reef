@@ -272,9 +272,7 @@ def _serving_recipe(selected: str, settings: ServiceConfig, env: Mapping[str, st
     refuse_weight_training_sections(settings)
     if settings.pipeline_settings is not None:
         raise ValueError(f"recipe {selected!r} is a preset: set its pipeline section in the preset file")
-    return build_named_recipe(
-        selected, env, default_runtime=_upstream_runtime(settings), preset_config=settings.preset_config
-    )
+    return build_named_recipe(selected, env, default_runtime=_upstream_runtime(settings))
 
 
 def default_served_url(host: str, port: int) -> str:

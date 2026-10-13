@@ -18,6 +18,7 @@ from reef.inference.http import InferenceProxyRuntime
 from reef.pipeline_context import PipelineContext
 from reef.recipe import Recipe, RecipeConfigError, WeightTrainingRecipe, WeightTrainingSpec, load_recipe_config
 from reef.recipe.checkpoint_strategy import EveryNVersions
+from reef.recipe.config import recipe_config_from_mapping
 from reef.recipe.registry import build_named_recipe, build_recipe, recipe_class_for
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.task2batch import NoBatches
@@ -301,22 +302,15 @@ def test_training_recipe_requires_its_runtime_environment() -> None:
         build_recipe("recipes.tttd.recipe:TTTDRecipe", {})
 
 
-def test_recipe_config_routes_sections_to_their_consumers(tmp_path) -> None:
-    path = tmp_path / "openclawrl.yaml"
-    path.write_text(
-        """implementation: recipes.openclawrl.recipe:OpenClawRLRecipe
-pipeline:
-  task2batch:
-    config:
-      batch_size: 4
-artifact:
-  checkpoint_every_n_versions: 3
-model:
-  path: /models/qwen
-"""
+def test_recipe_config_routes_sections_to_their_consumers() -> None:
+    settings = recipe_config_from_mapping(
+        {
+            "implementation": "recipes.openclawrl.recipe:OpenClawRLRecipe",
+            "pipeline": {"task2batch": {"config": {"batch_size": 4}}},
+            "artifact": {"checkpoint_every_n_versions": 3},
+            "model": {"path": "/models/qwen"},
+        }
     )
-
-    settings = load_recipe_config(path)
     recipe = build_recipe(settings["implementation"], {}, config=settings, **runtime_bindings(StubTrainingRuntime()))
 
     assert recipe.stages().task2batch.config == {"batch_size": 4}
@@ -325,22 +319,23 @@ model:
 
 def test_recipe_config_requires_implementation(tmp_path) -> None:
     path = tmp_path / "recipes.yaml"
-    path.write_text("data:\n  batch_size: 1\n")
+    path.write_text("recipe:\n  config:\n    training_mode: auto\n")
 
-    with pytest.raises(RecipeConfigError, match="non-empty 'implementation'"):
+    with pytest.raises(RecipeConfigError, match=r"recipe\.implementation must name a recipe class"):
         load_recipe_config(path)
 
 
 def test_named_recipe_resolves_preset_from_filename(tmp_path) -> None:
     path = tmp_path / "thorough.yaml"
     path.write_text(
-        """implementation: recipe
-runtime:
-  type: inference_proxy
-  base_url: http://provider
-  api_key: secret
-model:
-  path: Qwen/Qwen3.5-27B
+        """recipe:
+  implementation: recipe
+  runtime:
+    type: inference_proxy
+    base_url: http://provider
+    api_key: secret
+inference:
+  upstream-model: Qwen/Qwen3.5-27B
 """
     )
 
@@ -353,9 +348,10 @@ model:
 def test_config_backed_training_recipe_requires_an_injected_runtime(tmp_path) -> None:
     path = tmp_path / "sao-qwen.yaml"
     path.write_text(
-        """implementation: recipes.sao.recipe:SAORecipe
-model:
-  path: Qwen/Qwen3.5-27B
+        """recipe:
+  implementation: recipes.sao.recipe:SAORecipe
+inference:
+  model-path: Qwen/Qwen3.5-27B
 """
     )
     with pytest.raises(RecipeConfigError, match="requires a training runtime"):
@@ -369,7 +365,9 @@ def test_named_recipe_without_config_directory_resolves_core_recipe_only() -> No
 
 
 def test_named_recipe_reads_the_config_directory_from_the_environment(tmp_path) -> None:
-    (tmp_path / "thorough.yaml").write_text("implementation: recipe\nmodel:\n  path: Qwen/Qwen3.5-27B\n")
+    (tmp_path / "thorough.yaml").write_text(
+        "recipe:\n  implementation: recipe\ninference:\n  upstream-model: Qwen/Qwen3.5-27B\n"
+    )
 
     recipe = build_named_recipe("thorough", {"REEF_RECIPE_CONFIG_DIR": str(tmp_path)})
 
@@ -386,13 +384,14 @@ def test_named_recipe_configs_resolve_by_name(monkeypatch, tmp_path) -> None:
     # A local proxy preset: the core recipe pinned to a deployment's
     # own endpoint and model.
     (tmp_path / "local-proxy.yaml").write_text(
-        "implementation: recipe\n"
-        "runtime:\n"
-        "  type: inference_proxy\n"
-        "  base_url: http://127.0.0.1:30000\n"
-        "  timeout_s: 300\n"
-        "model:\n"
-        "  path: Qwen/Qwen3.6-27B\n"
+        "recipe:\n"
+        "  implementation: recipe\n"
+        "  runtime:\n"
+        "    type: inference_proxy\n"
+        "    base_url: http://127.0.0.1:30000\n"
+        "    timeout_s: 300\n"
+        "inference:\n"
+        "  upstream-model: Qwen/Qwen3.6-27B\n"
     )
     local = build_named_recipe("local-proxy", config_directory=tmp_path)
 
@@ -404,14 +403,15 @@ def test_named_recipe_configs_resolve_by_name(monkeypatch, tmp_path) -> None:
     # The hosted-provider shape (api_key_env) needs no built-in example: any
     # directory of named YAMLs resolves the same way.
     (tmp_path / "hosted-proxy.yaml").write_text(
-        "implementation: recipe\n"
-        "runtime:\n"
-        "  type: inference_proxy\n"
-        "  base_url: https://api.minimax.io/anthropic\n"
-        "  api_key_env: ANTHROPIC_AUTH_TOKEN\n"
-        "  timeout_s: 300\n"
-        "model:\n"
-        "  path: MiniMax-M3\n"
+        "recipe:\n"
+        "  implementation: recipe\n"
+        "  runtime:\n"
+        "    type: inference_proxy\n"
+        "    base_url: https://api.minimax.io/anthropic\n"
+        "    api_key_env: ANTHROPIC_AUTH_TOKEN\n"
+        "    timeout_s: 300\n"
+        "inference:\n"
+        "  upstream-model: MiniMax-M3\n"
     )
     runtime = build_named_recipe("hosted-proxy", config_directory=tmp_path).runtime
     assert isinstance(runtime, InferenceProxyRuntime)
