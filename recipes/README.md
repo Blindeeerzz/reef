@@ -196,9 +196,9 @@ under `recipes/beta/spade/`: one policy plays an Environment Designer that
 writes executable environments and a Reasoning Agent that learns in them.
 Reef knows one task format, Harbor, and the Designer writes it directly: an
 instruction, a container, a verifier and a reference solution, a task any
-Harbor agent can play. SPADE is a task generator. The deployment selects it in
-the `task-generation` section, and the built-in generated-task recipe plays the
-tasks and trains on them. Writing, checking and playing tasks is Reef's
+Harbor agent can play. SPADE is a task generator. The deployment selects it as
+the generator of the generated-task stages in its `pipeline` section, and the
+built-in generated-task recipe plays the tasks and trains on them. Writing, checking and playing tasks is Reef's
 (`reef.record2task.generator`, the generator service `reef serve` starts beside the
 HTTP service). The package holds the method: the Designer's adversarial
 experience section, the hint arm each task asks for, and the hint based regret

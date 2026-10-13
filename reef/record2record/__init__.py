@@ -7,7 +7,7 @@ decisions about each record. This package owns those decisions.
 Entry point: ``Record2Record`` in ``base.py``.
 
 * Each training pipeline (``reef.train.pipeline.TrainingPipeline``) has one
-  stage, from the recipe's ``build_record_stage(context)``. The pipeline gives
+  stage, from the recipe's ``build_record2record(context)``. The pipeline gives
   the stage every record except training instructions.
 * The stage forms ``RecordSet`` values: records that are used together. The
   record-to-task stage makes tasks from each set, and the pipeline gives the
@@ -43,7 +43,7 @@ Components of the pool:
   ``max_staleness`` versions behind the newest held set.
 
 The package depends only on ``reef.core``, ``reef.runtime.interfaces``,
-``reef.observability``, and ``reef.background_jobs``. Thus record-to-task and
+``reef.observability``, ``reef.background_jobs``, and ``reef.pipeline_context``. Thus record-to-task and
 the trainer can both use it.
 """
 

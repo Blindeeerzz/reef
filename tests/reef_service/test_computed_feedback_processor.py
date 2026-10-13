@@ -104,7 +104,7 @@ class _ToyProcessor(TrainingPipeline):
     def __init__(self, context: PipelineContext, *, worker: Any) -> None:
         super().__init__(
             context,
-            record_stage=JudgingStage(_ToyJudging(), worker, max_staleness=context.max_staleness),
+            record2record=JudgingStage(_ToyJudging(), worker, max_staleness=context.max_staleness),
             record2task=_ToyTasks(),
             task2batch=ToyBatches(context),
         )

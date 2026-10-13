@@ -29,17 +29,26 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Hashable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Failed, SupportsReceipt
 from reef.core import AgentRecord
+from reef.core.plugins import PluginConfigError
 from reef.core.tasks import GeneratedTask, TaskGenerationRequest, TaskGenerator, TaskPlayResult
 from reef.harness.client.tasks import TaskPlay
 from reef.pipeline_context import PipelineContext
-from reef.record2record import RecordSet, ReportContext, RoundRequest, RoundStage
+from reef.record2record import (
+    GroupDecision,
+    Record2Record,
+    RecordSet,
+    ReportContext,
+    RoundGrouping,
+    RoundRequest,
+    RoundStage,
+)
 from reef.record2task import ReportTasks, TaskResult
 from reef.record2task.assembly import SampleAssembly
 from reef.record2task.generator.client import DuplicateTask, Generator, HttpGenerator, TaskNameConflict
@@ -137,6 +146,90 @@ def episode_assembly(context: PipelineContext) -> SampleAssembly:
     )
 
 
+def source_tag_of(setting: str) -> tuple[str, str] | None:
+    """Read ``source_tag`` as a tag name and value: ``"source=session"`` is the tag ``x-reef-tag-source: session``.
+
+    An empty setting selects no source sessions.
+    """
+    if not setting:
+        return None
+    name, separator, value = setting.partition("=")
+    if not separator or not name.strip() or not value:
+        raise ValueError("source_tag must be name=value, the x-reef-tag-<name> header that marks a source session")
+    # The service keeps tag names in lower case.
+    return name.strip().lower(), value
+
+
+def inference_tags(record: AgentRecord) -> Mapping[str, object]:
+    """The ``x-reef-tag-*`` pairs that the service keeps under an inference record's ``metadata.tags``."""
+    metadata = record.payload.get("metadata")
+    tags = metadata.get("tags") if isinstance(metadata, Mapping) else None
+    return tags if isinstance(tags, Mapping) else {}
+
+
+class TaskGroupGrouping(RoundGrouping):
+    """The training arm's episodes of one task form one group, ready at ``plays_per_task`` episodes.
+
+    Measurement arms and the generator's own reports share the scenario; only the training arm trains.
+    A source session is a report whose inference records all carry ``source_tag``.
+    """
+
+    def __init__(self, plays_per_task: int, source_tag: tuple[str, str] | None = None) -> None:
+        self.plays_per_task = plays_per_task
+        self.source_tag = source_tag
+
+    def is_training_report(self, report: AgentRecord) -> bool:
+        return reported_arm(report) == TRAINING_ARM
+
+    def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
+        return reported_task_name(context.report), None
+
+    def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
+        return GroupDecision.READY if len(members) >= self.plays_per_task else GroupDecision.INCOMPLETE
+
+    def is_source_report(self, context: ReportContext) -> bool:
+        if self.source_tag is None or not context.inferences:
+            return False
+        name, value = self.source_tag
+        return all(inference_tags(inference).get(name) == value for inference in context.inferences)
+
+
+class GeneratedTaskRecord2Record(RoundStage):
+    """The generated-task record stage: one group per task, and a round request every ``batches_per_round`` batches.
+
+    Config: ``plays_per_task`` (the training plays of each task; a group is
+    complete at this count, at least 2), ``batches_per_round``,
+    ``source_records_per_round`` (the source sessions that each request takes,
+    at most), and ``source_tag`` (``name=value``; required when
+    ``source_records_per_round`` is above 0). A terminal report owns its sources.
+    """
+
+    def __init__(self, context: PipelineContext) -> None:
+        config = context.config
+        plays_per_task = int(config.get("plays_per_task", DEFAULT_PLAYS_PER_TASK))
+        if plays_per_task < 2:
+            raise ValueError("plays_per_task must be at least two: a group of one has no relative reward")
+        source_tag = source_tag_of(str(config.get("source_tag", "") or ""))
+        sources_per_round = int(config.get("source_records_per_round", 0))
+        if sources_per_round > 0 and source_tag is None:
+            raise ValueError("source_records_per_round needs a source_tag that marks the source sessions")
+        self.task_grouping = TaskGroupGrouping(plays_per_task, source_tag)
+        super().__init__(
+            context.scenario,
+            context.report_type,
+            self.task_grouping,
+            batches_per_round=int(config.get("batches_per_round", DEFAULT_BATCHES_PER_ROUND)),
+            sources_per_round=sources_per_round,
+            exclusive_sources=True,
+        )
+
+    @classmethod
+    def from_config(
+        cls, config: Mapping[str, Any], *, context: PipelineContext, environ: Mapping[str, str]
+    ) -> GeneratedTaskRecord2Record:
+        return cls(context.with_config({**context.config, **config}))
+
+
 class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
     """The record-to-task stage of generated tasks: played episodes as tasks, and rounds from round requests.
 
@@ -152,7 +245,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
     def __init__(
         self,
         context: PipelineContext,
-        round_stage: RoundStage,
+        round_stage: GeneratedTaskRecord2Record,
         *,
         task_generator: TaskGenerator | None = None,
         task_player: Generator | None = None,
@@ -163,7 +256,8 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         self.assembly = episode_assembly(context)
         config = context.config
         self.scenario = context.scenario
-        self.plays_per_task = int(config.get("plays_per_task", DEFAULT_PLAYS_PER_TASK))
+        # The record stage's groups complete at the plays that each round makes.
+        self.plays_per_task = round_stage.task_grouping.plays_per_task
         self.rounds = int(config.get("rounds", 0))
         self.description = str(config.get("description", "") or "")
         served_model = config.get("served_model")
@@ -175,7 +269,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             raise ValueError("rounds must be non-negative and batches_per_round positive")
         if self.rounds > 0:
             if task_generator is None:
-                raise ValueError("rounds need a task generator: add a task-generation section")
+                raise ValueError("rounds need a task generator: set pipeline.record2task.config.generator")
             if not self.description.strip() or self.state_dir is None:
                 raise ValueError("rounds need a description (what the tasks are about) and a state_dir")
             if task_player is None:
@@ -200,6 +294,35 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         self.tasks_generated = 0
         self.tasks_played = 0
         self.last_error = ""
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any],
+        *,
+        context: PipelineContext,
+        record2record: Record2Record,
+        environ: Mapping[str, str],
+    ) -> GeneratedTaskTasks:
+        """Build the rounds of one scenario. ``generator`` names the ``TaskGenerator`` class and its config."""
+        if not isinstance(record2record, GeneratedTaskRecord2Record):
+            raise PluginConfigError(
+                f"GeneratedTaskTasks needs GeneratedTaskRecord2Record as record2record, not {type(record2record).__name__}"
+            )
+        setting = config.get("generator")
+        task_generator = None
+        if setting is not None:
+            generator = TaskGenerator.reference(setting, setting="pipeline.record2task.config.generator")
+            task_generator = generator.plugin_class.from_config(
+                generator.config, scenario=context.scenario, environ=environ
+            )
+        settings = {key: value for key, value in config.items() if key != "generator"}
+        return cls(context.with_config({**context.config, **settings}), record2record, task_generator=task_generator)
+
+    @classmethod
+    def scenario_state_dirs(cls, config: Mapping[str, Any], scenario: str) -> tuple[Path, ...]:
+        state_dir = str(config.get("state_dir", "") or "")
+        return (Path(state_dir).expanduser() / scenario,) if state_dir else ()
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
         task_name = reported_task_name(context.report)
@@ -391,11 +514,8 @@ class GeneratedTaskBatches(Task2Batch):
 
     def __init__(self, context: PipelineContext) -> None:
         tasks_per_step = int(context.config.get("tasks_per_step", DEFAULT_TASKS_PER_STEP))
-        plays_per_task = int(context.config.get("plays_per_task", DEFAULT_PLAYS_PER_TASK))
         if tasks_per_step <= 0:
             raise ValueError("tasks_per_step must be positive")
-        if plays_per_task < 2:
-            raise ValueError("plays_per_task must be at least two: a group of one has no relative reward")
         # One record set of the batch is one complete task group.
         super().__init__(context.with_config({**context.config, "batch_size": tasks_per_step}))
 

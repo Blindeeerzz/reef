@@ -99,7 +99,7 @@ def _processor(batch_size: int = 1, *, worker=None, ttl_s: float = 900.0, client
     stage = openclawrl_record_stage(context, worker=worker, clients=clients)
     return TrainingPipeline(
         context,
-        record_stage=stage,
+        record2record=stage,
         record2task=OpenClawRLTasks(),
         task2batch=OpenClawRLBatches(context, stage.judging),
     )
@@ -490,7 +490,7 @@ def test_the_prm_record_file_reports_the_judged_population(tmp_path) -> None:
     stage = openclawrl_record_stage(context, worker=worker)
     processor = TrainingPipeline(
         context,
-        record_stage=stage,
+        record2record=stage,
         record2task=OpenClawRLTasks(),
         task2batch=OpenClawRLBatches(context, stage.judging),
     )
@@ -619,7 +619,7 @@ def test_traffic_without_a_session_tag_says_so_instead_of_training_on_nothing(ca
             processor.ingest(_turn(f"t{i}", [{"role": "user", "content": f"homework {i}"}]))
         assert "x-reef-tag-session" in caplog.text  # the fallback announced itself
         caplog.clear()
-        processor.record_stage.judging.expire(time.monotonic() + 10_000.0)  # every session times out unbound
+        processor.record2record.judging.expire(time.monotonic() + 10_000.0)  # every session times out unbound
     assert "without ever binding" in caplog.text
     assert "x-reef-tag-session" in caplog.text
 
@@ -630,7 +630,7 @@ def test_a_tagged_run_stays_quiet(caplog) -> None:
     with caplog.at_level("WARNING"):
         processor.ingest(_turn("t1", Q1, session="hw-1"))
         processor.ingest(_turn("t2", Q2, session="hw-1"))
-        processor.record_stage.judging.expire(time.monotonic() + 10_000.0)
+        processor.record2record.judging.expire(time.monotonic() + 10_000.0)
     assert caplog.text == ""
 
 

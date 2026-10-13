@@ -31,16 +31,16 @@ class ThresholdBatches(Task2Batch):
 def threshold_pipeline(
     context: PipelineContext,
     *,
-    record_stage: ReportStage | None = None,
+    record2record: ReportStage | None = None,
     task2batch: Task2Batch | None = None,
 ) -> TrainingPipeline:
-    """Every report by itself (or ``record_stage``), one sample each, batched by ``ThresholdBatches`` (or ``task2batch``)."""
+    """Every report by itself (or ``record2record``), one sample each, batched by ``ThresholdBatches`` (or ``task2batch``)."""
     return TrainingPipeline(
         context,
-        record_stage=(
+        record2record=(
             ReportStage(context.scenario, context.report_type, ReportGrouping())
-            if record_stage is None
-            else record_stage
+            if record2record is None
+            else record2record
         ),
         record2task=ThresholdTasks(context),
         task2batch=ThresholdBatches(context) if task2batch is None else task2batch,

@@ -474,7 +474,7 @@ def _judge_one_turn(judge, teacher):
     stage = openclawrl_record_stage(context, clients=(judge, teacher, None))
     processor = TrainingPipeline(
         context,
-        record_stage=stage,
+        record2record=stage,
         record2task=OpenClawRLTasks(),
         task2batch=OpenClawRLBatches(context, stage.judging),
     )
@@ -586,7 +586,7 @@ def test_processor_attaches_topk_and_candidates() -> None:
     stage = openclawrl_record_stage(context, worker=worker)
     processor = TrainingPipeline(
         context,
-        record_stage=stage,
+        record2record=stage,
         record2task=OpenClawRLTasks(),
         task2batch=OpenClawRLBatches(context, stage.judging),
     )

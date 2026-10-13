@@ -58,7 +58,7 @@ class FeedbackBatches(Task2Batch):
 def feedback_pipeline(context):
     return TrainingPipeline(
         context,
-        record_stage=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+        record2record=ReportStage(context.scenario, context.report_type, ReportGrouping()),
         record2task=FeedbackTasks(),
         task2batch=FeedbackBatches(context),
     )

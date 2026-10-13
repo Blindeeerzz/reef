@@ -17,7 +17,8 @@ names the class in ``WeightTrainingSpec.task2batch``.
 
 Everything numeric about a method, such as advantages and the loss family,
 lives in its backend training objective, not here. The package depends only
-on ``reef.core``, ``reef.observability``, and ``reef.pipeline_context``.
+on ``reef.core``, ``reef.observability``, ``reef.pipeline_context``, and the
+two earlier stage packages, whose classes ``Task2Batch.from_config`` receives.
 """
 
 from reef.task2batch.base import NoBatches, Task2Batch

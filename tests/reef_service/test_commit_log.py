@@ -603,7 +603,7 @@ class ProtectAllPipeline(TrainingPipeline):
     def __init__(self, context) -> None:
         super().__init__(
             context,
-            record_stage=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+            record2record=ReportStage(context.scenario, context.report_type, ReportGrouping()),
             record2task=ThresholdTasks(context),
             task2batch=ThresholdBatches(context),
         )

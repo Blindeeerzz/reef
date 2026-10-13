@@ -549,6 +549,7 @@ def test_record_to_record_stage_depends_only_on_contracts_below_training() -> No
         "reef.runtime.interfaces",
         "reef.observability",
         "reef.background_jobs",
+        "reef.pipeline_context",
         "reef.record2record",
     )
     for path in sorted((REPO_ROOT / "reef" / "record2record").rglob("*.py")):
@@ -575,7 +576,14 @@ def test_record_to_task_contract_depends_only_on_the_record_stage() -> None:
 
 def test_task_to_batch_stage_depends_only_on_contracts_below_training() -> None:
     # The pipeline and the recipes import the stage, so it never imports them.
-    allowed = ("reef.core", "reef.observability", "reef.pipeline_context", "reef.task2batch")
+    allowed = (
+        "reef.core",
+        "reef.observability",
+        "reef.pipeline_context",
+        "reef.record2record",
+        "reef.record2task",
+        "reef.task2batch",
+    )
     paths = [*sorted((REPO_ROOT / "reef" / "task2batch").rglob("*.py")), REPO_ROOT / "reef" / "pipeline_context.py"]
     for path in paths:
         package = ".".join(path.parent.relative_to(REPO_ROOT).parts)

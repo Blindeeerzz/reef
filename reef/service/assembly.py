@@ -121,8 +121,8 @@ def _training_recipe(
     recipe_config = recipe_type.service_config(_recipe_owned_settings(settings), model_path=model_path)
     if settings.evaluation_settings is not None:
         recipe_config["evaluation"] = dict(settings.evaluation_settings)
-    if settings.task_generation_settings is not None:
-        recipe_config["task_generation"] = dict(settings.task_generation_settings)
+    if settings.pipeline_settings is not None:
+        recipe_config["pipeline"] = dict(settings.pipeline_settings)
     # The runtime must exist before the recipe can be constructed, so
     # resolve the shared runtime-owned config field from the same inputs first.
     # WeightTrainingRecipe then verifies that both resolved the same value.
@@ -188,7 +188,7 @@ def composed_training_recipe(
         key: value
         for key, value in (
             ("evaluation", settings.evaluation_settings),
-            ("task_generation", settings.task_generation_settings),
+            ("pipeline", settings.pipeline_settings),
         )
         if value is not None
     }
@@ -211,7 +211,7 @@ def refuse_weight_training_sections(settings: ServiceConfig) -> None:
     """Refuse the top-level sections that only a recipe that trains weights reads."""
     for section, value in (
         ("evaluation", settings.evaluation_settings),
-        ("task-generation", settings.task_generation_settings),
+        ("pipeline", settings.pipeline_settings),
     ):
         if value is not None:
             raise ValueError(f"the top-level {section} section requires a weight-training recipe")

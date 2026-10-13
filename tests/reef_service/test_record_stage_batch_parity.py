@@ -36,8 +36,7 @@ from reef.artifact import ArtifactRef
 from reef.background_jobs import SupportsReceipt
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportBase, TeacherContextReport
-from reef.recipe.generated_tasks.processor import GeneratedTaskBatches, GeneratedTaskTasks
-from reef.recipe.generated_tasks.recipe import task_group_record_stage
+from reef.recipe.generated_tasks.processor import GeneratedTaskBatches, GeneratedTaskRecord2Record, GeneratedTaskTasks
 from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
 from reef.record2task import JudgedTasks, ReportTasks
 from reef.record2task.assembly import SampleAssembly
@@ -282,7 +281,7 @@ class ThresholdPipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
-            record_stage=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+            record2record=ReportStage(context.scenario, context.report_type, ReportGrouping()),
             record2task=ThresholdTasks(context),
             task2batch=ThresholdBatches(context),
         )
@@ -294,7 +293,7 @@ class SlotGroupPipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
-            record_stage=ReportStage(context.scenario, context.report_type, SlotGrouping(), exclusive_sources=True),
+            record2record=ReportStage(context.scenario, context.report_type, SlotGrouping(), exclusive_sources=True),
             record2task=AssembledTasks(context),
             task2batch=SlotBatches(context),
         )
@@ -306,7 +305,7 @@ class OrderedMixPipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
-            record_stage=ReportStage(
+            record2record=ReportStage(
                 context.scenario, context.report_type, AnyGroupReady(), exclusive_sources=True, ordered_groups=True
             ),
             record2task=AssembledTasks(context),
@@ -318,7 +317,7 @@ class TTTDPipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
-            record_stage=tttd_record_stage(context),
+            record2record=tttd_record_stage(context),
             record2task=TTTDTasks(context),
             task2batch=TTTDBatches(context),
         )
@@ -328,7 +327,7 @@ class SDPOPipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
-            record_stage=sdpo_record_stage(context),
+            record2record=sdpo_record_stage(context),
             record2task=SDPOTasks(context),
             task2batch=SDPOBatches(context),
         )
@@ -338,7 +337,7 @@ class CoralPipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
-            record_stage=coral_record_stage(context),
+            record2record=coral_record_stage(context),
             record2task=CoralTasks(context),
             task2batch=CoralBatches(context),
         )
@@ -346,10 +345,10 @@ class CoralPipeline(TrainingPipeline):
 
 class GeneratedTaskPipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
-        round_stage = task_group_record_stage(context)
+        round_stage = GeneratedTaskRecord2Record(context)
         super().__init__(
             context,
-            record_stage=round_stage,
+            record2record=round_stage,
             record2task=GeneratedTaskTasks(context, round_stage),
             task2batch=GeneratedTaskBatches(context),
         )
@@ -359,7 +358,7 @@ class DistillPipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
-            record_stage=distill_record_stage(context),
+            record2record=distill_record_stage(context),
             record2task=DistillTasks(context),
             task2batch=DistillBatches(context),
         )
@@ -371,7 +370,7 @@ class TracePipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
-            record_stage=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+            record2record=ReportStage(context.scenario, context.report_type, ReportGrouping()),
             record2task=TraceTasks(),
             task2batch=TraceBatches(context),
         )
@@ -447,7 +446,7 @@ class ToyComputedPipeline(TrainingPipeline):
 
     def __init__(self, context: PipelineContext) -> None:
         stage = JudgingStage(ToyJudging(), ImmediateWorker(), max_staleness=context.max_staleness)
-        super().__init__(context, record_stage=stage, record2task=ToyTasks(), task2batch=ToyBatches(context))
+        super().__init__(context, record2record=stage, record2task=ToyTasks(), task2batch=ToyBatches(context))
 
 
 def turn(record_id: str, *, version: str, completes: str | None = None, track: bool = True) -> AgentRecord:

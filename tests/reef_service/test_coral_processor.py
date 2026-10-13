@@ -27,7 +27,7 @@ def _processor(group_size=2):
     context = PipelineContext(SCENARIO, {"group_size": group_size})
     return TrainingPipeline(
         context,
-        record_stage=coral_record_stage(context),
+        record2record=coral_record_stage(context),
         record2task=CoralTasks(context),
         task2batch=CoralBatches(context),
     )

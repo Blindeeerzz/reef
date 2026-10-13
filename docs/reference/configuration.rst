@@ -88,7 +88,7 @@ The public layout groups fields by their owner:
 * ``storage``: artifact repository, work/cache directories and record retention.
 * ``execution`` / ``executors``: role placement and named executor profiles.
 * ``evaluation`` / ``observability``: their existing component-owned settings.
-* ``task-generation``: the task generator the generated-task recipe asks for tasks.
+* ``pipeline``: the stage classes that replace a weight-training recipe's own, with their config.
 * ``generator``: the generator service that writes, checks and plays Harbor tasks.
 
 Version 2 contains no process definitions. ``service`` and ``services`` are
@@ -1143,74 +1143,116 @@ lookalikes.
 The plugin interface is in `Write a recipe
 <../developer-guide/write-a-recipe.rst#gate-a-candidate>`__.
 
-The ``task-generation`` section
--------------------------------
+The ``pipeline`` section
+------------------------
 
-Only the built-in generated-task recipe,
-``reef.recipe.generated_tasks:GeneratedTaskRecipe``, reads this section.
-Another weight-training recipe refuses it, and a deployment that pairs it with
-a recipe that trains no weights fails at startup. When present, Reef calls the
-named class's ``from_config`` method once for each scenario.
+Absent by default. A weight-training recipe builds its three stages itself
+(see `Training pipeline <../developer-guide/processors.rst>`__). This section
+names a stage class to use instead, for one or more of the stages, with its
+config. A recipe that trains no weights refuses it at startup.
 
 .. config::
 
-   task-generation.module | a ``package.module:ClassName`` reference to a ``TaskGenerator`` subclass. Required.
-   task-generation.config | opaque mapping handed to ``from_config``; Reef never reads it
+   pipeline.record2record | the record-to-record stage: ``module`` names a ``Record2Record`` subclass and ``config`` is its config
+   pipeline.record2task | the record-to-task stage: ``module`` names a ``Record2Task`` subclass and ``config`` is its config
+   pipeline.task2batch | the task-to-batch stage: ``module`` names a ``Task2Batch`` subclass and ``config`` is its config
+
+Reef imports and checks each class when it loads the recipe config, and
+rejects functions and abstract classes. For each scenario, it builds the
+stages in pipeline order with the class method ``from_config``. A later stage
+receives the stages built before it, so a record-to-task stage can check the
+record stage that it needs. A stage that the section does not name is the
+recipe's own. Each stage reads its keys from ``config`` as the stage
+documents them. A stage class without ``from_config`` cannot be named here;
+the default ``Task2Batch.from_config`` builds the class with its ``config``
+over the recipe's.
+
+Generated tasks
+~~~~~~~~~~~~~~~
+
+The built-in generated-task recipe,
+``reef.recipe.generated_tasks:GeneratedTaskRecipe``, binds the ``task_group``
+objective on Tinker's ``importance_sampling`` loss, so it requires the
+``tinker`` training backend. Its stages are configured here. Without this
+section no round runs, and the recipe trains on the training arm's reports
+only.
 
 .. code:: yaml
 
    recipe:
      implementation: reef.recipe.generated_tasks:GeneratedTaskRecipe
-     config:
-       generator-url: ${endpoints.generator}
-       rounds: 20
-       description: shell tasks with hidden state under /var and /etc
-       state-dir: ${REEF_STATE_DIR}/rounds
-   task-generation:
-     module: recipes.beta.spade:SpadeTaskGenerator
-     config:
-       generator_url: ${endpoints.generator}
-       skills: [inspection, repair]
-       state_dir: ${REEF_STATE_DIR}/generations
+   pipeline:
+     record2record:
+       module: reef.recipe.generated_tasks:GeneratedTaskRecord2Record
+       config:
+         plays_per_task: 4
+         batches_per_round: 2
+     record2task:
+       module: reef.recipe.generated_tasks:GeneratedTaskTasks
+       config:
+         generator_url: ${endpoints.generator}
+         rounds: 20
+         description: shell tasks with hidden state under /var and /etc
+         state_dir: ${REEF_STATE_DIR}/rounds
+         generator:
+           module: recipes.beta.spade:SpadeTaskGenerator
+           config:
+             generator_url: ${endpoints.generator}
+             skills: [inspection, repair]
+             state_dir: ${REEF_STATE_DIR}/generations
+     task2batch:
+       module: reef.recipe.generated_tasks:GeneratedTaskBatches
+       config:
+         tasks_per_step: 2
 
-The class method ``from_config(config, *, scenario, environ)`` returns the
-scenario's generator. A generator that calls a remote service reads its
-credentials through environment references in ``config``. Reef checks the
-class when it loads the recipe config and rejects functions and abstract
-classes. The generator interface and the round are in `Processors
-<../developer-guide/processors.rst#task-generation-contract>`__.
-
-The generated-task recipe reads these ``recipe.config`` fields:
+``GeneratedTaskRecord2Record`` groups the training plays by task and requests
+the rounds:
 
 .. config::
 
-   recipe.config.tasks-per-step | 4 | complete task groups in one batch
-   recipe.config.plays-per-task | 4 | training plays of each task; a group is complete at this count. At least 2.
-   recipe.config.scaffold-tolerance | 8 | masked tokens the sample assembly may realign before a response, for a thinking template's scaffold
-   recipe.config.rounds | 0 | rounds of task generation; 0 generates nothing and trains on the training arm's reports only
-   recipe.config.batches-per-round | 1 | acknowledged batches after which the next round starts
-   recipe.config.description | what the tasks are about; every generation request carries it. Required with rounds.
-   recipe.config.source-records-per-round | 0 | recorded sessions that each round gives the generator, at most; 0 generates from the description only
-   recipe.config.source-tag | the ``name=value`` tag that marks a source session: each of its model calls carries the header ``x-reef-tag-<name>: <value>``. Required when ``source-records-per-round`` is above 0.
-   recipe.config.generator-url | the generator service, ``${endpoints.generator}``. Required with rounds.
-   recipe.config.state-dir | where each scenario keeps its round summaries. Required with rounds.
-   recipe.config.served-model | the model the task player asks for; the deployment's by default
+   pipeline.record2record.config.plays_per_task | 4 | training plays of each task; a group is complete at this count. At least 2.
+   pipeline.record2record.config.batches_per_round | 1 | trained batches after which the next round starts
+   pipeline.record2record.config.source_records_per_round | 0 | recorded sessions that each round gives the generator, at most; 0 generates from the description only
+   pipeline.record2record.config.source_tag | the ``name=value`` tag that marks a source session: each of its model calls carries the header ``x-reef-tag-<name>: <value>``. Required when ``source_records_per_round`` is above 0.
+
+``GeneratedTaskTasks`` runs the rounds and turns the training plays into
+tasks. It plays each task ``plays_per_task`` times, as its record stage
+groups them:
+
+.. config::
+
+   pipeline.record2task.config.rounds | 0 | rounds of task generation; 0 generates nothing
+   pipeline.record2task.config.generator | the ``TaskGenerator`` class (``module``) and its ``config``. Required with rounds.
+   pipeline.record2task.config.description | what the tasks are about; every generation request carries it. Required with rounds.
+   pipeline.record2task.config.generator_url | the generator service, ``${endpoints.generator}``. Required with rounds.
+   pipeline.record2task.config.state_dir | where each scenario keeps its round summaries. Required with rounds.
+   pipeline.record2task.config.served_model | the model the task player asks for; the deployment's by default
+   pipeline.record2task.config.scaffold_tolerance | 8 | masked tokens the sample assembly may realign before a response, for a thinking template's scaffold
+
+``GeneratedTaskBatches`` batches complete task groups:
+
+.. config::
+
+   pipeline.task2batch.config.tasks_per_step | 4 | complete task groups in one batch
+
+Reef calls the generator class's ``from_config(config, *, scenario, environ)``
+once for each scenario. A generator that calls a remote service reads its
+credentials through environment references in ``config``. The generator
+interface and the round are in `Training pipeline
+<../developer-guide/processors.rst#task-generation-contract>`__.
 
 A source session is a report, without a training arm, whose inference
-records all carry ``source-tag``. The generator service accepts at most
+records all carry ``source_tag``. The generator service accepts at most
 512 KiB of records and files in one request, so keep
-``source-records-per-round`` small when the sessions are long.
-
-The recipe trains with the ``task_group`` objective on Tinker's
-``importance_sampling`` loss, so it requires the ``tinker`` training backend.
+``source_records_per_round`` small when the sessions are long.
 
 The ``generator`` section
 -------------------------
 
 Absent by default. When present, ``reef serve`` starts the generator service
 (``python -m reef.service.deploy.generator_process``) before the HTTP service, which depends on
-it, and publishes its address as ``${endpoints.generator}`` for the recipe to
-consume. The generator writes, checks and plays Harbor tasks for the
+it, and publishes its address as ``${endpoints.generator}`` for the
+generated-task stages to consume. The generator writes, checks and plays Harbor tasks for the
 generated-task recipe and for a task generator such as SPADE, under the same
 interpreter as the Reef service (``REEF_PYTHON``, otherwise the launcher's). Its host needs Docker and the
 ``harbor`` command line; the Reef service itself does not. ``execution.generator`` selects its executor, so a deployment can
@@ -1239,9 +1281,11 @@ place it on the host that has Docker.
      tasks-root: ${REEF_SPADE_STATE_DIR}/tasks
    execution:
      generator: auto
-   recipe:
-     config:
-       generator-url: ${endpoints.generator}
+   pipeline:
+     record2task:
+       module: reef.recipe.generated_tasks:GeneratedTaskTasks
+       config:
+         generator_url: ${endpoints.generator}
 
 The generator reads the resolved deployment through ``REEF_CONFIG`` like the
 other children: the Reef address from ``reef.host`` and ``reef.port``, the

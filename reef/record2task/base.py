@@ -11,10 +11,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, Self
 
 from reef.core.batches import TrainDataItem
-from reef.record2record import AssemblyStatus, RecordSet, SetAssembly
+from reef.core.plugins import Plugin, PluginConfigError
+from reef.pipeline_context import PipelineContext
+from reef.record2record import AssemblyStatus, Record2Record, RecordSet, SetAssembly
 
 
 @dataclass(frozen=True)
@@ -35,12 +38,33 @@ class TaskResult:
         return cls(SetAssembly(AssemblyStatus.REJECTED))
 
 
-class Record2Task(ABC):
+class Record2Task(ABC, Plugin):
     """The record-to-task stage: turn one record set into tasks.
 
     Runs on the trainer thread without network or model calls. Raise on a
-    broken training contract.
+    broken training contract. A deployment can name a stage class in
+    ``pipeline.record2task``; the class then implements ``from_config``.
     """
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any],
+        *,
+        context: PipelineContext,
+        record2record: Record2Record,
+        environ: Mapping[str, str],
+    ) -> Self:
+        """Build the stage of one scenario from its ``pipeline.record2task.config``.
+
+        ``record2record`` is the scenario's record-to-record stage, built first.
+        """
+        raise PluginConfigError(f"{cls.__name__} cannot be built from a deployment file: it has no from_config")
+
+    @classmethod
+    def scenario_state_dirs(cls, config: Mapping[str, Any], scenario: str) -> tuple[Path, ...]:
+        """The directories under which a stage built from ``config`` keeps a scenario's state, for archiving."""
+        return ()
 
     @abstractmethod
     def make_tasks(self, record_set: RecordSet) -> TaskResult:
@@ -72,6 +96,19 @@ class Record2Task(ABC):
 
 class NoTasks(Record2Task):
     """Make no tasks. The record stage forgets each set; the no-update default."""
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any],
+        *,
+        context: PipelineContext,
+        record2record: Record2Record,
+        environ: Mapping[str, str],
+    ) -> Self:
+        if config:
+            raise PluginConfigError(f"{cls.__name__} takes no config, got {', '.join(sorted(map(str, config)))}")
+        return cls()
 
     def make_tasks(self, record_set: RecordSet) -> TaskResult:
         return TaskResult(SetAssembly(AssemblyStatus.INGESTED))

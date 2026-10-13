@@ -43,7 +43,7 @@ NUM_GPUS = 0
 
 def sao_pipeline(context: PipelineContext) -> TrainingPipeline:
     return TrainingPipeline(
-        context, record_stage=sao_record_stage(context), record2task=SAOTasks(context), task2batch=SAOBatches(context)
+        context, record2record=sao_record_stage(context), record2task=SAOTasks(context), task2batch=SAOBatches(context)
     )
 
 
@@ -293,7 +293,7 @@ def test_cookbook_processors_assemble_before_rejecting_multi_turn_reports(
     tasks = TTTDTasks(context) if processor_type is TTTDBatches else SAOTasks(context)
     processor = TrainingPipeline(
         context,
-        record_stage=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+        record2record=ReportStage(context.scenario, context.report_type, ReportGrouping()),
         record2task=tasks,
         task2batch=processor_type(context),
     )
@@ -468,7 +468,7 @@ def test_trainer_tells_the_processor_a_dropped_batch_before_acknowledging_it() -
     def noting_pipeline(context: PipelineContext) -> NotingPipeline:
         return NotingPipeline(
             context,
-            record_stage=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+            record2record=ReportStage(context.scenario, context.report_type, ReportGrouping()),
             record2task=ThresholdTasks(context),
             task2batch=ThresholdBatches(context),
         )

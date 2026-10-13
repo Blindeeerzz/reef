@@ -1238,7 +1238,7 @@ class _SlottedRecipe(_TwoTrainerRecipe):
         if component == HARNESS:
             # The threshold pipeline with ``_SlotGrouping``.
             return threshold_pipeline(
-                context, record_stage=ReportStage(context.scenario, context.report_type, _SlotGrouping())
+                context, record2record=ReportStage(context.scenario, context.report_type, _SlotGrouping())
             )
         return threshold_pipeline(context)
 
@@ -1538,7 +1538,7 @@ class _ComputedWeightsRecipe(_TwoTrainerRecipe):
             # Trains the judged turns of ``_RetiringRetriesJudging``.
             return TrainingPipeline(
                 context,
-                record_stage=JudgingStage(
+                record2record=JudgingStage(
                     _RetiringRetriesJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness
                 ),
                 record2task=_RetiringRetriesTasks(),

@@ -101,7 +101,7 @@ class RecordingPipeline(TrainingPipeline):
         self.stage = WithholdingStage()
         self.recording = RecordingTasks()
         self.batches = RecordingBatches(context)
-        super().__init__(context, record_stage=self.stage, record2task=self.recording, task2batch=self.batches)
+        super().__init__(context, record2record=self.stage, record2task=self.recording, task2batch=self.batches)
 
 
 class DroppingReportStage(ReportStage):
@@ -115,7 +115,7 @@ class DroppingReportStage(ReportStage):
 
 
 def dropping_pipeline(context: PipelineContext) -> TrainingPipeline:
-    return threshold_pipeline(context, record_stage=DroppingReportStage(context.scenario, None, ReportGrouping()))
+    return threshold_pipeline(context, record2record=DroppingReportStage(context.scenario, None, ReportGrouping()))
 
 
 class PairGrouping(ReportGrouping):
@@ -156,7 +156,7 @@ class PairPipeline(TrainingPipeline):
         self.pair_tasks = PairTasks()
         super().__init__(
             context,
-            record_stage=ReportStage("s", None, PairGrouping(), exclusive_sources=True),
+            record2record=ReportStage("s", None, PairGrouping(), exclusive_sources=True),
             record2task=self.pair_tasks,
             task2batch=PairBatches(context),
         )

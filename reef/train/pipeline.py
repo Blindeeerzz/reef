@@ -28,6 +28,7 @@ from collections.abc import Hashable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from reef.core.plugins import PluginConfigError, PluginReference
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase
 from reef.core.training_request import TrainingRequest
@@ -40,6 +41,48 @@ from reef.train.types import TrainDataItem, TrainingBatch
 
 #: In manual mode the pipeline holds at most this many batches of sets; it releases older ones.
 MANUAL_HELD_BATCHES = 4
+
+
+#: The keys of the deployment's ``pipeline`` section, one for each stage.
+PIPELINE_STAGES = ("record2record", "record2task", "task2batch")
+
+
+@dataclass(frozen=True)
+class PipelineConfig:
+    """The deployment's ``pipeline`` section: stage classes that replace the recipe's, with their config.
+
+    Each key names one stage as ``{module, config}``. A stage without a key is
+    the recipe's own. The classes are imported and checked when the recipe is
+    built; the stages are built for each scenario, in pipeline order.
+    """
+
+    record2record: PluginReference[Record2Record] | None = None
+    record2task: PluginReference[Record2Task] | None = None
+    task2batch: PluginReference[Task2Batch] | None = None
+    environ: Mapping[str, str] = field(default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_setting(cls, value: object, *, environ: Mapping[str, str]) -> PipelineConfig:
+        if not isinstance(value, Mapping):
+            raise PluginConfigError(f"pipeline must be a mapping with {', '.join(PIPELINE_STAGES)}")
+        unknown = sorted(str(key) for key in value if key not in PIPELINE_STAGES)
+        if unknown:
+            raise PluginConfigError(
+                f"pipeline has unknown key(s) {', '.join(unknown)}; expected {', '.join(PIPELINE_STAGES)}"
+            )
+        record2record, record2task, task2batch = (value.get(stage) for stage in PIPELINE_STAGES)
+        return cls(
+            record2record=(
+                None
+                if record2record is None
+                else Record2Record.reference(record2record, setting="pipeline.record2record")
+            ),
+            record2task=(
+                None if record2task is None else Record2Task.reference(record2task, setting="pipeline.record2task")
+            ),
+            task2batch=None if task2batch is None else Task2Batch.reference(task2batch, setting="pipeline.task2batch"),
+            environ=dict(environ),
+        )
 
 
 @dataclass(frozen=True)
@@ -69,14 +112,14 @@ class TrainingPipeline:
         self,
         context: PipelineContext,
         *,
-        record_stage: Record2Record | None = None,
+        record2record: Record2Record | None = None,
         record2task: Record2Task | None = None,
         task2batch: Task2Batch | None = None,
     ) -> None:
         self.context = context
         self.scenario = context.scenario
         #: The record-to-record stage that turns the records into record sets.
-        self.record_stage = PassThroughRecord2Record() if record_stage is None else record_stage
+        self.record2record = PassThroughRecord2Record() if record2record is None else record2record
         #: The record-to-task stage that turns each record set into tasks.
         self.record2task = NoTasks() if record2task is None else record2task
         #: The task-to-batch stage that shapes the tasks of the selected sets into a batch.
@@ -133,13 +176,15 @@ class TrainingPipeline:
             )
         self.context = replace(self.context, training_mode=training_mode)
         # Manual mode batches on instructions, not sets, so the held sets are bounded instead.
-        self.record_stage.limit_available(self.batch_size * MANUAL_HELD_BATCHES if training_mode == "manual" else None)
-        self.forget_sets(self.record_stage.take_ended())
+        self.record2record.limit_available(
+            self.batch_size * MANUAL_HELD_BATCHES if training_mode == "manual" else None
+        )
+        self.forget_sets(self.record2record.take_ended())
 
     def admit_reports_of(self, report_type: type[ReportBase] | None) -> None:
         """Name the contract the scenario's ingress admits when it is wider than this recipe's own."""
         self.context = replace(self.context, admitted_report_type=report_type)
-        self.record_stage.admit_reports_of(report_type)
+        self.record2record.admit_reports_of(report_type)
 
     # ------------------------------------------------------------ instructions
 
@@ -189,12 +234,12 @@ class TrainingPipeline:
 
     def make_formed_tasks(self) -> None:
         """Make tasks from each set that the stage formed, give each result back, and forget the sets that ended."""
-        for record_set in self.record_stage.take_formed():
+        for record_set in self.record2record.take_formed():
             result = self.record2task.make_tasks(record_set)
             if result.assembly.status is AssemblyStatus.READY:
                 self.tasks[record_set.set_id] = result.tasks
-            self.record_stage.settle(record_set, result.assembly)
-        self.forget_sets(self.record_stage.take_ended())
+            self.record2record.settle(record_set, result.assembly)
+        self.forget_sets(self.record2record.take_ended())
 
     def ingest(self, item: AgentRecord) -> None:
         """Read one record. Training instructions stay here; every other record goes through the record stage."""
@@ -205,7 +250,7 @@ class TrainingPipeline:
             if request.id not in self.consumed_requests:
                 self.training_requests.setdefault(request.id, request)
             return
-        self.record_stage.ingest(item)
+        self.record2record.ingest(item)
         self.make_formed_tasks()
 
     # ------------------------------------------------------------ batch cycle
@@ -217,7 +262,7 @@ class TrainingPipeline:
     def ready(self) -> bool:
         # Background work, such as judgments or finished rounds, forms sets without a new record.
         self.record2task.poll()
-        self.record_stage.poll(time.monotonic())
+        self.record2record.poll(time.monotonic())
         self.make_formed_tasks()
         if self.pending is not None:
             return True
@@ -225,7 +270,7 @@ class TrainingPipeline:
             return bool(self.training_requests)
         if self.training_mode == "hybrid" and self.training_requests:
             return True
-        return self.record_stage.available_count() >= self.batch_size
+        return self.record2record.available_count() >= self.batch_size
 
     def build_batch(self) -> TrainingBatch:
         if self.pending is None:
@@ -239,7 +284,7 @@ class TrainingPipeline:
                 else None
             )
             # In manual mode an instruction runs alone; in hybrid it takes the sets that an automatic batch would.
-            selected = self.record_stage.reserve(
+            selected = self.record2record.reserve(
                 0 if request is not None and self.training_mode == "manual" else self.batch_size
             )
             tasks = tuple(
@@ -252,14 +297,14 @@ class TrainingPipeline:
             if request is not None:
                 batch = replace(batch, batch_id=f"{self.scenario}:instruction:{request.id}", request=request)
             self.pending = batch
-            self.record_stage.mark_batch_out(True)
+            self.record2record.mark_batch_out(True)
         return self.pending
 
     def acknowledge(self, batch_id: str) -> frozenset[str]:
         if self.pending is None or self.pending.batch_id != batch_id:
             raise ValueError(f"unknown batch_id {batch_id!r}")
-        consumed = self.record_stage.consume_reservation()
-        self.forget_sets(self.record_stage.take_ended())
+        consumed = self.record2record.consume_reservation()
+        self.forget_sets(self.record2record.take_ended())
         if self.pending.request is not None:
             request_id = self.pending.request.id
             self.training_requests.pop(request_id)
@@ -267,30 +312,30 @@ class TrainingPipeline:
             self.consumed_requests.add(request_id)
             consumed = consumed | {request_id}
         self.pending = None
-        self.record_stage.mark_batch_out(False)
+        self.record2record.mark_batch_out(False)
         return consumed
 
     def dropped(self, batch_id: str) -> None:
         """The trainer says the batch is acknowledged without training: the backend dropped it as stale."""
-        self.record_stage.mark_batch_dropped()
+        self.record2record.mark_batch_dropped()
 
     def release_batch(self, batch_id: str) -> None:
         """Forget the handed out batch without consuming anything; the next ``build_batch`` selects again."""
         if self.pending is None or self.pending.batch_id != batch_id:
             raise ValueError(f"unknown batch_id {batch_id!r}")
         self.pending = None
-        self.record_stage.mark_batch_out(False)
+        self.record2record.mark_batch_out(False)
 
     # ------------------------------------------------------------- lifecycle
 
     def releasable_record_ids(self) -> frozenset[str]:
         """Records whose held state can be released after a durable commit."""
-        return frozenset(self.consumed_requests) | self.record_stage.releasable_record_ids()
+        return frozenset(self.consumed_requests) | self.record2record.releasable_record_ids()
 
     def release_records(self, agent_record_ids: frozenset[str]) -> None:
         """Release committed in-memory state without changing stored records."""
         self.consumed_requests -= agent_record_ids
-        self.record_stage.release_records(agent_record_ids)
+        self.record2record.release_records(agent_record_ids)
 
     def derivation_pending(self) -> bool:
         """Whether background work could make the pipeline ready without a new record.
@@ -300,13 +345,13 @@ class TrainingPipeline:
         bounded interval instead. Read on the training thread between drains;
         it must not block.
         """
-        return self.record_stage.derivation_pending() or self.record2task.derivation_pending()
+        return self.record2record.derivation_pending() or self.record2task.derivation_pending()
 
     def operational_metrics(self) -> Mapping[str, float | int]:
         """Numeric queue state, sampled under the trainer lock without advancing work."""
         return {
             "buffered_requests": self.buffered_requests(),
-            **self.record_stage.operational_metrics(),
+            **self.record2record.operational_metrics(),
             **self.record2task.operational_metrics(),
             **self.task2batch.operational_metrics(),
         }
@@ -321,10 +366,10 @@ class TrainingPipeline:
         The stages add terminal outcomes that can never train, so a bounded
         external wait can fail explicitly.
         """
-        state: dict[str, Any] = {"ready_units": self.record_stage.available_count(), "batch_size": self.batch_size}
+        state: dict[str, Any] = {"ready_units": self.record2record.available_count(), "batch_size": self.batch_size}
         if self.supported_training_modes & {"manual", "hybrid"}:
             state["buffered_requests"] = self.buffered_requests()
-        return {**state, **self.record_stage.status(), **self.record2task.status(), **self.task2batch.status()}
+        return {**state, **self.record2record.status(), **self.record2task.status(), **self.task2batch.status()}
 
     def close(self) -> None:
         """Close the three stages; safe to call more than once.
@@ -333,7 +378,7 @@ class TrainingPipeline:
         shared state or deliver further results.
         """
         try:
-            self.record_stage.close()
+            self.record2record.close()
         finally:
             try:
                 self.record2task.close()

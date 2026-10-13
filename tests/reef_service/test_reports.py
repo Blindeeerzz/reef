@@ -256,7 +256,7 @@ def test_tttd_raises_for_grid_mismatch_and_schema_violations() -> None:
     )
     processor = TrainingPipeline(
         context,
-        record_stage=tttd_record_stage(context),
+        record2record=tttd_record_stage(context),
         record2task=TTTDTasks(context),
         task2batch=TTTDBatches(context),
     )

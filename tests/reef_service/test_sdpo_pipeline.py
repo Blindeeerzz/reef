@@ -68,7 +68,7 @@ def processor(**config: Any) -> TrainingPipeline:
     )
     return TrainingPipeline(
         context,
-        record_stage=sdpo_record_stage(context),
+        record2record=sdpo_record_stage(context),
         record2task=SDPOTasks(context),
         task2batch=SDPOBatches(context),
     )

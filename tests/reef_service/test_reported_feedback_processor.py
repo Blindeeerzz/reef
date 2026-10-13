@@ -82,7 +82,7 @@ class SamplePipeline(TrainingPipeline):
         self.sample_tasks = SampleTasks() if tasks is None else tasks
         super().__init__(
             context,
-            record_stage=exclusive_stage(context, grouping, ordered_groups=ordered_groups),
+            record2record=exclusive_stage(context, grouping, ordered_groups=ordered_groups),
             record2task=self.sample_tasks,
             task2batch=batches(context),
         )
@@ -122,7 +122,7 @@ class GroupPipeline(SamplePipeline):
 
     @property
     def grouping_policy(self) -> PairGrouping:
-        stage = self.record_stage
+        stage = self.record2record
         assert isinstance(stage, ReportStage)
         grouping = stage.grouping
         assert isinstance(grouping, PairGrouping)

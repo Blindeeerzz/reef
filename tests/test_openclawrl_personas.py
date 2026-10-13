@@ -147,7 +147,7 @@ def test_openclawrl_processor_drops_unfillable_stale_version_candidates() -> Non
     stage = openclawrl_record_stage(context, worker=worker)
     processor = TrainingPipeline(
         context,
-        record_stage=stage,
+        record2record=stage,
         record2task=OpenClawRLTasks(),
         task2batch=OpenClawRLBatches(context, stage.judging),
     )
@@ -170,7 +170,7 @@ def test_openclawrl_processor_keeps_single_version_queue_intact() -> None:
     stage = openclawrl_record_stage(context, worker=worker)
     processor = TrainingPipeline(
         context,
-        record_stage=stage,
+        record2record=stage,
         record2task=OpenClawRLTasks(),
         task2batch=OpenClawRLBatches(context, stage.judging),
     )

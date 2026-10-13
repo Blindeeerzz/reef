@@ -127,7 +127,7 @@ def _processor(**config: Any) -> TrainingPipeline:
     )
     return TrainingPipeline(
         context,
-        record_stage=distill_record_stage(context),
+        record2record=distill_record_stage(context),
         record2task=DistillTasks(context),
         task2batch=DistillBatches(context),
     )
@@ -161,7 +161,7 @@ def test_a_recipe_composes_the_teacher_request_from_the_response_and_the_context
     context = PipelineContext("science", {"batch_size": 1, "tokenizer_path": "/models/science"}, TeacherContextReport)
     processor = TrainingPipeline(
         context,
-        record_stage=distill_record_stage(context),
+        record2record=distill_record_stage(context),
         record2task=FeedbackTasks(context),
         task2batch=FeedbackBatches(context),
     )

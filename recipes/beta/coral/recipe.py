@@ -27,7 +27,7 @@ from recipes.beta.coral.processor import CoralBatches, CoralTasks, attempt_relea
 from reef.pipeline_context import PipelineContext
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
-from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
+from reef.record2record import GroupDecision, Record2Record, ReportContext, ReportGrouping, ReportStage
 from reef.train.algos import StepScheduling
 
 logger = logging.getLogger(__name__)
@@ -97,10 +97,10 @@ class CoralRecipe(WeightTrainingRecipe):
             scheduling=StepScheduling(unit="sample", batch_size="actual"),
         )
 
-    def build_record_stage(self, context: PipelineContext) -> ReportStage:
+    def build_record2record(self, context: PipelineContext) -> ReportStage:
         return coral_record_stage(context)
 
-    def build_record2task(self, context: PipelineContext) -> CoralTasks:
+    def build_record2task(self, context: PipelineContext, record2record: Record2Record) -> CoralTasks:
         return CoralTasks(context)
 
     def __post_init__(self) -> None:

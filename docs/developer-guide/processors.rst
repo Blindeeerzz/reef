@@ -32,13 +32,21 @@ The three stages
   shapes the tasks of the selected sets into one ``TrainingBatch``. Grouped
   recipes set ``group_id`` on each member.
 
-The recipe builds the stages with ``build_record_stage(context)``,
-``build_record2task(context)``, and ``build_task2batch(context)``; the default
-of the last builds the ``task2batch`` class that ``training_spec()`` names.
-``build_pipeline(context)`` composes them into a ``TrainingPipeline``. A
-recipe overrides ``build_pipeline`` only when two stages need each other, as
-OpenClaw-RL's batches read the stage's judging. Without a record stage, the
-pipeline passes each record through and makes no tasks.
+The recipe builds the stages with ``build_record2record(context)``,
+``build_record2task(context, record2record)``, and
+``build_task2batch(context, record2record, record2task)``, in that order; a
+later stage receives the stages built before it, as OpenClaw-RL's batches read
+the record stage's judging. The default of the last builds the ``task2batch``
+class that ``training_spec()`` names. ``build_pipeline(context)`` composes them
+into a ``TrainingPipeline``. Without a record stage, the pipeline passes each
+record through and makes no tasks.
+
+A deployment can replace any stage in its ``pipeline`` section: it names a
+stage class and its config, and Reef builds the stage with the class method
+``from_config`` instead of the recipe's hook (see `the pipeline section
+<../reference/configuration.rst#the-pipeline-section>`__). A stage class that a
+deployment can name implements ``from_config``; it receives the same earlier
+stages as the hook.
 
 Nothing numeric lives in the stages. Advantages and the loss family are the
 step objective's. See `batch values <../reference/python-api.rst#batch>`__ for
@@ -187,7 +195,7 @@ not a reason to discard the report.
 
 A reported-feedback recipe writes:
 
-- a ``ReportStage`` from ``build_record_stage``, with its ``ReportGrouping``
+- a ``ReportStage`` from ``build_record2record``, with its ``ReportGrouping``
   (below);
 - ``make_sample(context) -> TrainDataItem`` on a ``ReportTasks`` subclass,
   from ``build_record2task``: assemble an ATIF trajectory or Harbor task
@@ -236,7 +244,7 @@ Computed feedback
 A computed-feedback recipe writes a ``RecordJudging``: correlation in
 ``observe(record, now, stage)`` with the stage's ``dispatch``, ``track``,
 ``tracked_record``, and ``retire`` operations, ``async judge``, and ``expire``
-for tracked records that time out. The recipe's ``build_record_stage``
+for tracked records that time out. The recipe's ``build_record2record``
 returns a ``JudgingStage`` with the judging and the worker that runs
 ``judge``. Its ``build_record2task`` returns a ``JudgedTasks`` with
 ``make_sample(record, judgment)``, and its ``Task2Batch`` supplies
@@ -247,9 +255,11 @@ Task generation contract
 ------------------------
 
 A deployment can train on tasks that a task generator makes. The deployment
-names a ``TaskGenerator`` class in its ``task-generation`` section and selects
-the built-in generated-task recipe,
-``reef.recipe.generated_tasks:GeneratedTaskRecipe``. The recipe does not
+selects the built-in generated-task recipe,
+``reef.recipe.generated_tasks:GeneratedTaskRecipe``, configures its stages in
+the ``pipeline`` section, and names a ``TaskGenerator`` class in
+``pipeline.record2task.config.generator`` (see `generated tasks
+<../reference/configuration.rst#generated-tasks>`__). The recipe does not
 depend on the generator's method, so a team can replace the generator without
 a new recipe. SPADE (``recipes/beta/spade``) is one generator.
 
@@ -281,8 +291,8 @@ played: it failed validation, the generator service refused it, or the agent
 could not start on it.
 
 The recipe splits the rounds across its stages. The record stage
-(``RoundStage``) decides when a round is due and forms a ``RoundRequest``
-record set. The record-to-task stage (``GeneratedTaskTasks``) runs one round
+(``GeneratedTaskRecord2Record``, a ``RoundStage``) decides when a round is due
+and forms a ``RoundRequest`` record set. The record-to-task stage (``GeneratedTaskTasks``) runs one round
 at a time from each request, on its own ``BackgroundJobWorker``, outside the
 trainer lock. In each round it:
 
@@ -290,25 +300,25 @@ trainer lock. In each round it:
    request's source sessions.
 2. Validates each task with the generator.
 3. Writes each valid task through the generator service and plays it
-   ``plays-per-task`` times on the training arm, then plays each measurement arm.
+   ``plays_per_task`` times on the training arm, then plays each measurement arm.
 4. Sends the results to ``record_results``.
 
 The training plays carry the arm ``plain``, and only reports with that label
 train. A generated task whose measurement arm is
 named ``plain`` comes back unplayed with an error. The record stage groups
 the training reports by ``metadata.task.name``. A group is complete at
-``plays-per-task`` episodes, and a batch holds ``tasks-per-step`` complete
+``plays_per_task`` episodes, and a batch holds ``tasks_per_step`` complete
 groups. The ``task_group`` objective centers and scales each reward within its
 task group, on Tinker's ``importance_sampling`` loss. The record stage
 releases the reports of measurement arms and reports without an arm, such as a
 generator's own reports, without assembling them.
 
-A round can also generate tasks from recorded sessions. Set
-``source-records-per-round`` above 0 and ``source-tag`` to a ``name=value``
-tag. A report without a training arm, whose inference records all carry the
+A round can also generate tasks from recorded sessions. Set the record
+stage's ``source_records_per_round`` above 0 and its ``source_tag`` to a
+``name=value`` tag. A report without a training arm, whose inference records all carry the
 header ``x-reef-tag-<name>: <value>``, is a source session. The record stage
 holds source sessions in arrival order. Each request takes at most
-``source-records-per-round`` of them, and a request without a waiting session
+``source_records_per_round`` of them, and a request without a waiting session
 has none. The generator receives each session's inference records and then
 its report as ``source_records``. The record stage keeps a session's records
 until its round finishes, then releases them. A session that arrives after the
@@ -316,12 +326,12 @@ last round is released at once. A restart before the release can use a
 session again.
 
 The first round starts when the pipeline first looks for a batch. The next
-round starts after ``batches-per-round`` batches trained since the previous
+round starts after ``batches_per_round`` batches trained since the previous
 round started; a batch that the backend dropped as stale does not count. A
 round that played no task is followed at once. An exception from the
 generator stops the round. The record-to-task stage still sends the results
 it has to ``record_results``. A summary of each round goes to
-``state-dir/<scenario>/round-<round>.json``, with the IDs of its source records. After a restart, the
+``state_dir/<scenario>/round-<round>.json``, with the IDs of its source records. After a restart, the
 record-to-task stage continues with the next round. ``GET /reef/status`` shows the generator, the
 round, the task counts, and the last error under ``task_generation``.
 

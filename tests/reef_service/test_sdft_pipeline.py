@@ -119,7 +119,7 @@ def _processor(**config: Any) -> TrainingPipeline:
     )
     return TrainingPipeline(
         context,
-        record_stage=distill_record_stage(context),
+        record2record=distill_record_stage(context),
         record2task=SDFTTasks(context),
         task2batch=SDFTBatches(context),
     )

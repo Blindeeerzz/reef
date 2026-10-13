@@ -16,7 +16,7 @@ beta/spade/
   examples/tinker/serve.yaml   a Tinker deployment with the generator service and the generated-task recipe
 ```
 
-SPADE is a task generator. The deployment selects it in the `task-generation` section. The built-in generated-task recipe (`reef.recipe.generated_tasks:GeneratedTaskRecipe`) plays the tasks and trains on them. The recipe and its settings are described in [the task-generation section](../../../docs/reference/configuration.rst).
+SPADE is a task generator. The deployment selects it in `pipeline.record2task.config.generator`. The built-in generated-task recipe (`reef.recipe.generated_tasks:GeneratedTaskRecipe`) plays the tasks and trains on them. Its stages and their settings are described in [generated tasks](../../../docs/reference/configuration.rst#generated-tasks).
 
 ## The generator
 
@@ -24,7 +24,7 @@ SPADE is a task generator. The deployment selects it in the `task-generation` se
 
 1. `generate` makes `count` Designer proposals across the configured `skills`. Each prompt includes the previous generation's results as SPADE's experience section. A task that has `solution/hint.txt` asks for a `hint` arm of `hint_plays` plays with that file appended to the instruction.
 2. `validate` writes the task under the service's tasks root, runs Harbor's oracle and nop agents, and removes the task again. The reference solution must score 1. Doing nothing must score below 1. A duplicate task is invalid. After a reload cancels a generation, a rerun replaces a task with the same name from the earlier attempt.
-3. The recipe writes each valid task again and plays it: `plays-per-task` plain episodes for training, then the hint arm. Hint episodes measure only.
+3. The recipe writes each valid task again and plays it: `plays_per_task` plain episodes for training, then the hint arm. Hint episodes measure only.
 4. `record_results` reports each proposal's regret against the Designer's receipt. A refused or unplayed proposal scores 0.
 
 Regret is the mean hint reward minus the mean plain reward. Without hint episodes, regret is 0. The mean plain reward determines the task's band: mastered above 0.9, out of reach below 0.1, and frontier otherwise. The next prompt lists frontier tasks by regret, highest first.
@@ -115,4 +115,4 @@ The input contract is `TaskGenerationRequest` in `reef.core.tasks`. Both SPADE a
 
 To call the generator directly, wrap the shared request in `DesignerRequest(inputs=request, difficulty="hard")`. Then call `HttpGenerator.propose(...)`. `DesignerRequest` holds the shared input and adds Designer settings. The HTTP client reads local `assets` into `asset_files`. The service reconstructs the same input type. Each source record retains its payload, type, timestamp, references, and artifact version. Existing `DesignerRequest(target="...")` calls still work for description-only generation. Use matching client and generator versions for historical inputs.
 
-The recipe's rounds use the recipe's `description` and the previous generation's scores. With `source-records-per-round` above 0, each round also sends recorded sessions that carry the recipe's `source-tag`; see the generated-task recipe in the [configuration reference](../../../docs/reference/configuration.rst#the-task-generation-section). Otherwise, the caller selects historical sessions. The Designer makes one model call. It does not yet inspect files with tools or revise a task after a failed check. Passing the oracle check does not establish that the reconstruction is faithful to the original task.
+The recipe's rounds use the `description` of its record-to-task stage and the previous generation's scores. With `source_records_per_round` above 0, each round also sends recorded sessions that carry the record stage's `source_tag`; see [generated tasks](../../../docs/reference/configuration.rst#generated-tasks). Otherwise, the caller selects historical sessions. The Designer makes one model call. It does not yet inspect files with tools or revise a task after a failed check. Passing the oracle check does not establish that the reconstruction is faithful to the original task.

@@ -9,10 +9,12 @@ from abc import ABC, abstractmethod
 from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Self
 
+from reef.core.plugins import Plugin, PluginConfigError
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase
+from reef.pipeline_context import PipelineContext
 from reef.record2record.eligibility import EligibilityCheck
 from reef.record2record.pool import RecordSetPool
 from reef.record2record.selection import SelectionPolicy
@@ -42,7 +44,7 @@ class SetAssembly:
     runtime_load_id: str | None = None
 
 
-class Record2Record(ABC):
+class Record2Record(ABC, Plugin):
     """Turn records into record sets for one pipeline, and decide which sets train and in what order.
 
     The pipeline gives the stage every record that it reads, except training
@@ -58,7 +60,18 @@ class Record2Record(ABC):
 
     The stage keeps only memory that a replay of the retained records
     rebuilds, as pipeline memory does.
+
+    A deployment can name a stage class in ``pipeline.record2record``; the
+    class then implements ``from_config``.
     """
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any], *, context: PipelineContext, environ: Mapping[str, str]) -> Self:
+        """Build the stage of one scenario from its ``pipeline.record2record.config``.
+
+        ``environ`` holds the environment the deployment was read with.
+        """
+        raise PluginConfigError(f"{cls.__name__} cannot be built from a deployment file: it has no from_config")
 
     def __init__(self, selection: SelectionPolicy | None = None, checks: Sequence[EligibilityCheck] = ()) -> None:
         self.pool = RecordSetPool(selection, checks)
@@ -174,6 +187,12 @@ class PassThroughRecord2Record(Record2Record):
     With ``NoTasks`` each set is ``AssemblyStatus.INGESTED``: the stage forgets it.
     """
 
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any], *, context: PipelineContext, environ: Mapping[str, str]) -> Self:
+        if config:
+            raise PluginConfigError(f"{cls.__name__} takes no config, got {', '.join(sorted(map(str, config)))}")
+        return cls()
+
     def __init__(self) -> None:
         super().__init__()
         self.formed: list[RecordSet] = []
@@ -192,6 +211,12 @@ class PassThroughRecord2Record(Record2Record):
 
 class InferenceRecord2Record(Record2Record):
     """Hold each inference record as one set, in arrival order, and end every other record untouched."""
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any], *, context: PipelineContext, environ: Mapping[str, str]) -> Self:
+        if config:
+            raise PluginConfigError(f"{cls.__name__} takes no config, got {', '.join(sorted(map(str, config)))}")
+        return cls()
 
     def __init__(self) -> None:
         super().__init__()

@@ -25,7 +25,7 @@ from reef.core.tasks import HarborTask, TaskGenerationRequest, read_harbor_task,
 from reef.harness.client.tasks import TaskPlay
 from reef.pipeline_context import PipelineContext
 from reef.recipe.generated_tasks import GeneratedTaskTasks
-from reef.recipe.generated_tasks.recipe import task_group_record_stage
+from reef.recipe.generated_tasks.processor import GeneratedTaskRecord2Record
 from reef.record2task.generator import (
     Designer,
     DesignerAnswer,
@@ -675,7 +675,7 @@ def test_history_and_materials_reach_the_designer_and_feedback_uses_its_receipt(
         assert task.name.startswith("harbor-history-")
         assert (await task_generator.validate(task)).is_valid
         context = PipelineContext("spade", {"plays_per_task": 2})
-        generation = GeneratedTaskTasks(context, task_group_record_stage(context), task_player=generator)
+        generation = GeneratedTaskTasks(context, GeneratedTaskRecord2Record(context), task_player=generator)
         result = await generation.played(item, 0)
         assert result.is_played and len(result.training_rewards) == 2 and set(result.measurement_rewards) == {"hint"}
         assert read_harbor_task(tmp_path / "tasks" / task.name).source_agent_record_ids == task.source_agent_record_ids

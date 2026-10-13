@@ -23,8 +23,7 @@ from reef.core.tasks import (
 )
 from reef.pipeline_context import PipelineContext
 from reef.recipe.generated_tasks import GeneratedTaskTasks
-from reef.recipe.generated_tasks.processor import RoundJob
-from reef.recipe.generated_tasks.recipe import task_group_record_stage
+from reef.recipe.generated_tasks.processor import GeneratedTaskRecord2Record, RoundJob
 from reef.record2task.generator import TaskNameConflict
 
 DESCRIPTION = "shell tasks with hidden state under /var and /etc"
@@ -254,7 +253,7 @@ def test_a_round_of_the_generated_task_recipe_runs_spade_end_to_end(tmp_path: Pa
     )
     generation = GeneratedTaskTasks(
         context,
-        task_group_record_stage(context),
+        GeneratedTaskRecord2Record(context),
         task_generator=generator,
         task_player=service,
     )

@@ -652,22 +652,33 @@ Pipeline stages
 A training pipeline (``reef.train.pipeline.TrainingPipeline``) turns durable
 records into typed batches through three stages that the recipe builds:
 
-- ``build_record_stage(context)``: the record-to-record stage
+- ``build_record2record(context)``: the record-to-record stage
   (``reef.record2record``). It decides which records train and in what order:
   it groups reports, judges records, and drops records that can no longer
   train. Without one, each record passes through and nothing trains.
-- ``build_record2task(context)``: the record-to-task stage
+- ``build_record2task(context, record2record)``: the record-to-task stage
   (``reef.record2task.Record2Task``). It turns each record set into tasks
   (``TrainDataItem`` values). Reported feedback supplies a ``make_sample`` hook
   on ``ReportTasks`` that assembles valid reports; computed feedback supplies
   a ``JudgedTasks`` after an asynchronous ``judge`` derives new feedback.
-- ``build_task2batch(context)``: the task-to-batch stage
+- ``build_task2batch(context, record2record, record2task)``: the task-to-batch stage
   (``reef.task2batch.Task2Batch``). Its ``make_batch(tasks,
   batch_number)`` shapes the tasks of the selected sets into a batch. The
   default builds the ``task2batch`` class of ``training_spec()``.
 
-``build_pipeline(context)`` composes them; override it only when two stages
-need each other. Reef owns replay, retention, deduplication, pending batches,
+``build_pipeline(context)`` builds them in this order; a later hook receives
+the stages built before it. A deployment's ``pipeline`` section can replace
+any stage with a class that implements ``from_config``:
+
+- ``Record2Record.from_config(config, *, context, environ)``
+- ``Record2Task.from_config(config, *, context, record2record, environ)``
+- ``Task2Batch.from_config(config, *, context, record2record, record2task, environ)``.
+  The default builds the class with ``config`` over the recipe's config.
+
+``config`` is the section's ``config`` for that stage; ``environ`` holds the
+environment the deployment was read with. A ``Record2Task`` that keeps
+per-scenario state also implements ``scenario_state_dirs(config, scenario)``,
+so a scenario delete archives it. Reef owns replay, retention, deduplication, pending batches,
 and exactly-once consumption; the method implements only the hooks below.
 They run synchronously on the trainer thread, so they must not block on
 network or model latency. Reports must reference existing inference records
@@ -701,7 +712,7 @@ A reported-feedback recipe implements these hooks:
    * - ``Task2Batch.make_batch(tasks, batch_number) -> TrainingBatch``
      - Shape the flat tuple of selected tasks into a batch.
 
-The recipe owns the report policy. Its ``build_record_stage(context)`` returns
+The recipe owns the report policy. Its ``build_record2record(context)`` returns
 ``ReportStage(scenario, report_type, grouping, *, exclusive_sources=False,
 ordered_groups=False)``; ``ReportStage(scenario, report_type, ReportGrouping())``
 trains every report by itself. A ``ReportGrouping`` runs in the
@@ -751,7 +762,7 @@ Computed feedback
 
 Use this engine when later traffic completes an earlier record and judging it
 calls a model or another slow service. The recipe writes a ``RecordJudging``.
-Its ``build_record_stage`` returns ``JudgingStage(judging, worker, *,
+Its ``build_record2record`` returns ``JudgingStage(judging, worker, *,
 max_staleness)``, its ``build_record2task`` returns a ``JudgedTasks``, and its
 ``Task2Batch`` shapes the judged samples into batches.
 
@@ -800,8 +811,8 @@ Task generation
        TaskPlayResult, TaskValidationResult,
    )
 
-``TaskGenerator`` is the plugin base class that a deployment's
-``task-generation`` section names. Subclasses implement:
+``TaskGenerator`` is the plugin base class that a deployment names in
+``pipeline.record2task.config.generator``. Subclasses implement:
 
 - the class method ``from_config(config, *, scenario, environ)``, which returns
   the generator of one scenario;
@@ -849,7 +860,7 @@ its ``generate`` and ``validate`` methods to a ``TaskGenerator`` subclass:
 - ``validate`` receives the ``HarborTask`` instead of a directory path.
 - Import ``TaskValidationResult`` from ``reef.core.tasks``.
 
-Select the class in the ``task-generation`` section and use the generated-task recipe. The recipe plays and trains, so the processor half of the method is
+Name the class in ``pipeline.record2task.config.generator`` and use the generated-task recipe. The recipe plays and trains, so the processor half of the method is
 not needed.
 
 Batch

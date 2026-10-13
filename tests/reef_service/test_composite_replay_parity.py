@@ -92,7 +92,7 @@ def session_pipeline(context: PipelineContext) -> TrainingPipeline:
     """Trains the judged turns of ``_SessionJudging``; a turn marked declined is unusable."""
     return TrainingPipeline(
         context,
-        record_stage=JudgingStage(_SessionJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness),
+        record2record=JudgingStage(_SessionJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness),
         record2task=_SessionTasks(),
         task2batch=SessionBatches(context),
     )
@@ -122,7 +122,7 @@ def step_pipeline(context: PipelineContext) -> TrainingPipeline:
     stage = ReportStage(
         context.scenario, context.report_type, _StepGrouping(), exclusive_sources=True, ordered_groups=True
     )
-    return threshold_pipeline(context, record_stage=stage)
+    return threshold_pipeline(context, record2record=stage)
 
 
 def tttd_pipeline(context: PipelineContext) -> TrainingPipeline:
@@ -130,7 +130,7 @@ def tttd_pipeline(context: PipelineContext) -> TrainingPipeline:
     configured = context.with_config({"groups_per_step": 1, "rollouts_per_group": 2})
     return TrainingPipeline(
         configured,
-        record_stage=tttd_record_stage(configured),
+        record2record=tttd_record_stage(configured),
         record2task=TTTDTasks(configured),
         task2batch=TTTDBatches(configured),
     )

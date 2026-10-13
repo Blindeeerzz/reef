@@ -88,7 +88,7 @@ def grouped_policy_pipeline(context: PipelineContext) -> TrainingPipeline:
     """Reports grouped by ``metadata.comparison_set``, two to a group."""
     return TrainingPipeline(
         context,
-        record_stage=ReportStage(context.scenario, context.report_type, ComparisonSetGrouping()),
+        record2record=ReportStage(context.scenario, context.report_type, ComparisonSetGrouping()),
         record2task=ComparisonSetTasks(context),
         task2batch=GroupedPolicyBatches(context),
     )

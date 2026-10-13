@@ -12,7 +12,7 @@ from reef.pipeline_context import PipelineContext
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.recipe.errors import RecipeConfigError
-from reef.record2record import ReportGrouping, ReportStage
+from reef.record2record import Record2Record, ReportGrouping, ReportStage
 from reef.train.algos import StepScheduling
 
 
@@ -62,10 +62,10 @@ class SAORecipe(WeightTrainingRecipe):
             scheduling=StepScheduling(unit="sample"),
         )
 
-    def build_record_stage(self, context: PipelineContext) -> ReportStage:
+    def build_record2record(self, context: PipelineContext) -> ReportStage:
         return sao_record_stage(context)
 
-    def build_record2task(self, context: PipelineContext) -> SAOTasks:
+    def build_record2task(self, context: PipelineContext, record2record: Record2Record) -> SAOTasks:
         return SAOTasks(context)
 
     def __post_init__(self) -> None:

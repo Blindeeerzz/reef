@@ -39,7 +39,7 @@ from reef.train.types import TrainingBatch
 
 def sao_processor(context: PipelineContext) -> TrainingPipeline:
     return TrainingPipeline(
-        context, record_stage=sao_record_stage(context), record2task=SAOTasks(context), task2batch=SAOBatches(context)
+        context, record2record=sao_record_stage(context), record2task=SAOTasks(context), task2batch=SAOBatches(context)
     )
 
 

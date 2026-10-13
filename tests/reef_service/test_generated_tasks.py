@@ -15,7 +15,6 @@ from reef_service.task_service_stubs import StandInGenerator, task_for
 
 from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Failed, SupportsReceipt
 from reef.core import AgentRecord, RequestType
-from reef.core.plugins import PluginReference
 from reef.core.reports import ScoredRolloutReport
 from reef.core.tasks import (
     GeneratedTask,
@@ -29,21 +28,17 @@ from reef.core.tasks import (
 from reef.harness.client.tasks import TaskPlay
 from reef.inference.http import InferenceProxyRuntime
 from reef.pipeline_context import PipelineContext
+from reef.recipe.base import WeightTrainingRecipe
 from reef.recipe.errors import RecipeConfigError
-from reef.recipe.generated_tasks import (
-    GeneratedTaskBatches,
-    GeneratedTaskRecipe,
-    TaskGenerationConfig,
-    TaskGroupObjective,
-)
+from reef.recipe.generated_tasks import GeneratedTaskBatches, GeneratedTaskRecipe, TaskGroupObjective
 from reef.recipe.generated_tasks.processor import (
+    GeneratedTaskRecord2Record,
     GeneratedTaskTasks,
     RoundJob,
     episode_assembly,
     reported_task_name,
     rewards_of,
 )
-from reef.recipe.generated_tasks.recipe import task_group_record_stage
 from reef.record2record import GroupDecision, ReportContext
 from reef.train.algos.registry import resolve_objective
 from reef.train.pipeline import TrainingPipeline
@@ -90,9 +85,9 @@ def report(
 def processor(**config: object) -> TrainingPipeline:
     context = PipelineContext("tasks", {"tasks_per_step": 2, "plays_per_task": 2, **config})
     batches = GeneratedTaskBatches(context)
-    stage = task_group_record_stage(context)
+    stage = GeneratedTaskRecord2Record(context)
     return TrainingPipeline(
-        context, record_stage=stage, record2task=GeneratedTaskTasks(context, stage), task2batch=batches
+        context, record2record=stage, record2task=GeneratedTaskTasks(context, stage), task2batch=batches
     )
 
 
@@ -159,7 +154,7 @@ def test_measurement_arms_and_reports_without_an_arm_are_released_not_trained() 
 
 
 def test_a_task_group_waits_for_plays_per_task_episodes() -> None:
-    grouping = processor(plays_per_task=3).record_stage.grouping
+    grouping = processor(plays_per_task=3).record2record.grouping
     one = (ReportContext(inference("a"), 1.0, (inference("a"),)),)
     assert grouping.decide("t", one) is GroupDecision.INCOMPLETE
     assert grouping.decide("t", one * 3) is GroupDecision.READY
@@ -366,10 +361,10 @@ def rounds(
             **config,
         },
     )
-    stage = task_group_record_stage(context)
+    stage = GeneratedTaskRecord2Record(context)
     generation = GeneratedTaskTasks(context, stage, task_generator=task_generator, task_player=player, worker=worker)
     built = TrainingPipeline(
-        context, record_stage=stage, record2task=generation, task2batch=GeneratedTaskBatches(context)
+        context, record2record=stage, record2task=generation, task2batch=GeneratedTaskBatches(context)
     )
     worker.generation = generation
     return built, player
@@ -576,14 +571,16 @@ def test_the_real_worker_runs_a_round_off_the_trainers_thread(tmp_path: Path) ->
     context = PipelineContext(
         "tasks", {"rounds": 1, "description": "shell tasks", "state_dir": str(tmp_path / "state")}
     )
-    stage = task_group_record_stage(context)
+    stage = GeneratedTaskRecord2Record(context)
     generation = GeneratedTaskTasks(
         context,
         stage,
         task_generator=ScriptedGenerator([generated(0, 0)]),
         task_player=StandInGenerator(tmp_path / "tasks"),
     )
-    p = TrainingPipeline(context, record_stage=stage, record2task=generation, task2batch=GeneratedTaskBatches(context))
+    p = TrainingPipeline(
+        context, record2record=stage, record2task=generation, task2batch=GeneratedTaskBatches(context)
+    )
     try:
         assert not p.ready()
         deadline = time.monotonic() + 10.0
@@ -681,7 +678,9 @@ def test_no_session_waits_once_the_rounds_are_over(tmp_path: Path) -> None:
     [
         ({"tasks_per_step": 0}, "tasks_per_step must be positive"),
         ({"plays_per_task": 1}, "at least two"),
-        ({"rounds": 1}, "task-generation section"),
+        ({"rounds": 1}, "pipeline.record2task.config.generator"),
+        ({"source_records_per_round": 1}, "needs a source_tag"),
+        ({"source_tag": "session"}, "name=value"),
     ],
 )
 def test_a_processor_configuration_that_cannot_train_is_refused(config: dict[str, int], message: str) -> None:
@@ -692,7 +691,7 @@ def test_a_processor_configuration_that_cannot_train_is_refused(config: dict[str
 def test_rounds_need_a_description_a_state_dir_and_the_generator_service() -> None:
     def built(**config: object) -> GeneratedTaskTasks:
         context = PipelineContext("tasks", {"rounds": 1, **config})
-        return GeneratedTaskTasks(context, task_group_record_stage(context), task_generator=ScriptedGenerator())
+        return GeneratedTaskTasks(context, GeneratedTaskRecord2Record(context), task_generator=ScriptedGenerator())
 
     with pytest.raises(ValueError, match="description"):
         built()
@@ -710,68 +709,103 @@ def training_recipe(**fields: Any) -> GeneratedTaskRecipe:
     return GeneratedTaskRecipe(training_runtime=StubTrainingRuntime(), runtime=runtime, **fields)
 
 
-def test_the_recipe_binds_the_processor_the_objective_and_its_schedule() -> None:
+def test_the_recipe_binds_the_objective_its_schedule_and_its_stages() -> None:
     spec = GeneratedTaskRecipe.training_spec()
     assert spec.task2batch is GeneratedTaskBatches and spec.objective == "task_group"
     assert spec.loss_family == "importance_sampling"
     assert spec.scheduling.unit == "sample" and spec.scheduling.batch_size == "actual"
     assert GeneratedTaskRecipe.report_type.fget(GeneratedTaskRecipe) is ScoredRolloutReport  # type: ignore[union-attr]
-    config = training_recipe().pipeline_config()
-    assert config["tasks_per_step"] == 4 and config["plays_per_task"] == 4 and config["scaffold_tolerance"] == 8
-    assert config["rounds"] == 0 and config["generator_url"] == ""
-    with pytest.raises(ValueError, match="scaffold_tolerance"):
-        training_recipe(scaffold_tolerance=-1)
-    with pytest.raises(ValueError, match="task-generation section"):
-        training_recipe(rounds=2)
-    with pytest.raises(ValueError, match="needs a source_tag"):
-        training_recipe(source_records_per_round=1)
-    with pytest.raises(ValueError, match="name=value"):
-        training_recipe(source_tag="session")
+    built = training_recipe().build_pipeline(PipelineContext("one"))
+    assert isinstance(built.record2record, GeneratedTaskRecord2Record)
+    assert isinstance(built.record2task, GeneratedTaskTasks) and built.record2task.worker is None, "no round runs"
+    assert isinstance(built.task2batch, GeneratedTaskBatches) and built.batch_size == 4
+    built.close()
 
 
-def test_the_section_selects_a_generator_class_built_once_for_each_scenario(tmp_path: Path) -> None:
-    setting = {"module": f"{MODULE}:ScriptedGenerator", "config": {"count": 3}}
-    environ = {"TASKS_KEY": "secret"}
-    recipe = GeneratedTaskRecipe.from_environment(
+def generated_pipeline_recipe(environ: Mapping[str, str], pipeline: Mapping[str, Any]) -> WeightTrainingRecipe:
+    return GeneratedTaskRecipe.from_environment(
         environ,
-        config={
-            "data": {
-                "rounds": 1,
-                "generator_url": "http://g:8910",
-                "description": "shell tasks",
-                "state_dir": str(tmp_path / "state"),
-            },
-            "model": {"path": "Qwen/Qwen3-8B"},
-            "task_generation": setting,
-        },
+        config={"data": {}, "model": {"path": "Qwen/Qwen3-8B"}, "pipeline": pipeline},
         runtime=InferenceProxyRuntime(model_path="Qwen/Qwen3-8B", base_url="http://127.0.0.1:8000"),
         training_runtime=StubTrainingRuntime(),
     )
-    assert isinstance(recipe, GeneratedTaskRecipe)
-    assert recipe.task_generation == TaskGenerationConfig(PluginReference(ScriptedGenerator, {"count": 3}), environ)
+
+
+def test_the_pipeline_section_configures_the_stages_and_builds_the_generator_once_for_each_scenario(
+    tmp_path: Path,
+) -> None:
+    generator = {"module": f"{MODULE}:ScriptedGenerator", "config": {"count": 3}}
+    environ = {"TASKS_KEY": "secret"}
+    recipe = generated_pipeline_recipe(
+        environ,
+        {
+            "record2record": {
+                "module": "reef.recipe.generated_tasks:GeneratedTaskRecord2Record",
+                "config": {"plays_per_task": 3},
+            },
+            "record2task": {
+                "module": "reef.recipe.generated_tasks:GeneratedTaskTasks",
+                "config": {
+                    "rounds": 1,
+                    "generator_url": "http://g:8910",
+                    "description": "shell tasks",
+                    "state_dir": str(tmp_path / "state"),
+                    "generator": generator,
+                },
+            },
+            "task2batch": {
+                "module": "reef.recipe.generated_tasks:GeneratedTaskBatches",
+                "config": {"tasks_per_step": 2},
+            },
+        },
+    )
     ScriptedGenerator.built.clear()
     built = recipe.build_pipeline(PipelineContext("one"))
-    assert isinstance(built.task2batch, GeneratedTaskBatches) and isinstance(built.record2task, GeneratedTaskTasks)
+    assert isinstance(built.record2task, GeneratedTaskTasks)
     assert isinstance(built.record2task.task_generator, ScriptedGenerator)
     assert ScriptedGenerator.built == [{"config": {"count": 3}, "scenario": "one", "environ": environ}]
+    assert built.record2task.plays_per_task == 3, "the plays come from the record stage's groups"
     assert built.record2task.state_dir == tmp_path / "state" / "one"
+    assert built.batch_size == 2
     assert recipe.scenario_state_dirs("one") == (tmp_path / "state" / "one",)
     built.close()
 
 
 @pytest.mark.parametrize(
-    ("setting", "message"),
+    ("pipeline", "message"),
     [
-        (f"{MODULE}:ScriptedGenerator.missing", "cannot import task-generation"),
+        ({"record2task": {"module": "reef.recipe.generated_tasks:GeneratedTaskBatches"}}, "inherits Record2Task"),
+        ({"record2tasks": {"module": "reef.recipe.generated_tasks:GeneratedTaskTasks"}}, "unknown key"),
+    ],
+)
+def test_a_pipeline_section_that_names_no_usable_stage_is_refused(pipeline: Mapping[str, Any], message: str) -> None:
+    with pytest.raises(RecipeConfigError, match=message):
+        generated_pipeline_recipe({}, pipeline)
+
+
+@pytest.mark.parametrize(
+    ("generator", "message"),
+    [
+        (f"{MODULE}:ScriptedGenerator.missing", "cannot import pipeline.record2task.config.generator"),
         ("reef.recipe.generated_tasks:GeneratedTaskRecipe", "must name a class that inherits TaskGenerator"),
         ("reef.core.tasks:TaskGenerator", "names an abstract class"),
     ],
 )
-def test_a_section_that_names_no_usable_generator_is_refused(setting: str, message: str) -> None:
+def test_a_generator_setting_that_names_no_usable_generator_is_refused(generator: str, message: str) -> None:
+    recipe = generated_pipeline_recipe(
+        {},
+        {
+            "record2task": {
+                "module": "reef.recipe.generated_tasks:GeneratedTaskTasks",
+                "config": {"generator": generator},
+            }
+        },
+    )
     with pytest.raises(RecipeConfigError, match=message):
-        GeneratedTaskRecipe.from_environment(
-            {},
-            config={"data": {}, "model": {"path": "m"}, "task_generation": setting},
-            runtime=InferenceProxyRuntime(model_path="m", base_url="http://127.0.0.1:8000"),
-            training_runtime=StubTrainingRuntime(),
-        )
+        recipe.build_pipeline(PipelineContext("one"))
+
+
+def test_a_stage_without_from_config_cannot_be_named_in_the_pipeline_section() -> None:
+    recipe = generated_pipeline_recipe({}, {"record2record": {"module": "reef.record2record:JudgingStage"}})
+    with pytest.raises(RecipeConfigError, match="JudgingStage cannot be built from a deployment file"):
+        recipe.build_pipeline(PipelineContext("one"))

@@ -72,13 +72,13 @@ def trace_pipeline(context: PipelineContext, batch_policy: str) -> TrainingPipel
     if batch_policy == "records":
         return TrainingPipeline(
             context,
-            record_stage=InferenceRecord2Record(),
+            record2record=InferenceRecord2Record(),
             record2task=InferenceTasks(),
             task2batch=TraceBatches(context),
         )
     return TrainingPipeline(
         context,
-        record_stage=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+        record2record=ReportStage(context.scenario, context.report_type, ReportGrouping()),
         record2task=TraceTasks(),
         task2batch=TraceBatches(context),
     )

@@ -248,7 +248,7 @@ def test_report_processor_reserves_and_acknowledges_mixed_data():
     context = PipelineContext("mixed", {"batch_size": 2})
     processor = TrainingPipeline(
         context,
-        record_stage=ReportStage("mixed", None, ReportGrouping(), exclusive_sources=True),
+        record2record=ReportStage("mixed", None, ReportGrouping(), exclusive_sources=True),
         record2task=MixedTasks(),
         task2batch=MixedBatches(context),
     )

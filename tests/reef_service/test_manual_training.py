@@ -344,7 +344,7 @@ def test_manual_instruction_batch_never_falls_back_to_auto():
     context = PipelineContext("s", training_mode="manual")
     pipeline = TrainingPipeline(
         context,
-        record_stage=InferenceRecord2Record(),
+        record2record=InferenceRecord2Record(),
         record2task=InferenceTasks(),
         task2batch=TraceOnlyBatches(context),
     )
@@ -356,7 +356,7 @@ def test_manual_instruction_batch_never_falls_back_to_auto():
     assert batch.request.id == "one"
     assert batch.items == ()
     assert pipeline.acknowledge(batch.batch_id) == frozenset({"one"})
-    assert pipeline.record_stage.available_count() == 1
+    assert pipeline.record2record.available_count() == 1
     pipeline.close()
 
 
@@ -379,7 +379,7 @@ def test_status_shows_how_far_a_partly_filled_batch_still_has_to_go():
 
     stage = CountingStage()
     pipeline = TrainingPipeline(
-        PipelineContext("s", config={"batch_size": 4}, training_mode="auto"), record_stage=stage
+        PipelineContext("s", config={"batch_size": 4}, training_mode="auto"), record2record=stage
     )
     assert pipeline.status() == {"ready_units": 0, "batch_size": 4}
     stage.held = 3
@@ -422,7 +422,7 @@ def test_processor_uses_shared_data_and_one_batch_assembly_hook(mode):
     def trajectory_pipeline(context):
         return TrainingPipeline(
             context,
-            record_stage=InferenceRecord2Record(),
+            record2record=InferenceRecord2Record(),
             record2task=InferenceTasks(),
             task2batch=TrajectoryBatches(context),
         )
@@ -1402,7 +1402,7 @@ def test_manual_mode_caps_held_units_at_four_batches_and_the_batching_modes_hold
 
     with caplog.at_level(logging.WARNING, logger="reef.record2record.reports"):
         manual = fill("manual")
-    assert manual.record_stage.available_count() == 4
+    assert manual.record2record.available_count() == 4
     assert not manual.ready()
     retention = manual.releasable_record_ids()
     shed = {f"inf-{i}" for i in range(16)} | {f"rep-{i}" for i in range(16)}
@@ -1415,19 +1415,19 @@ def test_manual_mode_caps_held_units_at_four_batches_and_the_batching_modes_hold
     batch = manual.build_batch()
     assert batch.items == ()
     assert manual.acknowledge(batch.batch_id) == frozenset({"do-it"})
-    assert manual.record_stage.available_count() == 4
+    assert manual.record2record.available_count() == 4
     manual.close()
 
     for mode in ("auto", "hybrid"):
         uncapped = fill(mode)
-        assert uncapped.record_stage.available_count() == 20
+        assert uncapped.record2record.available_count() == 20
         # The switch to manual trims the pile at once; the batch already handed out keeps its unit.
         reserved = uncapped.build_batch()
         uncapped.set_training_mode("manual")
-        assert uncapped.record_stage.available_count() == 4
+        assert uncapped.record2record.available_count() == 4
         assert "inf-0" not in uncapped.releasable_record_ids()
         assert uncapped.acknowledge(reserved.batch_id) == frozenset({"inf-0", "rep-0"})
-        assert uncapped.record_stage.available_count() == 3
+        assert uncapped.record2record.available_count() == 3
         uncapped.close()
 
 

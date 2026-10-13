@@ -10,20 +10,24 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Self
 
 from reef.core.batches import TrainDataItem, TrainingBatch
+from reef.core.plugins import Plugin
 from reef.core.records_types import RequestType
 from reef.observability import ExperimentLogger
 from reef.pipeline_context import PipelineContext
+from reef.record2record import Record2Record
+from reef.record2task import Record2Task
 
 
-class Task2Batch(ABC):
+class Task2Batch(ABC, Plugin):
     """The task-to-batch stage: shape the tasks of the selected record sets into one batch.
 
     A recipe implements ``make_batch``. The class attributes declare what the
     pipeline and the trainer need to know about the recipe's batches.
     ``make_batch`` runs on the trainer thread without network or model calls.
+    A deployment can name a stage class in ``pipeline.task2batch``.
     """
 
     #: The batch type ``make_batch`` returns; the trainer validates it.
@@ -42,6 +46,23 @@ class Task2Batch(ABC):
             raise ValueError("batch_size must be positive")
         #: The number of record sets in one batch.
         self.batch_size = batch_size
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any],
+        *,
+        context: PipelineContext,
+        record2record: Record2Record,
+        record2task: Record2Task,
+        environ: Mapping[str, str],
+    ) -> Self:
+        """Build the stage of one scenario from its ``pipeline.task2batch.config``.
+
+        The default builds the class with the section's config over the
+        recipe's. A class that needs the earlier stages overrides it.
+        """
+        return cls(context.with_config({**context.config, **config}))
 
     @property
     def experiment_logger(self) -> ExperimentLogger:
