@@ -654,8 +654,7 @@ class Trainer:
             batch_id = self._pending.batch_id
             consumed = self._pending.consumed_ids
             if consumed is None:
-                self._pipeline.dropped(batch_id)
-                consumed = self._pipeline.acknowledge(batch_id)
+                consumed = self._pipeline.acknowledge(batch_id, trained=False)
             released = self._pipeline.releasable_record_ids()
             metadata: dict[str, Any] = {"outcome": "stale", "metrics": dict(metrics or {})}
             if component is not None:
