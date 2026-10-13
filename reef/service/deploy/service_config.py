@@ -214,11 +214,13 @@ class ServiceConfig:
         default=None,
         metadata=config_metadata("Candidate evaluation settings as a JSON/YAML object.", path=("evaluation",)),
     )
-    #: The task generator the generated-task recipe asks for tasks: a plugin class and its config.
-    task_generation_settings: Mapping[str, Any] | None = field(
+    #: The stage classes that replace a weight-training recipe's own: ``record2record``, ``record2task``, ``task2batch``.
+    pipeline_settings: Mapping[str, Any] | None = field(
         default=None,
         metadata=config_metadata(
-            "Task generator settings as a JSON/YAML object with module and config.", path=("task-generation",)
+            "Pipeline stages as a JSON/YAML object: record2record, record2task and task2batch, each with module and "
+            "config.",
+            path=("pipeline",),
         ),
     )
     #: The generator service ``reef serve`` starts beside the HTTP service; ``reef.service.deploy.generator`` parses it.
@@ -280,7 +282,7 @@ def service_owned_keys() -> frozenset[str]:
     non_reef_fields = {
         "evaluation_settings",
         "generator_settings",
-        "task_generation_settings",
+        "pipeline_settings",
         "tracing_config",
         "training_settings",
         "wandb_config",

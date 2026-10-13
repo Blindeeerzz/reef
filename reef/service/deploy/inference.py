@@ -178,7 +178,7 @@ _CONFIGURED_FIELDS = {
     "training_settings",
     "training_backend_options",
     "evaluation_settings",
-    "task_generation_settings",
+    "pipeline_settings",
 }
 
 
@@ -194,7 +194,8 @@ def command_line_config(environ: Mapping[str, str]) -> dict[str, Any]:
 def assemble_provider_services(config: dict[str, Any]) -> None:
     """Validate typed inputs and add the owned HTTP process and readiness probe."""
     unsupported = set(config.get("reef", {})) & _CONFIGURED_FIELDS
-    if unsupported or "training" in config or "evaluation" in config or "task-generation" in config:
+    # The pipeline section belongs to any recipe; the recipe reads it.
+    if unsupported or "training" in config or "evaluation" in config:
         raise DeployConfigError(
             "select a weight-training recipe for training; custom process stacks require unversioned legacy YAML"
         )

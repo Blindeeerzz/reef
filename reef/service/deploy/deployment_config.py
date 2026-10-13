@@ -108,7 +108,7 @@ def translate_layout(config: Mapping[str, Any]) -> dict[str, Any]:
         "execution",
         "executors",
         "evaluation",
-        "task-generation",
+        "pipeline",
         "generator",
         "observability",
     }
