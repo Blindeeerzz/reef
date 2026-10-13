@@ -17,7 +17,7 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Self
+from typing import Any, Self, cast
 
 from reef.core.batches import TrajectoryItem
 from reef.core.config import config_option
@@ -121,13 +121,17 @@ class TeacherRenderer:
         template_options: dict[str, Any] = {}
         if enable_thinking is not None:
             template_options["enable_thinking"] = enable_thinking
-        prompt_ids = self.tokenizer.apply_chat_template(
-            list(messages),
-            tools=list(tools) if tools else None,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_dict=False,
-            **template_options,
+        # tokenize=True and return_dict=False return the flat token list.
+        prompt_ids = cast(
+            list[int],
+            self.tokenizer.apply_chat_template(
+                list(messages),
+                tools=list(tools) if tools else None,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_dict=False,
+                **template_options,
+            ),
         )
         if max_prompt_tokens > 0:
             prompt_ids = prompt_ids[:max_prompt_tokens]
@@ -151,6 +155,22 @@ def recorded_sample(assembly: SampleAssembly, context: ReportContext, score: flo
     if not 0 < response_length < len(tokens):
         raise ValueError("a teacher sequence requires the recorded prompt and response tokens of the inference")
     return sample
+
+
+def teacher_overflow(context: ReportContext, teacher_tokens: Sequence[int], max_teacher_tokens: int) -> bool:
+    """Return True when the teacher sequence is longer than ``max_teacher_tokens``, and log the report it skips.
+
+    0 is no limit.
+    """
+    if not max_teacher_tokens or len(teacher_tokens) <= max_teacher_tokens:
+        return False
+    logger.warning(
+        "report %s skipped: its teacher sequence is %d tokens, over max_teacher_tokens %d",
+        context.report.agent_record_id,
+        len(teacher_tokens),
+        max_teacher_tokens,
+    )
+    return True
 
 
 class DistillTasks(ReportTasks):
@@ -211,13 +231,7 @@ class DistillTasks(ReportTasks):
         teacher_tokens = self.renderer.teacher_tokens(
             teacher_messages, teacher_tools, sample.training["tokens"][-response_length:]
         )
-        if self.max_teacher_tokens and len(teacher_tokens) > self.max_teacher_tokens:
-            logger.warning(
-                "report %s skipped: its teacher sequence is %d tokens, over max_teacher_tokens %d",
-                context.report.agent_record_id,
-                len(teacher_tokens),
-                self.max_teacher_tokens,
-            )
+        if teacher_overflow(context, teacher_tokens, self.max_teacher_tokens):
             self.overflow_count += 1
             return SkippedReport("teacher_overflow")
         return sample.with_training(teacher_tokens=teacher_tokens)
@@ -231,4 +245,5 @@ __all__ = [
     "normalize_messages_for_template",
     "normalize_tool_call",
     "recorded_sample",
+    "teacher_overflow",
 ]

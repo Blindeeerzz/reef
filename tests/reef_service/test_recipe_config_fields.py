@@ -287,3 +287,14 @@ def test_default_build_requires_processor_and_objective_declarations() -> None:
         NoTask2BatchRecipe(**runtime_bindings(StubTrainingRuntime())).build("scenario", SQLiteRecordStore())
     with pytest.raises(TypeError, match=r"declares no objective.*registered objective name.*'module:Objective'"):
         NoObjectiveRecipe(**runtime_bindings(StubTrainingRuntime())).build("scenario", SQLiteRecordStore())
+
+
+@pytest.mark.unit
+def test_opd_config_keeps_objective_options_out_of_recipe_fields() -> None:
+    from recipes.opd import OPDRecipe
+
+    values = resolve_config_field_values(OPDRecipe, {}, {})
+    assert values["max_staleness"] == 0
+    # The stage settings belong to the pipeline section, and the objective options to the backend.
+    for name in ("batch_size", "max_teacher_tokens", "teacher_checkpoint", "tokenizer_path"):
+        assert name not in recipe_config_fields(OPDRecipe)
