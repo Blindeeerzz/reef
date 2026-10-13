@@ -9,7 +9,7 @@ One round is one GEPA step: pull the served tree, run the next epoch-shuffled
 minibatch of three training problems as Pi episodes against it with a model
 binding pointed back at this service, report each score against the request
 that episode recorded, and wait. The third report closes the batch
-(``data.batch_size: 3``), which is what schedules the step where the method
+(``pipeline.task2batch.config.batch_size: 3``), which is what schedules the step where the method
 proposes, evaluates on the 45 validation problems, and publishes on a strict
 mean improvement. Rounds stop at ``--budget`` metric calls; then the seed and
 the served compositions are each scored on the sealed 150-problem test split
@@ -104,8 +104,8 @@ def load_recipe(tasks: list[str], *, api_key: str, seed: int = 0) -> tuple[str, 
     # into spawn/Ray workers. Bind the example hooks to explicit task data;
     # preserve user-supplied hooks when a config overrides either one.
     scorer = aime.AIMEScorer(aime.ANSWERS, aime.CONTEXTS)
-    if evolution.get("evaluate") == "harness.aime:evaluate":
-        evolution["evaluate"] = scorer.evaluate
+    if evolution.get("evaluate") == "harness.aime:AIMEAnswerScorer":
+        evolution["evaluate"] = scorer
     if evolution.get("feedback") == "harness.aime:AIMEFeedback":
         evolution["feedback"] = scorer
     # One --seed drives both random draws: the proposer's parent sampling

@@ -9,8 +9,9 @@ endpoint, hosted or local, and the agent stays online throughout.
 
 Reef supplies the mechanism: it snapshots the tree, applies a mutation, runs
 the paired episodes, and publishes or reverts. You supply two Python
-callables, ``propose`` (which edit to try) and ``evaluate`` (how an episode
-scored). `Write a harness method <../developer-guide/write-a-harness-method.rst>`__ documents the
+classes: a ``Proposer`` (which edit to try) and an ``EpisodeScorer`` (how an
+episode scored). The deployment names them in ``evolution.propose`` and
+``evolution.evaluate``. `Write a harness method <../developer-guide/write-a-harness-method.rst>`__ documents the
 contract.
 
 At a glance
@@ -225,24 +226,37 @@ Trigger of step
 ``auto`` mode
 ^^^^^^^^^^^^^
 
-In ``auto`` mode, two settings determine when Reef should start a step:
+In ``auto`` mode, the deployment's top-level ``pipeline`` section decides
+when Reef starts a step:
 
-- ``data.batch_size``: when this number of units is collected, trigger a step.
-- ``data.batch_policy``: decides what counts as one unit toward ``batch_size``.
+- ``pipeline.task2batch.config.batch_size`` (default 1): when this number of
+  units is collected, Reef starts a step.
+- The ``pipeline.record2record`` and ``pipeline.record2task`` stages decide
+  what counts as one unit toward ``batch_size``.
 
-``data.batch_policy`` supports two settings:
+The recipe's default stages count reports. Every valid scored report with
+at least one unique inference reference counts as one unit, including
+successful outcomes. A report over one receipt batches as that exchange. A
+report over several receipts batches as one trajectory sample that carries
+every referenced exchange in order. ``reef-pi report`` sends this kind of
+report for a whole run (``--per-receipt`` fans the score across the receipts
+as separate reports instead). Reports that reference inferences trained in
+earlier batches are dropped.
 
-- ``reports`` (default): every valid scored report with at least one unique
-  inference reference counts as one unit, including successful outcomes.  This
-  can be either a report over one receipt batches as that exchange, or a
-  report over several batches as one trajectory sample carrying every
-  referenced exchange in order, which is what ``reef-pi report`` sends for a
-  whole run (``--per-receipt`` fans the score across the receipts as
-  separate reports instead). Reports referencing inferences trained in
-  earlier batches are dropped.
-- ``records``: every inference counts as one unit. The report requirement is
-  dropped entirely: recorded traffic alone batches, unscored, for methods
-  that judge for themselves.
+To count recorded inference traffic instead, name the inference stages.
+Every inference then counts as one unit. No report is necessary: recorded
+traffic alone batches, unscored, for methods that judge for themselves.
+
+.. code-block:: yaml
+
+   pipeline:
+     record2record:
+       module: reef.record2record:InferenceRecord2Record
+     record2task:
+       module: reef.train.cordis_backend.processor:InferenceTasks
+     task2batch:
+       config:
+         batch_size: 4
 
 Under ``auto`` mode, training requests are rejected.
 
@@ -256,31 +270,29 @@ queued request first, one per step. See `manual training API
 e.g. what fields a request carries, the screens its text passes, and what
 happens to a request whose step fails.
 
-``data.batch_size`` and ``data.batch_policy`` trigger no evolution in this
-mode, but units are still collected while training requests run. However,
-these units are never used in evolution until ``data.training_mode`` is
-switched to ``auto`` or ``hybrid``. The held reports are capped at four
-times ``data.batch_size``, and the oldest are released once the batch
-passes that.
+The ``pipeline`` stages trigger no evolution in this mode, but units are
+still collected while training requests run. However, these units are never
+used in evolution until ``data.training_mode`` is switched to ``auto`` or
+``hybrid``. The held reports are capped at four times ``batch_size``, and
+the oldest are released once the batch passes that.
 
 ``hybrid`` mode
 ^^^^^^^^^^^^^^^
 
-In ``hybrid`` mode, either condition starts a step: enough units collected
-under ``data.batch_size`` and ``data.batch_policy``, or a training request
-received.
+In ``hybrid`` mode, either condition starts a step: ``batch_size`` units
+collected by the ``pipeline`` stages, or a training request received.
 
-When both conditions are met, training requests take precedence to make
-next step. Regardless of whether ``data.batch_size`` are met, Reef will
-construct a step that consumes both information. I.e. the ``propose``
-callable will see both the training request content and the units an
-automatic batch would have taken next, up to ``data.batch_size`` and
-possibly none, to determine a mutation.
+When both conditions are met, the training request takes precedence for the
+next step. Reef builds one step that uses both, whether or not
+``batch_size`` is met. The proposer then
+receives the training request and the units that an automatic batch would
+take next. It gets up to ``batch_size`` units, or none, and uses both
+to make a mutation.
 
 Propose: mutation to the harness tree
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Reef calls ``propose`` once per step, with the current tree, the step's
+Reef calls the proposer once per step, with the current tree, the step's
 trace samples, and the model bindings it may call. It may return one or
 multiple mutations or a ``None`` to skip it. Anything but ``None`` becomes
 the step's proposal, and the episodes and comparison that follow are what
@@ -294,7 +306,7 @@ Evaluation: selection of the better tree
 
 Reef runs episodes for the prompts from the evaluation suite (seeded from
 ``evolution.tasks``) on both the mutated tree (the candidate tree) and the
-current tree, and asks ``evaluate`` to score the results. The harness tree
+current tree, and asks the episode scorer to score the results. The harness tree
 with the better result is selected to become the next harness tree.
 
 Running episodes
@@ -383,9 +395,9 @@ Two settings shape the evaluation result:
   losses, so on a stochastic episode a single lucky flip does not publish.
 - ``evolution.max_rejected_history: N`` (25 by default, 0 off) keeps the
   last ``N`` rejected proposals in the scenario state, each with its step,
-  its mutations with the options they carried, and the result's reason; a
-  ``propose`` whose signature names ``rejected`` receives them and can stop
-  re-proposing what the evaluation already refused.
+  its mutations with the options they carried, and the result's reason. The
+  proposer receives them as ``rejected`` and can stop re-proposing what the
+  evaluation already refused.
 
 By default a successful evaluation is served at once.
 ``evolution.publish: review`` holds every win as a pending release instead,
@@ -408,7 +420,7 @@ The evaluation suite consists of the seed tasks specified in
 ``evolution.tasks`` by default. To grow it automatically from failed tasks,
 configure ``evolution.promote_failures: true``, which adds failing traces'
 prompts to the evaluation set permanently. This also means the method's
-``evaluate`` implementation must be able to score any arbitrary prompt. A
+episode scorer must be able to score any arbitrary prompt. A
 request step in ``hybrid`` promotes the failures it carries the same way.
 
 A promoted prompt is real client traffic, so it is screened before it
@@ -421,8 +433,8 @@ client holds at most ``evolution.max_promoted_per_client`` promoted tasks,
 so a single sender cannot fill the suite.
 
 Which prompts are promoted is the method's call. An optional
-``evolution.promote`` names a ``Promoter`` subclass or instance, whose
-``__call__(samples, *, manifest=None)`` receives the step's trace samples
+``evolution.promote`` names a ``Promoter`` class, whose
+``promote(samples, *, manifest=None)`` receives the step's trace samples
 and failure manifest and returns the prompts to promote. Without it, every
 failing trace's user prompt is promoted. Reef dedupes, screens and caps
 whatever it returns either way.
@@ -899,8 +911,8 @@ reported at the next session start, where the update notice offers the
 install. A session start also says the commands exist and counts the
 releases ready to install, with the ``/versions <version> install`` that
 installs one. Recovered trees keep their
-existing entries, as with ``version_check``. The proposer must explicitly
-accept ``requests``. The tutorial's proposer asks the served model for a
+existing entries, as with ``version_check``. The proposer's
+``reads_requests`` must be true. The tutorial's proposer asks the served model for a
 skill, rules entry, command, or extension, using the bundled
 ``reef-pi-extension-api`` skill as its extension reference. The native trainer
 owns request persistence, scheduling, retry and acknowledgement, and records
@@ -1224,8 +1236,8 @@ person in that loop.
 Write a method
 --------------
 
-Reef ships no proposer and no episode scorer. You supply ``propose``,
-``evaluate``, and optionally a selection policy; `Write a harness method
+Reef ships no general proposer and no general episode scorer. You supply a
+``Proposer``, an ``EpisodeScorer``, and optionally a selection policy; `Write a harness method
 <../developer-guide/write-a-harness-method.rst>`__ documents the contract, with worked examples.
 
 Connect a different agent

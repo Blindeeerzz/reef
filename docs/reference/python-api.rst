@@ -21,7 +21,7 @@ Start with Recipe and add only what the method actually needs.
 | validate feedback at ingress                | `Report <#report>`__                             | methods whose signal arrives |
 |                                             |                                                  | in reports                   |
 +---------------------------------------------+--------------------------------------------------+------------------------------+
-| turn records into a typed batch             | `Processor <#processor>`__                       | every method producing       |
+| turn records into a typed batch             | `Pipeline stages <#pipeline-stages>`__           | every method producing       |
 |                                             |                                                  | updates                      |
 +---------------------------------------------+--------------------------------------------------+------------------------------+
 | carry data to the backend                   | `Batch <#batch>`__                               | every method producing       |
@@ -219,10 +219,11 @@ Every recipe may declare ``report_type``, the ``ReportBase`` subclass its
 reports parse as (``None`` keeps ingress open), and ``harness_adapter``, the
 adapter a client installs its harness tree with (``None``, the default, for a
 recipe with no harness tree; ``CordisRecipe`` names ``evolution.adapter``).
-The scenario list names it for every scenario. Weight-training recipes add
-``training_spec()``, which binds the processor, the registered or dotted training
-objective, which declares the backend loss family, and the ``StepScheduling`` the
-runtime cuts each batch with; ``max_staleness``, the accepted
+The scenario list names it for every scenario. Every recipe declares
+``pipeline_spec()``, the default class of each pipeline stage (see `Pipeline
+stages <#pipeline-stages>`__). Weight-training recipes add ``training_spec()``,
+which binds the registered or dotted training objective, which declares the
+backend loss family, and the ``StepScheduling`` the runtime cuts each batch with; ``max_staleness``, the accepted
 producing-to-serving version lag, which must match the runtime; and
 ``candidate_evaluation``, the optional plugin configured by the deployment's
 ``evaluation`` section.
@@ -240,9 +241,16 @@ producing-to-serving version lag, which must match the runtime; and
        @classmethod
        def training_spec(cls) -> WeightTrainingSpec:
            return WeightTrainingSpec(
-               processor=MyMethodProcessor,
                objective="my_method.objective:MyObjective",
                scheduling=StepScheduling(unit="sample"),
+           )
+
+       @classmethod
+       def pipeline_spec(cls) -> PipelineSpec:
+           return PipelineSpec(
+               record2record=MyMethodRecord2Record,
+               record2task=MyMethodTasks,
+               task2batch=MyMethodBatches,
            )
 
 ``frozen=True`` is required by the base. ``kw_only=True`` keeps later fields
@@ -262,9 +270,9 @@ parser, and an optional environment fallback:
 Precedence is explicit configuration, then environment, then the default.
 ``from_environment()`` builds the recipe. On weight-training recipes,
 ``service_config()`` forwards declared fields and shared artifact settings
-from the service configuration; override ``processor_config()`` when a
-processor needs renamed or derived keys. Never read deployment YAML from
-inside a processor.
+from the service configuration. A setting that a pipeline stage reads belongs
+in the stage's settings, under the deployment's ``pipeline`` section, not in a
+recipe field. Never read deployment YAML from inside a stage.
 
 Report
 ------
@@ -640,74 +648,127 @@ sweeps. SQLite reuses freed pages without shrinking its file. Indexes and other
 metadata also require disk space. HTTP audit routes remain a separate integration. See
 `Configuration <configuration.rst>`__ for migration and rollback constraints.
 
-Processor
----------
+Pipeline stages
+---------------
 
 .. code:: python
 
-   from reef.train.processors import ComputedFeedbackProcessor, DistillProcessor, ReportedFeedbackProcessor
+   from reef.record2record import GroupDecision, RecordJudging, ReportContext, ReportGrouping, ReportRecord2Record
+   from reef.record2task import JudgedTasks, ReportTasks, SkippedReport
+   from reef.task2batch import DistillBatches, Task2Batch
 
-A processor turns durable records into typed batches. Reef owns replay,
-retention, deduplication, pending batches, and exactly-once consumption; the
-method implements only the hooks below. They run synchronously on the trainer
-thread, so they must not block on network or model latency.
+A training pipeline (``reef.train.pipeline.TrainingPipeline``) turns durable
+records into typed batches through three stages. A recipe names a default class
+for each in ``pipeline_spec()`` (``PipelineSpec(record2record=...,
+record2task=..., task2batch=...)``):
 
-Reported feedback supplies a ``make_sample`` hook that assembles valid reports;
-computed feedback supplies an asynchronous ``judge`` that derives new feedback.
-Both engines own their buffering, reservations, retention, and replay. Reports
-must reference existing inference records in the same scenario.
+- ``record2record``: the record-to-record stage
+  (``reef.record2record``). It decides which records train and in what order:
+  it groups reports, judges records, and drops records that can no longer
+  train. Without one, each record passes through and nothing trains.
+- ``record2task``: the record-to-task stage
+  (``reef.record2task.Record2Task``). It turns each record set into tasks
+  (``TrainDataItem`` values). Reported feedback supplies a ``make_sample`` hook
+  on ``ReportTasks`` that assembles valid reports; computed feedback supplies
+  a ``JudgedTasks`` after an asynchronous ``judge`` derives new feedback.
+- ``task2batch``: the task-to-batch stage (``reef.task2batch.Task2Batch``).
+  Its ``make_batch(tasks, batch_number)`` shapes the tasks of the selected
+  sets into a batch.
 
-``DataProcessor.training_mode`` selects automatic, instruction-triggered or
-combined batching on the same processor. Declare ``supported_training_modes`` and
-implement ``make_training_batch(batch_number, request)`` to select inputs;
-``request`` is the queued instruction in ``manual`` and ``hybrid`` and ``None``
-for an automatic batch. Ingestion, acknowledgement, retention,
-buffer release and background derivation are shared. See
-`Processors <../developer-guide/processors.rst>`__ for the instruction queue and batch contract.
+Reef builds the stages for each scenario, in this order, with the class
+methods below; a later stage receives the stages built before it:
 
-Every processor gets the scenario's experiment logger as
-``self.experiment_logger``. Log finite numeric metrics under the ``processor``
-namespace; processor code never imports W&B, and the logger is a no-op when
-tracking is off.
+- ``Record2Record.from_config(config, *, context, environ)``
+- ``Record2Task.from_config(config, *, context, record2record, environ)``
+- ``Task2Batch.from_config(config, *, context, record2record, record2task, environ)``
+
+``config`` is the stage's config from the deployment's ``pipeline`` section;
+``environ`` holds the environment the deployment was read with. A stage
+declares its keys in a frozen ``reef.core.plugins.PluginSettings`` subclass
+with ``reef.core.config.config_option`` fields and validation in
+``__post_init__``. In ``from_config``, parse the config with
+``Settings.parse(config, plugin_class=cls)`` (``NoSettings`` for a stage
+without config) and give the settings object to the constructor. A bad config
+fails when the first scenario builds its pipeline. A later stage that needs an
+earlier stage as a specific class checks it with ``isinstance`` and raises
+``PluginConfigError`` otherwise. A value that several stages need
+belongs to the first of them; later stages read it from the stage object
+they receive. A ``Record2Task`` that keeps
+per-scenario state also implements ``scenario_state_dirs(config, scenario)``,
+so a scenario delete archives it. Reef owns replay, retention, deduplication, pending batches,
+and exactly-once consumption; the method implements only the hooks below.
+They run synchronously on the trainer thread, so they must not block on
+network or model latency. Reports must reference existing inference records
+in the same scenario.
+
+``TrainingPipeline.training_mode`` selects automatic, instruction-triggered or
+combined batching. A ``Task2Batch`` declares ``supported_training_modes``. In
+``manual`` an instruction's batch has no tasks; in ``hybrid`` it takes the sets
+an automatic batch would. Ingestion, acknowledgement, retention, buffer release
+and background derivation are shared. See
+`Training pipeline <../developer-guide/processors.rst>`__ for the instruction queue and batch contract.
+
+Every stage gets the scenario's experiment logger as
+``context.experiment_logger`` (``self.experiment_logger`` on a ``Task2Batch``).
+Log finite numeric metrics under the method's namespace; stage code never
+imports W&B, and the logger is a no-op when tracking is off.
 
 Reported feedback
 ~~~~~~~~~~~~~~~~~
 
-``ReportedFeedbackProcessor`` exposes these recipe hooks:
+A reported-feedback recipe implements these hooks:
 
 .. list-table::
    :header-rows: 1
 
    * - Hook
      - Contract
-   * - ``make_sample(context) -> TrainDataItem``
-     - Assemble one valid report and its resolved inferences; raise on data errors.
-   * - ``make_batch(items, batch_number) -> TrainingBatch``
-     - Shape the flat tuple of selected training items into a batch.
-   * - ``grouping(context) -> (group_key, slot)``
+   * - ``ReportTasks.make_sample(context) -> TrainDataItem | SkippedReport``
+     - Assemble one valid report and its resolved inferences; raise on data errors. Return
+       ``SkippedReport(reason)`` for a valid report that cannot train; the stage releases it.
+   * - ``Task2Batch.make_batch(tasks, batch_number) -> TrainingBatch``
+     - Shape the flat tuple of selected tasks into a batch.
+
+The recipe owns the report policy. Its record stage is a subclass of
+``ReportRecord2Record(context, grouping, *, exclusive_sources=False,
+ordered_groups=False)``; ``ReportRecord2Record(context, ReportGrouping())``
+trains every report by itself. A ``ReportGrouping`` runs in the
+record-to-record stage and reads only records:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Method
+     - Contract
+   * - ``placement(context) -> (group_key, slot)``
      - Optional collection group and retry slot; defaults to an independent report.
-   * - ``decide_group(key, items) -> GroupDecision``
-     - Required when grouping supplies a group key; return READY, INCOMPLETE, or DISCARD.
+   * - ``decide(key, members) -> GroupDecision``
+     - Required when ``placement`` supplies a group key. ``members`` are the group's
+       ``ReportContext`` values in arrival order. Return READY, INCOMPLETE, or DISCARD.
    * - ``is_training_report(report) -> bool``
-     - Optional; ``False`` for a valid report that is not this method's training data. The engine releases it and never assembles it; its sources go with it only under ``exclusive_sources`` or when it references more than one inference.
+     - Optional; ``False`` for a valid report that is not this method's training data. The stage releases it and
+       never assembles it; its sources go with it only under ``exclusive_sources`` or when it references more than
+       one inference.
+   * - ``status() -> Mapping``
+     - Optional JSON-safe group outcomes, such as steps that can never train. The pipeline adds them to its status.
 
 ``ReportContext`` carries ``report``, ordered ``inferences``, optional ``score``,
 and the recipe's ``parsed_report``. ``require_score()`` returns a finite reward or
 raises if the training method cannot use the supplied feedback.
 
-``make_sample`` returns a trajectory or task directly. The processor adds the
+``make_sample`` returns a trajectory or task directly. ``ReportTasks`` adds the
 report id and ordered references to ``source_agent_record_ids``. Grouping and
-consumption state stay private; recipes never receive buffered report objects.
-``grouping`` returns ``(None, None)`` by default. A group key collects reports,
+consumption state stay in the stage; recipes never receive buffered report objects.
+``placement`` returns ``(None, None)`` by default. A group key collects reports,
 and a slot deduplicates retries within that group (None uses the report id).
 This collection group differs from ``TrajectoryItem.group_id``: TTTD waits for
 a complete step, then trains several comparison groups within it.
-``make_batch`` receives items in group/arrival order. Acknowledgement consumes
+``make_batch`` receives tasks in group/arrival order. Acknowledgement consumes
 all selected reports, even when the recipe omits constant-reward groups from
 its output. Reports arriving after reservation remain for a later batch.
-``output_schema`` declares the batch type, ``exclusive_sources`` controls source
-release for terminal group/duplicate reports, and ``ordered_groups`` orders ready
-groups by their keys.
+``output_schema`` declares the batch type. On the stage, ``exclusive_sources``
+controls source release for terminal group/duplicate reports, and
+``ordered_groups`` orders ready groups by their keys.
 
 There is no report-level ``judge``, ``WAIT``, ``NEVER``, or eligibility flag.
 Reference validation runs at admission; incomplete groups wait for more valid
@@ -717,62 +778,107 @@ Computed feedback
 ~~~~~~~~~~~~~~~~~
 
 Use this engine when later traffic completes an earlier record and judging it
-calls a model or another slow service.
+calls a model or another slow service. The recipe writes a ``RecordJudging``.
+Its record stage is a ``JudgingRecord2Record(context, judging, worker)``,
+its record-to-task stage is a ``JudgedTasks``, and its ``Task2Batch`` shapes
+the judged samples into batches.
 
-+---------------------------------------+-----------------------------------+
-| Hook                                  | Contract                          |
-+=======================================+===================================+
-| ``ingest(record)``                    | correlate records; must not block |
-+---------------------------------------+-----------------------------------+
-| ``async judge(job)``                  | slow judgment, on the processor's |
-|                                       | own worker                        |
-+---------------------------------------+-----------------------------------+
-| ``make_sample(record, judgment)``     | a ``TrajectoryItem``, or ``None`` |
-|                                       | to retire the record              |
-+---------------------------------------+-----------------------------------+
-| ``make_batch(samples, batch_number)`` | the declared batch type           |
-+---------------------------------------+-----------------------------------+
-| ``expire(now)``                       | optionally return receipts whose  |
-|                                       | completion window ended           |
-+---------------------------------------+-----------------------------------+
-| ``required_request_types``            | optionally restrict which record  |
-|                                       | types reach the processor         |
-+---------------------------------------+-----------------------------------+
++------------------------------------------+-----------------------------------+
+| Hook                                     | Contract                          |
++==========================================+===================================+
+| ``RecordJudging.observe(record, now,``   | correlate one record with the     |
+| ``stage)``                               | stage's verbs; must not block     |
++------------------------------------------+-----------------------------------+
+| ``async RecordJudging.judge(job)``       | slow judgment, on the worker      |
+|                                          | thread                            |
++------------------------------------------+-----------------------------------+
+| ``RecordJudging.expire(now)``            | optionally return receipts whose  |
+|                                          | completion window ended           |
++------------------------------------------+-----------------------------------+
+| ``JudgedTasks.make_sample(record,``      | a ``TrajectoryItem``, or ``None`` |
+| ``judgment)``                            | to retire the record              |
++------------------------------------------+-----------------------------------+
+| ``make_batch(tasks, batch_number)``      | the declared batch type           |
++------------------------------------------+-----------------------------------+
+| ``required_request_types``               | optionally restrict which record  |
+|                                          | types reach the pipeline          |
++------------------------------------------+-----------------------------------+
 
-Every ``ingest()`` starts with ``catch_up(now)``, then uses ``track(record)``,
+Before each ``observe``, the stage retires expired records and absorbs finished
+judgments. ``observe`` then uses the stage's ``track(record)``,
 ``tracked_record(receipt)``, ``dispatch(job)``, ``retire(receipt)``, and
 ``abandon(receipt)``. A failed judgment or a ``None`` sample retires the record
 instead of failing a training step. All correlation state must be
 reconstructible from replay.
+
+While no batch is out, the stage retires candidates that are more than
+``max_staleness`` versions behind the newest candidate, by record arrival. The
+recipe's ``max_staleness`` reaches the stages as
+``PipelineContext.max_staleness``. With the default value 0, only candidates of
+the newest version stay. Runtime admission still checks each batch against the
+serving version.
 
 Task generation
 ~~~~~~~~~~~~~~~
 
 .. code:: python
 
-   from reef.core.tasks import HarborTask
-   from reef.train.processors.task_generation import (
-       TaskGenerationProcessor, TaskGenerationRequest, TaskValidationResult,
+   from reef.core.tasks import (
+       GeneratedTask, HarborTask, PlayArm, TaskGenerationRequest, TaskGenerator,
+       TaskPlayResult, TaskValidationResult,
    )
 
-``TaskGenerationProcessor`` extends ``DataProcessor`` with two abstract methods:
-``async generate(request: TaskGenerationRequest) -> HarborTask`` and
-``async validate(task_path: Path) -> TaskValidationResult``. Both must be
-implemented by subclasses. The ABC supplies no task execution lifecycle;
-a method pairs the hooks with an engine and a worker of its own, as SPADE
-pairs them with the reported-feedback engine and the generator service
-(``reef.record2dataset``).
+``TaskGenerator`` is the plugin base class that a deployment names in
+``pipeline.record2task.config.generator``. Subclasses implement:
 
-``TaskGenerationRequest(source_records, description, assets=())`` carries a
-tuple of distinct ``AgentRecord`` values from one scenario (empty for a method
-that generates from the description alone), non-empty requirements text, and
-optional ``Path`` values for local generation assets. The generated task must
-preserve the source record ids in order.
-``TaskValidationResult(errors=())`` exposes ``is_valid``; each error is a
-non-empty explanation of a task defect. Check execution failures raise instead.
-Generation and validation must run outside the synchronous trainer-lock path.
-See `Processors <../developer-guide/processors.rst#task-generation-contract>`__
-for lifecycle requirements.
+- the class method ``from_config(config, *, scenario, environ)``, which returns
+  the generator of one scenario;
+- ``async generate(request: TaskGenerationRequest) -> tuple[GeneratedTask, ...]``;
+- ``async validate(task: HarborTask) -> TaskValidationResult``.
+
+``async record_results(results: tuple[TaskPlayResult, ...])`` is optional. The
+default keeps nothing. The built-in generated-task recipe,
+``reef.recipe.generated_tasks:GeneratedTaskRecipe``, calls these methods.
+See `Training pipeline <../developer-guide/processors.rst#task-generation-contract>`__
+for the round and its failure behavior.
+
+``TaskGenerationRequest(source_records, description, assets=(), asset_files={})``
+carries source records and non-empty requirements text.
+Each ``AgentRecord`` must have a distinct ID and belong to the same scenario.
+Use an empty record tuple for description-only generation.
+For local materials, pass a tuple of ``Path`` values in ``assets``.
+For materials in memory, use ``asset_files`` to map relative file names to
+UTF-8 text. Supplying both fields is an error. The constructor validates
+fields without reading files.
+
+Record2dataset accepts the same input through ``DesignerRequest(inputs=request,
+...)``. Its HTTP client reads local materials and sends their contents. The
+service rebuilds ``TaskGenerationRequest`` from the JSON fields. The generated
+task preserves source record IDs in order.
+
+``GeneratedTask(task, measurement_arms=())`` holds one task and the
+measurement arms the generator wants played on it. ``PlayArm(name, count,
+extra_instruction_files=())`` names an arm, its number of plays, and the task
+files shown after the instruction. Arm names are unique for each task.
+
+``TaskPlayResult(task, training_rewards=(), measurement_rewards={}, error="")``
+holds the rewards of the training plays and, by arm name, of each measurement
+arm. Each tuple holds only the episodes that ran. ``is_played`` is true when
+``error`` is empty. A task that was not played has no rewards.
+
+``TaskValidationResult(errors=())`` exposes ``is_valid``. Each error is a
+non-empty explanation of a task defect. Failures to execute the checks raise
+exceptions instead.
+
+Migration: ``reef.train.processors.TaskGenerationProcessor`` is removed. Move
+its ``generate`` and ``validate`` methods to a ``TaskGenerator`` subclass:
+
+- ``generate`` returns a tuple of ``GeneratedTask`` values instead of one task.
+- ``validate`` receives the ``HarborTask`` instead of a directory path.
+- Import ``TaskValidationResult`` from ``reef.core.tasks``.
+
+Name the class in ``pipeline.record2task.config.generator`` and use the generated-task recipe. The recipe plays and trains, so the processor half of the method is
+not needed.
 
 Batch
 -----
@@ -851,7 +957,7 @@ The ``reef.core.trajectories`` helpers construct and consume ATIF:
 methods, including external ATIF without captured records; and
 ``trajectory_reward`` reads a finite policy reward. Policy assembly uses
 ``make_policy_trajectory`` or ``make_multi_turn_policy_trajectory`` from
-``reef.train.processors.common`` to add exact captured tensors. Missing required
+``reef.record2task.samples`` to add exact captured tensors. Missing required
 tensors fail at the training boundary; these helpers do not invent tokens or
 log probabilities from text. Both batch readers reject unsupported item kinds
 instead of silently filtering mixed batches.
@@ -875,7 +981,7 @@ Training objective
 Each method defines a ``TrainingObjective`` in its own ``objective.py``. It
 owns full-batch signal preparation and declares the backend loss family.
 Recipes bind it with ``WeightTrainingSpec(objective="my_method.objective:MyObjective",
-processor=MyProcessor, scheduling=StepScheduling(...))``. The dotted reference names a class with a zero-argument
+scheduling=StepScheduling(...))``. The dotted reference names a class with a zero-argument
 constructor or an existing instance; its module must be importable in both the
 service and training processes.
 
@@ -954,15 +1060,33 @@ training payloads, checkpoints and artifact formats are unchanged.
 Harness method
 --------------
 
-A harness-evolution method fills three slots. Reef runs the loop around them:
-snapshot, apply, run the paired episodes, record, publish or revert.
+A harness-evolution method fills three slots with plugin classes. Reef runs
+the loop around them: snapshot, apply, run the paired episodes, record,
+publish or revert.
 
 .. code:: python
 
-   def propose(nodes, samples, models) -> Mutation | Sequence[Mutation] | StepProposal | None: ...
-   def evaluate(task, result) -> float: ...
-   class Selection:  # optional
+   from reef.train.cordis_backend import EpisodeScorer, Proposer
+   from reef.train.evaluation import SelectionPlugin
+
+   class MyProposer(Proposer):
+       def propose(self, nodes, samples, models, *, manifest=None, rejected=(), sources=(),
+                   requests=(), entries=(), agent_host=None) -> Mutation | Sequence[Mutation] | StepProposal | None: ...
+
+   class MyScorer(EpisodeScorer):
+       def score(self, task, result) -> float: ...
+
+   class MySelection(SelectionPlugin):  # optional
+       @classmethod
+       def from_config(cls, config, *, candidate_backend) -> "MySelection": ...
+       def evaluate(self, candidate) -> EvaluationResult: ...
        def decide(self, candidate, evaluation) -> SelectionDecision: ...
+
+A deployment names each class as ``package.module:ClassName``, or as a mapping
+with ``module`` and ``config``. Reef builds it with the class method
+``from_config``. ``Proposer``, ``EpisodeScorer`` and ``Promoter`` inherit
+``reef.core.plugins.ConfiguredPlugin``, whose default ``from_config(config)``
+builds the class with no arguments and refuses a non-empty ``config``.
 
 +------------------------+----------------------------------------------------------+
 | Member                 | Contract                                                 |
@@ -975,11 +1099,17 @@ snapshot, apply, run the paired episodes, record, publish or revert.
 |                        | the model under test, ``models["teacher"]`` comes from   |
 |                        | ``evolution.models``                                     |
 +------------------------+----------------------------------------------------------+
-| ``manifest``           | optional, keyword-only: the previous step's              |
-|                        | ``FailureManifest``, the per-task record of which        |
-|                        | episodes failed and how                                  |
+| ``manifest``           | keyword-only: the previous step's ``FailureManifest``,   |
+|                        | the per-task record of which episodes failed and how;    |
+|                        | ``None`` before the first settled step                   |
 +------------------------+----------------------------------------------------------+
-| ``entries``            | optional, keyword-only: the tree as entry options,       |
+| ``reads_requests``     | property, ``False`` by default: ``True`` when the        |
+|                        | proposer answers the ``requests`` of a manual step       |
++------------------------+----------------------------------------------------------+
+| ``runs_agent``         | property, ``False`` by default: ``True`` when the        |
+|                        | proposer uses ``agent_host`` to run a coding agent       |
++------------------------+----------------------------------------------------------+
+| ``entries``            | keyword-only: the tree as entry options,                 |
 |                        | ``{"id", "name", "config"}`` mappings in tree order, so  |
 |                        | an ``update`` or ``remove`` can name its entry           |
 +------------------------+----------------------------------------------------------+
@@ -1000,7 +1130,22 @@ snapshot, apply, run the paired episodes, record, publish or revert.
 |                        | alone                                                    |
 +------------------------+----------------------------------------------------------+
 
-Returning ``None`` from ``propose`` skips the step. The worked examples are in
+Returning ``None`` from ``propose`` skips the step. Reef passes every keyword
+on every call.
+
+Migration:
+
+- Wrap a plain ``propose`` or ``evaluate`` function in a ``Proposer`` or
+  ``EpisodeScorer`` subclass. Its ``propose`` or ``score`` method calls the
+  function. Name the class in the deployment file.
+- Rename ``__call__`` on a ``Proposer``, ``EpisodeScorer`` or ``Promoter``
+  subclass to ``propose``, ``score`` or ``promote``.
+- A proposer that named the ``requests`` or ``agent_host`` keyword overrides
+  ``reads_requests`` or ``runs_agent``.
+- Move the body of a ``CandidatePluginFactory`` or
+  ``CandidateEvaluationPluginFactory`` to the class method ``from_config`` on
+  the plugin. The plugin then inherits ``SelectionPlugin`` or
+  ``ConfiguredEvaluationPlugin``. The worked examples are in
 `Evolve your harness <../user-guide/evolve-your-harness.rst#write-a-method>`__.
 
 Candidate evaluation
@@ -1031,22 +1176,22 @@ exact result it was given.
 A rejection leaves the previous artifact serving. An exception is fail-closed:
 Reef aborts the prepared candidate rather than publishing it. Make evaluations
 idempotent by ``candidate.candidate_id`` because recovery may repeat work whose
-result was not durably committed. The deployment names the factory in its
-``evaluation`` section (`Configuration
+result was not durably committed. The deployment names the plugin class in
+its ``evaluation`` section (`Configuration
 <configuration.rst#the-evaluation-section>`__).
 
-``CandidateEvaluationPluginFactory`` is an abstract base class whose
-``build(config, *, runtime, training_runtime, scenario, environ)`` returns one
-scenario-local plugin. ``evaluation.module`` names its subclass or instance;
-factory subclasses must construct without arguments and without allocating
-model resources. Plain callable factories and objects that merely expose
-matching methods are rejected.
+A configured plugin inherits ``ConfiguredEvaluationPlugin``. It implements the
+class method ``from_config(config, *, runtime, training_runtime, scenario,
+environ)``, which returns one scenario-local plugin. Reef checks the class
+when it loads the configuration and calls ``from_config`` for each scenario.
+Reef rejects functions, abstract classes and objects that only expose
+matching methods.
 
-Harness recipes instead use ``reef.train.evaluation.CandidatePluginFactory``:
-its ``build(candidate_backend)`` binds a plugin to an existing candidate
-backend. ``AlwaysSelectPluginFactory`` and ``ScoreComparisonPluginFactory``
-provide the built-in policies; custom factory classes explicitly inherit the
-same interface.
+Harness recipes instead name a ``reef.train.evaluation.SelectionPlugin``
+class in ``evolution.selection``. Its ``from_config(config, *,
+candidate_backend)`` binds the plugin to the scenario's candidate backend.
+``BackendAlwaysSelectPlugin``, ``ScoreComparisonPlugin`` and ``FloorPlugin``
+are the built-in policies ``always``, ``score_comparison`` and ``floor``.
 
 Surface
 -------

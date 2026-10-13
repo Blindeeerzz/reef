@@ -101,12 +101,14 @@ def translate_layout(config: Mapping[str, Any]) -> dict[str, Any]:
     known_sections = {
         "reef",
         "inference",
+        "teacher",
         "recipe",
         "training",
         "storage",
         "execution",
         "executors",
         "evaluation",
+        "pipeline",
         "generator",
         "observability",
     }
