@@ -20,7 +20,7 @@ The three stages
 
    record ─► record2record ─► record set ─► record2task ─► task ─► task2batch ─► batch ─► trainer
 
-- The **record-to-record stage** (``Record2RecordStage``, ``reef.record2record``)
+- The **record-to-record stage** (``Record2Record``, ``reef.record2record``)
   decides which records train, in which sets, and in what order. A set is a
   report with the inference records that it references, a ready group, one
   judged record, or a round request.

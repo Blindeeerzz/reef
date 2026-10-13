@@ -27,9 +27,9 @@ from dataclasses import dataclass
 
 from reef.core.records_types import AgentRecord
 from reef.core.reports import ReportBase
+from reef.record2record.base import SetAssembly
 from reef.record2record.reports import ReportContext, ReportGrouping, ReportStage
 from reef.record2record.sets import RecordSet
-from reef.record2record.stage import SetAssembly
 
 
 class RoundGrouping(ReportGrouping):

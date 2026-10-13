@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 
 from reef.core.batches import TaskItem, TrainDataItem, TrajectoryItem
 from reef.record2record import RecordSet, ReportCandidate, ReportContext
-from reef.record2task.stage import Record2Task, TaskResult
+from reef.record2task.base import Record2Task, TaskResult
 
 
 @dataclass(frozen=True)

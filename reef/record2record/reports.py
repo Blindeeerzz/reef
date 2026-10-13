@@ -20,9 +20,9 @@ from typing import Any
 
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase, ReportValidationError, validate_report_payload
+from reef.record2record.base import Record2Record, SetAssembly
 from reef.record2record.selection import ArrivalOrder, GroupKeyOrder
 from reef.record2record.sets import RecordSet
-from reef.record2record.stage import Record2RecordStage, SetAssembly
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +158,7 @@ def report_sets(pool_sets: tuple[RecordSet, ...]) -> tuple[ReportSet, ...]:
     return selected
 
 
-class ReportStage(Record2RecordStage):
+class ReportStage(Record2Record):
     """Form report sets, and hold singleton reports and ready groups until a batch uses them.
 
     Invalid references raise immediately. Deduplication, consumed-source

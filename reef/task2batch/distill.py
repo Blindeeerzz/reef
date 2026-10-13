@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from reef.core.batches import TrainDataItem, TrainingBatch
-from reef.task2batch.stage import Task2Batch
+from reef.task2batch.base import Task2Batch
 
 
 class DistillBatches(Task2Batch):

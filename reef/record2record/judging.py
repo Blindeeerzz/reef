@@ -22,10 +22,10 @@ from dataclasses import dataclass, replace
 
 from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Failed, SupportsReceipt
 from reef.core.records_types import AgentRecord
+from reef.record2record.base import Record2Record, SetAssembly
 from reef.record2record.eligibility import StalenessCheck
 from reef.record2record.selection import ArrivalOrder
 from reef.record2record.sets import RecordSet
-from reef.record2record.stage import Record2RecordStage, SetAssembly
 
 
 class RecordJudging(BackgroundJobRunner, ABC):
@@ -80,7 +80,7 @@ def judged_sets(pool_sets: tuple[RecordSet, ...]) -> tuple[JudgedSet, ...]:
     return selected
 
 
-class JudgingStage(Record2RecordStage):
+class JudgingStage(Record2Record):
     """Judge records on a background worker, and hold the judged sets until a batch uses them.
 
     Every record is in exactly one state: tracked, in flight, held in the

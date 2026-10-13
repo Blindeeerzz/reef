@@ -8,7 +8,7 @@
 that the trainer gives records to and takes batches from. A recipe writes the
 stages; it does not subclass the pipeline:
 
-* the record-to-record stage (:class:`~reef.record2record.Record2RecordStage`)
+* the record-to-record stage (:class:`~reef.record2record.Record2Record`)
   decides which records train, in which sets, and in what order;
 * the record-to-task stage (:class:`~reef.record2task.Record2Task`) turns each
   record set into tasks;
@@ -33,7 +33,7 @@ from reef.core.reports import ReportBase
 from reef.core.training_request import TrainingRequest
 from reef.observability import ExperimentLogger
 from reef.pipeline_context import PipelineContext
-from reef.record2record import AssemblyStatus, PassThroughStage, Record2RecordStage
+from reef.record2record import AssemblyStatus, PassThroughStage, Record2Record
 from reef.record2task import NoTasks, Record2Task
 from reef.task2batch import NoBatches, Task2Batch
 from reef.train.types import TrainDataItem, TrainingBatch
@@ -69,7 +69,7 @@ class TrainingPipeline:
         self,
         context: PipelineContext,
         *,
-        record_stage: Record2RecordStage | None = None,
+        record_stage: Record2Record | None = None,
         record2task: Record2Task | None = None,
         task2batch: Task2Batch | None = None,
     ) -> None:

@@ -8,10 +8,10 @@ The training pipeline (``reef.train.pipeline.TrainingPipeline``) reserves the
 next batch's record sets from ``reef.record2record`` and gives their tasks,
 which ``reef.record2task`` made, to this stage.
 
-Entry point: ``Task2Batch`` in ``stage.py``. A recipe writes ``make_batch`` and
+Entry point: ``Task2Batch`` in ``base.py``. A recipe writes ``make_batch`` and
 names the class in ``WeightTrainingSpec.task2batch``.
 
-* ``NoBatches`` (``stage.py``): the no-update default; it never makes a batch.
+* ``NoBatches`` (``base.py``): the no-update default; it never makes a batch.
 * ``DistillBatches`` (``distill.py``): the distilling recipes' batches, named by
   ``batch_label``.
 
@@ -20,8 +20,8 @@ lives in its backend training objective, not here. The package depends only
 on ``reef.core``, ``reef.observability``, and ``reef.pipeline_context``.
 """
 
+from reef.task2batch.base import NoBatches, Task2Batch
 from reef.task2batch.distill import DistillBatches
-from reef.task2batch.stage import NoBatches, Task2Batch
 
 __all__ = [
     "DistillBatches",

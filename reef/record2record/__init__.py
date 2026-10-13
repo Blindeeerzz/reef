@@ -4,7 +4,7 @@ Reef uses records in two ways. It trains on records directly, and it turns
 records into runnable tasks (``reef.recipe.generated_tasks``). Both need the same
 decisions about each record. This package owns those decisions.
 
-Entry point: ``Record2RecordStage`` in ``stage.py``.
+Entry point: ``Record2Record`` in ``base.py``.
 
 * Each training pipeline (``reef.train.pipeline.TrainingPipeline``) has one
   stage, from the recipe's ``build_record_stage(context)``. The pipeline gives
@@ -17,7 +17,7 @@ Entry point: ``Record2RecordStage`` in ``stage.py``.
 
 Stages:
 
-* ``PassThroughStage`` (``stage.py``): the default. It forms one set per
+* ``PassThroughStage`` (``base.py``): the default. It forms one set per
   record and decides nothing.
 * ``ReportStage`` (``reports.py``): reports and the inference records that
   they reference, alone or in groups. A recipe's ``ReportGrouping`` decides
@@ -25,7 +25,7 @@ Stages:
 * ``JudgingStage`` (``judging.py``): records that a model judges on a
   background worker after later traffic completes them. A recipe's
   ``RecordJudging`` holds the correlation and the judge.
-* ``InferenceStage`` (``stage.py``): one set per inference record.
+* ``InferenceStage`` (``base.py``): one set per inference record.
 * ``RoundStage`` (``rounds.py``): a ``ReportStage`` that also forms a
   ``RoundRequest`` set each time a task-generation round is due. A recipe's
   ``RoundGrouping`` decides which reports are source sessions for the rounds.
@@ -47,6 +47,7 @@ The package depends only on ``reef.core``, ``reef.runtime.interfaces``,
 the trainer can both use it.
 """
 
+from reef.record2record.base import AssemblyStatus, InferenceStage, PassThroughStage, Record2Record, SetAssembly
 from reef.record2record.eligibility import EligibilityCheck, IneligibleSet, StalenessCheck
 from reef.record2record.judging import JudgedSet, JudgingStage, RecordJudging, judged_sets
 from reef.record2record.pool import RecordSetPool
@@ -65,7 +66,6 @@ from reef.record2record.reports import (
 from reef.record2record.rounds import RoundGrouping, RoundRequest, RoundStage
 from reef.record2record.selection import ArrivalOrder, GroupKeyOrder, SelectionPolicy
 from reef.record2record.sets import RecordSet, SingleRecordSet
-from reef.record2record.stage import AssemblyStatus, InferenceStage, PassThroughStage, Record2RecordStage, SetAssembly
 
 __all__ = [
     "ArrivalOrder",
@@ -78,7 +78,7 @@ __all__ = [
     "JudgedSet",
     "JudgingStage",
     "PassThroughStage",
-    "Record2RecordStage",
+    "Record2Record",
     "RecordJudging",
     "RecordSet",
     "RecordSetPool",

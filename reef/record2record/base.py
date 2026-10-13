@@ -1,6 +1,6 @@
 """The record-to-record stage: records in, record sets out, for one pipeline.
 
-``Record2RecordStage`` is the interface. ``PassThroughStage`` is the default implementation.
+``Record2Record`` is the interface. ``PassThroughStage`` is the default implementation.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ class SetAssembly:
     runtime_load_id: str | None = None
 
 
-class Record2RecordStage(ABC):
+class Record2Record(ABC):
     """Turn records into record sets for one pipeline, and decide which sets train and in what order.
 
     The pipeline gives the stage every record that it reads, except training
@@ -168,7 +168,7 @@ class Record2RecordStage(ABC):
         return
 
 
-class PassThroughStage(Record2RecordStage):
+class PassThroughStage(Record2Record):
     """Hand each record to the pipeline by itself, in arrival order, and decide nothing.
 
     With ``NoTasks`` each set is ``AssemblyStatus.INGESTED``: the stage forgets it.
@@ -190,7 +190,7 @@ class PassThroughStage(Record2RecordStage):
         return formed
 
 
-class InferenceStage(Record2RecordStage):
+class InferenceStage(Record2Record):
     """Hold each inference record as one set, in arrival order, and end every other record untouched."""
 
     def __init__(self) -> None:

@@ -13,7 +13,7 @@ from typing import Any
 from reef.core.batches import TrajectoryItem
 from reef.core.records_types import AgentRecord
 from reef.record2record import JudgedSet, RecordSet
-from reef.record2task.stage import Record2Task, TaskResult
+from reef.record2task.base import Record2Task, TaskResult
 
 
 class JudgedTasks(Record2Task, ABC):

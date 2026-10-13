@@ -11,7 +11,7 @@ rolls out. A recipe's ``Task2Batch`` (``reef.task2batch``) shapes the
 tasks into batches, and ``reef.train.pipeline.TrainingPipeline`` drives the
 three stages.
 
-Entry point: ``Record2Task`` in ``stage.py``. The recipe builds one in
+Entry point: ``Record2Task`` in ``base.py``. The recipe builds one in
 ``build_record2task(context)``.
 
 Implementations:
@@ -44,9 +44,9 @@ The modules in this directory depend only on ``reef.core``,
 them without the generator service.
 """
 
+from reef.record2task.base import NoTasks, Record2Task, TaskResult
 from reef.record2task.judged import JudgedTasks
 from reef.record2task.reports import ReportTasks, SkippedReport
-from reef.record2task.stage import NoTasks, Record2Task, TaskResult
 
 __all__ = [
     "JudgedTasks",

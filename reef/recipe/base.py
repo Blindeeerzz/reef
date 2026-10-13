@@ -24,7 +24,7 @@ from reef.recipe.checkpoint_strategy import CheckpointStrategy, EveryNVersions
 from reef.recipe.config import config_positive_int
 from reef.recipe.config_fields import config_field, parse_int, recipe_config_fields, resolve_config_field_values
 from reef.recipe.errors import RecipeConfigError
-from reef.record2record import Record2RecordStage
+from reef.record2record import Record2Record
 from reef.record2task import Record2Task
 from reef.runtime.interfaces import InferenceHandler, InferenceRuntime, MultimodalRelay, TrainingRuntime
 from reef.storage.records import RecordStore
@@ -521,7 +521,7 @@ class WeightTrainingRecipe(Recipe):
             if name not in ("max_staleness", "training_mode")
         }
 
-    def build_record_stage(self, context: PipelineContext) -> Record2RecordStage | None:
+    def build_record_stage(self, context: PipelineContext) -> Record2Record | None:
         """Build the record-to-record stage of one scenario: this method's grouping, judging, and eligibility.
 
         ``context`` carries :meth:`pipeline_config`. Return ``None`` to use
