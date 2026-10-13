@@ -54,22 +54,6 @@ class _ArtifactHeadSync:
     error: str | None = None
 
 
-@dataclass(frozen=True)
-class CommitHeads:
-    """Heads observed before publication, retained for compare-and-swap installation."""
-
-    serving: ArtifactRef
-    checkpoint: ArtifactRef
-
-
-@dataclass(frozen=True)
-class PublicationPlan:
-    """Resolved artifact delivery and checkpoint decision for one training step."""
-
-    publication: LiveWeightPublication | NoArtifactPublication | SavedArtifactPublication
-    checkpoint: bool
-
-
 class SettledTrainingResultError(ReefError):
     """A trainer's result is on record already: another trainer's commit settled its durable record first.
 
@@ -488,7 +472,9 @@ class ScenarioCommitter:
                 if staged is not None:
                     artifacts.discard(staged)
                 raise
-            self.finish_committed_step(prepared, record, self._trainer, heads=CommitHeads(current_ref, checkpoint))
+            self.finish_committed_step(
+                prepared, record, self._trainer, expected=current_ref, expected_checkpoint=checkpoint
+            )
             if restore_weights:
                 # A rollback that left the weights alone paused nothing; resuming here would open admission
                 # under a dispatched job that still holds it and call its unpublished version served.
@@ -577,8 +563,6 @@ class ScenarioCommitter:
             prepared = replace(
                 trainer.prepare_commit(None), algorithm_state=dict(result.state), metrics=dict(result.metrics)
             )
-            if publication.component is None:
-                publication = SavedArtifactPublication(publication.artifact, component)
             self.commit_saved_artifact(
                 result, publication, prepared, trainer, component, checkpointed=self._should_checkpoint(result)
             )
@@ -661,60 +645,47 @@ class ScenarioCommitter:
 
             if self._store.durable:
                 self._synchronize_checkpoint()
-            plan = self.resolve_publication(result, component)
-            if isinstance(plan.publication, LiveWeightPublication):
-                self.commit_live_weights(plan.publication, prepared, trainer)
-            elif isinstance(plan.publication, NoArtifactPublication):
+            publication = result.publication
+            if isinstance(publication, NoArtifactPublication):
                 self.commit_without_artifact(prepared, trainer, component)
+                return result.state
+
+            # Resolve checkpoint policy once; held artifacts always retain their bytes.
+            checkpointed = (
+                isinstance(publication, SavedArtifactPublication) and result.pending
+            ) or self._should_checkpoint(result)
+            surface = self._binding.surface
+            if isinstance(publication, DurableWeightsPublication):
+                if checkpointed:
+                    publication = SavedArtifactPublication(
+                        Artifact.local(
+                            Path(publication.checkpoint_path),
+                            metadata={"runtime_load_id": publication.runtime_load_id},
+                        ),
+                        surface.loader_component,
+                    )
+                else:
+                    publication = LiveWeightPublication(publication.runtime_load_id)
+            if isinstance(publication, LiveWeightPublication):
+                if not surface.single:
+                    raise ReefError(
+                        f"scenario {self._name!r} serves components {list(surface.names)}: "
+                        "live weights cannot be published without a checkpoint"
+                    )
+                if checkpointed:
+                    raise ReefError(
+                        "checkpoint-selected training results must include the artifact returned by execute_training_job"
+                    )
+                if result.pending:
+                    raise ReefError(
+                        "a pending release requires a durable checkpoint; this step publishes live weights only"
+                    )
+                self.commit_live_weights(publication, prepared, trainer)
             else:
                 self.commit_saved_artifact(
-                    result, plan.publication, prepared, trainer, component, checkpointed=plan.checkpoint
+                    result, publication, prepared, trainer, component, checkpointed=result.pending or checkpointed
                 )
             return result.state
-
-    def resolve_publication(self, result: TrainStepResult, component: str | None) -> PublicationPlan:
-        """Choose this step's publication once, before staging or activating artifacts.
-
-        A durable weight result provides both checkpoint bytes and a live identity.
-        The scenario's checkpoint policy chooses which one to publish. Held
-        releases always retain bytes; a live release cannot hold other components.
-        """
-        publication = result.publication
-        if isinstance(publication, NoArtifactPublication):
-            return PublicationPlan(publication, checkpoint=False)
-        if isinstance(publication, SavedArtifactPublication) and result.pending:
-            checkpointed = True
-        else:
-            checkpointed = self._should_checkpoint(result)
-        if isinstance(publication, DurableWeightsPublication):
-            if checkpointed:
-                publication = SavedArtifactPublication(
-                    Artifact.local(
-                        Path(publication.checkpoint_path),
-                        metadata={"runtime_load_id": publication.runtime_load_id},
-                    ),
-                    self._binding.surface.loader_component,
-                )
-            else:
-                publication = LiveWeightPublication(publication.runtime_load_id)
-        if isinstance(publication, LiveWeightPublication):
-            if not self._binding.surface.single:
-                raise ReefError(
-                    f"scenario {self._name!r} serves components {list(self._binding.surface.names)}: "
-                    "live weights cannot be published without a checkpoint"
-                )
-            if checkpointed:
-                raise ReefError(
-                    "checkpoint-selected training results must include the artifact returned by execute_training_job"
-                )
-            if result.pending:
-                raise ReefError(
-                    "a pending release requires a durable checkpoint; this step publishes live weights only"
-                )
-            return PublicationPlan(publication, checkpoint=False)
-        if publication.component is None:
-            publication = SavedArtifactPublication(publication.artifact, component)
-        return PublicationPlan(publication, checkpoint=result.pending or checkpointed)
 
     def _should_checkpoint(self, result: TrainStepResult) -> bool:
         return self._checkpoint_strategy.should_checkpoint(self._name, self._step + 1, result)
@@ -736,7 +707,7 @@ class ScenarioCommitter:
             checkpoint=False,
             prepared=prepared,
         )
-        self.finish_committed_step(prepared, record, trainer, heads=CommitHeads(head, artifacts.checkpoint))
+        self.finish_committed_step(prepared, record, trainer, expected=head, expected_checkpoint=artifacts.checkpoint)
 
     def commit_without_artifact(self, prepared: PreparedCommit, trainer: Trainer, component: str | None) -> None:
         # No pending check: a pending step carries durable bytes by construction, so it never lands here.
@@ -749,7 +720,7 @@ class ScenarioCommitter:
             component=component,
         )
         self.finish_committed_step(
-            prepared, record, trainer, heads=CommitHeads(self._artifacts.current, self._artifacts.checkpoint)
+            prepared, record, trainer, expected=self._artifacts.current, expected_checkpoint=self._artifacts.checkpoint
         )
 
     def commit_saved_artifact(
@@ -768,6 +739,8 @@ class ScenarioCommitter:
         head = artifacts.current
         pending = result.pending
         durable = self._store.durable
+        if publication.component is None:
+            publication = SavedArtifactPublication(publication.artifact, component)
         local_artifact = self.stage_publication(next_step, publication, checkpoint)
         try:
             # A pending release is recorded but never activated and moves no head.
@@ -806,28 +779,21 @@ class ScenarioCommitter:
                 )
                 if not pending:
                     self._activate(artifacts.resolve(published_ref), source=local_artifact)
-                record = self._append_commit_record(
-                    step=next_step,
-                    artifact_ref=published_ref,
-                    checkpoint=True,
-                    prepared=prepared,
-                    pending=pending,
-                    component=component,
-                    components=self.recorded_components(local_artifact),
-                )
             else:
+                published_ref = local_artifact.ref
                 if not durable:
                     # Without a durable commit point, reject a changed serving
                     # head before recording the prepared step.
-                    artifacts.advance(local_artifact.ref, expected=head)
-                record = self._append_commit_record(
-                    step=next_step,
-                    artifact_ref=local_artifact.ref,
-                    checkpoint=False,
-                    prepared=prepared,
-                    component=component,
-                    components=self.recorded_components(local_artifact),
-                )
+                    artifacts.advance(published_ref, expected=head)
+            record = self._append_commit_record(
+                step=next_step,
+                artifact_ref=published_ref,
+                checkpoint=checkpointed,
+                prepared=prepared,
+                pending=pending,
+                component=component,
+                components=self.recorded_components(local_artifact),
+            )
         except Exception:
             # A lost append acknowledgment can leave a committed local release.
             # Its bytes must survive so retry can settle that exact record.
@@ -835,7 +801,7 @@ class ScenarioCommitter:
                 artifacts.discard(local_artifact)
             raise
 
-        self.finish_committed_step(prepared, record, trainer, heads=CommitHeads(head, checkpoint))
+        self.finish_committed_step(prepared, record, trainer, expected=head, expected_checkpoint=checkpoint)
 
     def _install_committed_checkpoint(
         self, ref: ArtifactRef, *, expected: ArtifactRef, expected_checkpoint: ArtifactRef
@@ -908,15 +874,18 @@ class ScenarioCommitter:
         self._binding.surface.activate(artifact, self._binding.runtime, source=source, previous=previous)
 
     def finish_committed_step(
-        self, prepared: PreparedCommit, record: CommitRecord, trainer: Trainer, *, heads: CommitHeads
+        self,
+        prepared: PreparedCommit,
+        record: CommitRecord,
+        trainer: Trainer,
+        *,
+        expected: ArtifactRef,
+        expected_checkpoint: ArtifactRef,
     ) -> None:
         """Complete a recorded step before exposing trainer state; callers hold both commit locks.
 
-        Normal commits and retries install the same recorded release. A pending
-        release moves neither head. Repository pointer failures remain visible
-        through ``commit_status`` without repeating an already committed step.
-        Backend settlement and trainer bookkeeping must finish before the scenario
-        step advances, so a failed completion can retry the same record.
+        Install heads and settle the trainer before advancing the scenario step.
+        Failed completion retries the same record; pending releases move no head.
         """
         if not record.pending:
             if self._artifacts.current == record.artifact_ref:
@@ -924,10 +893,10 @@ class ScenarioCommitter:
                     self._refresh_committed_checkpoint()
             elif record.checkpoint:
                 self._install_committed_checkpoint(
-                    record.artifact_ref, expected=heads.serving, expected_checkpoint=heads.checkpoint
+                    record.artifact_ref, expected=expected, expected_checkpoint=expected_checkpoint
                 )
             else:
-                self._artifacts.advance(record.artifact_ref, expected=heads.serving)
+                self._artifacts.advance(record.artifact_ref, expected=expected)
         trainer.commit_applied(prepared.algorithm_state)
         trainer.commit(prepared)
         if not self._store.durable:
@@ -944,7 +913,9 @@ class ScenarioCommitter:
             (prior.artifact_ref for prior in reversed(records[:-1]) if not prior.pending),
             self._releases.creation_artifact,
         )
-        self.finish_committed_step(prepared, record, trainer, heads=CommitHeads(previous, self._artifacts.checkpoint))
+        self.finish_committed_step(
+            prepared, record, trainer, expected=previous, expected_checkpoint=self._artifacts.checkpoint
+        )
         return record
 
     def settle_sibling_record(self, component: str | None) -> None:

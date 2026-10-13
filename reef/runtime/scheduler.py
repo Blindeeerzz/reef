@@ -70,34 +70,6 @@ from reef.runtime.recovery import (
 COMMIT_PENDING_STATES = frozenset({"UPDATING_WEIGHTS", *PUBLISHED_STATES})
 
 
-@dataclass(frozen=True)
-class CommittedTrainingStep:
-    """Scenario commit information used to finish its matching runtime job."""
-
-    step: int
-    training_job_id: str | None
-    without_job_id: bool = False
-
-    def __post_init__(self) -> None:
-        if self.training_job_id is not None and (
-            not isinstance(self.training_job_id, str) or not self.training_job_id
-        ):
-            raise TrainingRuntimeError("committed_training_job_id must be a non-empty string or None")
-        if not isinstance(self.without_job_id, bool):
-            raise TrainingRuntimeError("committed_training_without_job_id must be a boolean")
-
-    def matches(self, job_step: int, job_id: str, *, status: str, acknowledged: bool) -> bool:
-        """Match a durable identity, or the exact next training step of an older bridge.
-
-        A different component can advance the scenario while a job runs. Its
-        higher step alone never confirms this job. Only old COMPLETE markers
-        without an acknowledgement permit the legacy next-step match.
-        """
-        if self.training_job_id is not None:
-            return self.step > job_step and self.training_job_id == job_id
-        return self.without_job_id and status == "COMPLETE" and not acknowledged and self.step == job_step + 1
-
-
 # -- Staleness admission ------------------------------------------------------
 
 
@@ -748,7 +720,12 @@ class RuntimeScheduler:
         committed_training_without_job_id: bool = False,
     ) -> None:
         """Reconcile a backend journal only against the owning scenario commit."""
-        committed = CommittedTrainingStep(scenario_step, committed_training_job_id, committed_training_without_job_id)
+        if committed_training_job_id is not None and (
+            not isinstance(committed_training_job_id, str) or not committed_training_job_id
+        ):
+            raise TrainingRuntimeError("committed_training_job_id must be a non-empty string or None")
+        if not isinstance(committed_training_without_job_id, bool):
+            raise TrainingRuntimeError("committed_training_without_job_id must be a boolean")
         scenario = scenario if self.training_runtime.concurrent_training_scenarios else None
         training_job = self.training_runtime.training_job_status()
         if training_job is None:
@@ -780,12 +757,18 @@ class RuntimeScheduler:
         if status == "UPDATING_WEIGHTS":
             with self.operations.measure("weight_sync"):
                 self.inference_runtime.resume_weight_update(training_job_id)
-        if committed.matches(
-            job_scenario_step,
-            training_job_id,
-            status=status,
-            acknowledged=training_job.get("commit_acknowledged") is True,
-        ):
+        # Other components can advance the scenario; only this job's commit can finish it.
+        if committed_training_job_id is not None:
+            committed = scenario_step > job_scenario_step and committed_training_job_id == training_job_id
+        else:
+            # Older bridges lack job IDs and require an unacknowledged COMPLETE marker at the exact next step.
+            committed = (
+                committed_training_without_job_id
+                and status == "COMPLETE"
+                and training_job.get("commit_acknowledged") is not True
+                and scenario_step == job_scenario_step + 1
+            )
+        if committed:
             self.finish_committed_training_job(training_job_id)
 
     def acknowledge_commit(self, scenario_step: int, training_job_id: str, *, scenario: str | None = None) -> None:
@@ -793,11 +776,9 @@ class RuntimeScheduler:
         self.recover_pending_step(scenario_step, scenario=scenario, committed_training_job_id=training_job_id)
 
     def finish_committed_training_job(self, training_job_id: str) -> None:
-        """Finish both runtime acknowledgements before exposing the published identity and reopening admission.
+        """Acknowledge the matched job before publishing its identity and reopening admission.
 
-        The caller has matched this job to its scenario commit. If either
-        acknowledgement fails, admission stays closed and recovery repeats the
-        same job's completion without training or activating another candidate.
+        If either acknowledgement fails, admission stays closed; retry completes the same job.
         """
         self.inference_runtime.acknowledge_publication(training_job_id)
         self.training_runtime.commit_candidate(training_job_id)
