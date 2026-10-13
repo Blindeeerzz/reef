@@ -1,7 +1,7 @@
 # OpenClaw-RL on reef — next-state binary reward, changes model weights.
 # OpenClawRL Compose owns PRM and user-simulation services independently.
 # Reef assembles driver + HTTP and a local Ray runtime for Slime.
-# The whole method is the cookbook `openclawrl` recipe: its processor
+# The whole method is the cookbook `openclawrl` recipe: its judging stage
 # correlates sessions from the harness's conversation-unique
 # x-reef-tag-session value, with trace matching as a fallback, and judges next
 # states through the independently deployed PRM endpoint. Clients use reef as their inference
