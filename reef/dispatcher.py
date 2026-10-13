@@ -173,11 +173,11 @@ class Dispatcher:
     """
 
     storage_retry_seconds: float = 5.0
-    # Poll interval while a trainer reports background work (see
-    # Trainer.derivation_pending). A judgment can make a batch ready, but no
-    # new record sets the ready event. Thus the worker checks readiness at
-    # this interval, and does not wait for the next accept.
-    derivation_poll_seconds: float = 1.0
+    # Poll interval while a pipeline has background jobs that run (see
+    # TrainingPipeline.background_jobs_running). A finished job, such as a
+    # judgment, can make a batch ready, but no new record sets the ready
+    # event. Thus the thread checks for a batch at this interval.
+    background_job_poll_seconds: float = 1.0
     # One drain, plus one more after reloading the scenario from durable state.
     drain_attempts: int = 2
     # A local result refused this many times in a row, each time because a
@@ -1105,19 +1105,22 @@ class Dispatcher:
     def _training_wait_timeout(self) -> float | None:
         """How long the training thread may sleep before re-checking.
 
-        Blocked checkpoint storage retries on its own cadence. A processor
-        with asynchronous derivation in flight can become ready without a
-        new record ever setting the event, so it is polled on a bounded
-        interval. Otherwise sleep until the next accept.
+        Blocked checkpoint storage retries on its own interval. While a
+        pipeline has background jobs that run, a finished job can make a
+        batch ready without a new record. Thus the thread polls at
+        ``background_job_poll_seconds``. Otherwise it sleeps until the next
+        accepted record.
         """
         timeout: float | None = self.storage_retry_seconds if self._training.storage_status is not None else None
         for name in self._training_scenario_names():
             current = self._registry.get_optional(name)
             if current is not None and any(
-                bound.trainer.pipeline.derivation_pending() for bound in current.component_trainers
+                bound.trainer.pipeline.background_jobs_running() for bound in current.component_trainers
             ):
                 timeout = (
-                    self.derivation_poll_seconds if timeout is None else min(timeout, self.derivation_poll_seconds)
+                    self.background_job_poll_seconds
+                    if timeout is None
+                    else min(timeout, self.background_job_poll_seconds)
                 )
         return timeout
 

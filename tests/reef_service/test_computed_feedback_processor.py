@@ -125,9 +125,10 @@ def _engine(batch_size: int = 1, worker=None) -> tuple[_ToyProcessor, _FakeWorke
 def test_track_complete_judge_batch_acknowledge() -> None:
     processor, worker = _engine()
     processor.ingest(_record("r1", track=True))
-    assert processor.derivation_pending()
+    assert not processor.background_jobs_running()
     processor.ingest(_record("r2", completes="r1", track=True))
     assert [job.receipt for job in worker.jobs] == ["r1"]
+    assert processor.background_jobs_running()
 
     worker.push(_Judgment("r1"))
     assert processor.ready()

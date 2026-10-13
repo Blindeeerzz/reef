@@ -382,15 +382,15 @@ class TrainingPipeline:
         self.consumed_requests -= agent_record_ids
         self.record2record.release_records(agent_record_ids)
 
-    def derivation_pending(self) -> bool:
-        """Whether background work could make the pipeline ready without a new record.
+    def background_jobs_running(self) -> bool:
+        """Return True while a stage has background jobs that run, such as judgments or a round.
 
-        The training worker sleeps until the next accepted record; while a
-        stage has background work (judgments, a running round), it polls on a
-        bounded interval instead. Read on the training thread between drains;
-        it must not block.
+        A finished job can make the pipeline ready without a new record.
+        While this is True, the training thread polls at a fixed interval.
+        Otherwise it sleeps until the next accepted record. The training
+        thread reads this between drains. It must not block.
         """
-        return self.record2record.derivation_pending() or self.record2task.derivation_pending()
+        return self.record2record.background_jobs_running() or self.record2task.background_jobs_running()
 
     def operational_metrics(self) -> Mapping[str, float | int]:
         """Numeric queue state, sampled under the trainer lock without advancing work."""

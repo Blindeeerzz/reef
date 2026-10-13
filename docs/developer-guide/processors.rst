@@ -88,7 +88,7 @@ The trainer calls it on its own thread, under its lock; no call may block:
   for a record stage that paces work on what trained.
 
 The pipeline also merges the three stages' ``status()``, metrics, background
-work (``derivation_pending()``), and ``close()``. ``releasable_record_ids()``
+work (``background_jobs_running()``), and ``close()``. ``releasable_record_ids()``
 returns the completed records that no held set references, and
 ``release_records(ids)`` frees their memory after a successful commit. New
 commits retain the stored bodies; consumption progress prevents retraining

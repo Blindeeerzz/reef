@@ -137,8 +137,8 @@ class Record2Record(ABC, Plugin):
         """Forget released records. Stored records do not change."""
         self.terminal -= agent_record_ids
 
-    def derivation_pending(self) -> bool:
-        """Return True while background work can form sets without a new record."""
+    def background_jobs_running(self) -> bool:
+        """Return True while background jobs run. A finished job can form sets without a new record."""
         return False
 
     def status(self) -> Mapping[str, Any]:
