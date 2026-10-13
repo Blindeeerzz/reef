@@ -2,7 +2,7 @@
 
 Task generation reads a description and, optionally, recorded sessions. Its
 record-to-task stage takes a record set: a ``RoundRequest``. ``RoundStage``
-forms one when the processor looks for a batch (``poll``) and a round is due.
+forms one when the pipeline looks for a batch (``poll``) and a round is due.
 Otherwise it works as a ``ReportStage`` for the reports that the rounds' plays
 produce.
 
@@ -60,7 +60,7 @@ class RoundStage(ReportStage):
     The record-to-task stage starts a round from each request. It returns
     ``READY`` when the round started, and a skip when no round can start (no
     rounds are left, or its worker stopped). After a skip, the stage forms no
-    more requests and holds no more source sessions. The processor reports
+    more requests and holds no more source sessions. The pipeline reports
     each finished round with ``round_finished``.
     """
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from reef.train.processors import DistillProcessor
+from reef.train.processors import DistillBatches
 from reef.train.processors.distill import DistillTasks, normalize_messages_for_template
 from reef.train.types import ProcessorContext
 
@@ -54,10 +54,10 @@ class SDFTTasks(DistillTasks):
         return [*rendered, {"role": "user", "content": block}], tools
 
 
-class SDFTProcessor(DistillProcessor):
+class SDFTBatches(DistillBatches):
     """SDFT's batches: distillation tasks as they come."""
 
     batch_label = "sdft"
 
 
-__all__ = ["CONTEXT_PLACEHOLDER", "DEFAULT_CONTEXT_TEMPLATE", "SDFTProcessor", "SDFTTasks", "context_block_template"]
+__all__ = ["CONTEXT_PLACEHOLDER", "DEFAULT_CONTEXT_TEMPLATE", "SDFTBatches", "SDFTTasks", "context_block_template"]

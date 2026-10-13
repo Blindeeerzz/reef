@@ -8,7 +8,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 from reef_service._trajectories import policy_trajectory
 
-from recipes.tttd import TTTDGroupedRolloutReport, TTTDProcessor
+from recipes.tttd import TTTDBatches, TTTDGroupedRolloutReport
 from recipes.tttd.objective import TttdObjective
 from recipes.tttd.processor import TTTDTasks
 from recipes.tttd.recipe import tttd_record_stage
@@ -18,6 +18,7 @@ from reef.core.reports import ReportValidationError
 from reef.core.trajectories import trajectory_reward
 from reef.train import ProcessorContext
 from reef.train.algos import StepScheduling
+from reef.train.pipeline import TrainingPipeline
 from reef.train.slime_backend.loss_families import resolve_loss_family
 from reef.train.slime_backend.reef_adapters.preparation import prepare_slime_step
 from reef.train.types import TrajectoryItem, trajectory_groups
@@ -78,7 +79,7 @@ def _report(step: int, group: int, rollout: int, score: float) -> AgentRecord:
     )
 
 
-def _processor(experiment_logger=None) -> TTTDProcessor:
+def _processor(experiment_logger=None) -> TrainingPipeline:
     context = ProcessorContext(
         "discovery",
         {
@@ -88,7 +89,12 @@ def _processor(experiment_logger=None) -> TTTDProcessor:
         report_type=TTTDGroupedRolloutReport,
         experiment_logger=experiment_logger or _ExperimentLogger(),
     )
-    return TTTDProcessor(context, record_stage=tttd_record_stage(context), record2task=TTTDTasks(context))
+    return TrainingPipeline(
+        context,
+        record_stage=tttd_record_stage(context),
+        record2task=TTTDTasks(context),
+        task2batch=TTTDBatches(context),
+    )
 
 
 @pytest.mark.unit
@@ -278,7 +284,7 @@ def test_tttd_refuses_reports_before_their_inferences() -> None:
 def test_tttd_invalid_single_report_does_not_wait_for_missing_inference() -> None:
     processor = _processor()
     with pytest.raises(ReportValidationError):
-        processor.ingest(_report(0, processor.groups_per_step, 0, 1.0))
+        processor.ingest(_report(0, processor.record2task.groups_per_step, 0, 1.0))
     assert not processor.ready()
 
 

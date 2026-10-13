@@ -9,9 +9,9 @@ import pytest
 from reef_service._trajectories import policy_trajectory
 from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
-from recipes.openclawrl import OpenClawRLProcessor, OpenClawRLRecipe
-from recipes.sao import SAOProcessor, SAORecipe
-from recipes.tttd import TTTDGroupedRolloutReport, TTTDProcessor, TTTDRecipe
+from recipes.openclawrl import OpenClawRLBatches, OpenClawRLRecipe
+from recipes.sao import SAOBatches, SAORecipe
+from recipes.tttd import TTTDBatches, TTTDGroupedRolloutReport, TTTDRecipe
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ScoredRolloutReport
 from reef.inference.http import InferenceProxyRuntime
@@ -19,10 +19,11 @@ from reef.recipe import Recipe, RecipeConfigError, WeightTrainingRecipe, WeightT
 from reef.recipe.checkpoint_strategy import EveryNVersions
 from reef.recipe.registry import build_named_recipe, build_recipe, recipe_class_for
 from reef.storage.sqlite import SQLiteRecordStore
-from reef.train.processors.base import DataProcessor
+from reef.train.pipeline import TrainingPipeline
+from reef.train.processors.base import NoBatches
 from reef.train.runtime_backend import RuntimeCandidateBackend
 
-from ._threshold_processor import ThresholdProcessor
+from ._threshold_processor import ThresholdBatches
 
 
 @pytest.mark.unit
@@ -77,40 +78,41 @@ def test_dotted_recipe_rejects_bad_references(reference: str, match: str) -> Non
 
 
 @pytest.mark.parametrize(
-    ("recipe", "name", "processor_type", "objective", "report_type"),
+    ("recipe", "name", "task2batch_type", "objective", "report_type"),
     [
-        (Recipe(), "recipe", DataProcessor, None, None),
+        (Recipe(), "recipe", NoBatches, None, None),
         (
             OpenClawRLRecipe(**runtime_bindings(StubTrainingRuntime()), batch_size=3),
             "openclawrl",
-            OpenClawRLProcessor,
+            OpenClawRLBatches,
             "openclawrl",
             None,
         ),
         (
             SAORecipe(**runtime_bindings(StubTrainingRuntime()), batch_size=1),
             "sao",
-            SAOProcessor,
+            SAOBatches,
             "sao",
             ScoredRolloutReport,
         ),
         (
             TTTDRecipe(**runtime_bindings(StubTrainingRuntime()), groups_per_step=2, rollouts_per_group=3),
             "tttd",
-            TTTDProcessor,
+            TTTDBatches,
             "tttd",
             TTTDGroupedRolloutReport,
         ),
     ],
 )
 def test_concrete_recipe_builds_its_processor_objective_and_report_type(
-    recipe, name, processor_type, objective, report_type
+    recipe, name, task2batch_type, objective, report_type
 ) -> None:
     trainer = recipe.build("math", SQLiteRecordStore())
 
     assert recipe.name == name
     assert recipe.report_type is report_type
-    assert isinstance(trainer.processor, processor_type)
+    assert type(trainer.pipeline) is TrainingPipeline
+    assert isinstance(trainer.pipeline.task2batch, task2batch_type)
     if objective is None:
         assert trainer.candidate_backend is None
     else:
@@ -131,7 +133,7 @@ def test_build_rejects_an_unknown_objective_before_any_training_step() -> None:
 
         @classmethod
         def training_spec(cls) -> WeightTrainingSpec:
-            return WeightTrainingSpec(objective="online_grpo", processor=ThresholdProcessor)
+            return WeightTrainingSpec(objective="online_grpo", task2batch=ThresholdBatches)
 
     with pytest.raises(ValueError, match=r"unknown objective 'online_grpo'.*available objectives"):
         StaleObjectiveRecipe(**runtime_bindings(StubTrainingRuntime())).build("math", SQLiteRecordStore())
@@ -202,11 +204,11 @@ def _turn_inference(agent_record_id: str, tokens: list[int], log_prob: float) ->
 def test_cookbook_recipes_reject_multi_turn_policy_samples(recipe, metadata) -> None:
     # Unsupported multi-turn training fails explicitly and preserves its inputs.
     trainer = recipe.build("math", SQLiteRecordStore())
-    processor = trainer.processor
-    processor.ingest(_turn_inference("i1", [10, 20], -0.1))
-    processor.ingest(_turn_inference("i2", [10, 20, 11, 21], -0.2))
+    pipeline = trainer.pipeline
+    pipeline.ingest(_turn_inference("i1", [10, 20], -0.1))
+    pipeline.ingest(_turn_inference("i2", [10, 20, 11, 21], -0.2))
     with pytest.raises(ValueError, match="accept_multi_turn"):
-        processor.ingest(
+        pipeline.ingest(
             AgentRecord.create(
                 scenario="math",
                 request_type=RequestType.REPORT,
@@ -216,16 +218,16 @@ def test_cookbook_recipes_reject_multi_turn_policy_samples(recipe, metadata) -> 
             )
         )
 
-    assert not processor.ready()
-    assert "r1" not in processor.releasable_record_ids()
+    assert not pipeline.ready()
+    assert "r1" not in pipeline.releasable_record_ids()
 
 
 def test_openclawrl_recipe_never_trains_on_reports() -> None:
-    # The judging half lives inside the processor now: a report is consumed
+    # The judging half lives inside the pipeline's record stage: a report is consumed
     # held for retention only — terminal on sight, releasable, never a candidate.
     trainer = OpenClawRLRecipe(**runtime_bindings(StubTrainingRuntime())).build("math", SQLiteRecordStore())
-    processor = trainer.processor
-    processor.ingest(
+    pipeline = trainer.pipeline
+    pipeline.ingest(
         AgentRecord.create(
             scenario="math",
             request_type=RequestType.REPORT,
@@ -234,8 +236,8 @@ def test_openclawrl_recipe_never_trains_on_reports() -> None:
             references=("i1",),
         )
     )
-    assert not processor.ready()
-    decision = processor.releasable_record_ids()
+    assert not pipeline.ready()
+    decision = pipeline.releasable_record_ids()
     assert "r1" in decision
     assert "r1" in decision
     trainer.close()
@@ -396,7 +398,7 @@ def test_cookbook_objectives_signal_their_recipes_loss_family() -> None:
     checked = set()
     for recipe_type in (OpenClawRLRecipe, SAORecipe, TTTDRecipe):
         spec = recipe_type.training_spec()
-        assert spec.processor is not None
+        assert spec.task2batch is not None
         if recipe_type is TTTDRecipe:
             batch = TrainingBatch(
                 "b",

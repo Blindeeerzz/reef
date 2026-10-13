@@ -35,7 +35,7 @@ class StalenessCheck(EligibilityCheck):
 
     The reference version is the ``runtime_load_id`` of the set whose source
     record arrived last (``source_index``, or ``arrival_index`` when it is
-    None). The processor does not see the serving version, so the check
+    None). The pipeline does not see the serving version, so the check
     measures the lag against this reference. A set stays when it has the
     same incarnation as the reference and is 0 to ``max_staleness`` versions
     behind it. With ``max_staleness`` 0, only sets of the reference version

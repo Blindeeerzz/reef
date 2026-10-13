@@ -7,8 +7,9 @@ Reef reuses records in a pipeline of three stages::
 ``reef.record2record`` decides which records Reef uses and forms record sets.
 This package turns each set into tasks. A task is a ``TrainDataItem``: a
 ``TrajectoryItem`` that trains directly, or a ``TaskItem`` that the algorithm
-rolls out. The processor (task-to-batch, ``reef.train.processors``) shapes the
-tasks into batches.
+rolls out. A recipe's ``Task2Batch`` (``reef.train.processors``) shapes the
+tasks into batches, and ``reef.train.pipeline.TrainingPipeline`` drives the
+three stages.
 
 Entry point: ``Record2Task`` in ``stage.py``. The recipe builds one in
 ``build_record2task(context)``.

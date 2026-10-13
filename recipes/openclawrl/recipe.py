@@ -6,12 +6,12 @@ import logging
 from dataclasses import dataclass
 
 from recipes.openclawrl.judging import openclawrl_record_stage
-from recipes.openclawrl.processor import OpenClawRLProcessor, OpenClawRLTasks
+from recipes.openclawrl.processor import OpenClawRLBatches, OpenClawRLTasks
 from recipes.openclawrl.sessions import DEFAULT_MAX_SESSIONS
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
-from reef.record2record import JudgingStage
 from reef.train.algos import StepScheduling
+from reef.train.pipeline import TrainingPipeline
 from reef.train.types import ProcessorContext
 
 _logger = logging.getLogger(__name__)
@@ -68,16 +68,21 @@ class OpenClawRLRecipe(WeightTrainingRecipe):
         # (recipes/openclawrl/slime), not the plain pg surrogate.
         return WeightTrainingSpec(
             objective="openclawrl",
-            processor=OpenClawRLProcessor,
+            task2batch=OpenClawRLBatches,
             # Each turn-sample is its own rollout; the backend's configured step size applies.
             scheduling=StepScheduling(unit="sample"),
         )
 
-    def build_record_stage(self, context: ProcessorContext) -> JudgingStage:
-        return openclawrl_record_stage(context)
-
-    def build_record2task(self, context: ProcessorContext) -> OpenClawRLTasks:
-        return OpenClawRLTasks()
+    def build_pipeline(self, context: ProcessorContext) -> TrainingPipeline:
+        # The batches write what the stage's judging saw, so both share one judging.
+        configured = context.with_config(self.pipeline_config())
+        record_stage = openclawrl_record_stage(configured)
+        return TrainingPipeline(
+            configured,
+            record_stage=record_stage,
+            record2task=OpenClawRLTasks(),
+            task2batch=OpenClawRLBatches(configured, record_stage.judging),
+        )
 
     def __post_init__(self) -> None:
         super().__post_init__()

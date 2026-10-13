@@ -1,162 +1,28 @@
-"""Reported feedback: reports and their inference records, as tasks and batches.
+"""Reported feedback: assemble a report and its inference records into a policy sample.
 
-The record-to-record stage (:class:`~reef.record2record.ReportStage`) reads
-reports in append order. It validates them, places them in groups, and decides
-which singleton reports and ready groups train. ``ReportTasks`` turns each
-report into a task (record-to-task), and ``ReportedFeedbackProcessor`` turns
-each reserved selection of sets into a batch (task-to-batch).
+The record-to-record stage (:class:`~reef.record2record.ReportStage`) forms a
+set for each valid report that trains, and a recipe's
+:class:`~reef.record2task.ReportTasks` turns it into a task. ``SampleAssembly``
+is the shared assembly that those recipes use in ``make_sample``.
 """
 
 from __future__ import annotations
 
 import logging
-from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from reef.core.records_types import AgentRecord, RequestType
-from reef.record2record import (
-    GroupDecision,
-    Record2RecordStage,
-    ReportContext,
-    ReportGrouping,
-    ReportStage,
-    accepted_by,
-    report_sets,
-)
-from reef.record2task import Record2Task
-from reef.train.processors.base import DataProcessor
+from reef.core.records_types import AgentRecord
+from reef.record2record import ReportContext
 from reef.train.processors.common import (
     make_multi_turn_policy_trajectory,
     make_policy_trajectory,
     sample_assembly_config_fields,
 )
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
+from reef.train.types import ProcessorContext, TrajectoryItem
 
 logger = logging.getLogger(__name__)
-
-__all__ = [
-    "GroupDecision",
-    "ReportContext",
-    "ReportGrouping",
-    "ReportedFeedbackProcessor",
-    "SampleAssembly",
-    "accepted_by",
-]
-
-#: Report policy that moved from the processor to the recipe's ``ReportStage``. A subclass that still
-#: defines one fails at import, because it would otherwise train with the default policy without an error.
-MOVED_REPORT_HOOKS = ("grouping", "decide_group", "is_training_report", "exclusive_sources", "ordered_groups")
-
-
-class ReportedFeedbackProcessor(DataProcessor, ABC):
-    """Shape the tasks of valid reports into batches.
-
-    Recipes implement ``make_batch``. The recipe's
-    :class:`~reef.record2record.ReportStage`, passed as ``record_stage``,
-    owns the report policy (its ``ReportGrouping``), deduplication, group
-    slots, selection, consumption, and record release. Without one, every
-    report trains by itself. The recipe's ``ReportTasks``, passed as
-    ``record2task``, makes the tasks. Invalid references raise immediately;
-    training data failures propagate instead of silently dropping reports.
-    """
-
-    required_request_types = frozenset({RequestType.INFERENCE, RequestType.REPORT})
-
-    #: The batch type ``make_batch`` returns; the trainer validates it.
-    output_schema: type[TrainingBatch] = TrainingBatch
-    #: Units held in manual mode beyond this many batches are released, oldest first.
-    manual_unit_cap_batches: int = 4
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-        moved = [name for name in MOVED_REPORT_HOOKS if name in vars(cls)]
-        if moved:
-            raise TypeError(
-                f"{cls.__name__} defines {', '.join(moved)}: the report policy moved to the recipe. "
-                "Build a reef.record2record.ReportStage with a ReportGrouping (is_training_report, "
-                "placement, decide) and exclusive_sources/ordered_groups in the recipe's "
-                "build_record_stage(), and pass it to the processor as record_stage."
-            )
-
-    def __init__(
-        self,
-        context: ProcessorContext,
-        *,
-        record_stage: Record2RecordStage | None = None,
-        record2task: Record2Task | None = None,
-    ) -> None:
-        super().__init__(context, record_stage=record_stage, record2task=record2task)
-        if not isinstance(self.record_stage, ReportStage):
-            raise TypeError(f"{type(self).__name__} needs a ReportStage, not {type(self.record_stage).__name__}")
-        # The sample-assembly settings belong to every reported-feedback processor's config
-        # surface: validate them here so a bad deployment fails at construction
-        # even for recipes that never assemble a policy sample.
-        sample_assembly_config_fields(context.config)
-        self.record_stage.limit_available(self.available_set_limit())
-
-    def default_record_stage(self) -> ReportStage:
-        return ReportStage(self.scenario, self.context.report_type, ReportGrouping())
-
-    def default_record2task(self) -> Record2Task:
-        raise TypeError(f"{type(self).__name__} needs the recipe's ReportTasks as record2task")
-
-    @property
-    def report_stage(self) -> ReportStage:
-        stage = self.record_stage
-        if not isinstance(stage, ReportStage):
-            raise TypeError(f"{type(self).__name__} needs a ReportStage, not {type(stage).__name__}")
-        return stage
-
-    # ------------------------------------------------------- the recipe hooks
-
-    @abstractmethod
-    def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
-        """Build a batch from selected items, in group and arrival order.
-
-        The processor tracks consumption independently, including any selected
-        items the recipe omits from the resulting batch.
-        """
-
-    def set_training_mode(self, training_mode: str) -> None:
-        super().set_training_mode(training_mode)
-        self.record_stage.limit_available(self.available_set_limit())
-        self.forget_sets(self.record_stage.take_ended())
-
-    def available_set_limit(self) -> int | None:
-        """Manual mode batches on instructions, not sets, so the held sets are bounded instead."""
-        return self._batch_size * self.manual_unit_cap_batches if self.training_mode == "manual" else None
-
-    # ----------------------------------------------------------- batch cycle
-    #
-    # A unit is one accepted singleton report or one ready group; the
-    # engine's half of the shared cycle in base.py is the three methods below.
-
-    def _ready_count(self) -> int:
-        return self.record_stage.available_count()
-
-    def _make_pending(self, batch_number: int) -> TrainingBatch:
-        report_sets_reserved = report_sets(self.record_stage.reserve(self._batch_size))
-        items = tuple(
-            task
-            for report_set in report_sets_reserved
-            for entry in report_set.entries
-            for task in self.tasks[entry.report_id]
-        )
-        return self.make_batch(items, batch_number)
-
-    def reserved_report_ids(self) -> set[str]:
-        """Return the IDs of the reports in the reserved batch."""
-        return self.report_stage.reserved_report_ids()
-
-    def _consume_pending(self) -> frozenset[str]:
-        consumed = self.record_stage.consume_reservation()
-        self.forget_sets(self.record_stage.take_ended())
-        return consumed
-
-
-# --------------------------------------------------------- shared helpers
 
 
 def reported_task(metadata: object) -> dict[str, Any] | None:

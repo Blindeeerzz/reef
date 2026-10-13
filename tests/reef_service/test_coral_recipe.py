@@ -22,9 +22,9 @@ def _recipe_cls():
 def test_training_spec_binds_processor_and_grouped_machinery():
     recipe_cls = _recipe_cls()
     spec = recipe_cls.training_spec()
-    from recipes.beta.coral.processor import CoralProcessor
+    from recipes.beta.coral.processor import CoralBatches
 
-    assert spec.processor is CoralProcessor
+    assert spec.task2batch is CoralBatches
     assert spec.objective == "tttd"
     assert spec.loss_family == "tttd"
 

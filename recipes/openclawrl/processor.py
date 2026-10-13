@@ -1,11 +1,9 @@
-"""The OpenClaw-RL processor: one judged turn, one sample.
+"""The OpenClaw-RL record-to-task and task-to-batch stages: one judged turn, one sample.
 
-A computed-feedback recipe on the shared engine
-(:class:`~reef.train.processors.computed.ComputedFeedbackProcessor`). The
-correlation and the judge are :class:`~recipes.openclawrl.judging.OpenClawRLJudging`,
-which runs in the record-to-record stage. This file validates the tensors
-(``make_sample``), shapes the batch (``make_batch``), and writes the PRM
-record file. Rewards pass through raw (upstream ``--n-samples-per-prompt 1``;
+A computed-feedback recipe. The correlation and the judge are
+:class:`~recipes.openclawrl.judging.OpenClawRLJudging`, which runs in the
+record-to-record stage. This file validates the tensors (``make_sample``),
+shapes the batch (``make_batch``), and writes the PRM record file. Rewards pass through raw (upstream ``--n-samples-per-prompt 1``;
 no grouping, no normalization).
 """
 
@@ -19,13 +17,13 @@ from dataclasses import asdict, replace
 
 from recipes.openclawrl.judging import OpenClawRLJudging
 from recipes.openclawrl.turns import TurnJudgment, validate_teacher_cands
-from reef.core.records_types import AgentRecord, RequestType
+from reef.core.records_types import AgentRecord
 from reef.core.trajectories import source_record_id, trajectory_reward
-from reef.record2record import JudgingStage
+from reef.record2record import RecordJudging
 from reef.record2task import JudgedTasks
+from reef.train.processors.base import Task2Batch
 from reef.train.processors.common import make_policy_trajectory
-from reef.train.processors.computed import ComputedFeedbackProcessor
-from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem, policy_row_violation
+from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, policy_row_violation
 
 logger = logging.getLogger(__name__)
 
@@ -71,31 +69,25 @@ class OpenClawRLTasks(JudgedTasks):
         return sample.with_training(extras={**sample.training.get("extras", {}), "teacher_cands": list(validated)})
 
 
-class OpenClawRLProcessor(ComputedFeedbackProcessor):
-    """Judged turns into batches, and the PRM record file."""
+class OpenClawRLBatches(Task2Batch):
+    """Judged turns into batches, and the PRM record file. ``judging`` is the record stage's judging."""
 
-    output_schema = TrainingBatch
-    required_request_types = frozenset({RequestType.INFERENCE, RequestType.REPORT})
-
-    def __init__(self, context: ProcessorContext, *, record_stage: JudgingStage, record2task: JudgedTasks) -> None:
+    def __init__(self, context: ProcessorContext, judging: RecordJudging) -> None:
         # What the judge actually saw goes to the PRM record file, one line
         # per batch. Upstream persists this per turn; without it a batch mean
         # is the only visible number. A file, not a log line: reef configures
         # no logging, so anything below WARNING is discarded.
         record_file = str(context.config.get("prm_record_file", "") or "").strip()
         self._record_path = pathlib.Path(record_file) if record_file else None
-        super().__init__(context, record_stage=record_stage, record2task=record2task)
-        if not isinstance(self.judging, OpenClawRLJudging):
-            raise TypeError("OpenClawRLProcessor needs a stage with OpenClawRLJudging")
-
-    @property
-    def openclawrl_judging(self) -> OpenClawRLJudging:
-        judging = self.judging
+        super().__init__(context)
         if not isinstance(judging, OpenClawRLJudging):
-            raise TypeError("OpenClawRLProcessor needs OpenClawRLJudging")
-        return judging
+            raise TypeError(f"OpenClawRLBatches needs OpenClawRLJudging, not {type(judging).__name__}")
+        self.openclawrl_judging = judging
 
-    def make_batch(self, samples: tuple[TrajectoryItem, ...], batch_number: int) -> TrainingBatch:
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+        samples = tuple(task for task in tasks if isinstance(task, TrajectoryItem))
+        if len(samples) != len(tasks):
+            raise TypeError("OpenClaw-RL tasks must be trajectories")
         self._record_batch(samples, batch_number)
         return TrainingBatch(
             f"{self.scenario}:openclawrl:{batch_number}",

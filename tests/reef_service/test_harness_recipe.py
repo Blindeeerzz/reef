@@ -1382,7 +1382,7 @@ def test_backend_rejects_invalid_gate_knobs(tmp_path: Path) -> None:
 
 
 def test_recipe_selects_the_record_driven_processor(tmp_path: Path, monkeypatch) -> None:
-    """data.batch_policy records swaps the processor; the default stays the
+    """data.batch_policy records swaps the pipeline's stages; the default stays the
     reported window."""
     module = tmp_path / "demo_batch_policy.py"
     module.write_text(
@@ -1411,14 +1411,18 @@ def test_recipe_selects_the_record_driven_processor(tmp_path: Path, monkeypatch)
     )
     assert records.batch_policy == "records"
     trainer = records.build("demo", SQLiteRecordStore())
-    assert type(trainer.processor).__name__ == "RecordDrivenTraceProcessor"
+    assert type(trainer.pipeline.record_stage).__name__ == "InferenceStage"
+    assert type(trainer.pipeline.record2task).__name__ == "InferenceTasks"
+    assert type(trainer.pipeline.task2batch).__name__ == "TraceBatches"
 
     reported = CordisRecipe.from_environment(
         {}, config=config(None), runtime=InferenceProxyRuntime(model_path="m", base_url="http://localhost:8000")
     )
     assert reported.batch_policy == "reports"
     trainer = reported.build("demo", SQLiteRecordStore())
-    assert type(trainer.processor).__name__ == "CordisProcessor"
+    assert type(trainer.pipeline.record_stage).__name__ == "ReportStage"
+    assert type(trainer.pipeline.record2task).__name__ == "TraceTasks"
+    assert type(trainer.pipeline.task2batch).__name__ == "TraceBatches"
 
     with pytest.raises(RecipeConfigError, match="batch_policy must be 'reports' or 'records'"):
         CordisRecipe.from_environment({}, config=config("sometimes"))

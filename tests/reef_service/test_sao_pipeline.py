@@ -16,7 +16,7 @@ from reef_service._trajectories import policy_trajectory
 from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
 from recipes.sao import SAORecipe
-from recipes.sao.processor import SAOProcessor, SAOTasks
+from recipes.sao.processor import SAOBatches, SAOTasks
 from recipes.sao.recipe import sao_record_stage
 from reef.artifact import InMemoryRepositoryBackend
 from reef.artifact.artifact import LiveWeightArtifactRef
@@ -31,13 +31,16 @@ from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
 from reef.train import ProcessorContext, Trainer
 from reef.train.algos import StepScheduling
 from reef.train.backend import CandidateBackend, PreparedStep
+from reef.train.pipeline import TrainingPipeline
 from reef.train.slime_backend.data_builder import to_slime_rollout_data
 from reef.train.slime_backend.reef_adapters.preparation import prepare_slime_step
 from reef.train.types import TrainingBatch
 
 
-def sao_processor(context: ProcessorContext) -> SAOProcessor:
-    return SAOProcessor(context, record_stage=sao_record_stage(context), record2task=SAOTasks(context))
+def sao_processor(context: ProcessorContext) -> TrainingPipeline:
+    return TrainingPipeline(
+        context, record_stage=sao_record_stage(context), record2task=SAOTasks(context), task2batch=SAOBatches(context)
+    )
 
 
 class _StateOnlySaoBackend(CandidateBackend):
@@ -634,7 +637,7 @@ def test_sao_train_step_recovers_across_a_restart(tmp_path) -> None:
         first = Trainer.build(
             "math",
             first_store,
-            processor_factory=lambda context: sao_processor(context.with_config({"batch_size": 1})),
+            pipeline_factory=lambda context: sao_processor(context.with_config({"batch_size": 1})),
             candidate_backend=_StateOnlySaoBackend(),
         )
         batch = first.reserve_training_batch()
@@ -649,7 +652,7 @@ def test_sao_train_step_recovers_across_a_restart(tmp_path) -> None:
         second = Trainer.build(
             "math",
             second_store,
-            processor_factory=lambda context: sao_processor(context.with_config({"batch_size": 1})),
+            pipeline_factory=lambda context: sao_processor(context.with_config({"batch_size": 1})),
             candidate_backend=_StateOnlySaoBackend(),
             algorithm_state=prepared.algorithm_state,
         )

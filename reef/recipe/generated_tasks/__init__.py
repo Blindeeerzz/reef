@@ -7,7 +7,7 @@ generator's method:
 - ``processor``: ``GeneratedTaskTasks``, the record-to-task stage that runs the
   rounds (generate, validate, play through the generator service, send the
   results back) and turns the training arm's episodes into tasks; and
-  ``GeneratedTaskProcessor``, which batches complete task groups.
+  ``GeneratedTaskBatches``, which batches complete task groups.
 - ``objective``: group relative advantages per task group on Tinker's
   importance sampling loss.
 - ``recipe``: the configuration that binds them.
@@ -16,11 +16,11 @@ The recipe plays tasks through the generator service (``reef.record2task.generat
 """
 
 from reef.recipe.generated_tasks.objective import TaskGroupObjective
-from reef.recipe.generated_tasks.processor import GeneratedTaskProcessor, GeneratedTaskTasks
+from reef.recipe.generated_tasks.processor import GeneratedTaskBatches, GeneratedTaskTasks
 from reef.recipe.generated_tasks.recipe import GeneratedTaskRecipe, TaskGenerationConfig
 
 __all__ = [
-    "GeneratedTaskProcessor",
+    "GeneratedTaskBatches",
     "GeneratedTaskRecipe",
     "GeneratedTaskTasks",
     "TaskGenerationConfig",

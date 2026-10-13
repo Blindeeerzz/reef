@@ -1,6 +1,6 @@
-"""CordisProcessor: the failed-trace batching half of harness evolution.
+"""The trace pipeline: the failed-trace batching half of harness evolution.
 
-The processor pairs reports with their inference records and batches the
+The pipeline pairs reports with their inference records and batches the
 traces whose scores fall inside the configured window; the evolution backend
 (``CordisBackend``) consumes the batch. Exercised directly rather
 than through any Recipe wrapper.
@@ -13,7 +13,8 @@ import pytest
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportValidationError
 from reef.core.trajectories import recorded_payload, recorded_payloads, source_record_id
-from reef.train.cordis_backend.processor import CordisProcessor, RecordDrivenTraceProcessor
+from reef.train.cordis_backend.processor import TraceBatches, TraceTasks, trace_pipeline
+from reef.train.pipeline import TrainingPipeline
 from reef.train.types import ProcessorContext, TrainingBatch
 
 
@@ -38,8 +39,8 @@ def _report(agent_record_id: str, score: object, references: list[str], feedback
     )
 
 
-def _processor(config: dict | None = None) -> CordisProcessor:
-    return CordisProcessor(ProcessorContext("s", config or {}))
+def _processor(config: dict | None = None) -> TrainingPipeline:
+    return trace_pipeline(ProcessorContext("s", config or {}), "reports")
 
 
 def test_trace_processor_batches_a_failed_trace() -> None:
@@ -125,22 +126,14 @@ def test_trace_processor_rejects_a_report_without_references() -> None:
 
 
 def test_trace_processor_has_no_judge_hook() -> None:
-    assert not hasattr(CordisProcessor, "judge")
-
-
-def test_trace_processor_validates_assembly_config_fields_at_construction() -> None:
-    # The trace-batch spec never assembles a policy sample, but the assembly
-    # settings are part of every reported-feedback processor's config surface: a bad value
-    # fails at construction instead of passing silently.
-    with pytest.raises(ValueError, match="realign_threshold"):
-        _processor({"realign_threshold": -1})
-    with pytest.raises(ValueError, match="accept_multi_turn_policy_samples"):
-        _processor({"accept_multi_turn_policy_samples": "yes"})
+    for stage in (TrainingPipeline, TraceTasks, TraceBatches):
+        assert not hasattr(stage, "judge")
 
 
 def test_trace_processor_has_no_training_preparation_hook() -> None:
-    assert not hasattr(CordisProcessor, "prepare_training_step")
-    assert not hasattr(CordisProcessor, "prepare")
+    for stage in (TrainingPipeline, TraceTasks, TraceBatches):
+        assert not hasattr(stage, "prepare_training_step")
+        assert not hasattr(stage, "prepare")
 
 
 def test_trace_processor_refuses_a_non_finite_score() -> None:
@@ -152,8 +145,8 @@ def test_trace_processor_refuses_a_non_finite_score() -> None:
         assert not processor.ready()
 
 
-def _record_processor(batch_size: int = 2) -> RecordDrivenTraceProcessor:
-    return RecordDrivenTraceProcessor(ProcessorContext("s", {"batch_size": batch_size}))
+def _record_processor(batch_size: int = 2) -> TrainingPipeline:
+    return trace_pipeline(ProcessorContext("s", {"batch_size": batch_size}), "records")
 
 
 def test_record_driven_processor_batches_every_n_inferences_unscored() -> None:

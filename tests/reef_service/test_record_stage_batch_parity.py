@@ -24,32 +24,33 @@ from typing import Any
 import pytest
 from reef_service._trajectories import policy_trajectory
 
-from recipes.beta.coral.processor import CoralProcessor, CoralTasks
+from recipes.beta.coral.processor import CoralBatches, CoralTasks
 from recipes.beta.coral.recipe import coral_record_stage
-from recipes.sdpo import SDPOProcessor, SDPOReport
+from recipes.sdpo import SDPOBatches, SDPOReport
 from recipes.sdpo.processor import SDPOTasks
 from recipes.sdpo.recipe import sdpo_record_stage
-from recipes.tttd import TTTDGroupedRolloutReport, TTTDProcessor
+from recipes.tttd import TTTDBatches, TTTDGroupedRolloutReport
 from recipes.tttd.processor import TTTDTasks
 from recipes.tttd.recipe import tttd_record_stage
 from reef.artifact import ArtifactRef
+from reef.background_jobs import SupportsReceipt
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportBase, TeacherContextReport
-from reef.recipe.generated_tasks.processor import GeneratedTaskProcessor, GeneratedTaskTasks
+from reef.recipe.generated_tasks.processor import GeneratedTaskBatches, GeneratedTaskTasks
 from reef.recipe.generated_tasks.recipe import task_group_record_stage
 from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
 from reef.record2task import JudgedTasks, ReportTasks
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.train import ProcessorContext, Trainer
 from reef.train.backend import CandidateBackend, PreparedStep
-from reef.train.cordis_backend.processor import CordisProcessor
-from reef.train.processors import DataProcessor, DistillProcessor
-from reef.train.processors.computed import ComputedFeedbackProcessor, SupportsReceipt
+from reef.train.cordis_backend.processor import TraceBatches, TraceTasks
+from reef.train.pipeline import TrainingPipeline
+from reef.train.processors import DistillBatches, Task2Batch
 from reef.train.processors.distill import DistillTasks, distill_record_stage
-from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
+from reef.train.processors.reported import SampleAssembly
 from reef.train.types import TaskItem, TrainDataItem, TrainingBatch, TrajectoryItem
 
-from ._threshold_processor import ThresholdProcessor
+from ._threshold_processor import ThresholdBatches, ThresholdTasks
 from .test_sdpo_pipeline import SDPOTokenizer
 
 GOLDENS_PATH = Path(__file__).parent / "data" / "record_stage_batch_goldens.json"
@@ -117,7 +118,7 @@ def describe_item(item: TrainDataItem) -> dict[str, object]:
 class StreamRun:
     """One stream's trainer, its record store, and what its commits recorded."""
 
-    processor_class: type[DataProcessor]
+    pipeline_class: type[TrainingPipeline]
     config: Mapping[str, object]
     report_type: type[ReportBase] | None = None
     training_mode: str = "auto"
@@ -131,7 +132,7 @@ class StreamRun:
         return Trainer.build(
             "s",
             self.records,
-            processor_factory=lambda context: self.processor_class(context.with_config(self.config)),
+            pipeline_factory=lambda context: self.pipeline_class(context.with_config(self.config)),
             candidate_backend=CountingBackend(),
             report_type=self.report_type,
             training_mode=self.training_mode,
@@ -234,7 +235,7 @@ def scored(prefix: str, index: int, score: float = 1.0, **metadata: object) -> l
     ]
 
 
-# ------------------------------------------------------------- in-file processors
+# ------------------------------------------------------------- in-file pipelines
 
 
 class SlotGrouping(ReportGrouping):
@@ -267,57 +268,113 @@ class AssembledTasks(ReportTasks):
         return self.assembly.build(context, context.require_score())
 
 
-class SlotGroupProcessor(ReportedFeedbackProcessor):
+class SlotBatches(Task2Batch):
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+        return TrainingBatch(f"{self.scenario}:slots:{batch_number}", tasks)
+
+
+# Each recipe builds its three stages. These pipelines build the same stages, as the recipe would.
+
+
+class ThresholdPipeline(TrainingPipeline):
+    """Every report by itself."""
+
+    def __init__(self, context: ProcessorContext) -> None:
+        super().__init__(
+            context,
+            record_stage=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+            record2task=ThresholdTasks(context),
+            task2batch=ThresholdBatches(context),
+        )
+
+
+class SlotGroupPipeline(TrainingPipeline):
     """Trains the groups of ``SlotGrouping``."""
 
     def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context, record_stage=self.slot_stage(context), record2task=AssembledTasks(context))
+        super().__init__(
+            context,
+            record_stage=ReportStage(context.scenario, context.report_type, SlotGrouping(), exclusive_sources=True),
+            record2task=AssembledTasks(context),
+            task2batch=SlotBatches(context),
+        )
 
-    def slot_stage(self, context: ProcessorContext) -> ReportStage:
-        return ReportStage(context.scenario, context.report_type, SlotGrouping(), exclusive_sources=True)
 
-    def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
-        return TrainingBatch(f"{self.scenario}:slots:{batch_number}", items)
-
-
-class OrderedMixProcessor(SlotGroupProcessor):
+class OrderedMixPipeline(TrainingPipeline):
     """Reports with a ``metadata.group`` form groups that batch in key order after singletons."""
 
-    def slot_stage(self, context: ProcessorContext) -> ReportStage:
-        return ReportStage(
-            context.scenario, context.report_type, AnyGroupReady(), exclusive_sources=True, ordered_groups=True
-        )
-
-
-# Each recipe builds its processor's record stage and record-to-task stage. These processors build the same
-# stages, as the recipe would.
-
-
-class RecipeTTTDProcessor(TTTDProcessor):
-    def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context, record_stage=tttd_record_stage(context), record2task=TTTDTasks(context))
-
-
-class RecipeSDPOProcessor(SDPOProcessor):
-    def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context, record_stage=sdpo_record_stage(context), record2task=SDPOTasks(context))
-
-
-class RecipeCoralProcessor(CoralProcessor):
-    def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context, record_stage=coral_record_stage(context), record2task=CoralTasks(context))
-
-
-class RecipeGeneratedTaskProcessor(GeneratedTaskProcessor):
     def __init__(self, context: ProcessorContext) -> None:
         super().__init__(
-            context, record_stage=task_group_record_stage(context), record2task=GeneratedTaskTasks(context)
+            context,
+            record_stage=ReportStage(
+                context.scenario, context.report_type, AnyGroupReady(), exclusive_sources=True, ordered_groups=True
+            ),
+            record2task=AssembledTasks(context),
+            task2batch=SlotBatches(context),
         )
 
 
-class RecipeDistillProcessor(DistillProcessor):
+class TTTDPipeline(TrainingPipeline):
     def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context, record_stage=distill_record_stage(context), record2task=DistillTasks(context))
+        super().__init__(
+            context,
+            record_stage=tttd_record_stage(context),
+            record2task=TTTDTasks(context),
+            task2batch=TTTDBatches(context),
+        )
+
+
+class SDPOPipeline(TrainingPipeline):
+    def __init__(self, context: ProcessorContext) -> None:
+        super().__init__(
+            context,
+            record_stage=sdpo_record_stage(context),
+            record2task=SDPOTasks(context),
+            task2batch=SDPOBatches(context),
+        )
+
+
+class CoralPipeline(TrainingPipeline):
+    def __init__(self, context: ProcessorContext) -> None:
+        super().__init__(
+            context,
+            record_stage=coral_record_stage(context),
+            record2task=CoralTasks(context),
+            task2batch=CoralBatches(context),
+        )
+
+
+class GeneratedTaskPipeline(TrainingPipeline):
+    def __init__(self, context: ProcessorContext) -> None:
+        round_stage = task_group_record_stage(context)
+        super().__init__(
+            context,
+            record_stage=round_stage,
+            record2task=GeneratedTaskTasks(context, round_stage),
+            task2batch=GeneratedTaskBatches(context),
+        )
+
+
+class DistillPipeline(TrainingPipeline):
+    def __init__(self, context: ProcessorContext) -> None:
+        super().__init__(
+            context,
+            record_stage=distill_record_stage(context),
+            record2task=DistillTasks(context),
+            task2batch=DistillBatches(context),
+        )
+
+
+class TracePipeline(TrainingPipeline):
+    """The harness-evolution pipeline of reported traces."""
+
+    def __init__(self, context: ProcessorContext) -> None:
+        super().__init__(
+            context,
+            record_stage=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+            record2task=TraceTasks(),
+            task2batch=TraceBatches(context),
+        )
 
 
 @dataclass(frozen=True)
@@ -331,7 +388,7 @@ class ToyJudgment(SupportsReceipt):
 
 
 class ImmediateWorker:
-    """A worker that judges each job when the processor next polls."""
+    """A worker that judges each job when the pipeline next polls."""
 
     def __init__(self) -> None:
         self.ready: list[ToyJudgment] = []
@@ -380,15 +437,17 @@ class ToyTasks(JudgedTasks):
         )
 
 
-class ToyComputedProcessor(ComputedFeedbackProcessor):
+class ToyBatches(Task2Batch):
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+        return TrainingBatch(f"{self.scenario}:toy:{batch_number}", tasks)
+
+
+class ToyComputedPipeline(TrainingPipeline):
     """Trains the judged records of ``ToyJudging``."""
 
     def __init__(self, context: ProcessorContext) -> None:
         stage = JudgingStage(ToyJudging(), ImmediateWorker(), max_staleness=context.max_staleness)
-        super().__init__(context, record_stage=stage, record2task=ToyTasks())
-
-    def make_batch(self, samples: tuple[TrajectoryItem, ...], batch_number: int) -> TrainingBatch:
-        return TrainingBatch(f"{self.scenario}:toy:{batch_number}", samples)
+        super().__init__(context, record_stage=stage, record2task=ToyTasks(), task2batch=ToyBatches(context))
 
 
 def turn(record_id: str, *, version: str, completes: str | None = None, track: bool = True) -> AgentRecord:
@@ -404,7 +463,7 @@ def turn(record_id: str, *, version: str, completes: str | None = None, track: b
 
 
 def ungrouped_stream() -> StreamRun:
-    return StreamRun(ThresholdProcessor, {"batch_size": 2})
+    return StreamRun(ThresholdPipeline, {"batch_size": 2})
 
 
 def ungrouped_steps() -> list[Step]:
@@ -646,23 +705,23 @@ def streams() -> dict[str, tuple[StreamRun, list[Step]]]:
     return {
         "ungrouped": (ungrouped_stream(), ungrouped_steps()),
         "ungrouped_reload": (ungrouped_stream(), [*ungrouped_steps()[:5], RELOAD, *ungrouped_steps()[5:]]),
-        "slots_and_discards": (StreamRun(SlotGroupProcessor, {"batch_size": 1}), slot_steps()),
-        "ordered_groups": (StreamRun(OrderedMixProcessor, {"batch_size": 3}), ordered_steps()),
-        "tttd": (StreamRun(RecipeTTTDProcessor, tttd, TTTDGroupedRolloutReport), tttd_steps()),
-        "coral": (StreamRun(RecipeCoralProcessor, {"group_size": 2}), coral_steps()),
+        "slots_and_discards": (StreamRun(SlotGroupPipeline, {"batch_size": 1}), slot_steps()),
+        "ordered_groups": (StreamRun(OrderedMixPipeline, {"batch_size": 3}), ordered_steps()),
+        "tttd": (StreamRun(TTTDPipeline, tttd, TTTDGroupedRolloutReport), tttd_steps()),
+        "coral": (StreamRun(CoralPipeline, {"group_size": 2}), coral_steps()),
         "generated_tasks": (
-            StreamRun(RecipeGeneratedTaskProcessor, {"tasks_per_step": 2, "plays_per_task": 2}),
+            StreamRun(GeneratedTaskPipeline, {"tasks_per_step": 2, "plays_per_task": 2}),
             task_steps(),
         ),
-        "distill_overflow": (StreamRun(RecipeDistillProcessor, distill, TeacherContextReport), distill_steps()),
-        "sdpo": (StreamRun(RecipeSDPOProcessor, sdpo, SDPOReport), sdpo_steps()),
-        "computed_exact_version": (StreamRun(ToyComputedProcessor, {"batch_size": 2}), computed_steps()),
-        "computed_window": (StreamRun(ToyComputedProcessor, {"batch_size": 2}, max_staleness=1), computed_steps()),
+        "distill_overflow": (StreamRun(DistillPipeline, distill, TeacherContextReport), distill_steps()),
+        "sdpo": (StreamRun(SDPOPipeline, sdpo, SDPOReport), sdpo_steps()),
+        "computed_exact_version": (StreamRun(ToyComputedPipeline, {"batch_size": 2}), computed_steps()),
+        "computed_window": (StreamRun(ToyComputedPipeline, {"batch_size": 2}, max_staleness=1), computed_steps()),
         "cordis_manual_cap": (
-            StreamRun(CordisProcessor, {"batch_size": 1}, training_mode="manual"),
+            StreamRun(TracePipeline, {"batch_size": 1}, training_mode="manual"),
             cordis_steps(True),
         ),
-        "cordis_hybrid": (StreamRun(CordisProcessor, {"batch_size": 2}, training_mode="hybrid"), cordis_steps(True)),
+        "cordis_hybrid": (StreamRun(TracePipeline, {"batch_size": 2}, training_mode="hybrid"), cordis_steps(True)),
     }
 
 

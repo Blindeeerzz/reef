@@ -98,7 +98,7 @@ PUCT chooses G parents
   -> Reef stores exact tokens, response loss mask, and rollout log-probabilities
   -> sandbox executes each generated program; the official verifier gives rewards
   -> harness reports every reward against its exact inference receipt
-  -> TTTDProcessor waits for the complete G × R step and removes constant groups
+  -> TTTDGrouping waits for the complete G × R step; TTTDBatches removes constant groups
   -> Slime prepares adaptive-beta entropic leave-one-out advantages from the reserved batch
   -> Slime applies frozen-base token KL and un-clipped importance sampling
   -> Megatron performs one optimizer step and synchronizes weights to SGLang

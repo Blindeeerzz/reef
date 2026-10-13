@@ -1,9 +1,9 @@
-"""The generated-task processor: rounds of generated tasks played here, their training episodes trained here.
+"""The generated-task stages: rounds of generated tasks played here, their training episodes trained here.
 
-Two contracts meet in this class. As a reported feedback processor it takes the task player's reports:
-every episode of the training arm names its task under ``metadata.task``, the episodes of one task form
-a group, a group is complete at ``plays_per_task`` episodes, and a batch holds ``tasks_per_step``
-complete groups, in arrival order. As the driver of task generation it runs rounds with the
+The record stage (``RoundStage``, built in ``recipe.py``) groups the task player's reports: every
+episode of the training arm names its task under ``metadata.task``, the episodes of one task form a
+group, and a group is complete at ``plays_per_task`` episodes. ``GeneratedTaskBatches`` batches
+``tasks_per_step`` complete groups, in arrival order. ``GeneratedTaskTasks`` runs the rounds with the
 deployment's :class:`~reef.core.tasks.TaskGenerator`.
 
 One round is one job on a private worker, off the trainer's thread:
@@ -14,13 +14,13 @@ One round is one job on a private worker, off the trainer's thread:
    training arm, then each measurement arm the generator asked for.
 4. Send the results to the generator.
 
-The first round starts when the processor first looks for a batch. The next round starts after
+The first round starts when the pipeline first looks for a batch. The next round starts after
 ``batches_per_round`` batches were acknowledged since the previous round started. Its episodes train
 while it runs, so the generator always writes for the policy that trains now. A round that played no
 task is followed at once. A summary of each round goes under ``state_dir/<scenario>``; a restart
 reads it to continue with the next round.
 
-Only the training arm, labeled ``plain``, trains. The processor releases reports of other arms, and
+Only the training arm, labeled ``plain``, trains. The record stage releases reports of other arms, and
 reports without an arm, such as a generator's own reports, without assembling them. A generated task
 whose measurement arm is named ``plain`` is not played.
 """
@@ -41,7 +41,8 @@ from reef.harness.client.tasks import TaskPlay
 from reef.record2record import RecordSet, ReportContext, RoundRequest, RoundStage
 from reef.record2task import ReportTasks, TaskResult
 from reef.record2task.generator.client import DuplicateTask, Generator, HttpGenerator, TaskNameConflict
-from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
+from reef.train.processors.base import Task2Batch
+from reef.train.processors.reported import SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 logger = logging.getLogger(__name__)
@@ -150,11 +151,14 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
     def __init__(
         self,
         context: ProcessorContext,
+        round_stage: RoundStage,
         *,
         task_generator: TaskGenerator | None = None,
         task_player: Generator | None = None,
         worker: BackgroundJobWorker | None = None,
     ) -> None:
+        #: The record stage that requests the rounds; ``poll`` tells it when each one finished.
+        self.round_stage = round_stage
         self.assembly = episode_assembly(context)
         config = context.config
         self.scenario = context.scenario
@@ -220,17 +224,16 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         self.next_round += 1
         return TaskResult.ready(())
 
-    def take_finished_rounds(self) -> tuple[bool, ...]:
-        """Absorb the rounds that the worker finished. For each, return whether it played no task."""
+    def poll(self) -> None:
+        """Absorb the rounds that the worker finished, and tell the record stage whether each one played no task."""
         if self.worker is None:
-            return ()
-        finished: list[bool] = []
+            return
         for outcome in self.worker.poll():
             self.round_in_flight = None
             if isinstance(outcome, Failed):
                 self.last_error = f"{outcome.receipt} did not finish; see the service log"
                 logger.error("generated-task %s failed on scenario %r", outcome.receipt, self.scenario)
-                finished.append(False)
+                self.round_stage.round_finished(played_none=False)
                 continue
             if not isinstance(outcome, RoundOutcome):
                 raise TypeError("the round worker must hand back a RoundOutcome")
@@ -246,8 +249,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
                 played,
                 len(outcome.results),
             )
-            finished.append(played == 0)
-        return tuple(finished)
+            self.round_stage.round_finished(played_none=played == 0)
 
     def derivation_pending(self) -> bool:
         return self.round_in_flight is not None
@@ -383,61 +385,18 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         return path
 
 
-class GeneratedTaskProcessor(ReportedFeedbackProcessor):
-    """Batch the training arm's complete task groups, ``tasks_per_step`` groups to a batch.
+class GeneratedTaskBatches(Task2Batch):
+    """Batch the training arm's complete task groups, ``tasks_per_step`` groups to a batch."""
 
-    The recipe's record stage (a ``RoundStage``) decides when a round is due,
-    and the record-to-task stage (``GeneratedTaskTasks``) runs it. This
-    processor hands each finished round from the second to the first.
-    """
-
-    output_schema = TrainingBatch
-
-    def __init__(
-        self,
-        context: ProcessorContext,
-        *,
-        record_stage: RoundStage | None = None,
-        record2task: GeneratedTaskTasks | None = None,
-    ) -> None:
-        config = dict(context.config)
-        self.tasks_per_step = int(config.get("tasks_per_step", DEFAULT_TASKS_PER_STEP))
-        self.plays_per_task = int(config.get("plays_per_task", DEFAULT_PLAYS_PER_TASK))
-        if self.tasks_per_step <= 0:
+    def __init__(self, context: ProcessorContext) -> None:
+        tasks_per_step = int(context.config.get("tasks_per_step", DEFAULT_TASKS_PER_STEP))
+        plays_per_task = int(context.config.get("plays_per_task", DEFAULT_PLAYS_PER_TASK))
+        if tasks_per_step <= 0:
             raise ValueError("tasks_per_step must be positive")
-        if self.plays_per_task < 2:
+        if plays_per_task < 2:
             raise ValueError("plays_per_task must be at least two: a group of one has no relative reward")
-        # An agent's episode is many model calls that extend one conversation; the sample spans them.
-        config.setdefault("accept_multi_turn_policy_samples", True)
-        config.setdefault("scaffold_tolerance", DEFAULT_SCAFFOLD_TOLERANCE)
-        # One unit of the batch is one complete task group.
-        super().__init__(
-            context.with_config({**config, "batch_size": self.tasks_per_step}),
-            record_stage=record_stage,
-            record2task=record2task,
-        )
+        # One record set of the batch is one complete task group.
+        super().__init__(context.with_config({**context.config, "batch_size": tasks_per_step}))
 
-    def default_record2task(self) -> GeneratedTaskTasks:
-        return GeneratedTaskTasks(self.context)
-
-    @property
-    def round_stage(self) -> RoundStage:
-        stage = self.record_stage
-        if not isinstance(stage, RoundStage):
-            raise TypeError(f"{type(self).__name__} needs a RoundStage, not {type(stage).__name__}")
-        return stage
-
-    @property
-    def generation(self) -> GeneratedTaskTasks:
-        record2task = self.record2task
-        if not isinstance(record2task, GeneratedTaskTasks):
-            raise TypeError(f"{type(self).__name__} needs GeneratedTaskTasks, not {type(record2task).__name__}")
-        return record2task
-
-    def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
-        return TrainingBatch(f"{self.scenario}:generated-tasks:{batch_number}", items)
-
-    def ready(self) -> bool:
-        for played_none in self.generation.take_finished_rounds():
-            self.round_stage.round_finished(played_none)
-        return super().ready()
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+        return TrainingBatch(f"{self.scenario}:generated-tasks:{batch_number}", tasks)

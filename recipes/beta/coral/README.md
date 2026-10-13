@@ -64,7 +64,7 @@ LiteLLM -> reef serve         stores INFERENCE records with tags,
 CORAL grader daemon finalizes the attempt (.coral/**/attempts/*.json)
    -> recipes.beta.coral.watcher: resolves the attempt's captured references,
       POST /reef/report {score, references, metadata.coral}, exactly once
-   -> CoralProcessor groups siblings of one parent commit -> Slime LoRA step
+   -> CoralGrouping groups siblings of one parent commit -> CoralBatches -> Slime LoRA step
    -> new revision served to the next attempts
 ```
 
@@ -106,7 +106,7 @@ and are grouped together: they all diverged from the task seed.
 
 From a report to a gradient:
 
-1. **Grouping.** `CoralProcessor` files each report under its `parent_hash`.
+1. **Grouping.** `CoralGrouping` files each report under its `parent_hash`.
    A group releases once `group_size` scored siblings accrue (`serve.yaml`
    sets 2 for the demo; the default is 4). Parents that never accrue enough
    scored children never train, the barrier is a recipe setting, not a CORAL

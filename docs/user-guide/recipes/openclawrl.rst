@@ -15,7 +15,7 @@ and the model is updated while the agent stays in service.
 +-------------+------------------------------------------------------------+
 | Package     | ``recipes/openclawrl/``                                    |
 +-------------+------------------------------------------------------------+
-| Processor   | computed feedback                                          |
+| Pipeline    | computed feedback                                          |
 +-------------+------------------------------------------------------------+
 | Needs       | GPUs, plus a second served model for the PRM judge         |
 +-------------+------------------------------------------------------------+
@@ -31,9 +31,9 @@ negative. Reef reads this from the traffic it already records, so the agent
 does not send training reports. For reliable correlation, the harness should
 send a stable ``x-reef-tag-session`` value, unique to the conversation within
 its scenario, on every inference in that conversation. Reef stores this opaque
-tag with each record and the processor uses it to bind turns in arrival order,
+tag with each record and the judging stage uses it to bind turns in arrival order,
 so one tag must not be shared by concurrent or distinct conversations. Without
-the tag, the processor falls back to matching the transcripts that clients
+the tag, the judging stage falls back to matching the transcripts that clients
 resend on later requests.
 
 .. flow::
@@ -47,7 +47,7 @@ resend on later requests.
 How Reef implements it
 ----------------------
 
-The processor rebuilds sessions from the recorded traffic. It prefers the
+The judging stage rebuilds sessions from the recorded traffic. It prefers the
 ``x-reef-tag-session`` value supplied by the harness, which also supports
 agents that keep or rewrite their history locally. If the tag is absent, a
 chat agent must resend an extending transcript so each request can be matched
@@ -59,7 +59,7 @@ tag itself.
 
 A turn that never correlates is never judged and never trains, so a run on the
 fallback can produce an empty training set with nothing else to show for it.
-The processor therefore says so: it warns once when it sees untagged traffic,
+The recipe therefore says so: it warns once when it sees untagged traffic,
 warns again when sessions keep expiring without ever binding a turn, and counts
 both under ``correlation`` in the ``prm_record_file`` line. ``max_open_sessions``
 caps the table those unmatched requests fill, evicting the least recently active

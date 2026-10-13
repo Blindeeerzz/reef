@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from reef.core.records_types import AgentRecord
+from reef.record2record import ReportContext
 from reef.record2task import ReportTasks
+from reef.train.processors.base import Task2Batch
 from reef.train.processors.common import make_policy_trajectory
-from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, SampleAssembly
+from reef.train.processors.reported import SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 
@@ -41,11 +43,11 @@ class SAOTasks(ReportTasks):
         return sample
 
 
-class SAOProcessor(ReportedFeedbackProcessor):
-    """Turn scored rollouts into independently-scheduled SAO samples.
+class SAOBatches(Task2Batch):
+    """Batch scored rollouts as independently scheduled SAO samples.
 
     Single-Rollout Asynchronous Optimization ships each completed rollout on
-    its own — no comparison group, no slowest-sample barrier. The dispatcher
+    its own — no comparison group, no slowest-sample barrier. The pipeline
     collects ``batch_size`` accepted rollouts (from as many prompts) into one
     training step; the recipe default is the paper's 128, and 1 trains once
     per accepted rollout for smoke runs.
@@ -54,8 +56,6 @@ class SAOProcessor(ReportedFeedbackProcessor):
     and ``rollout_created_at``. The training backend validates required
     tensors; malformed training input fails explicitly.
     """
-
-    output_schema = TrainingBatch
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"{self.scenario}:sao:{batch_number}", items)

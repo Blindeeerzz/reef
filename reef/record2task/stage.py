@@ -1,7 +1,7 @@
 """The record-to-task contract: one record set from the record-to-record stage becomes tasks.
 
 A task is a ``TrainDataItem``: a ``TrajectoryItem`` that trains directly, or a
-``TaskItem`` that the algorithm rolls out. The processor calls ``make_tasks``
+``TaskItem`` that the algorithm rolls out. The training pipeline calls ``make_tasks``
 for each set that the record stage forms and gives the ``TaskResult`` back to
 the stage.
 """
@@ -46,12 +46,19 @@ class Record2Task(ABC):
     def make_tasks(self, record_set: RecordSet) -> TaskResult:
         """Return the tasks of ``record_set``, or a skip."""
 
+    def poll(self) -> None:
+        """Absorb finished background work, such as a finished round.
+
+        The pipeline calls it each time it looks for a batch, before the record stage's ``poll``.
+        """
+        return
+
     def status(self) -> Mapping[str, Any]:
-        """Return JSON-safe state that the processor adds to its status."""
+        """Return JSON-safe state that the pipeline adds to its status."""
         return {}
 
     def operational_metrics(self) -> Mapping[str, float | int]:
-        """Return numeric state that the processor adds to its metrics."""
+        """Return numeric state that the pipeline adds to its metrics."""
         return {}
 
     def derivation_pending(self) -> bool:

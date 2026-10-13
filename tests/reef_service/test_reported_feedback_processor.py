@@ -12,7 +12,8 @@ from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportBase, ReportValidationError
 from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
 from reef.record2task import ReportTasks
-from reef.train.processors.reported import ReportedFeedbackProcessor
+from reef.train.pipeline import TrainingPipeline
+from reef.train.processors.base import Task2Batch
 from reef.train.types import ProcessorContext, TaskItem, TrainDataItem, TrainingBatch
 
 
@@ -58,8 +59,13 @@ class SampleTasks(ReportTasks):
         return TaskItem(Path(context.report.agent_record_id))
 
 
-class SampleProcessor(ReportedFeedbackProcessor):
-    output_schema = TrainingBatch
+class SampleBatches(Task2Batch):
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+        return TrainingBatch(f"batch:{batch_number}", tasks)
+
+
+class SamplePipeline(TrainingPipeline):
+    """A reported-feedback pipeline over an exclusive report stage, with ``SampleTasks`` and ``batches``."""
 
     def __init__(
         self,
@@ -69,6 +75,7 @@ class SampleProcessor(ReportedFeedbackProcessor):
         ordered_groups: bool = False,
         report_type: type[ReportBase] | None = None,
         tasks: SampleTasks | None = None,
+        batches: type[SampleBatches] = SampleBatches,
     ) -> None:
         context = ProcessorContext("math", {"batch_size": batch_size}, report_type=report_type)
         self.sample_tasks = SampleTasks() if tasks is None else tasks
@@ -76,6 +83,7 @@ class SampleProcessor(ReportedFeedbackProcessor):
             context,
             record_stage=exclusive_stage(context, grouping, ordered_groups=ordered_groups),
             record2task=self.sample_tasks,
+            task2batch=batches(context),
         )
 
     @property
@@ -89,9 +97,6 @@ class SampleProcessor(ReportedFeedbackProcessor):
     @fail_assembly.setter
     def fail_assembly(self, fail: bool) -> None:
         self.sample_tasks.fail_assembly = fail
-
-    def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
-        return TrainingBatch(f"batch:{batch_number}", items)
 
 
 class PairGrouping(ReportGrouping):
@@ -110,13 +115,15 @@ class PairGrouping(ReportGrouping):
         return GroupDecision.DISCARD if self.discard else GroupDecision.READY
 
 
-class GroupProcessor(SampleProcessor):
-    def __init__(self, batch_size: int = 1) -> None:
-        super().__init__(batch_size, grouping=PairGrouping())
+class GroupPipeline(SamplePipeline):
+    def __init__(self, batch_size: int = 1, *, batches: type[SampleBatches] = SampleBatches) -> None:
+        super().__init__(batch_size, grouping=PairGrouping(), batches=batches)
 
     @property
     def grouping_policy(self) -> PairGrouping:
-        grouping = self.report_stage.grouping
+        stage = self.record_stage
+        assert isinstance(stage, ReportStage)
+        grouping = stage.grouping
         assert isinstance(grouping, PairGrouping)
         return grouping
 
@@ -127,7 +134,7 @@ def test_a_report_shaped_for_another_component_is_released_not_raised() -> None:
     from reef.core.reports import ScoredRolloutReport
     from reef.recipe.composite import any_component_report
 
-    processor = SampleProcessor(report_type=TTTDGroupedRolloutReport)
+    processor = SamplePipeline(report_type=TTTDGroupedRolloutReport)
     processor.ingest(inference("i1"))
     processor.ingest(inference("i2"))
     # Alone, the processor refuses a report of another shape, as ingress would have.
@@ -171,12 +178,12 @@ def test_a_report_shaped_for_another_component_is_released_not_raised() -> None:
 
 def test_processor_requires_sample_assembly_instead_of_judge() -> None:
     with pytest.raises(TypeError, match="abstract"):
-        ReportedFeedbackProcessor(ProcessorContext("math"))
-    assert not hasattr(ReportedFeedbackProcessor, "judge")
+        ReportTasks()
+    assert not hasattr(ReportTasks, "judge")
 
 
 def test_operational_backlog_excludes_reserved_reports() -> None:
-    processor = SampleProcessor(batch_size=1)
+    processor = SamplePipeline(batch_size=1)
     for index in (1, 2):
         processor.ingest(inference(f"i{index}"))
         processor.ingest(report(f"r{index}", f"i{index}"))
@@ -192,7 +199,7 @@ def test_operational_backlog_excludes_reserved_reports() -> None:
 
 
 def test_inferences_wait_for_reports_and_batch_counts_completed_samples() -> None:
-    processor = SampleProcessor(batch_size=2)
+    processor = SamplePipeline(batch_size=2)
     for record_id in ("i1", "i2", "i3"):
         processor.ingest(inference(record_id))
     assert not processor.ready()
@@ -204,7 +211,7 @@ def test_inferences_wait_for_reports_and_batch_counts_completed_samples() -> Non
 
 
 def test_report_before_inference_fails_without_queuing_it() -> None:
-    processor = SampleProcessor()
+    processor = SamplePipeline()
     with pytest.raises(ReportValidationError, match="unavailable"):
         processor.ingest(report("r1", "i1"))
     processor.ingest(inference("i1"))
@@ -216,7 +223,7 @@ def test_report_before_inference_fails_without_queuing_it() -> None:
 
 @pytest.mark.parametrize("references", [(), ("i1", "i1"), ("i1", "missing")])
 def test_invalid_references_do_not_create_a_sample(references: tuple[str, ...]) -> None:
-    processor = SampleProcessor()
+    processor = SamplePipeline()
     processor.ingest(inference("i1"))
     with pytest.raises(ReportValidationError):
         processor.ingest(report("r1", *references))
@@ -226,7 +233,7 @@ def test_invalid_references_do_not_create_a_sample(references: tuple[str, ...]) 
 
 @pytest.mark.parametrize("request_type", [RequestType.INFERENCE, RequestType.REPORT])
 def test_processor_rejects_cross_scenario_records(request_type: RequestType) -> None:
-    processor = SampleProcessor()
+    processor = SamplePipeline()
     record = inference("i1") if request_type is RequestType.INFERENCE else report("r1", "i1")
     with pytest.raises(ReportValidationError, match="scenario"):
         processor.ingest(replace(record, scenario="other"))
@@ -234,7 +241,7 @@ def test_processor_rejects_cross_scenario_records(request_type: RequestType) -> 
 
 @pytest.mark.parametrize("eligible", [True, False, None])
 def test_reports_cannot_set_training_eligibility(eligible: object) -> None:
-    processor = SampleProcessor()
+    processor = SamplePipeline()
     processor.ingest(inference("i1"))
     record = report("r1", "i1")
     record = replace(record, payload={**record.payload, "metadata": {"training": {"eligible": eligible}}})
@@ -245,14 +252,14 @@ def test_reports_cannot_set_training_eligibility(eligible: object) -> None:
 
 @pytest.mark.parametrize("score", [0.0, -1.0, 1.0])
 def test_valid_feedback_is_assembled_without_score_filtering(score: float) -> None:
-    processor = SampleProcessor()
+    processor = SamplePipeline()
     processor.ingest(inference("i1"))
     processor.ingest(report("r1", "i1", score=score))
     assert tuple(str(item.task_path) for item in processor.build_batch().items) == ("r1",)
 
 
 def test_assembly_failure_protects_inputs_and_does_not_acknowledge_a_retry() -> None:
-    processor = SampleProcessor()
+    processor = SamplePipeline()
     processor.ingest(inference("i1"))
     processor.fail_assembly = True
     for _ in range(2):
@@ -266,7 +273,7 @@ def test_assembly_failure_protects_inputs_and_does_not_acknowledge_a_retry() -> 
 
 
 def test_duplicate_reports_and_batch_polls_do_not_assemble_twice() -> None:
-    processor = SampleProcessor()
+    processor = SamplePipeline()
     processor.ingest(inference("i1"))
     processor.ingest(report("r1", "i1"))
     processor.ingest(report("r1", "i1"))
@@ -283,7 +290,7 @@ def test_duplicate_reports_and_batch_polls_do_not_assemble_twice() -> None:
 
 
 def test_live_report_keeps_a_shared_source_protected_until_its_consumption() -> None:
-    processor = SampleProcessor()
+    processor = SamplePipeline()
     processor.ingest(inference("i1"))
     processor.ingest(report("r1", "i1"))
     processor.ingest(report("r2", "i1"))
@@ -296,7 +303,7 @@ def test_live_report_keeps_a_shared_source_protected_until_its_consumption() -> 
 
 
 def test_group_waits_for_complete_samples() -> None:
-    processor = GroupProcessor()
+    processor = GroupPipeline()
     for index in (1, 2):
         processor.ingest(inference(f"i{index}"))
         processor.ingest(report(f"r{index}", f"i{index}"))
@@ -305,7 +312,7 @@ def test_group_waits_for_complete_samples() -> None:
 
 
 def test_group_discard_releases_all_members_and_refuses_later_members() -> None:
-    processor = GroupProcessor()
+    processor = GroupPipeline()
     processor.grouping_policy.discard = True
     for index in (1, 2, 3):
         processor.ingest(inference(f"i{index}"))
@@ -315,7 +322,7 @@ def test_group_discard_releases_all_members_and_refuses_later_members() -> None:
 
 
 def test_slot_retry_preserves_first_report() -> None:
-    processor = GroupProcessor()
+    processor = GroupPipeline()
     for record_id, slot in (("first", "a"), ("retry", "a"), ("second", "b")):
         processor.ingest(inference(record_id))
         record = report(f"r-{record_id}", record_id)
@@ -333,7 +340,7 @@ def test_ordered_groups_can_coexist_with_singleton_samples() -> None:
         def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
             return GroupDecision.READY
 
-    processor = SampleProcessor(batch_size=3, grouping=PrefixGrouping(), ordered_groups=True)
+    processor = SamplePipeline(batch_size=3, grouping=PrefixGrouping(), ordered_groups=True)
     for record_id in ("g-z", "g-a", "single"):
         processor.ingest(inference(f"source-{record_id}"))
         processor.ingest(report(record_id, f"source-{record_id}"))
@@ -341,7 +348,7 @@ def test_ordered_groups_can_coexist_with_singleton_samples() -> None:
 
 
 def test_group_arrivals_after_reservation_are_left_for_the_next_batch() -> None:
-    processor = GroupProcessor()
+    processor = GroupPipeline()
     for index in (1, 2):
         processor.ingest(inference(f"i{index}"))
         processor.ingest(report(f"r{index}", f"i{index}"))
@@ -360,12 +367,12 @@ def test_group_arrivals_after_reservation_are_left_for_the_next_batch() -> None:
 
 
 def test_recipe_receives_items_and_omitting_one_does_not_lose_consumption() -> None:
-    class SelectedProcessor(GroupProcessor):
-        def make_batch(self, items, batch_number):
-            assert [item.source_agent_record_ids for item in items] == [("i1", "r1"), ("i2", "r2")]
-            return super().make_batch(items[:1], batch_number)
+    class SelectedBatches(SampleBatches):
+        def make_batch(self, tasks, batch_number):
+            assert [task.source_agent_record_ids for task in tasks] == [("i1", "r1"), ("i2", "r2")]
+            return super().make_batch(tasks[:1], batch_number)
 
-    processor = SelectedProcessor()
+    processor = GroupPipeline(batches=SelectedBatches)
     for index in (1, 2):
         processor.ingest(inference(f"i{index}"))
         processor.ingest(report(f"r{index}", f"i{index}"))
@@ -380,7 +387,7 @@ def test_untyped_assembly_output_fails_and_keeps_report_retryable() -> None:
         def make_sample(self, context):
             return object() if self.fail_assembly else super().make_sample(context)
 
-    processor = SampleProcessor(tasks=BrokenTasks())
+    processor = SamplePipeline(tasks=BrokenTasks())
     processor.ingest(inference("i1"))
     processor.fail_assembly = True
     with pytest.raises(TypeError, match="TrainDataItem"):

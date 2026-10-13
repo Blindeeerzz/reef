@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from recipes.sao.processor import SAOProcessor, SAOTasks
+from recipes.sao.processor import SAOBatches, SAOTasks
 from reef.core.reports import ReportBase, ScoredRolloutReport
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
@@ -57,7 +57,7 @@ class SAORecipe(WeightTrainingRecipe):
     def training_spec(cls) -> WeightTrainingSpec:
         return WeightTrainingSpec(
             objective="sao",
-            processor=SAOProcessor,
+            task2batch=SAOBatches,
             # Each rollout is its own DP unit; the backend's configured step size applies.
             scheduling=StepScheduling(unit="sample"),
         )

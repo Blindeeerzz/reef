@@ -1,6 +1,6 @@
 """The CORAL weight-training recipe: what a deployment names in ``serve.yaml``.
 
-Binds :class:`~recipes.beta.coral.processor.CoralProcessor` to the grouped
+Binds :class:`~recipes.beta.coral.processor.CoralBatches` to the grouped
 relative-reward training machinery. CORAL sibling groups have the same shape
 as TTT-Discover steps — comparison sets of scored rollouts from one shared
 starting point — so the recipe reuses the ``tttd`` training objective (grouped
@@ -23,7 +23,7 @@ from typing import Any
 # The tttd training objective and loss-family reference live in the repository
 # cookbook; importing them is what registers both names this recipe binds.
 import recipes.tttd  # noqa: F401  (registration side effect)
-from recipes.beta.coral.processor import CoralProcessor, CoralTasks, attempt_release_ids, sibling_group
+from recipes.beta.coral.processor import CoralBatches, CoralTasks, attempt_release_ids, sibling_group
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
@@ -92,7 +92,7 @@ class CoralRecipe(WeightTrainingRecipe):
     def training_spec(cls) -> WeightTrainingSpec:
         return WeightTrainingSpec(
             objective="tttd",
-            processor=CoralProcessor,
+            task2batch=CoralBatches,
             # Sibling groups train as one optimizer step, as TTTD's grid does.
             scheduling=StepScheduling(unit="sample", batch_size="actual"),
         )

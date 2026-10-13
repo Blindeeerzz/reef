@@ -1,4 +1,4 @@
-"""The distillation processor: the student's request with the teacher's context, rendered as the teacher reads it.
+"""Distillation: the student's request with the teacher's context, rendered as the teacher reads it.
 
 The distilling recipes make a teacher score the student's own sample. What
 the teacher reads beyond the student's request is the recipe's policy
@@ -19,10 +19,11 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from reef.core.reports import TeacherContextReport
-from reef.record2record import ReportGrouping, ReportStage
+from reef.record2record import ReportContext, ReportGrouping, ReportStage
 from reef.record2task import ReportTasks, SkippedReport
+from reef.train.processors.base import Task2Batch
 from reef.train.processors.common import flatten_content, recorded_request, recorded_response
-from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, SampleAssembly
+from reef.train.processors.reported import SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 logger = logging.getLogger(__name__)
@@ -195,18 +196,17 @@ class DistillTasks(ReportTasks):
         return sample.with_training(teacher_tokens=teacher_tokens)
 
 
-class DistillProcessor(ReportedFeedbackProcessor):
+class DistillBatches(Task2Batch):
     """Batch distillation tasks as they come. A recipe's subclass sets ``batch_label``, its batches' name."""
 
-    output_schema = TrainingBatch
     batch_label = "teacher"
 
-    def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
-        return TrainingBatch(f"{self.scenario}:{self.batch_label}:{batch_number}", items)
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+        return TrainingBatch(f"{self.scenario}:{self.batch_label}:{batch_number}", tasks)
 
 
 __all__ = [
-    "DistillProcessor",
+    "DistillBatches",
     "DistillTasks",
     "TeacherRenderer",
     "distill_record_stage",

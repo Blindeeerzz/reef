@@ -1,10 +1,12 @@
-"""Shared policy processor test double: assemble every valid scored report."""
+"""Shared policy pipeline test double: assemble every valid scored report, and batch the samples as they come."""
 
 from __future__ import annotations
 
-from reef.record2record import ReportStage
-from reef.record2task import Record2Task, ReportTasks
-from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, SampleAssembly
+from reef.record2record import ReportContext, ReportGrouping, ReportStage
+from reef.record2task import ReportTasks
+from reef.train.pipeline import TrainingPipeline
+from reef.train.processors.base import Task2Batch
+from reef.train.processors.reported import SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 
@@ -18,25 +20,27 @@ class ThresholdTasks(ReportTasks):
         return self.assembly.build(context, context.require_score())
 
 
-class ThresholdProcessor(ReportedFeedbackProcessor):
+class ThresholdBatches(Task2Batch):
     """Batch the tasks of ``ThresholdTasks`` as they come."""
 
-    output_schema = TrainingBatch
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+        return TrainingBatch(f"{self.scenario}:threshold:{batch_number}", tasks)
 
-    def __init__(
-        self,
-        context: ProcessorContext,
-        *,
-        record_stage: ReportStage | None = None,
-        record2task: Record2Task | None = None,
-    ) -> None:
-        super().__init__(context, record_stage=record_stage, record2task=record2task)
 
-    def default_record2task(self) -> Record2Task:
-        return ThresholdTasks(self.context)
-
-    def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
-        return TrainingBatch(
-            f"{self.scenario}:threshold:{batch_number}",
-            items,
-        )
+def threshold_pipeline(
+    context: ProcessorContext,
+    *,
+    record_stage: ReportStage | None = None,
+    task2batch: Task2Batch | None = None,
+) -> TrainingPipeline:
+    """Every report by itself (or ``record_stage``), one sample each, batched by ``ThresholdBatches`` (or ``task2batch``)."""
+    return TrainingPipeline(
+        context,
+        record_stage=(
+            ReportStage(context.scenario, context.report_type, ReportGrouping())
+            if record_stage is None
+            else record_stage
+        ),
+        record2task=ThresholdTasks(context),
+        task2batch=ThresholdBatches(context) if task2batch is None else task2batch,
+    )

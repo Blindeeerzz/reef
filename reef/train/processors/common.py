@@ -25,10 +25,8 @@ TopkRow = tuple[list[int], list[float]]
 def sample_assembly_config_fields(config: Mapping[str, Any]) -> tuple[bool, int, int]:
     """Parse and validate the sample-assembly settings in one place.
 
-    Every reported-feedback processor accepts these config keys, so
-    ``ReportedFeedbackProcessor`` runs this at construction to fail fast on a bad deployment — even for
-    specs that never assemble a policy sample. ``SampleAssembly`` is the one
-    consumer of the returned values.
+    ``SampleAssembly.from_config`` runs this, so a recipe whose record-to-task
+    stage assembles policy samples fails at construction on a bad deployment.
     """
     accept_multi_turn = config.get("accept_multi_turn_policy_samples", False)
     if not isinstance(accept_multi_turn, bool):

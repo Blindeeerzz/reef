@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
-from recipes.sdft import SdftObjective, SDFTProcessor, SDFTRecipe
+from recipes.sdft import SDFTBatches, SdftObjective, SDFTRecipe
 from recipes.sdft.processor import DEFAULT_CONTEXT_TEMPLATE, SDFTTasks
 from recipes.sdft.slime import SdftSettings
 from reef.artifact.artifact import LiveWeightArtifactRef
@@ -29,6 +29,7 @@ from reef.recipe.errors import RecipeConfigError
 from reef.recipe.registry import build_recipe, recipe_class_for
 from reef.train import ProcessorContext
 from reef.train.algos import StepScheduling
+from reef.train.pipeline import TrainingPipeline
 from reef.train.processors.distill import distill_record_stage
 from reef.train.slime_backend.data_builder import to_slime_rollout_data
 from reef.train.slime_backend.loss_families import resolve_loss_family
@@ -112,11 +113,16 @@ def _report(
     )
 
 
-def _processor(**config: Any) -> SDFTProcessor:
+def _processor(**config: Any) -> TrainingPipeline:
     context = ProcessorContext(
         "science", {"batch_size": 1, "tokenizer_path": TOKENIZER_PATH, **config}, TeacherContextReport
     )
-    return SDFTProcessor(context, record_stage=distill_record_stage(context), record2task=SDFTTasks(context))
+    return TrainingPipeline(
+        context,
+        record_stage=distill_record_stage(context),
+        record2task=SDFTTasks(context),
+        task2batch=SDFTBatches(context),
+    )
 
 
 # --- the teacher's request --------------------------------------------------
@@ -211,7 +217,7 @@ def test_sdft_recipe_resolves_by_dotted_reference() -> None:
     assert recipe.context_template == DEFAULT_CONTEXT_TEMPLATE
     assert recipe.checkpoint_strategy == EveryNVersions(1)
     spec = SDFTRecipe.training_spec()
-    assert (spec.objective, spec.processor, spec.loss_family) == ("sdft", SDFTProcessor, "sdft")
+    assert (spec.objective, spec.task2batch, spec.loss_family) == ("sdft", SDFTBatches, "sdft")
     assert spec.scheduling == StepScheduling(unit="sample")
 
 
@@ -233,7 +239,7 @@ def test_sdft_recipe_reads_reef_side_config_and_hands_it_to_the_processor() -> N
 
     assert recipe.batch_size == 4
     assert recipe.checkpoint_strategy == EveryNVersions(4)
-    assert recipe.processor_config() == {
+    assert recipe.pipeline_config() == {
         "batch_size": 4,
         "tokenizer_path": TOKENIZER_PATH,
         "max_teacher_tokens": 24000,

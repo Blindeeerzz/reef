@@ -20,7 +20,7 @@ from reef.storage.sqlite import SQLiteRecordStore
 from reef.train.evaluation import BackendAlwaysSelectPlugin
 from reef.train.runtime_backend import RuntimeCandidateBackend
 
-from ._threshold_processor import ThresholdProcessor
+from ._threshold_processor import ThresholdBatches
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,7 @@ class ConfiguredRecipe(WeightTrainingRecipe):
 
     @classmethod
     def training_spec(cls) -> WeightTrainingSpec:
-        return WeightTrainingSpec(objective="sft", processor=ThresholdProcessor)
+        return WeightTrainingSpec(objective="sft", task2batch=ThresholdBatches)
 
 
 @pytest.mark.unit
@@ -212,13 +212,13 @@ def test_default_build_uses_declared_processor_and_config_fields() -> None:
         "scenario", SQLiteRecordStore()
     )
 
-    assert isinstance(trainer.processor, ThresholdProcessor)
+    assert isinstance(trainer.pipeline.task2batch, ThresholdBatches)
     assert isinstance(trainer.candidate_backend, RuntimeCandidateBackend)
     assert isinstance(trainer.candidate_evaluator, BackendAlwaysSelectPlugin)
     assert trainer.candidate_evaluator._candidate_backend is trainer.candidate_backend
     assert trainer.candidate_backend.objective == "sft"
-    assert trainer.processor.context.config["batch_size"] == 2
-    assert "max_staleness" not in trainer.processor.context.config
+    assert trainer.pipeline.context.config["batch_size"] == 2
+    assert "max_staleness" not in trainer.pipeline.context.config
 
 
 @pytest.mark.unit
@@ -226,7 +226,7 @@ def test_default_build_requires_processor_and_objective_declarations() -> None:
     from reef.storage.sqlite import SQLiteRecordStore
 
     @dataclass(frozen=True)
-    class NoProcessorRecipe(WeightTrainingRecipe):
+    class NoTask2BatchRecipe(WeightTrainingRecipe):
         @classmethod
         def training_spec(cls) -> WeightTrainingSpec:
             return WeightTrainingSpec(objective="sft")
@@ -235,9 +235,9 @@ def test_default_build_requires_processor_and_objective_declarations() -> None:
     class NoObjectiveRecipe(WeightTrainingRecipe):
         @classmethod
         def training_spec(cls) -> WeightTrainingSpec:
-            return WeightTrainingSpec(objective="", processor=ThresholdProcessor)
+            return WeightTrainingSpec(objective="", task2batch=ThresholdBatches)
 
-    with pytest.raises(TypeError, match=r"declares no processor.*training_spec\(\).*override build"):
-        NoProcessorRecipe(**runtime_bindings(StubTrainingRuntime())).build("scenario", SQLiteRecordStore())
+    with pytest.raises(TypeError, match=r"declares no task2batch.*training_spec\(\).*override build"):
+        NoTask2BatchRecipe(**runtime_bindings(StubTrainingRuntime())).build("scenario", SQLiteRecordStore())
     with pytest.raises(TypeError, match=r"declares no objective.*registered objective name.*'module:Objective'"):
         NoObjectiveRecipe(**runtime_bindings(StubTrainingRuntime())).build("scenario", SQLiteRecordStore())

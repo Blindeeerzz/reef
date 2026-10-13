@@ -37,7 +37,7 @@ from reef.storage.sqlite import SQLiteRecordStore
 from reef.train.backend import PreparedStep
 from reef.train.cordis_backend import Mutation
 from reef.train.cordis_backend.backend import merged_requires
-from reef.train.cordis_backend.processor import RecordDrivenTraceProcessor
+from reef.train.cordis_backend.processor import trace_pipeline
 from reef.train.trainer import Trainer
 from reef.train.types import TrainingBatch
 
@@ -530,7 +530,7 @@ def test_prepare_commit_keeps_the_backends_training_request_and_fills_a_step_tha
         trainer = Trainer.build(
             "agents",
             records,
-            processor_factory=lambda ctx: RecordDrivenTraceProcessor(ctx.with_config({"batch_size": 1})),
+            pipeline_factory=lambda ctx: trace_pipeline(ctx.with_config({"batch_size": 1}), "records"),
             candidate_backend=_RequiresBackend(written),
             training_mode="manual",
         )

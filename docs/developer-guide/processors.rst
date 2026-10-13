@@ -1,165 +1,163 @@
-Processors
-==========
+Training pipeline
+=================
 
-A processor is a scenario's batch builder: records in, one typed training
-batch out, with ownership of its in-memory buffers. Storage owns deletion. This page
-explains the record-to-record stage, the two feedback engines, the task
-generation contract, and the path a record takes to a batch.
+A scenario's training pipeline turns records into typed training batches. It
+has three stages, with one data type between each pair. A recipe writes the
+stages; Reef owns the pipeline that drives them. This page explains the
+stages, what a recipe writes for each, the training modes, the task
+generation contract, and the path a record takes to a batch. Storage owns
+deletion.
 
 .. page::
-   :for: recipe authors choosing an engine, and anyone reading ``reef/train/processors/``
-   :needs: the processor hooks from `Python API <../reference/python-api.rst#processor>`__
-   :outcome: which engine a method needs, what it writes, and what it never writes
+   :for: recipe authors writing the stages of a method, and anyone reading ``reef/train/pipeline.py``
+   :needs: the stage hooks from `Python API <../reference/python-api.rst#pipeline-stages>`__
+   :outcome: which stages a method needs, what it writes, and what it never writes
 
-The contract
+The three stages
+----------------
+
+.. code:: text
+
+   record ─► record2record ─► record set ─► record2task ─► task ─► task2batch ─► batch ─► trainer
+
+- The **record-to-record stage** (``Record2RecordStage``, ``reef.record2record``)
+  decides which records train, in which sets, and in what order. A set is a
+  report with the inference records that it references, a ready group, one
+  judged record, or a round request.
+- The **record-to-task stage** (``Record2Task``, ``reef.record2task``) turns
+  one record set into tasks. A task is a ``TrainDataItem``: a ``TrajectoryItem``
+  that trains directly, or a ``TaskItem`` (a Harbor task) that an algorithm
+  rolls out. A batch may mix both.
+- The **task-to-batch stage** (``Task2Batch``, ``reef.train.processors``)
+  shapes the tasks of the selected sets into one ``TrainingBatch``. Grouped
+  recipes set ``group_id`` on each member.
+
+The recipe builds the stages with ``build_record_stage(context)``,
+``build_record2task(context)``, and ``build_task2batch(context)``; the default
+of the last builds the ``task2batch`` class that ``training_spec()`` names.
+``build_pipeline(context)`` composes them into a ``TrainingPipeline``. A
+recipe overrides ``build_pipeline`` only when two stages need each other, as
+OpenClaw-RL's batches read the stage's judging. Without a record stage, the
+pipeline passes each record through and makes no tasks.
+
+Nothing numeric lives in the stages. Advantages and the loss family are the
+step objective's. See `batch values <../reference/python-api.rst#batch>`__ for
+formats and algorithm support.
+
+The pipeline
 ------------
 
-The trainer drives four mutating methods on its own thread, under its lock;
-none may block:
+``TrainingPipeline`` (``reef/train/pipeline.py``) is the only object that the
+trainer gives records to and takes batches from. Recipes do not subclass it.
+The trainer calls it on its own thread, under its lock; no call may block:
 
 - ``ingest(record)``: one record arrives. A TRAIN instruction stays in the
-  processor; every other record goes through the processor's record-to-record
-  stage (see below);
-- ``ready()``: is a batch available;
-- ``build_batch()``: produce it (the trainer validates it against ``output_schema``);
-- ``acknowledge(batch_id)``: the training step consumed that batch; returns
-  the consumed record ids, which the commit record persists so recovery never
-  re-ingests them.
+  pipeline; every other record goes to the record stage. The pipeline gives
+  each set that the stage forms to the record-to-task stage and gives the
+  result back to the record stage (``settle``): ``READY`` with tasks, or a
+  skip, which ends the set's records.
+- ``ready()``: is a batch available. It first lets background work land: the
+  record-to-task stage's ``poll`` (for example a finished round), then the
+  record stage's ``poll`` (for example finished judgments).
+- ``build_batch()``: reserve ``batch_size`` sets from the record stage, in
+  its selection order, and give their tasks to ``make_batch``. The trainer
+  validates the batch against ``output_schema``. The same batch stays
+  reserved until it is acknowledged or released.
+- ``acknowledge(batch_id)``: the training step consumed that batch. The record
+  stage ends the sets as trained and returns the IDs of the records that they
+  consumed. The commit record persists these IDs, so recovery never ingests
+  them again.
 
-Every concrete processor produces ``TrainingBatch.items``, an ordered tuple of
-``TrainDataItem`` values: ``TrajectoryItem`` for existing trajectories or
-``TaskItem`` for Harbor tasks that an algorithm will roll out. A batch may mix
-both. The record-to-task stage's ``make_sample`` constructs ATIF trajectory
-items, including captured training tensors and feedback in ``extra.reef``.
-The processor's ``make_batch`` collects the items; grouped recipes set
-``group_id`` on each member. Assembly, scheduling
-and group completeness remain recipe decisions. There is no separate dataset
-container. See `batch values <../reference/python-api.rst#batch>`__ for formats
-and algorithm support.
+The pipeline also merges the three stages' ``status()``, metrics, background
+work (``derivation_pending()``), and ``close()``. ``releasable_record_ids()``
+returns the completed records that no held set references, and
+``release_records(ids)`` frees their memory after a successful commit. New
+commits retain the stored bodies; consumption progress prevents retraining
+on restart. Storage can independently evict any body under capacity pressure,
+with warnings and durable loss totals. In a scenario with one trainer per
+component, every trainer reads the same rows and keeps its own consumption,
+so a row one pipeline releases is still stored for the others. When the
+scenario admits a wider report contract than a recipe's own,
+``admit_reports_of(report_type)`` names it, and the record stage releases a
+report shaped for another component instead of failing it. A batch that the
+backend dropped as stale is announced through ``dropped()`` before its
+acknowledgement, for a record stage that paces work on what actually trained.
 
-The processor controls its in-memory buffers. ``releasable_record_ids()``
-returns completed records with no remaining buffered dependents, and
-``release_records(ids)`` frees their memory after a successful commit. New commits retain the stored bodies; consumption progress prevents
-retraining on restart. Storage can independently evict any body under capacity
-pressure, with warnings and durable loss totals. In a scenario with one trainer
-per component, every trainer reads the same rows and keeps its own consumption,
-so a row one processor releases is still stored for the others. When the
-scenario admits a wider report contract than a processor's own,
-``admit_reports_of(report_type)`` names it, and the processor releases a report
-shaped for another component instead of failing it. A batch the backend dropped as stale is
-announced through ``dropped()`` before its acknowledgement, for a processor
-that paces work on what actually trained.
-Nothing numeric lives here. Advantages and the loss family are the step
-objective's. The read-only ``status()`` hook reports ``ready_units`` and
-``batch_size``. A report grouping adds an entry only when a terminal outcome
-cannot become a batch and an external runner must stop waiting (TTTD reports a
-complete mixed-artifact step as an invariant failure).
+``status()`` reports ``ready_units`` (the held sets) and ``batch_size``. A
+stage adds an entry only when a terminal outcome cannot become a batch and an
+external runner must stop waiting (TTTD reports a complete mixed-artifact
+step as an invariant failure).
 
 The record-to-record stage
 --------------------------
 
-Each processor has one ``Record2RecordStage`` (``reef.record2record``). The
-stage decides which records train and in what order. The processor turns what
-the stage decides into samples and batches. The recipe owns the stage's
-policy: ``WeightTrainingRecipe.build_record_stage(context)`` builds the stage,
-and ``build_processor`` passes it to the processor as ``record_stage``.
-Without one, the processor uses a default stage with no method policy.
-
-1. The stage reads each record and forms record sets: a report with the
-   inference records that it references, or one judged record.
-2. The processor assembles each formed set (``assemble``). It returns
-   ``READY`` with the training data, or ``REJECTED`` when the set cannot train.
-3. The stage holds ready sets in its pool, places reports in their groups, and
-   drops sets that can no longer train. The selection policy orders the pool.
+1. The stage reads each record and forms record sets.
+2. The record-to-task stage makes tasks from each formed set.
+3. The stage holds the sets that train in its pool, places reports in their
+   groups, and drops sets that can no longer train. The selection policy
+   orders the pool.
 4. ``build_batch`` reserves sets from the pool. ``acknowledge`` ends them as
-   trained and returns the IDs of the records that they consumed.
+   trained.
 
-A record that the stage ends, for example a report in a taken slot or a
-candidate that is too stale, appears in ``releasable_record_ids()``. The next
-commit names it, so the record never trains after a restart.
+A record that the stage ends, for example a report in a taken slot or a set
+that is too stale, appears in ``releasable_record_ids()``. The next commit
+names it, so the record never trains after a restart.
 
 .. list-table::
    :header-rows: 1
 
    * - Stage
-     - Used by
      - Decides
    * - ``PassThroughStage``
-     - the bare ``DataProcessor`` and processors that keep records themselves
-     - nothing; each record goes to ``assemble`` by itself
+     - nothing; the default of a pipeline that trains no weights
    * - ``ReportStage``
-     - ``ReportedFeedbackProcessor``
      - report validation, groups and slots, the manual-mode limit, source release
    * - ``JudgingStage``
-     - ``ComputedFeedbackProcessor``
      - correlation, the judging worker, and the ``max_staleness`` check
    * - ``InferenceStage``
-     - ``RecordDrivenTraceProcessor``
      - one set per inference record; other records are released
+   * - ``RoundStage``
+     - a ``ReportStage`` that also forms a request when a task-generation round is due
 
-``DataProcessor`` in ``base.py`` is concrete on purpose: bare, it is the
-no-update default that ingests for audit and never becomes ready. Recipes
-can implement their own lifecycle or reuse one of the feedback engines below.
+Training modes
+--------------
 
-Explicit manual training
-------------------------
+``training_mode`` is an attribute of each pipeline. The recipe passes its
+initial value through ``Trainer.build`` and ``ProcessorContext``; it defaults
+to ``auto``. A ``Task2Batch`` declares the modes it supports in
+``supported_training_modes``; the default is ``auto`` only. Ingestion,
+acknowledgement and buffer release use the same methods and buffers in every
+mode. ``GET /reef/status`` reports ``pending_instructions`` as the
+pipeline's ``buffered_requests`` plus the instructions still unread in
+storage.
 
-``training_mode`` is an attribute of each ``DataProcessor``. The recipe passes
-its initial value through ``Trainer.build`` and ``ProcessorContext``; it
-defaults to ``auto``. Ingestion, acknowledgement and buffer release use
-the same methods and buffers in every mode. ``GET /reef/status`` reports
-``pending_instructions`` as the processor's ``buffered_requests`` plus the
-instructions still unread in storage.
+- ``auto`` batches when ``batch_size`` sets are held.
+- ``manual`` batches on a queued TRAIN instruction. The instruction's batch
+  has no sets, so ``make_batch`` receives no tasks.
+- ``hybrid`` batches on either, and a queued instruction goes first. The
+  instruction's batch takes the sets that an automatic batch would.
 
-The shared batching cycle waits for ``batch_size`` units in ``auto``, for a
-queued TRAIN instruction in ``manual``, and for either in ``hybrid``, where a
-queued instruction goes first. A processor that takes instructions declares
-``supported_training_modes = frozenset({"auto", "manual", "hybrid"})`` and
-implements one assembly hook:
+The pipeline attaches the instruction to ``batch.request`` and replaces the
+batch id with ``<scenario>:instruction:<request id>``, the oldest instruction
+first, one per step. Acknowledgement also consumes the instruction. Batch
+construction must not call models or perform training.
 
-.. code:: python
+The trainer gives TRAIN records to the pipeline when ``RequestType.TRAIN`` is
+in the ``Task2Batch``'s ``required_request_types``. The pipeline queues them
+FIFO regardless of the selected mode; ``auto`` leaves the queue for a mode that
+takes it. Data ingestion continues normally in manual mode, so changing to auto
+or hybrid can batch data already collected. In manual mode the record stage
+holds at most four batches of sets and releases the oldest beyond that with a
+warning, at the switch and as reports arrive.
 
-   def make_training_batch(self, batch_number, request):
-       if request is not None and self.training_mode == "manual":
-           # Manual runs the instruction alone; harness needs no samples.
-           self.record_stage.reserve(0)
-           return TrainingBatch(request.id, ())
-       # Hybrid hands the instruction the units an automatic batch would take.
-       return self._make_pending(batch_number)
-
-This example extends the reported-feedback engine. ``request`` is a
-``TrainingRequest`` in ``manual`` and ``hybrid`` when an instruction is queued
-and ``None`` for an automatic batch. The base class attaches the instruction
-to ``batch.request`` and replaces the hook's own batch id with
-``<scenario>:instruction:<request id>``, the oldest instruction first, one
-per step. ``_consume_pending`` releases the selected data; shared
-acknowledgement also consumes the instruction. A processor that needs other
-inputs for an instruction selects them in the hook or extends the shared
-``ready`` predicate. Batch construction must not call models or perform
-training.
-
-Processors receive TRAIN records by including ``RequestType.TRAIN`` in
-``required_request_types`` and forwarding those records to ``super().ingest``.
-The base class queues them FIFO regardless of the selected mode; ``auto``
-leaves the queue for a mode that takes it. Data ingestion continues normally
-in manual mode, so changing to auto or hybrid can batch data already collected;
-the reported-feedback engine holds at most four batches of units in manual
-mode and releases the oldest beyond that with a warning, at the switch and
-as reports arrive. Custom retention
-implementations must preserve queued instructions and release consumed ones,
-as the reported-feedback engine does.
-
-Unsupported modes, or instruction assembly without an implementation, raise
-``NotImplementedError``. An invalid mode name raises ``ValueError``.
-The default automatic assembly keeps the existing ``_make_pending`` hook;
-automatic processors and computed-feedback ``RecordJudging`` implementations need no
-mode-specific lifecycle methods or additional processor class.
+Unsupported modes raise ``NotImplementedError``. An invalid mode name raises
+``ValueError``.
 
 Changing training mode
 ----------------------
 
 ``POST /reef/scenarios/{scenario}/update`` selects ``auto``, ``manual`` or
-``hybrid`` on the existing processor. The trainer serializes selection with
+``hybrid`` on the existing pipeline. The trainer serializes selection with
 ingestion and reservation. A reserved batch stays unchanged and acknowledgement
 consumes its actual contents, independently of subsequent mode changes.
 
@@ -170,10 +168,9 @@ mode, and a service restart starts from the recipe's configured mode.
 The two feedback paths
 ----------------------
 
-``ReportedFeedbackProcessor`` consumes feedback already supplied in reports.
-``ComputedFeedbackProcessor`` derives feedback from traffic, potentially using
-slow model calls on its worker. Reported feedback does not have a ``judge``
-hook; the computed engine retains its asynchronous ``judge``.
+Reported feedback arrives in reports. Computed feedback is derived from the
+traffic, potentially with slow model calls on a worker. Reported feedback has
+no ``judge`` hook; computed feedback keeps its asynchronous ``judge``.
 
 Reported feedback
 ~~~~~~~~~~~~~~~~~
@@ -182,31 +179,27 @@ Before accepting a new report, Reef checks its schema and verifies that every
 reference identifies an existing inference in the same scenario. Missing,
 wrong-kind, duplicate, or foreign references raise an error. Reports are not
 queued waiting for future inference records. Storage is authoritative; a record
-need not have reached the processor's in-memory cache at admission time.
+need not have reached the pipeline's in-memory cache at admission time.
 
 Reports cannot opt out of training: ``metadata.training.eligible`` is rejected,
 including when its value is ``true``. Valid low or negative scores are feedback,
 not a reason to discard the report.
 
-A reported-feedback recipe implements:
+A reported-feedback recipe writes:
 
-- ``make_sample(context) -> TrainDataItem`` on a ``ReportTasks`` subclass, its
-  record-to-task stage: assemble an ATIF trajectory or Harbor task directly.
-  Use ``context.require_score()`` when the method needs a reward. The stage
-  attaches the source and report ids to the returned item. The recipe's
-  ``build_record2task(context)`` returns it, and ``build_processor`` passes
-  it to the processor as ``record2task``.
-- ``make_batch(items, batch_number)`` on the processor: assemble the flat
-  tuple of selected training items into a batch. Consumption remains the
-  engine's responsibility, including selected items that the recipe removes
-  from training.
+- a ``ReportStage`` from ``build_record_stage``, with its ``ReportGrouping``
+  (below);
+- ``make_sample(context) -> TrainDataItem`` on a ``ReportTasks`` subclass,
+  from ``build_record2task``: assemble an ATIF trajectory or Harbor task
+  directly. Use ``context.require_score()`` when the method needs a reward.
+  The stage attaches the source and report ids to the returned item.
+- ``make_batch(tasks, batch_number)`` on a ``Task2Batch`` subclass: assemble
+  the flat tuple of selected tasks into a batch. The pipeline tracks
+  consumption by set, including tasks that the recipe removes from training.
 
-A recipe whose method groups or filters reports overrides
-``build_record_stage`` and returns a ``ReportStage`` with its
-``ReportGrouping``. ``exclusive_sources`` makes a terminal report own its
-referenced inference records outright, and ``ordered_groups`` batches ready
-groups in key order. The grouping runs on the trainer thread and reads only
-records:
+``exclusive_sources`` makes a terminal report own its referenced inference
+records outright, and ``ordered_groups`` batches ready groups in key order.
+The grouping runs on the trainer thread and reads only records:
 
 - ``is_training_report(report)`` when another role's reports share the
   scenario: return ``False`` for a valid report that is not this method's
@@ -228,10 +221,9 @@ cannot train, as Distill does for a teacher sequence that is too long. The
 stage releases the report.
 
 The stage handles report-id deduplication, group-slot retries, consumption,
-and retention; the processor keeps the reservation. A batch is ready in automatic mode after
-``batch_size`` units accumulate; a unit is one sample or one complete group.
-The same batch remains reserved until acknowledged or released. Reports arriving
-later for already consumed sources cannot train those sources again.
+and retention. A batch is ready in automatic mode after ``batch_size`` sets
+accumulate; a set is one report or one complete group. Reports arriving later
+for already consumed sources cannot train those sources again.
 
 Training data errors propagate: missing required tokens/logprobs are checked by
 the training backend, and unsupported trajectory assembly raises an error rather
@@ -247,7 +239,7 @@ A computed-feedback recipe writes a ``RecordJudging``: correlation in
 for tracked records that time out. The recipe's ``build_record_stage``
 returns a ``JudgingStage`` with the judging and the worker that runs
 ``judge``. Its ``build_record2task`` returns a ``JudgedTasks`` with
-``make_sample(record, judgment)``. The processor receives both and supplies
+``make_sample(record, judgment)``, and its ``Task2Batch`` supplies
 ``make_batch``. The stage holds judged records and drops those more than
 ``max_staleness`` versions behind the newest one.
 
@@ -323,7 +315,7 @@ until its round finishes, then releases them. A session that arrives after the
 last round is released at once. A restart before the release can use a
 session again.
 
-The first round starts when the processor first looks for a batch. The next
+The first round starts when the pipeline first looks for a batch. The next
 round starts after ``batches-per-round`` batches trained since the previous
 round started; a batch that the backend dropped as stale does not count. A
 round that played no task is followed at once. An exception from the
@@ -334,7 +326,7 @@ record-to-task stage continues with the next round. ``GET /reef/status`` shows t
 round, the task counts, and the last error under ``task_generation``.
 
 Container operations run in the generator service, ``reef.record2task.generator``.
-The processor calls this service over HTTP. The ``generator`` deployment
+The record-to-task stage calls this service over HTTP. The ``generator`` deployment
 section configures the service that ``reef serve`` starts.
 See `generator configuration
 <../reference/configuration.rst#the-generator-section>`__ for its settings.
@@ -344,30 +336,36 @@ A record's path to a batch
 
 .. code:: text
 
-   report -> record2record: validate references, filter -> record2task: make_sample
-       -> TrainDataItem -> record2record: optional group barrier -> make_batch -> batch -> acknowledge
+   report -> record2record: validate references, filter, group -> record set
+       -> record2task: make_sample -> TrainDataItem -> task2batch: make_batch -> batch -> acknowledge
 
-   computed record -> record2record: observe/track -> dispatch -> async judge
-       -> record2task: make_sample -> candidate -> make_batch -> batch -> acknowledge
+   computed record -> record2record: observe/track -> dispatch -> async judge -> judged set
+       -> record2task: make_sample -> TrainDataItem -> task2batch: make_batch -> batch -> acknowledge
 
-Where a processor lives
------------------------
+Where the stages live
+---------------------
 
-Shared engines live under ``reef/train/processors/``, including
-``DistillTasks``, the record-to-task stage of the distilling recipes: it
-emits the student's rollout plus the teacher sequence, the request the recipe
-composes from the recorded request and the report's ``teacher_context`` (its
-``teacher_request`` override) rendered with the served model's chat template.
-Concrete method processors and their record-to-task classes live in
-``recipes/<name>/processor.py``; the harness evolution implementation lives
+The stage contracts live in ``reef/record2record/``, ``reef/record2task/``, and
+``reef/train/processors/base.py``; the pipeline lives in
+``reef/train/pipeline.py``. ``reef/train/processors/`` also holds shared
+implementations, including ``DistillTasks``, the record-to-task stage of the
+distilling recipes: it emits the student's rollout plus the teacher sequence,
+the request the recipe composes from the recorded request and the report's
+``teacher_context`` (its ``teacher_request`` override) rendered with the
+served model's chat template. A method's own stages live in
+``recipes/<name>/processor.py`` (the record-to-task and task-to-batch classes)
+and ``recipes/<name>/recipe.py`` (the record stage); harness evolution's live
 in ``reef/train/cordis_backend/processor.py``. Recipe-specific correlation and
-model clients belong beside the method processor.
+model clients belong beside the method's stages.
 
 Compatibility
 -------------
 
-Reported-feedback recipes must replace ``judge`` and ``ReportDecision`` with
-``make_sample`` returning ``TrainDataItem`` on a ``ReportTasks`` subclass. Remove ``WAIT``/``NEVER`` branches: invalid
+A recipe's processor class becomes a ``Task2Batch`` with its ``make_batch``,
+named by ``WeightTrainingSpec.task2batch``; the trainer drives a
+``TrainingPipeline`` instead of a ``DataProcessor``. Reported-feedback recipes
+must replace ``judge`` and ``ReportDecision`` with ``make_sample`` returning
+``TrainDataItem`` on a ``ReportTasks`` subclass. Remove ``WAIT``/``NEVER`` branches: invalid
 references fail admission, and training contract failures must raise. Existing
 stored records replay through the new contract; legacy reports with invalid
 references or eligibility flags fail explicitly and need correction before replay.

@@ -26,9 +26,10 @@ from dataclasses import replace
 from typing import Any
 
 from reef.core.trajectories import trajectory_reward
-from reef.record2record import ReportContext, ReportStage
-from reef.record2task import Record2Task, ReportTasks
-from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
+from reef.record2record import ReportContext
+from reef.record2task import ReportTasks
+from reef.train.processors.base import Task2Batch
+from reef.train.processors.reported import SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
 logger = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ def sibling_group(context: ReportContext) -> tuple[str, str]:
     """The attempt's sibling group (its parent commit, or ``ROOT_GROUP``) and its own commit hash."""
     coral = coral_metadata(context)
     if coral is None:
-        raise ValueError("CoralProcessor requires metadata.coral with a commit_hash")
+        raise ValueError("CoralBatches requires metadata.coral with a commit_hash")
     parent = coral.get("parent_hash")
     return (parent if isinstance(parent, str) and parent else ROOT_GROUP), coral["commit_hash"]
 
@@ -83,7 +84,7 @@ class CoralTasks(ReportTasks):
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
         coral = coral_metadata(context)
         if coral is None:
-            raise ValueError("CoralProcessor requires metadata.coral with a commit_hash")
+            raise ValueError("CoralBatches requires metadata.coral with a commit_hash")
         sample = self.assembly.build(context, context.require_score())
         release_ids = attempt_release_ids(context)
         if len(release_ids) > 1:
@@ -93,39 +94,29 @@ class CoralTasks(ReportTasks):
         )
 
 
-class CoralProcessor(ReportedFeedbackProcessor):
-    """One CORAL sibling group = one grouped relative-reward training unit.
+class CoralBatches(Task2Batch):
+    """One CORAL sibling group, one batch: the siblings of one parent are one relative-reward group.
 
     Config:
 
     - ``group_size`` (default 4, min 2): scored siblings required before a
-      parent's group trains. CORAL sibling counts are dynamic, so this is a
+      parent's group trains; the recipe's ``CoralGrouping`` waits for them. CORAL sibling counts are dynamic, so this is a
       recipe-level barrier, not a CORAL invariant; parents that never accrue
       enough scored children simply never train.
     """
 
-    output_schema = TrainingBatch
-
-    def __init__(
-        self,
-        context: ProcessorContext,
-        *,
-        record_stage: ReportStage | None = None,
-        record2task: Record2Task | None = None,
-    ) -> None:
+    def __init__(self, context: ProcessorContext) -> None:
         config = dict(context.config)
         self.group_size = int(config.get("group_size", 4))
         if self.group_size < 2:
             raise ValueError("group_size must be at least two (relative rewards need contrast)")
         config.setdefault("accept_multi_turn_policy_samples", True)
-        super().__init__(
-            context.with_config({**config, "batch_size": 1}), record_stage=record_stage, record2task=record2task
-        )
+        super().__init__(context.with_config({**config, "batch_size": 1}))
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         parents = {item.metadata["coral"]["group"] for item in items}
         if len(parents) != 1:
-            raise RuntimeError("CoralProcessor batches exactly one sibling group per step")
+            raise RuntimeError("CoralBatches batches exactly one sibling group per step")
         parent = next(iter(parents))
         batch = TrainingBatch(f"{self.scenario}:coral:{parent}:{batch_number}", items)
         group = trajectories(batch)

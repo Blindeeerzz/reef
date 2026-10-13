@@ -18,14 +18,16 @@ from reef.core.training_request import TrainingRequest
 from reef.core.trajectories import source_record_id
 from reef.dispatcher import Dispatcher
 from reef.recipe import Recipe, RecipeConfigError
+from reef.record2record import InferenceStage, PassThroughStage
 from reef.runtime.interfaces import TrainingRuntime
 from reef.service.app import create_app
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
 from reef.train.backend import PreparedStep
-from reef.train.cordis_backend.processor import CordisProcessor, RecordDrivenTraceProcessor
-from reef.train.processors.base import DataProcessor
+from reef.train.cordis_backend.processor import InferenceTasks, trace_pipeline
+from reef.train.pipeline import TrainingPipeline
+from reef.train.processors.base import Task2Batch
 from reef.train.trainer import Trainer
-from reef.train.types import ProcessorContext, TrainingBatch
+from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch
 
 from .runtime_stubs import StubTrainingRuntime
 from .test_harness_proposals import _dispatcher, _recipe
@@ -80,11 +82,21 @@ def failure(records, receipt):
     records.append(report(receipt))
 
 
-def build(records, backend, processor=RecordDrivenTraceProcessor, mode="manual", batch_size=1):
+def reports_pipeline(context):
+    """Harness traces from reported scores."""
+    return trace_pipeline(context, "reports")
+
+
+def records_pipeline(context):
+    """Harness traces from recorded inference traffic, unscored."""
+    return trace_pipeline(context, "records")
+
+
+def build(records, backend, processor=records_pipeline, mode="manual", batch_size=1):
     return Trainer.build(
         "s",
         records,
-        processor_factory=lambda ctx: processor(ctx.with_config({"batch_size": batch_size})),
+        pipeline_factory=lambda ctx: processor(ctx.with_config({"batch_size": batch_size})),
         candidate_backend=backend,
         training_mode=mode,
     )
@@ -104,7 +116,7 @@ def _release_texts(dispatcher, scenario="s"):
     return [row.get("metrics", {}).get("training_request", {}).get("text") for row in rows]
 
 
-@pytest.mark.parametrize("processor", [CordisProcessor, RecordDrivenTraceProcessor])
+@pytest.mark.parametrize("processor", [reports_pipeline, records_pipeline])
 @pytest.mark.parametrize("batch_size", [1, 100])
 def test_manual_waits_for_instruction_without_automatic_batch_gates(processor, batch_size):
     records, backend = SQLiteRecordStore(), CaptureBackend()
@@ -195,9 +207,9 @@ def test_manual_recovery_replays_pending_requests_but_not_committed_ones(tmp_pat
 def test_manual_requires_an_explicit_recipe_assembler():
     records = SQLiteRecordStore()
     with pytest.raises(NotImplementedError, match="does not implement training_mode='manual'"):
-        build(records, CaptureBackend(), DataProcessor)
+        build(records, CaptureBackend(), TrainingPipeline)
     with pytest.raises(NotImplementedError, match="does not implement training_mode='hybrid'"):
-        build(records, CaptureBackend(), DataProcessor, mode="hybrid")
+        build(records, CaptureBackend(), TrainingPipeline, mode="hybrid")
     with pytest.raises(ValueError, match="training_mode"):
         build(records, CaptureBackend(), mode="typo")
     records.close()
@@ -269,22 +281,30 @@ def test_auto_rejects_manual_requests(tmp_path):
 
 
 def test_manual_is_a_native_contract_for_arbitrary_batch_schemas():
-    class InstructionProcessor(DataProcessor):
+    class InstructionBatches(Task2Batch):
         supported_training_modes = frozenset({"manual"})
         required_request_types = frozenset(RequestType)
         output_schema = ExampleBatch
 
-        def make_training_batch(self, batch_number, request):
-            return ExampleBatch(request.id, values=(request.text,))
+        def make_batch(self, tasks, batch_number):
+            return ExampleBatch(
+                f"{self.scenario}:{batch_number}", values=tuple(source_record_id(task) for task in tasks)
+            )
+
+    def instruction_pipeline(context):
+        return TrainingPipeline(context, task2batch=InstructionBatches(context))
 
     with pytest.raises(NotImplementedError, match="training_mode='auto'"):
-        InstructionProcessor(ProcessorContext("s"))
+        instruction_pipeline(ProcessorContext("s"))
     records, backend = SQLiteRecordStore(), CaptureBackend()
-    trainer = build(records, backend, InstructionProcessor)
+    trainer = build(records, backend, instruction_pipeline)
     records.append(instruction("change"))
     assert trainer.run_once() is not None
     assert isinstance(backend.batches[0], ExampleBatch)
-    assert backend.batches[0].values == ("change",)
+    # The pipeline attaches the instruction to the recipe's own batch type; a manual batch has no tasks.
+    assert backend.batches[0].batch_id == "s:instruction:change"
+    assert backend.batches[0].request.text == "change"
+    assert backend.batches[0].values == ()
     trainer.close()
     records.close()
 
@@ -294,32 +314,46 @@ def test_processor_context_keeps_mode_when_recipe_applies_config():
     configured = context.with_config({"batch_size": 100})
     assert configured.training_mode == "manual"
     assert configured.config == {"batch_size": 100}
-    processor = CordisProcessor(configured)
+    processor = reports_pipeline(configured)
     assert processor.training_mode == "manual"
     assert RequestType.TRAIN in processor.required_request_types
     processor.close()
 
 
 def test_missing_mode_implementation_fails_at_processor_initialization():
-    class AutoOnlyProcessor(DataProcessor):
-        pass
+    class AutoOnlyBatches(Task2Batch):
+        def make_batch(self, tasks, batch_number):
+            return TrainingBatch(f"{self.scenario}:{batch_number}", tasks)
 
-    with pytest.raises(NotImplementedError, match=r"AutoOnlyProcessor.*manual"):
-        AutoOnlyProcessor(ProcessorContext("s", training_mode="manual"))
-    with pytest.raises(NotImplementedError, match=r"AutoOnlyProcessor.*hybrid"):
-        AutoOnlyProcessor(ProcessorContext("s", training_mode="hybrid"))
+    for mode in ("manual", "hybrid"):
+        context = ProcessorContext("s", training_mode=mode)
+        with pytest.raises(NotImplementedError, match=rf"AutoOnlyBatches.*{mode}"):
+            TrainingPipeline(context, task2batch=AutoOnlyBatches(context))
     with pytest.raises(ValueError, match="training_mode"):
         ProcessorContext("s", training_mode="invalid")
 
 
-def test_unimplemented_manual_assembly_never_falls_back_to_auto():
-    class IncompleteProcessor(DataProcessor):
+def test_manual_instruction_batch_never_falls_back_to_auto():
+    class TraceOnlyBatches(Task2Batch):
         supported_training_modes = frozenset({"auto", "manual"})
 
-    processor = IncompleteProcessor(ProcessorContext("s", training_mode="manual"))
-    processor.ingest(instruction("one"))
-    with pytest.raises(NotImplementedError, match="instruction batch assembly"):
-        processor.build_batch()
+        def make_batch(self, tasks, batch_number):
+            return TrainingBatch(f"{self.scenario}:{batch_number}", tasks)
+
+    context = ProcessorContext("s", training_mode="manual")
+    pipeline = TrainingPipeline(
+        context, record_stage=InferenceStage(), record2task=InferenceTasks(), task2batch=TraceOnlyBatches(context)
+    )
+    pipeline.ingest(inference("held"))
+    assert not pipeline.ready()
+    pipeline.ingest(instruction("one"))
+    batch = pipeline.build_batch()
+    # The instruction runs alone: the held set an automatic batch would take stays held.
+    assert batch.request.id == "one"
+    assert batch.items == ()
+    assert pipeline.acknowledge(batch.batch_id) == frozenset({"one"})
+    assert pipeline.record_stage.available_count() == 1
+    pipeline.close()
 
 
 def test_status_shows_how_far_a_partly_filled_batch_still_has_to_go():
@@ -331,36 +365,41 @@ def test_status_shows_how_far_a_partly_filled_batch_still_has_to_go():
     training that is merely slow.
     """
 
-    class CountingProcessor(DataProcessor):
-        supported_training_modes = frozenset({"auto"})
-
-        def __init__(self, context: ProcessorContext) -> None:
-            super().__init__(context)
+    class CountingStage(PassThroughStage):
+        def __init__(self) -> None:
+            super().__init__()
             self.held = 0
 
-        def _ready_count(self) -> int:
+        def available_count(self) -> int:
             return self.held
 
-    processor = CountingProcessor(ProcessorContext("s", config={"batch_size": 4}, training_mode="auto"))
-    assert processor.status() == {"ready_units": 0, "batch_size": 4}
-    processor.held = 3
-    assert processor.status() == {"ready_units": 3, "batch_size": 4}
-    assert not processor.ready()
-    processor.held = 4
-    assert processor.status() == {"ready_units": 4, "batch_size": 4}
-    assert processor.ready()
+    stage = CountingStage()
+    pipeline = TrainingPipeline(
+        ProcessorContext("s", config={"batch_size": 4}, training_mode="auto"), record_stage=stage
+    )
+    assert pipeline.status() == {"ready_units": 0, "batch_size": 4}
+    stage.held = 3
+    assert pipeline.status() == {"ready_units": 3, "batch_size": 4}
+    assert not pipeline.ready()
+    stage.held = 4
+    assert pipeline.status() == {"ready_units": 4, "batch_size": 4}
+    assert pipeline.ready()
 
 
 def test_status_reports_buffered_requests_when_a_processor_takes_instructions_in_hybrid_only():
-    class HybridOnlyProcessor(DataProcessor):
+    class HybridOnlyBatches(Task2Batch):
         supported_training_modes = frozenset({"auto", "hybrid"})
         required_request_types = frozenset(RequestType)
 
-    processor = HybridOnlyProcessor(ProcessorContext("s", training_mode="hybrid"))
-    processor.ingest(instruction("one"))
-    assert processor.status()["buffered_requests"] == 1
-    processor.close()
-    auto_only = DataProcessor(ProcessorContext("s"))
+        def make_batch(self, tasks, batch_number):
+            return TrainingBatch(f"{self.scenario}:{batch_number}", tasks)
+
+    context = ProcessorContext("s", training_mode="hybrid")
+    pipeline = TrainingPipeline(context, task2batch=HybridOnlyBatches(context))
+    pipeline.ingest(instruction("one"))
+    assert pipeline.status()["buffered_requests"] == 1
+    pipeline.close()
+    auto_only = TrainingPipeline(ProcessorContext("s"))
     auto_only.ingest(instruction("one"))
     assert "buffered_requests" not in auto_only.status()
     auto_only.close()
@@ -368,48 +407,36 @@ def test_status_reports_buffered_requests_when_a_processor_takes_instructions_in
 
 @pytest.mark.parametrize("mode", ["auto", "manual", "hybrid"])
 def test_processor_uses_shared_data_and_one_batch_assembly_hook(mode):
-    class TrajectoryProcessor(DataProcessor):
+    class TrajectoryBatches(Task2Batch):
         supported_training_modes = frozenset({"auto", "manual", "hybrid"})
         required_request_types = frozenset({RequestType.INFERENCE, RequestType.TRAIN})
         output_schema = ExampleBatch
 
-        def __init__(self, context):
-            super().__init__(context)
-            self.exchanges = []
+        def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> ExampleBatch:
+            return ExampleBatch("custom-batch", values=tuple(source_record_id(task) for task in tasks))
 
-        def ingest(self, item):
-            super().ingest(item)
-            if item.request_type is RequestType.INFERENCE:
-                self.exchanges.append(item)
-
-        def _ready_count(self):
-            return len(self.exchanges)
-
-        def ready(self):
-            return self._pending is not None or (len(self.exchanges) >= 2 and super().ready())
-
-        def make_training_batch(self, batch_number, request):
-            return ExampleBatch("custom-batch", values=tuple(record.agent_record_id for record in self.exchanges))
-
-        def _consume_pending(self):
-            consumed = frozenset(record.agent_record_id for record in self.exchanges)
-            self.exchanges.clear()
-            return consumed
+    def trajectory_pipeline(context):
+        return TrainingPipeline(
+            context, record_stage=InferenceStage(), record2task=InferenceTasks(), task2batch=TrajectoryBatches(context)
+        )
 
     records, backend = SQLiteRecordStore(), CaptureBackend()
-    trainer = build(records, backend, TrajectoryProcessor, mode=mode, batch_size=2)
+    trainer = build(records, backend, trajectory_pipeline, mode=mode, batch_size=2)
     try:
         records.append(inference("first"))
         assert trainer.run_once() is None
-        if mode != "auto":
+        if mode == "auto":
+            records.append(inference("second"))
+        else:
             records.append(instruction("use-the-trajectory"))
-            assert trainer.run_once() is None
-        records.append(inference("second"))
         result = trainer.run_once()
-        assert backend.batches[0].values == ("first", "second")
+        # The same hook shapes every mode's batch: manual runs the instruction alone, hybrid with the held sets.
+        expected_values = {"auto": ("first", "second"), "manual": (), "hybrid": ("first",)}[mode]
+        assert isinstance(backend.batches[0], ExampleBatch)
+        assert backend.batches[0].values == expected_values
         assert (backend.batches[0].request is None) == (mode == "auto")
         prepared = trainer.prepare_commit(result)
-        expected = {"first", "second"} | ({"use-the-trajectory"} if mode != "auto" else set())
+        expected = set(expected_values) | ({"use-the-trajectory"} if mode != "auto" else set())
         assert prepared.consumed_ids == frozenset(expected)
         trainer.commit(prepared)
         assert trainer.run_once() is None
@@ -424,7 +451,7 @@ def test_factory_cannot_silently_change_the_processor_mode():
         Trainer.build(
             "s",
             records,
-            processor_factory=lambda ctx: DataProcessor(replace(ctx, training_mode="auto")),
+            pipeline_factory=lambda ctx: TrainingPipeline(replace(ctx, training_mode="auto")),
             candidate_backend=CaptureBackend(),
             training_mode="manual",
         )
@@ -488,9 +515,9 @@ def test_switch_during_reserved_batch_keeps_original_acknowledgement(mode, dispa
             result = trainer.run_once()
             original = trainer.pending_batch
         target = "manual" if mode == "auto" else "auto"
-        processor = trainer.processor
+        processor = trainer.pipeline
         trainer.set_training_mode(target)
-        assert trainer.processor is processor
+        assert trainer.pipeline is processor
         assert trainer.training_mode == target
         assert trainer.pending_batch is original
         if dispatched:
@@ -548,7 +575,7 @@ def test_http_training_mode_updates_only_existing_supported_processors(tmp_path,
     recipe = _recipe(tmp_path, propose if reads_requests else lambda n, s, m: None)
     dispatcher = _dispatcher(tmp_path, recipe)
     scenario = dispatcher.get_or_create_scenario("s")
-    processor = scenario.trainer.processor
+    processor = scenario.trainer.pipeline
 
     async def run():
         client = TestClient(TestServer(create_app(dispatcher)))
@@ -561,7 +588,7 @@ def test_http_training_mode_updates_only_existing_supported_processors(tmp_path,
                 if reads_requests:
                     assert await response.json() == {"scenario": "s", "training_mode": mode}
                 assert scenario.trainer.training_mode == (mode if reads_requests else "auto")
-                assert scenario.trainer.processor is processor
+                assert scenario.trainer.pipeline is processor
                 status = await (await client.get("/reef/status")).json()
                 assert status["scenarios"]["s"]["training_mode"] == scenario.trainer.training_mode
             for invalid in (
@@ -701,6 +728,7 @@ def test_a_step_whose_evaluation_raised_keeps_its_proposal_and_says_where_it_fai
     from reef.harness.tree.mutations import Mutation
     from reef.service.release_page import failed_words
     from reef.train.cordis_backend.strategies import StepProposal
+
     from ._strategies import resolve_episode_scorer
 
     marker = Mutation("create", "r1", {"name": "rules", "config": {"text": "marker rules"}})
@@ -772,7 +800,7 @@ def test_a_failed_instruction_is_skipped_with_its_error_and_the_queue_moves_on(t
         assert "error" not in _committed_row(dispatcher, "fine")
         current = dispatcher.get_or_create_scenario("s")
         assert current.trainer.pending_instructions() == 0
-        assert current.trainer.processor_status()["buffered_requests"] == 0
+        assert current.trainer.pipeline_status()["buffered_requests"] == 0
         assert current.trainer.instruction_failures() == {}
         assert current.records.get("s", "poison") is not None
         assert current.trainer.training_mode == "manual"
@@ -962,7 +990,7 @@ def test_a_logless_scenario_keeps_the_failed_batch_and_skips_it_on_its_next_wake
         assert _wait(lambda: scenario.scenario_step == 2)
         assert _last_committed(scenario).get("skipped") == "no proposal"
         assert scenario.trainer.pending_instructions() == 0
-        assert scenario.trainer.processor_status()["buffered_requests"] == 0
+        assert scenario.trainer.pipeline_status()["buffered_requests"] == 0
         assert scenario.trainer.instruction_failures() == {}
         assert scenario.records.get("s", "poison") is not None
     finally:
@@ -990,7 +1018,7 @@ def test_the_dispatched_training_thread_skips_a_failed_instruction(tmp_path):
             return Trainer.build(
                 scenario,
                 records,
-                processor_factory=lambda ctx: RecordDrivenTraceProcessor(ctx.with_config({"batch_size": 1})),
+                pipeline_factory=lambda ctx: records_pipeline(ctx.with_config({"batch_size": 1})),
                 candidate_backend=RaisingBackend(dispatched=True),
                 algorithm_state=algorithm_state,
                 experiment_logger=experiment_logger,
@@ -1065,14 +1093,14 @@ def test_an_instruction_runs_past_the_step_budget_and_the_failure_streak(tmp_pat
         records.close()
 
 
-@pytest.mark.parametrize("processor", [CordisProcessor, RecordDrivenTraceProcessor])
+@pytest.mark.parametrize("processor", [reports_pipeline, records_pipeline])
 def test_manual_traffic_is_available_to_auto_without_reingestion(processor):
     records, backend = SQLiteRecordStore(), CaptureBackend()
     trainer = build(records, backend, processor, mode="manual", batch_size=2)
     try:
         for receipt in ("a", "b"):
             records.append(inference(receipt))
-            if processor is CordisProcessor:
+            if processor is reports_pipeline:
                 records.append(
                     AgentRecord.create(
                         scenario="s",
@@ -1081,11 +1109,11 @@ def test_manual_traffic_is_available_to_auto_without_reingestion(processor):
                     )
                 )
         assert trainer.run_once() is None
-        original = trainer.processor
+        original = trainer.pipeline
         offset = trainer.data_offset
         trainer.set_training_mode("auto")
         assert trainer.run_once() is not None
-        assert trainer.processor is original
+        assert trainer.pipeline is original
         assert trainer.data_offset == offset
         assert [source_record_id(sample) for sample in backend.batches[-1].items] == ["a", "b"]
     finally:
@@ -1105,20 +1133,20 @@ def test_hybrid_is_a_recipe_and_processor_mode_and_a_fourth_value_is_refused(tmp
     try:
         trainer = recipe.build("s", records)
         assert trainer.training_mode == "hybrid"
-        assert trainer.processor.training_mode == "hybrid"
-        assert trainer.processor.status()["buffered_requests"] == 0
+        assert trainer.pipeline.training_mode == "hybrid"
+        assert trainer.pipeline.status()["buffered_requests"] == 0
         trainer.close()
         with pytest.raises(ValueError, match="training_mode"):
             replace(recipe, training_mode="either")
         with pytest.raises(ValueError, match="training_mode"):
             ProcessorContext("s", training_mode="either")
         with pytest.raises(ValueError, match="training_mode"):
-            CordisProcessor(ProcessorContext("s")).set_training_mode("either")
+            reports_pipeline(ProcessorContext("s")).set_training_mode("either")
     finally:
         records.close()
 
 
-@pytest.mark.parametrize("processor", [CordisProcessor, RecordDrivenTraceProcessor])
+@pytest.mark.parametrize("processor", [reports_pipeline, records_pipeline])
 def test_hybrid_runs_a_queued_instruction_alone_when_no_units_are_held(processor):
     records, backend = SQLiteRecordStore(), CaptureBackend()
     trainer = build(records, backend, processor, mode="hybrid", batch_size=2)
@@ -1143,7 +1171,7 @@ def test_hybrid_runs_a_queued_instruction_alone_when_no_units_are_held(processor
         records.close()
 
 
-@pytest.mark.parametrize("processor", [CordisProcessor, RecordDrivenTraceProcessor])
+@pytest.mark.parametrize("processor", [reports_pipeline, records_pipeline])
 def test_hybrid_runs_a_queued_instruction_with_the_held_units_as_samples(processor):
     records, backend = SQLiteRecordStore(), CaptureBackend()
     trainer = build(records, backend, processor, mode="hybrid", batch_size=2)
@@ -1169,7 +1197,7 @@ def test_hybrid_runs_a_queued_instruction_with_the_held_units_as_samples(process
 
 
 def test_hybrid_runs_two_queued_instructions_oldest_first_one_per_step():
-    processor = CordisProcessor(ProcessorContext("s", {"batch_size": 1}, training_mode="hybrid"))
+    processor = reports_pipeline(ProcessorContext("s", {"batch_size": 1}, training_mode="hybrid"))
     processor.ingest(instruction("first"))
     processor.ingest(instruction("second"))
     assert processor.status()["buffered_requests"] == 2
@@ -1186,7 +1214,7 @@ def test_hybrid_runs_two_queued_instructions_oldest_first_one_per_step():
 
 
 def test_hybrid_batches_as_auto_does_without_an_instruction():
-    processor = CordisProcessor(ProcessorContext("s", {"batch_size": 1}, training_mode="hybrid"))
+    processor = reports_pipeline(ProcessorContext("s", {"batch_size": 1}, training_mode="hybrid"))
     processor.ingest(inference("a"))
     processor.ingest(report("a"))
     batch = processor.build_batch()
@@ -1199,7 +1227,7 @@ def test_hybrid_batches_as_auto_does_without_an_instruction():
 
 def test_hybrid_alternates_the_instruction_path_and_the_failure_path_without_a_mode_change():
     records, backend = SQLiteRecordStore(), CaptureBackend()
-    trainer = build(records, backend, CordisProcessor, mode="hybrid", batch_size=2)
+    trainer = build(records, backend, reports_pipeline, mode="hybrid", batch_size=2)
 
     def step():
         result = trainer.run_once()
@@ -1240,12 +1268,12 @@ def test_hybrid_alternates_the_instruction_path_and_the_failure_path_without_a_m
 
 def test_switching_hybrid_to_auto_holds_the_unread_instruction_for_a_mode_that_takes_it():
     records, backend = SQLiteRecordStore(), CaptureBackend()
-    trainer = build(records, backend, CordisProcessor, mode="hybrid", batch_size=2)
+    trainer = build(records, backend, reports_pipeline, mode="hybrid", batch_size=2)
     try:
         records.append(instruction("later"))
         trainer.set_training_mode("auto")
         assert trainer.run_once() is None
-        assert trainer.processor.status()["buffered_requests"] == 1
+        assert trainer.pipeline.status()["buffered_requests"] == 1
         failure(records, "a")
         failure(records, "b")
         result = trainer.run_once()
@@ -1352,7 +1380,7 @@ def test_the_proposal_route_refuses_in_manual_mode_and_admits_again_in_a_batchin
 
 def test_manual_mode_caps_held_units_at_four_batches_and_the_batching_modes_hold_them_all(caplog):
     def fill(mode):
-        processor = CordisProcessor(ProcessorContext("s", {"batch_size": 1}, training_mode=mode))
+        processor = reports_pipeline(ProcessorContext("s", {"batch_size": 1}, training_mode=mode))
         for i in range(20):
             processor.ingest(inference(f"inf-{i}"))
             processor.ingest(
@@ -1365,9 +1393,9 @@ def test_manual_mode_caps_held_units_at_four_batches_and_the_batching_modes_hold
             )
         return processor
 
-    with caplog.at_level(logging.WARNING, logger="reef.train.processors.reported"):
+    with caplog.at_level(logging.WARNING, logger="reef.record2record.reports"):
         manual = fill("manual")
-    assert manual._ready_count() == 4
+    assert manual.record_stage.available_count() == 4
     assert not manual.ready()
     retention = manual.releasable_record_ids()
     shed = {f"inf-{i}" for i in range(16)} | {f"rep-{i}" for i in range(16)}
@@ -1380,19 +1408,19 @@ def test_manual_mode_caps_held_units_at_four_batches_and_the_batching_modes_hold
     batch = manual.build_batch()
     assert batch.items == ()
     assert manual.acknowledge(batch.batch_id) == frozenset({"do-it"})
-    assert manual._ready_count() == 4
+    assert manual.record_stage.available_count() == 4
     manual.close()
 
     for mode in ("auto", "hybrid"):
         uncapped = fill(mode)
-        assert uncapped._ready_count() == 20
+        assert uncapped.record_stage.available_count() == 20
         # The switch to manual trims the pile at once; the batch already handed out keeps its unit.
         reserved = uncapped.build_batch()
         uncapped.set_training_mode("manual")
-        assert uncapped._ready_count() == 4
+        assert uncapped.record_stage.available_count() == 4
         assert "inf-0" not in uncapped.releasable_record_ids()
         assert uncapped.acknowledge(reserved.batch_id) == frozenset({"inf-0", "rep-0"})
-        assert uncapped._ready_count() == 3
+        assert uncapped.record_stage.available_count() == 3
         uncapped.close()
 
 

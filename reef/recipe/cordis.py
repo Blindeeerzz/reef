@@ -55,7 +55,7 @@ from reef.surface.harnesses import create_harness_surface
 from reef.train.backend import STALE_RESULT_POLICIES, StaleResultPolicy
 from reef.train.cordis_backend.backend import CordisBackend, FloorPlugin, ScoreComparisonPlugin, tree_files
 from reef.train.cordis_backend.execution import evaluation_selection, legacy_worker_settings
-from reef.train.cordis_backend.processor import CordisProcessor, RecordDrivenTraceProcessor
+from reef.train.cordis_backend.processor import trace_pipeline
 from reef.train.cordis_backend.strategies import EpisodeScorer, Promoter, Proposer
 from reef.train.evaluation.evaluators import BackendAlwaysSelectPlugin, SelectionPlugin
 from reef.train.trainer import Trainer
@@ -813,15 +813,9 @@ class CordisRecipe(Recipe):
         return Trainer.build(
             scenario,
             records,
-            processor_factory=lambda context: (
-                RecordDrivenTraceProcessor if self.batch_policy == "records" else CordisProcessor
-            )(
-                context.with_config(
-                    {
-                        "batch_size": self.batch_size,
-                        "manual_enabled": self.propose.reads_requests,
-                    }
-                )
+            pipeline_factory=lambda context: trace_pipeline(
+                context.with_config({"batch_size": self.batch_size, "manual_enabled": self.propose.reads_requests}),
+                self.batch_policy,
             ),
             candidate_backend=candidate_backend,
             candidate_evaluator=candidate_evaluator,

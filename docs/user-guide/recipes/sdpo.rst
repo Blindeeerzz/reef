@@ -19,7 +19,7 @@ reports that SDPO reaches GRPO's accuracy with fewer samples.
 +-------------+------------------------------------------------------------+
 | Package     | ``recipes/sdpo/``                                          |
 +-------------+------------------------------------------------------------+
-| Processor   | reported feedback, one batch per sampling grid             |
+| Pipeline    | reported feedback, one batch per sampling grid             |
 +-------------+------------------------------------------------------------+
 | Needs       | GPUs, and a backend that captures tokens and log-probs     |
 +-------------+------------------------------------------------------------+
@@ -45,14 +45,14 @@ grid. The recipe waits for the whole grid and trains on it in one step.
 How Reef implements it
 ----------------------
 
-The processor is ``SDPOProcessor`` on the shared ``DistillProcessor``
-(`Processors <../../developer-guide/processors.rst>`__). One batch is one
-complete grid. The teacher's request is the question with the first correct
+``SDPOTasks`` turns each rollout's report into a task, and ``SDPOBatches``
+batches them (`Training pipeline <../../developer-guide/processors.rst>`__). One
+batch is one complete grid. The teacher's request is the question with the first correct
 attempt by another rollout appended, in the reference implementation's
 words. An attempt whose question no other rollout got right keeps the plain
 request and a sample weight of 0. It stays in the step's mean and has no
 target. A grid whose attempts came from different policy versions is dropped
-and listed in the processor's status. A teacher sequence over
+and listed in the pipeline's status. A teacher sequence over
 ``max_teacher_tokens`` fails the step.
 
 The ``sdpo`` loss family is a thin family on the Slime backend's

@@ -81,8 +81,8 @@ import a concrete integration.
 |                         | resolution, runtime binding, and the built-in Reefine    |                                            |
 |                         | and generated-task recipes                               |                                            |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/train/``         | the trainer loop, processor engines, batch               | HTTP endpoints, deployment                 |
-|                         | types, backend integrations                              | configuration parsing                      |
+| ``reef/train/``         | the trainer loop, the training pipeline, task-to-batch   | HTTP endpoints, deployment                 |
+|                         | stages, batch types, backend integrations                | configuration parsing                      |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
 | ``reef/record2record/`` | which records Reef uses and in what order: report        | sample and batch assembly, record storage, |
 |                         | grouping, judging, eligibility checks, selection order   | task generation                            |
@@ -283,7 +283,7 @@ The extension points those packages expose are in `Python API
   ``reef/record2record/``. Does it turn one record set into tasks? Put the
   shared contract in ``reef/record2task/``. Does it shape tasks into a batch
   or a step signal? Put it in ``reef/train/processors/`` or
-  ``reef/train/algos/``. A recipe selects and binds that machinery; it should
+  ``reef/train/algos/``. ``reef/train/pipeline.py`` drives the three stages. A recipe selects and binds that machinery; it should
   not reimplement it.
 - Is it HTTP-specific? Keep the aiohttp adapter in ``reef/service/routes/``
   and put transport-independent behavior in a service or domain object.
@@ -317,7 +317,7 @@ Where the detailed rules live
 Each package's ``__init__`` docstring states the boundaries it holds and
 how to extend it; there are no READMEs under ``reef/``. Design pages for the
 two packages that need more than a docstring are `Surfaces
-<../developer-guide/surface.rst>`__ and `Processors
+<../developer-guide/surface.rst>`__ and `Training pipeline
 <../developer-guide/processors.rst>`__; the extension points every package
 exposes are in `Python API <../reference/python-api.rst>`__, and the public
 harness wire contract is `HTTP API <../reference/http-api.rst>`__. The

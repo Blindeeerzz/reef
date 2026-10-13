@@ -9,9 +9,10 @@ from dataclasses import replace
 from typing import Any
 
 from reef.core.trajectories import trajectory_reward
-from reef.record2record import ReportContext, ReportStage
-from reef.record2task import Record2Task, ReportTasks
-from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
+from reef.record2record import ReportContext
+from reef.record2task import ReportTasks
+from reef.train.processors.base import Task2Batch
+from reef.train.processors.reported import SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
 logger = logging.getLogger(__name__)
@@ -61,14 +62,14 @@ class TTTDTasks(ReportTasks):
         )
 
 
-class TTTDProcessor(ReportedFeedbackProcessor):
-    """Wait for one complete TTTD step before exposing a training batch.
+class TTTDBatches(Task2Batch):
+    """One complete TTTD step, one batch: the step's grid, without its constant-reward groups.
 
     TTT-Discover samples ``groups_per_step`` parents and exactly
     ``rollouts_per_group`` siblings from each parent.  A partially received
     group is not a valid relative-reward group, and groups from different
-    policy steps must never be mixed.  The whole step is therefore one engine
-    group — its barrier is the recipe's ``TTTDGrouping``, its (group, rollout)
+    policy steps must never be mixed.  The whole step is therefore one record
+    set — its barrier is the recipe's ``TTTDGrouping``, its (group, rollout)
     coordinates are candidate slots (a retried report at an occupied
     coordinate is terminal; the first durable report wins), and a step whose
     reports span releases is discarded wholesale with every row
@@ -81,25 +82,15 @@ class TTTDProcessor(ReportedFeedbackProcessor):
     reference behavior.
     """
 
-    output_schema = TrainingBatch
-
-    def __init__(
-        self,
-        context: ProcessorContext,
-        *,
-        record_stage: ReportStage | None = None,
-        record2task: Record2Task | None = None,
-    ) -> None:
+    def __init__(self, context: ProcessorContext) -> None:
         config = dict(context.config)
         self.groups_per_step, self.rollouts_per_group = tttd_grid(config)
-        super().__init__(
-            context.with_config({**config, "batch_size": 1}), record_stage=record_stage, record2task=record2task
-        )
+        super().__init__(context.with_config({**config, "batch_size": 1}))
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         steps = {item.metadata["tttd"]["step"] for item in items}
         if len(steps) != 1:
-            raise RuntimeError("TTTDProcessor creates exactly one complete step per batch")
+            raise RuntimeError("TTTDBatches creates exactly one complete step per batch")
         step = next(iter(steps))
         batch = TrainingBatch(f"{self.scenario}:tttd:{step}", items)
         # Lay the accepted rollouts back out as the step's grid.

@@ -1,4 +1,4 @@
-"""OpenClaw-RL processor (in-processor judging), backend preparation, and recipe."""
+"""OpenClaw-RL pipeline (judging in the record stage), backend preparation, and recipe."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pytest
 from reef_service._trajectories import policy_trajectory
 from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
-from recipes.openclawrl import OpenClawRLProcessor, OpenClawRLRecipe
+from recipes.openclawrl import OpenClawRLBatches, OpenClawRLRecipe
 from recipes.openclawrl.judging import openclawrl_record_stage
 from recipes.openclawrl.processor import OpenClawRLTasks
 from recipes.openclawrl.sessions import SessionIndex
@@ -20,6 +20,7 @@ from reef.core.trajectories import source_record_id, trajectory_reward
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.surface import Surface, WeightInferenceHooks, WeightLoader
 from reef.train.algos import StepScheduling
+from reef.train.pipeline import TrainingPipeline
 from reef.train.runtime_backend import RuntimeCandidateBackend
 from reef.train.slime_backend.reef_adapters.preparation import prepare_slime_step
 from reef.train.types import ProcessorContext, TrainingBatch
@@ -94,10 +95,12 @@ def _successor(prior_messages, next_state: str):
 
 def _processor(batch_size: int = 1, *, worker=None, ttl_s: float = 900.0, clients=None, **config):
     context = ProcessorContext("s", {"batch_size": batch_size, "session_ttl_s": ttl_s, **config})
-    return OpenClawRLProcessor(
+    stage = openclawrl_record_stage(context, worker=worker, clients=clients)
+    return TrainingPipeline(
         context,
-        record_stage=openclawrl_record_stage(context, worker=worker, clients=clients),
+        record_stage=stage,
         record2task=OpenClawRLTasks(),
+        task2batch=OpenClawRLBatches(context, stage.judging),
     )
 
 
@@ -483,8 +486,12 @@ def test_the_prm_record_file_reports_the_judged_population(tmp_path) -> None:
     record = tmp_path / "prm-records.jsonl"
     worker = FakeWorker()
     context = ProcessorContext("s", {"batch_size": 1, "prm_record_file": str(record)})
-    processor = OpenClawRLProcessor(
-        context, record_stage=openclawrl_record_stage(context, worker=worker), record2task=OpenClawRLTasks()
+    stage = openclawrl_record_stage(context, worker=worker)
+    processor = TrainingPipeline(
+        context,
+        record_stage=stage,
+        record2task=OpenClawRLTasks(),
+        task2batch=OpenClawRLBatches(context, stage.judging),
     )
     processor.ingest(_turn("t1", Q1))
     processor.ingest(_turn("t2", _successor(Q1, "that works")))
@@ -611,7 +618,7 @@ def test_traffic_without_a_session_tag_says_so_instead_of_training_on_nothing(ca
             processor.ingest(_turn(f"t{i}", [{"role": "user", "content": f"homework {i}"}]))
         assert "x-reef-tag-session" in caplog.text  # the fallback announced itself
         caplog.clear()
-        processor.judging.expire(time.monotonic() + 10_000.0)  # every session times out unbound
+        processor.record_stage.judging.expire(time.monotonic() + 10_000.0)  # every session times out unbound
     assert "without ever binding" in caplog.text
     assert "x-reef-tag-session" in caplog.text
 
@@ -622,7 +629,7 @@ def test_a_tagged_run_stays_quiet(caplog) -> None:
     with caplog.at_level("WARNING"):
         processor.ingest(_turn("t1", Q1, session="hw-1"))
         processor.ingest(_turn("t2", Q2, session="hw-1"))
-        processor.judging.expire(time.monotonic() + 10_000.0)
+        processor.record_stage.judging.expire(time.monotonic() + 10_000.0)
     assert caplog.text == ""
 
 

@@ -737,7 +737,7 @@ The budget measures UTF-8 JSON payloads, references and artifact references
 across active and archived scenarios. SQLite shares it across the record
 directory; PostgreSQL shares it across the deployment schema. Each eviction
 logs a warning with the scenario, record count, sequence range and body bytes.
-Per-scenario loss totals survive restart. Processor status exposes
+Per-scenario loss totals survive restart. The pipeline status exposes
 ``record_data_incomplete``, ``evicted_record_count`` and ``evicted_body_bytes``
 after a loss; metrics also expose ``records/evicted_count`` and
 ``records/data_incomplete``. These describe missing stored data, not proof that
@@ -794,11 +794,11 @@ policy.
 For a dotted weight-training deployment this field is also accepted as
 ``reef.training_mode``. Named presets set it in their own ``data`` section.
 
-The processor receives ``ProcessorContext.training_mode`` as its initial
-batching mode. The modes share ingestion and retention; the
-``make_training_batch(batch_number, request)`` hook selects batch inputs.
-Processors declare ``supported_training_modes``; unsupported modes or missing
-instruction assembly raise ``NotImplementedError``.
+The training pipeline receives ``ProcessorContext.training_mode`` as its
+initial batching mode. The modes share ingestion and retention. In ``manual``
+an instruction's batch has no record sets; in ``hybrid`` it takes the sets that
+an automatic batch would. A recipe's ``Task2Batch`` declares
+``supported_training_modes``; an unsupported mode raises ``NotImplementedError``.
 Harness evolution supports the three modes and requires a proposer that
 explicitly accepts ``requests`` for ``manual`` and ``hybrid``. Setting either
 on an inference-only recipe does not create a training backend.

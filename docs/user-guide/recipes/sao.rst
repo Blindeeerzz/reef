@@ -16,7 +16,7 @@ step produced.
 +-------------+------------------------------------------------------------+
 | Package     | ``recipes/sao/``                                           |
 +-------------+------------------------------------------------------------+
-| Processor   | reported feedback, singleton                               |
+| Pipeline    | reported feedback, singleton                               |
 +-------------+------------------------------------------------------------+
 | Needs       | GPUs, and a backend that captures tokens and log-probs     |
 +-------------+------------------------------------------------------------+
@@ -42,7 +42,7 @@ for a stream of tasks where each attempt gets its own score.
 How Reef implements it
 ----------------------
 
-The processor turns every eligible ``ScoredRolloutReport`` into one
+The record-to-task stage turns every eligible ``ScoredRolloutReport`` into one
 ``TrajectoryItem``. "Single rollout" means one rollout per prompt, with no
 comparison group; ``batch_size`` such rollouts, from different prompts, form
 one optimizer step. The default is the paper's 128. Setting it to 1 makes

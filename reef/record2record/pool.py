@@ -1,4 +1,4 @@
-"""The record sets that a stage holds, and the batch that the processor reserved from them."""
+"""The record sets that a stage holds, and the batch that the pipeline reserved from them."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ class RecordSetPool:
     The stage adds and removes sets. It also decides what a consumed set
     releases. The pool orders sets only through its ``SelectionPolicy``, and
     removes unusable sets only through its eligibility checks.
-    A reservation does not change until the processor consumes it or reserves
-    again. Thus the processor can return the same batch until the trainer
+    A reservation does not change until the pipeline consumes it or reserves
+    again. Thus the pipeline can return the same batch until the trainer
     acknowledges it.
     """
 

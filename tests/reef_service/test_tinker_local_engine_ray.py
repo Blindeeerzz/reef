@@ -245,7 +245,7 @@ def test_tinker_trains_behind_the_model_driver_with_a_local_engine(tmp_path, mon
         engine = ray.get_actor("reef-test-engine", namespace=NAMESPACE)
         assert ray.get(engine.state.remote())["versions"] == [inference.serving_runtime_load_id()] * 2
 
-        from reef_service._threshold_processor import ThresholdProcessor  # noqa: F401  (import side effects none)
+        from reef_service._threshold_processor import threshold_pipeline  # noqa: F401  (import side effects none)
 
         from recipes.tttd.recipe import TTTDRecipe
         from reef.artifact import InMemoryRepositoryBackend

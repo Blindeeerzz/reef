@@ -25,7 +25,9 @@ from reef.record2record import GroupDecision, ReportContext, ReportGrouping, Rep
 from reef.record2task import ReportTasks
 from reef.train.algos import StepSignal, TrainingObjective
 from reef.train.algos.helpers import next_steps
-from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
+from reef.train.pipeline import TrainingPipeline
+from reef.train.processors.base import Task2Batch
+from reef.train.processors.reported import SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectory_groups
 
 GROUPED_PG_OBJECTIVE = "reef_service._grouped_pg:GroupedPolicyObjective"
@@ -76,12 +78,16 @@ class ComparisonSetTasks(ReportTasks):
         return replace(self.assembly.build(context, context.require_score()), group_id=set_id)
 
 
-class GroupedPolicyProcessor(ReportedFeedbackProcessor):
-    output_schema = TrainingBatch
+class GroupedPolicyBatches(Task2Batch):
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+        return TrainingBatch(f"{self.scenario}:grouped:{batch_number}", tasks)
 
-    def __init__(self, context: ProcessorContext) -> None:
-        stage = ReportStage(context.scenario, context.report_type, ComparisonSetGrouping())
-        super().__init__(context, record_stage=stage, record2task=ComparisonSetTasks(context))
 
-    def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
-        return TrainingBatch(f"{self.scenario}:grouped:{batch_number}", items)
+def grouped_policy_pipeline(context: ProcessorContext) -> TrainingPipeline:
+    """Reports grouped by ``metadata.comparison_set``, two to a group."""
+    return TrainingPipeline(
+        context,
+        record_stage=ReportStage(context.scenario, context.report_type, ComparisonSetGrouping()),
+        record2task=ComparisonSetTasks(context),
+        task2batch=GroupedPolicyBatches(context),
+    )

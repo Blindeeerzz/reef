@@ -460,7 +460,7 @@ def test_scenario_commits_recovers_and_rolls_back_remote_checkpoint(tmp_path, ob
     import time
     from dataclasses import dataclass
 
-    from reef_service._threshold_processor import ThresholdProcessor
+    from reef_service._threshold_processor import ThresholdBatches, threshold_pipeline
 
     from reef.artifact import InMemoryRepositoryBackend
     from reef.core import AgentRecord, RequestType
@@ -475,7 +475,10 @@ def test_scenario_commits_recovers_and_rolls_back_remote_checkpoint(tmp_path, ob
 
         @classmethod
         def training_spec(cls):
-            return WeightTrainingSpec(objective.name, ThresholdProcessor)
+            return WeightTrainingSpec(objective.name, ThresholdBatches)
+
+        def build_pipeline(self, context):
+            return threshold_pipeline(context.with_config(self.pipeline_config()))
 
     initial = tmp_path / "initial"
     initial.mkdir()

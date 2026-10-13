@@ -1,4 +1,4 @@
-"""The record-to-record stage: records in, record sets out, for one processor.
+"""The record-to-record stage: records in, record sets out, for one pipeline.
 
 ``Record2RecordStage`` is the interface. ``PassThroughStage`` is the default implementation.
 """
@@ -20,13 +20,13 @@ from reef.record2record.sets import RecordSet, SingleRecordSet
 
 
 class AssemblyStatus(Enum):
-    """What the processor did with a formed record set."""
+    """What the record-to-task stage made of a formed record set."""
 
-    #: The processor made training data from the set. The stage holds the set until a batch uses it.
+    #: The set has tasks. The stage holds the set until a batch uses it.
     READY = "ready"
     #: The set cannot train. The stage ends its records.
     REJECTED = "rejected"
-    #: The processor keeps the records itself. The stage forgets the set.
+    #: The set makes no task, as in a pipeline that trains no weights. The stage forgets the set and keeps its records.
     INGESTED = "ingested"
 
 
@@ -35,7 +35,7 @@ class SetAssembly:
     """The result of one assembly.
 
     ``runtime_load_id`` is the runtime load ID of the training data, if the
-    processor knows it. The stage's eligibility checks read it.
+    pipeline knows it. The stage's eligibility checks read it.
     """
 
     status: AssemblyStatus
@@ -43,28 +43,28 @@ class SetAssembly:
 
 
 class Record2RecordStage(ABC):
-    """Turn records into record sets for one processor, and decide which sets train and in what order.
+    """Turn records into record sets for one pipeline, and decide which sets train and in what order.
 
-    The processor gives the stage every record that it reads, except training
+    The pipeline gives the stage every record that it reads, except training
     instructions, in append order. The stage forms record sets
-    (``take_formed``). The processor assembles each formed set and gives the
+    (``take_formed``). The pipeline assembles each formed set and gives the
     result back (``settle``). The stage holds each assembled set in its pool
-    until the processor reserves it for a batch. The pool applies the stage's
-    selection policy and eligibility checks. The stage never calls the processor.
+    until the pipeline reserves it for a batch. The pool applies the stage's
+    selection policy and eligibility checks. The stage never calls the pipeline.
 
     A record that the stage ends, for example a record that can no longer
     train, appears in ``releasable_record_ids``. The trainer adds those IDs to
     the next commit, so the record never trains after a restart.
 
     The stage keeps only memory that a replay of the retained records
-    rebuilds, as processor memory does.
+    rebuilds, as pipeline memory does.
     """
 
     def __init__(self, selection: SelectionPolicy | None = None, checks: Sequence[EligibilityCheck] = ()) -> None:
         self.pool = RecordSetPool(selection, checks)
         #: Formed sets that ended after assembly. The assembler forgets their training data.
         self.ended_set_ids: set[Hashable] = set()
-        #: Whether the processor handed out a batch that the trainer has not acknowledged or released yet.
+        #: Whether the pipeline handed out a batch that the trainer has not acknowledged or released yet.
         self.batch_out = False
 
     @abstractmethod
@@ -80,7 +80,7 @@ class Record2RecordStage(ABC):
         return
 
     def settle(self, record_set: RecordSet, assembly: SetAssembly) -> None:
-        """Keep or end a formed set from the processor's assembly result."""
+        """Keep or end a formed set from the pipeline's assembly result."""
         if assembly.status is AssemblyStatus.READY:
             self.accept(record_set, assembly)
         elif assembly.status is AssemblyStatus.REJECTED:
@@ -97,7 +97,7 @@ class Record2RecordStage(ABC):
         raise NotImplementedError(f"{type(self).__name__} does not end rejected sets")
 
     def take_ended(self) -> frozenset[Hashable]:
-        """Return the IDs of the formed sets that ended since the last call. The processor forgets their data."""
+        """Return the IDs of the formed sets that ended since the last call. The pipeline forgets their data."""
         ended, self.ended_set_ids = frozenset(self.ended_set_ids), set()
         return ended
 
@@ -140,7 +140,7 @@ class Record2RecordStage(ABC):
     # ------------------------------------------------------------- lifecycle
 
     def admit_reports_of(self, report_type: type[ReportBase] | None) -> None:
-        """Name the report contract that the scenario admits when it is wider than the processor's own."""
+        """Name the report contract that the scenario admits when it is wider than the pipeline's own."""
         return
 
     def releasable_record_ids(self) -> frozenset[str]:
@@ -156,11 +156,11 @@ class Record2RecordStage(ABC):
         return False
 
     def status(self) -> Mapping[str, Any]:
-        """Return JSON-safe state that the processor adds to its status."""
+        """Return JSON-safe state that the pipeline adds to its status."""
         return {}
 
     def operational_metrics(self) -> Mapping[str, float | int]:
-        """Return numeric state that the processor adds to its metrics."""
+        """Return numeric state that the pipeline adds to its metrics."""
         return {}
 
     def close(self) -> None:
@@ -169,9 +169,9 @@ class Record2RecordStage(ABC):
 
 
 class PassThroughStage(Record2RecordStage):
-    """Hand each record to the processor by itself, in arrival order, and decide nothing.
+    """Hand each record to the pipeline by itself, in arrival order, and decide nothing.
 
-    The processor keeps the records itself (``AssemblyStatus.INGESTED``).
+    With ``NoTasks`` each set is ``AssemblyStatus.INGESTED``: the stage forgets it.
     """
 
     def __init__(self) -> None:

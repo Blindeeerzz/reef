@@ -7,7 +7,7 @@ from collections.abc import Hashable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from recipes.sdpo.processor import SDPOProcessor, SDPOTasks, sdpo_grid, sibling_request
+from recipes.sdpo.processor import SDPOBatches, SDPOTasks, sdpo_grid, sibling_request
 from recipes.sdpo.report import SDPOReport
 from reef.core.reports import ReportBase
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
@@ -34,7 +34,7 @@ class SDPOGrouping(ReportGrouping):
     def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
         parsed = context.parsed_report
         if not isinstance(parsed, SDPOReport):
-            raise ValueError("SDPOProcessor requires the SDPOReport schema")
+            raise ValueError("SDPOBatches requires the SDPOReport schema")
         return parsed.step, (parsed.group, parsed.rollout)
 
     def decide(self, key: Hashable, members: tuple[ReportContext, ...]) -> GroupDecision:
@@ -128,7 +128,7 @@ class SDPORecipe(WeightTrainingRecipe):
     def training_spec(cls) -> WeightTrainingSpec:
         return WeightTrainingSpec(
             objective="sdpo",
-            processor=SDPOProcessor,
+            task2batch=SDPOBatches,
             # The grid is the optimizer step, however many rollouts it holds.
             scheduling=StepScheduling(unit="sample", batch_size="actual"),
         )

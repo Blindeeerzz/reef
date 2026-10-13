@@ -1,28 +1,24 @@
-"""Processors: records in, one typed training batch out.
+"""Task to batch: the tasks of the selected record sets become one typed training batch.
 
-Feedback either arrives as reports referencing inference records — where it is
-whatever the report carries, scores, text, or structured objects, not only
-numbers — or is mined from the traffic itself. ``DistillProcessor`` is the reported engine of the distilling
-recipes: the student's rollout plus the teacher's prompt, which a recipe
-composes from the recorded request and the report's teacher context.
+A recipe writes a ``Task2Batch`` with ``make_batch``. The training pipeline
+(:class:`reef.train.pipeline.TrainingPipeline`) selects the record sets of
+each batch and gives their tasks to it. ``DistillBatches`` batches the
+distilling recipes' tasks; ``distill`` also holds their record-to-task stage.
+``reported`` holds ``SampleAssembly``, which turns a report and its inference
+records into a policy sample.
 
-The design — the four-method contract, the two engines and the one question
-that picks between them, what a recipe writes on each tier, and a record's
-path to a batch — is at https://reefinfra.ai/docs/developer-guide/processors/.
+The design (the three stages, what a recipe writes for each, and a record's
+path to a batch) is at https://reefinfra.ai/docs/developer-guide/processors/.
 
-Everything numeric about a method — advantages, loss family — lives in its
-backend training objective, not here: processors own the records and their
-memory, objectives own the training signal.
+Everything numeric about a method, such as advantages and the loss family,
+lives in its backend training objective, not here.
 """
 
-from reef.train.processors.base import DataProcessor
-from reef.train.processors.computed import ComputedFeedbackProcessor
-from reef.train.processors.distill import DistillProcessor
-from reef.train.processors.reported import ReportedFeedbackProcessor
+from reef.train.processors.base import NoBatches, Task2Batch
+from reef.train.processors.distill import DistillBatches
 
 __all__ = [
-    "ComputedFeedbackProcessor",
-    "DataProcessor",
-    "DistillProcessor",
-    "ReportedFeedbackProcessor",
+    "DistillBatches",
+    "NoBatches",
+    "Task2Batch",
 ]

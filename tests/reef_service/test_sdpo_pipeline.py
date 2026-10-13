@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
-from recipes.sdpo import SDPOProcessor, SDPORecipe, SDPOReport
+from recipes.sdpo import SDPOBatches, SDPORecipe, SDPOReport
 from recipes.sdpo.processor import SDPOTasks
 from recipes.sdpo.recipe import sdpo_record_stage
 from recipes.sdpo.slime import SdpoAlgorithm, SdpoSettings
@@ -25,6 +25,7 @@ from reef.core import AgentRecord, RequestType
 from reef.recipe.errors import RecipeConfigError
 from reef.train import ProcessorContext
 from reef.train.algos import StepScheduling
+from reef.train.pipeline import TrainingPipeline
 from reef.train.slime_backend.data_builder import to_slime_rollout_data
 from reef.train.slime_backend.distill.algorithm import settings_from_args
 from reef.train.types import TrainingBatch
@@ -53,7 +54,7 @@ def tokenizer(monkeypatch: pytest.MonkeyPatch) -> SDPOTokenizer:
     return fake
 
 
-def processor(**config: Any) -> SDPOProcessor:
+def processor(**config: Any) -> TrainingPipeline:
     context = ProcessorContext(
         "science",
         {
@@ -65,11 +66,16 @@ def processor(**config: Any) -> SDPOProcessor:
         },
         SDPOReport,
     )
-    return SDPOProcessor(context, record_stage=sdpo_record_stage(context), record2task=SDPOTasks(context))
+    return TrainingPipeline(
+        context,
+        record_stage=sdpo_record_stage(context),
+        record2task=SDPOTasks(context),
+        task2batch=SDPOBatches(context),
+    )
 
 
 def ingest(
-    target: SDPOProcessor,
+    target: SDPOBatches,
     rollout: int,
     *,
     group: int = 0,
@@ -110,7 +116,7 @@ def test_waits_for_entire_grid_and_uses_successful_sibling(tokenizer: SDPOTokeni
     ingest(target, 1, score=0.0)
     ingest(target, 0, group=1, score=0.0)
     ingest(target, 1, group=1, score=0.0)
-    with pytest.raises(RuntimeError, match="batch is not ready"):
+    with pytest.raises(RuntimeError, match="no batch ready"):
         target.build_batch()
     ingest(target, 0, score=1.0)
     batch = target.build_batch()
@@ -142,7 +148,7 @@ def test_first_report_wins_a_retry_slot(tokenizer: SDPOTokenizer) -> None:
     target = processor()
     ingest(target, 0, score=0.0)
     ingest(target, 0, score=1.0, suffix="retry")
-    with pytest.raises(RuntimeError, match="batch is not ready"):
+    with pytest.raises(RuntimeError, match="no batch ready"):
         target.build_batch()
     ingest(target, 1, score=0.0)
     batch = target.build_batch()
@@ -156,7 +162,7 @@ def test_rejects_steps_without_one_known_policy_release(tokenizer: SDPOTokenizer
     target = processor()
     ingest(target, 0)
     ingest(target, 1, release=release)
-    with pytest.raises(RuntimeError, match="batch is not ready"):
+    with pytest.raises(RuntimeError, match="no batch ready"):
         target.build_batch()
     assert target.status()["failed_steps"] == [{"step": 0, "reason": "missing_or_mixed_release_ids"}]
 
@@ -166,7 +172,7 @@ def test_rejects_different_questions_in_one_group(tokenizer: SDPOTokenizer) -> N
     target = processor()
     ingest(target, 0)
     ingest(target, 1, question=[{"role": "user", "content": "A different question"}])
-    with pytest.raises(RuntimeError, match="batch is not ready"):
+    with pytest.raises(RuntimeError, match="no batch ready"):
         target.build_batch()
     assert target.status()["failed_steps"][0]["reason"] == "different_requests_in_group"
 
@@ -221,7 +227,7 @@ def test_sdpo_recipe_uses_one_actual_sized_step() -> None:
     assert recipe.report_type is SDPOReport
     assert recipe.groups_per_step == 32 and recipe.rollouts_per_group == 8
     assert recipe.allow_own_success_as_demonstration is False
-    assert recipe.processor_config()["max_teacher_tokens"] == 18432
+    assert recipe.pipeline_config()["max_teacher_tokens"] == 18432
     assert recipe.training_spec().scheduling == StepScheduling(unit="sample", batch_size="actual")
     with pytest.raises(RecipeConfigError, match=r"training\.options"):
         SDPORecipe.from_environment(

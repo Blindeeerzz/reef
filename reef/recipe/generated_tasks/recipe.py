@@ -21,13 +21,14 @@ from reef.recipe.generated_tasks.processor import (
     DEFAULT_SCAFFOLD_TOLERANCE,
     DEFAULT_TASKS_PER_STEP,
     TRAINING_ARM,
-    GeneratedTaskProcessor,
+    GeneratedTaskBatches,
     GeneratedTaskTasks,
     reported_arm,
     reported_task_name,
 )
 from reef.record2record import GroupDecision, ReportContext, RoundGrouping, RoundStage
 from reef.train.algos import StepScheduling
+from reef.train.pipeline import TrainingPipeline
 from reef.train.types import ProcessorContext
 
 
@@ -118,7 +119,7 @@ class GeneratedTaskRecipe(WeightTrainingRecipe):
     """Rounds of generated tasks played by the served model; group relative advantages per task.
 
     The deployment's ``task-generation`` section selects the generator. With ``rounds`` above zero the
-    processor runs that many rounds: ``generator_url`` names the generator service that ``reef serve``
+    pipeline runs that many rounds: ``generator_url`` names the generator service that ``reef serve``
     starts from the deployment's ``generator`` section, ``description`` says what the tasks are about,
     and ``state_dir`` keeps a summary of each round, in one directory for each scenario.
 
@@ -152,7 +153,7 @@ class GeneratedTaskRecipe(WeightTrainingRecipe):
     def training_spec(cls) -> WeightTrainingSpec:
         return WeightTrainingSpec(
             objective=TaskGroupObjective.name,
-            processor=GeneratedTaskProcessor,
+            task2batch=GeneratedTaskBatches,
             scheduling=StepScheduling(unit="sample", batch_size="actual"),
         )
 
@@ -198,9 +199,14 @@ class GeneratedTaskRecipe(WeightTrainingRecipe):
         """The scenario's round summaries: what a delete archives beside the record store."""
         return (Path(self.state_dir).expanduser() / scenario,) if self.state_dir else ()
 
-    def build_record_stage(self, context: ProcessorContext) -> RoundStage:
-        return task_group_record_stage(context)
-
-    def build_record2task(self, context: ProcessorContext) -> GeneratedTaskTasks:
-        task_generator = None if self.task_generation is None else self.task_generation.build(context.scenario)
-        return GeneratedTaskTasks(context, task_generator=task_generator)
+    def build_pipeline(self, context: ProcessorContext) -> TrainingPipeline:
+        # The record-to-task stage tells the record stage when each round finished, so both share one stage.
+        configured = context.with_config(self.pipeline_config())
+        round_stage = task_group_record_stage(configured)
+        task_generator = None if self.task_generation is None else self.task_generation.build(configured.scenario)
+        return TrainingPipeline(
+            configured,
+            record_stage=round_stage,
+            record2task=GeneratedTaskTasks(configured, round_stage, task_generator=task_generator),
+            task2batch=GeneratedTaskBatches(configured),
+        )

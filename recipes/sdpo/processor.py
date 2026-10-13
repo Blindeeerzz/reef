@@ -1,7 +1,7 @@
 """SDPO's processor: the shared distillation processor with a whole sampling step as its batch unit.
 
 The teacher's request is composed once the step's other rollouts are known
-(:meth:`SDPOProcessor.make_batch`), with the reference's reprompt template
+(:meth:`SDPOBatches.make_batch`), with the reference's reprompt template
 (lasgroup/SDPO at ``7c457fc1b1f6``, ``verl/trainer/config/sdpo.yaml``): the
 original question followed by the first successful sibling's response and,
 when enabled, the environment feedback the report carried.
@@ -16,8 +16,9 @@ from typing import Any
 
 from recipes.sdpo.report import SDPOReport
 from reef.core.trajectories import trajectory_reward
-from reef.record2record import ReportContext, ReportStage
-from reef.record2task import Record2Task, ReportTasks
+from reef.record2record import ReportContext
+from reef.record2task import ReportTasks
+from reef.train.processors.base import Task2Batch
 from reef.train.processors.common import recorded_request, recorded_response
 from reef.train.processors.distill import (
     TeacherRenderer,
@@ -25,7 +26,7 @@ from reef.train.processors.distill import (
     recorded_sample,
     teacher_tokens_limit,
 )
-from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
+from reef.train.processors.reported import SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
 #: The reference's reprompt strings (``sdpo.yaml`` at the pin), used verbatim.
@@ -84,12 +85,12 @@ class SDPOTasks(ReportTasks):
         )
 
 
-class SDPOProcessor(ReportedFeedbackProcessor):
-    """One complete sampling step, one update; the teacher's context comes from the step's other rollouts.
+class SDPOBatches(Task2Batch):
+    """One complete sampling step, one batch; the teacher's context comes from the step's other rollouts.
 
     A report names its rollout's coordinates in the step's grid
     (``groups_per_step`` questions by ``rollouts_per_group`` attempts), and
-    the coordinates are its retry slot: the first report at one wins. A step
+    the coordinates are its retry slot in the recipe's ``SDPOGrouping``: the first report at one wins. A step
     trains only complete, sampled from one policy release, with one request
     per question; anything else is discarded whole and listed in
     ``status()``. A rollout whose teacher reads no privileged information
@@ -100,15 +101,8 @@ class SDPOProcessor(ReportedFeedbackProcessor):
     """
 
     batch_label = "sdpo"
-    output_schema = TrainingBatch
 
-    def __init__(
-        self,
-        context: ProcessorContext,
-        *,
-        record_stage: ReportStage | None = None,
-        record2task: Record2Task | None = None,
-    ) -> None:
+    def __init__(self, context: ProcessorContext) -> None:
         config = dict(context.config)
         self.groups_per_step, self.rollouts_per_group = sdpo_grid(config)
         self.max_teacher_tokens = teacher_tokens_limit(config)
@@ -125,9 +119,7 @@ class SDPOProcessor(ReportedFeedbackProcessor):
         if not math.isfinite(self.success_reward_threshold):
             raise ValueError("success_reward_threshold must be finite")
         # A batch is one unit: the whole step.
-        super().__init__(
-            context.with_config({**config, "batch_size": 1}), record_stage=record_stage, record2task=record2task
-        )
+        super().__init__(context.with_config({**config, "batch_size": 1}))
         if not 0 < self.max_teacher_prompt_tokens <= self.max_teacher_tokens:
             raise ValueError("SDPO needs 0 < max_teacher_prompt_tokens <= max_teacher_tokens")
 
@@ -197,4 +189,4 @@ class SDPOProcessor(ReportedFeedbackProcessor):
         return TrainingBatch(batch.batch_id, tuple(result))
 
 
-__all__ = ["FEEDBACK_TEMPLATE", "REPROMPT_TEMPLATE", "SOLUTION_TEMPLATE", "SDPOProcessor", "SDPOTasks"]
+__all__ = ["FEEDBACK_TEMPLATE", "REPROMPT_TEMPLATE", "SOLUTION_TEMPLATE", "SDPOBatches", "SDPOTasks"]

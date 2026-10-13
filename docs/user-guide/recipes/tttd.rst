@@ -17,7 +17,7 @@ search step uses the updated adapter.
 +-------------+------------------------------------------------------------+
 | Package     | ``recipes/tttd/``                                          |
 +-------------+------------------------------------------------------------+
-| Processor   | reported feedback, grouped                                 |
+| Pipeline    | reported feedback, grouped                                 |
 +-------------+------------------------------------------------------------+
 | Needs       | GPUs, and a harness that already runs a search loop        |
 +-------------+------------------------------------------------------------+
@@ -60,10 +60,10 @@ records the adapter version with the inference.
 
 The task judge executes the generated program and computes its reward. The
 harness reports that reward with the inference receipt and the rollout's step,
-group, and position. ``TTTDProcessor`` waits for every position in the grid. It
+group, and position. ``TTTDBatches`` waits for every position in the grid. It
 rejects a grid that contains more than one release. Groups with one
 reward value across all siblings are removed after the grid reaches the barrier.
-If every group is constant, the processor keeps one group so that the training
+If every group is constant, ``TTTDBatches`` keeps one group so that the training
 runtime receives a zero-signal batch.
 
 Slime computes adaptive-beta entropic leave-one-out advantages within each
@@ -379,7 +379,7 @@ paths are logged as metadata when ``upload_checkpoints`` is false. `Experiment
 tracking <../../reference/configuration.rst#experiment-tracking>`__ describes grouping,
 rollback behavior, offline mode, and metric names.
 
-When the processor receives a complete search grid, it records the following
+When ``TTTDBatches`` receives a complete search grid, it records the following
 metrics in the ``tttd`` namespace. These values describe every evaluated
 rollout before constant-reward groups are removed from the training batch.
 
@@ -399,7 +399,7 @@ rollout before constant-reward groups are removed from the training batch.
        also the configured reward for an invalid solution.
    * - ``tttd/constant_groups``, ``tttd/constant_groups_removed``
      - Number of constant-reward groups and the number removed before training.
-       If every group is constant, the processor retains one group for the
+       If every group is constant, ``TTTDBatches`` retains one group for the
        zero-gradient step.
    * - ``tttd/grid_groups``, ``tttd/grid_rollouts``
      - Size of the completed search grid.

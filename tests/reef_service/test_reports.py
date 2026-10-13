@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from recipes.tttd import TTTDGroupedRolloutReport, TTTDProcessor
+from recipes.tttd import TTTDBatches, TTTDGroupedRolloutReport
 from recipes.tttd.processor import TTTDTasks
 from recipes.tttd.recipe import tttd_record_stage
 from reef.artifact.memory import InMemoryRepositoryBackend
@@ -20,6 +20,7 @@ from reef.dispatcher import Dispatcher
 from reef.recipe.base import Recipe
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train import ProcessorContext
+from reef.train.pipeline import TrainingPipeline
 
 
 @dataclass(frozen=True)
@@ -230,7 +231,7 @@ def test_declared_schema_is_enforced_at_ingress() -> None:
     assert stored.agent_record_id == "good"
     scenario = dispatcher.get_or_create_scenario("workload")
     assert scenario is not None
-    assert scenario.trainer.processor.context.report_type is ScoredRolloutReport
+    assert scenario.trainer.pipeline.context.report_type is ScoredRolloutReport
 
 
 def test_undeclared_recipe_keeps_open_ingress_via_anyreport() -> None:
@@ -253,7 +254,12 @@ def test_tttd_raises_for_grid_mismatch_and_schema_violations() -> None:
         {"groups_per_step": 2, "rollouts_per_group": 3},
         report_type=TTTDGroupedRolloutReport,
     )
-    processor = TTTDProcessor(context, record_stage=tttd_record_stage(context), record2task=TTTDTasks(context))
+    processor = TrainingPipeline(
+        context,
+        record_stage=tttd_record_stage(context),
+        record2task=TTTDTasks(context),
+        task2batch=TTTDBatches(context),
+    )
     processor.ingest(
         AgentRecord.create(
             scenario="discovery",
@@ -355,6 +361,7 @@ def test_missing_reference_rejection_does_not_queue_or_reserve_the_report_id() -
 
 def test_report_retry_after_capacity_eviction_remains_idempotent_and_conflicts_fail(tmp_path) -> None:
     from dataclasses import replace
+
     from reef.storage.records import RecordConflict, RecordRetention
 
     dispatcher = _dispatcher(Recipe(), "recipe", record_dir=tmp_path)

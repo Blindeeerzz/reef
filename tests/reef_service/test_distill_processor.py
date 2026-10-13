@@ -19,7 +19,8 @@ from reef.core import AgentRecord, RequestType
 from reef.core.reports import TeacherContextReport
 from reef.core.trajectories import source_record_id
 from reef.train import ProcessorContext
-from reef.train.processors import DistillProcessor
+from reef.train.pipeline import TrainingPipeline
+from reef.train.processors import DistillBatches
 from reef.train.processors.common import recorded_response
 from reef.train.processors.distill import DistillTasks, TeacherRenderer, distill_record_stage
 from reef.train.types import TrainingBatch
@@ -71,7 +72,7 @@ def tokenizer(monkeypatch: pytest.MonkeyPatch) -> CountingTokenizer:
     return fake
 
 
-class FeedbackProcessor(DistillProcessor):
+class FeedbackBatches(DistillBatches):
     """A recipe's batches, named ``feedback``."""
 
     batch_label = "feedback"
@@ -120,11 +121,16 @@ def _report(
     )
 
 
-def _processor(**config: Any) -> DistillProcessor:
+def _processor(**config: Any) -> TrainingPipeline:
     context = ProcessorContext(
         "science", {"batch_size": 1, "tokenizer_path": "/models/science", **config}, TeacherContextReport
     )
-    return DistillProcessor(context, record_stage=distill_record_stage(context), record2task=DistillTasks(context))
+    return TrainingPipeline(
+        context,
+        record_stage=distill_record_stage(context),
+        record2task=DistillTasks(context),
+        task2batch=DistillBatches(context),
+    )
 
 
 @pytest.mark.unit
@@ -153,8 +159,11 @@ def test_by_default_the_teacher_reads_the_request_as_recorded(tokenizer: Countin
 @pytest.mark.unit
 def test_a_recipe_composes_the_teacher_request_from_the_response_and_the_context(tokenizer: CountingTokenizer) -> None:
     context = ProcessorContext("science", {"batch_size": 1, "tokenizer_path": "/models/science"}, TeacherContextReport)
-    processor = FeedbackProcessor(
-        context, record_stage=distill_record_stage(context), record2task=FeedbackTasks(context)
+    processor = TrainingPipeline(
+        context,
+        record_stage=distill_record_stage(context),
+        record2task=FeedbackTasks(context),
+        task2batch=FeedbackBatches(context),
     )
     processor.ingest(_inference("i1"))
     processor.ingest(_report("r1", ("i1",), teacher_context="Too low."))

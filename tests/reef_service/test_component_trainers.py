@@ -17,6 +17,7 @@ from aiohttp.test_utils import TestServer
 
 from reef.artifact import Artifact, ArtifactNotFound, ArtifactRef, InMemoryRepositoryBackend
 from reef.artifact.release_chain import ArtifactReleaseChain
+from reef.background_jobs import SupportsReceipt
 from reef.core import AgentRecord, RequestType
 from reef.core.components import RECORDS_COMPONENT
 from reef.core.errors import ReefError, ScenarioBusy
@@ -43,11 +44,11 @@ from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
 from reef.surface import ComponentSurface, Surface, TextFileTree
 from reef.train import CandidateBackend, ComponentTrainer, PreparedStep, Trainer, TrainStepResult
 from reef.train.evaluation import EvaluationResult, UpdateCandidate
-from reef.train.processors.base import DataProcessor
-from reef.train.processors.computed import ComputedFeedbackProcessor, SupportsReceipt
-from reef.train.types import TrainingBatch
+from reef.train.pipeline import TrainingPipeline
+from reef.train.processors.base import Task2Batch
+from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch
 
-from ._threshold_processor import ThresholdProcessor
+from ._threshold_processor import ThresholdBatches, threshold_pipeline
 from ._trajectories import policy_trajectory
 from .runtime_stubs import StubTrainingRuntime
 
@@ -187,8 +188,8 @@ class _ColocatedBackend(_DispatchedBackend):
         return True
 
 
-class _HybridThresholdProcessor(ThresholdProcessor):
-    """The same processor, taking instructions too."""
+class HybridThresholdBatches(ThresholdBatches):
+    """The same batches, taking instructions too."""
 
     supported_training_modes = frozenset({"auto", "manual", "hybrid"})
 
@@ -208,13 +209,14 @@ class _TwoTrainerRecipe(Recipe):
             }
         )
 
-    def processor_for(self, component: str) -> type[DataProcessor]:
-        return _HybridThresholdProcessor if component in self.hybrid_components else ThresholdProcessor
+    def pipeline_for(self, component: str, context: ProcessorContext) -> TrainingPipeline:
+        if component in self.hybrid_components:
+            return threshold_pipeline(context, task2batch=HybridThresholdBatches(context))
+        return threshold_pipeline(context)
 
     def build_trainers(self, scenario, records, *, surface, algorithm_states, experiment_logger=None):
         def factory_for(component: str):
-            processor = self.processor_for(component)
-            return lambda context: processor(context.with_config({"batch_size": 1}))
+            return lambda context: self.pipeline_for(component, context.with_config({"batch_size": 1}))
 
         return tuple(
             ComponentTrainer(
@@ -222,7 +224,7 @@ class _TwoTrainerRecipe(Recipe):
                 Trainer.build(
                     scenario,
                     records,
-                    processor_factory=factory_for(component),
+                    pipeline_factory=factory_for(component),
                     candidate_backend=backend,
                     algorithm_state=algorithm_states.get(component),
                     experiment_logger=experiment_logger,
@@ -1100,7 +1102,7 @@ class _NamedComponentsRecipe(Recipe):
                 Trainer.build(
                     scenario,
                     records,
-                    processor_factory=lambda context: ThresholdProcessor(context.with_config({"batch_size": 1})),
+                    pipeline_factory=lambda context: threshold_pipeline(context.with_config({"batch_size": 1})),
                     candidate_backend=_ComponentBackend(name, self.artifact_dir),
                     algorithm_state=algorithm_states.get(name),
                     experiment_logger=experiment_logger,
@@ -1227,19 +1229,17 @@ class _SlotGrouping(ReportGrouping):
         return GroupDecision.READY if len(members) >= 2 else GroupDecision.INCOMPLETE
 
 
-class _SlottedProcessor(ThresholdProcessor):
-    """The threshold processor with ``_SlotGrouping``."""
-
-    def __init__(self, context: Any) -> None:
-        super().__init__(context, record_stage=ReportStage(context.scenario, context.report_type, _SlotGrouping()))
-
-
 @dataclass(frozen=True)
 class _SlottedRecipe(_TwoTrainerRecipe):
     """The two trainer recipe whose harness batches reports by group and retry slot."""
 
-    def processor_for(self, component: str) -> type[DataProcessor]:
-        return _SlottedProcessor if component == HARNESS else ThresholdProcessor
+    def pipeline_for(self, component: str, context: ProcessorContext) -> TrainingPipeline:
+        if component == HARNESS:
+            # The threshold pipeline with ``_SlotGrouping``.
+            return threshold_pipeline(
+                context, record_stage=ReportStage(context.scenario, context.report_type, _SlotGrouping())
+            )
+        return threshold_pipeline(context)
 
 
 def _slotted_report(record_id: str, reference: str, group: str, slot: int) -> AgentRecord:
@@ -1521,23 +1521,29 @@ class _RetiringRetriesTasks(JudgedTasks):
         )
 
 
-class _RetiringRetriesProcessor(ComputedFeedbackProcessor):
-    """Trains the judged turns of ``_RetiringRetriesJudging``."""
+class RetiringRetriesBatches(Task2Batch):
+    """Batches the judged turns of ``_RetiringRetriesJudging``."""
 
-    def __init__(self, context: Any) -> None:
-        stage = JudgingStage(_RetiringRetriesJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness)
-        super().__init__(context, record_stage=stage, record2task=_RetiringRetriesTasks())
-
-    def make_batch(self, samples: Any, batch_number: int) -> TrainingBatch:
-        return TrainingBatch(f"{self.scenario}:retiring:{batch_number}", tuple(samples))
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+        return TrainingBatch(f"{self.scenario}:retiring:{batch_number}", tasks)
 
 
 @dataclass(frozen=True)
 class _ComputedWeightsRecipe(_TwoTrainerRecipe):
     """The two trainer recipe whose weights trainer computes its own feedback."""
 
-    def processor_for(self, component: str) -> type[DataProcessor]:
-        return _RetiringRetriesProcessor if component == WEIGHTS else ThresholdProcessor
+    def pipeline_for(self, component: str, context: ProcessorContext) -> TrainingPipeline:
+        if component == WEIGHTS:
+            # Trains the judged turns of ``_RetiringRetriesJudging``.
+            return TrainingPipeline(
+                context,
+                record_stage=JudgingStage(
+                    _RetiringRetriesJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness
+                ),
+                record2task=_RetiringRetriesTasks(),
+                task2batch=RetiringRetriesBatches(context),
+            )
+        return threshold_pipeline(context)
 
 
 def _turn(record_id: str, turn: str, completes: str | None = None) -> AgentRecord:
@@ -1657,7 +1663,7 @@ def test_training_mode_switches_every_trainer_or_none(dispatchers: _Dispatchers)
     """A mode one component cannot run is refused before any component switches."""
     dispatcher, _ = dispatchers.open(hybrid_components=frozenset({WEIGHTS}))
     scenario = _scenario(dispatcher)
-    with pytest.raises(NotImplementedError, match=r"harness \(ThresholdProcessor\)"):
+    with pytest.raises(NotImplementedError, match=r"harness \(ThresholdBatches\)"):
         scenario.set_training_mode("hybrid")
     assert [bound.trainer.training_mode for bound in scenario.component_trainers] == ["auto", "auto"]
     with pytest.raises(ValueError, match="training_mode must be"):
@@ -2231,7 +2237,7 @@ def test_commit_record_carries_component_and_base_release() -> None:
 @pytest.mark.unit
 def test_component_trainers_must_match_the_surface() -> None:
     def trainer() -> Trainer:
-        return Trainer.build("agent", SQLiteRecordStore(), processor_factory=DataProcessor)
+        return Trainer.build("agent", SQLiteRecordStore(), pipeline_factory=TrainingPipeline)
 
     flat = Surface(components={HARNESS: ComponentSurface(files=TextFileTree())})
     composed = Surface(components={WEIGHTS: ComponentSurface(), HARNESS: ComponentSurface(files=TextFileTree())})

@@ -32,7 +32,8 @@ from reef.surface.weights import create_weight_surface
 from reef.train.algos import StepScheduling
 from reef.train.algos.registry import resolve_objective
 from reef.train.evaluation import CandidateEvaluationConfig, CandidateEvaluationConfigError, build_candidate_evaluation
-from reef.train.processors.base import DataProcessor
+from reef.train.pipeline import TrainingPipeline
+from reef.train.processors.base import Task2Batch
 from reef.train.trainer import ComponentTrainer, Trainer
 from reef.train.types import ProcessorContext
 
@@ -200,7 +201,7 @@ class Recipe:
         return Trainer.build(
             scenario,
             records,
-            processor_factory=DataProcessor,
+            pipeline_factory=TrainingPipeline,
             algorithm_state=algorithm_state,
             report_type=self.report_type,
             experiment_logger=experiment_logger,
@@ -342,7 +343,7 @@ class WeightTrainingSpec:
     """
 
     objective: str
-    processor: type[DataProcessor] | None = None
+    task2batch: type[Task2Batch] | None = None
     scheduling: StepScheduling = field(default_factory=StepScheduling)
 
     @property
@@ -358,7 +359,7 @@ class WeightTrainingRecipe(Recipe):
     Requires an independent :class:`TrainingRuntime` in ``training_runtime``
     (the first positional argument of every training recipe).
 
-    :meth:`training_spec` binds the data processor, the training objective, which declares its
+    :meth:`training_spec` binds the task-to-batch stage, the training objective, which declares its
     backend loss family, and the step schedule. Keeping that static machinery in one structured return value
     means the dataclass fields remain the recipe's instance configuration. The
     training driver reads the selected class from the same deployment config
@@ -368,7 +369,7 @@ class WeightTrainingRecipe(Recipe):
     ``max_staleness`` is the shared stale-sample admission window. Zero keeps
     exact-version training; a positive value admits same-incarnation samples
     up to that lag before the existing training path runs. The default
-    :meth:`build` also gives it to the processor as
+    :meth:`build` also gives it to the pipeline as
     ``ProcessorContext.max_staleness``.
 
     ``candidate_evaluation`` is framework-owned configuration derived from an
@@ -392,10 +393,10 @@ class WeightTrainingRecipe(Recipe):
 
     @classmethod
     def training_spec(cls) -> WeightTrainingSpec:
-        """Return the processor, objective and step-schedule binding for this recipe.
+        """Return the task-to-batch stage, objective and step-schedule binding for this recipe.
 
         Concrete weight recipes override this hook. A recipe with bespoke
-        trainer wiring may omit ``processor`` and override :meth:`build`.
+        trainer wiring may omit ``task2batch`` and override :meth:`build`.
         """
         return WeightTrainingSpec(objective="")
 
@@ -506,13 +507,13 @@ class WeightTrainingRecipe(Recipe):
         as SAO refusing an ``optimization`` section.
         """
 
-    def processor_config(self) -> dict[str, Any]:
-        """The config mapping the default :meth:`build` hands the processor.
+    def pipeline_config(self) -> dict[str, Any]:
+        """The config mapping the default :meth:`build_pipeline` hands the three stages.
 
         Defaults to this recipe's data config field values. The shared
         ``max_staleness`` field is not included: the default :meth:`build`
         passes it as the typed ``ProcessorContext.max_staleness`` instead.
-        Override this method to rename keys or add processor-only entries.
+        Override this method to rename keys or add stage-only entries.
         """
         return {
             name: getattr(self, name)
@@ -523,33 +524,41 @@ class WeightTrainingRecipe(Recipe):
     def build_record_stage(self, context: ProcessorContext) -> Record2RecordStage | None:
         """Build the record-to-record stage of one scenario: this method's grouping, judging, and eligibility.
 
-        ``context`` carries :meth:`processor_config`. Return ``None`` to use
-        the processor's default stage, which has no method policy.
+        ``context`` carries :meth:`pipeline_config`. Return ``None`` to use
+        the pass-through stage, which has no method policy.
         """
         return None
 
     def build_record2task(self, context: ProcessorContext) -> Record2Task | None:
         """Build the record-to-task stage of one scenario: how this method turns a record set into tasks.
 
-        ``context`` carries :meth:`processor_config`. Return ``None`` to use
-        the processor's default, which makes no tasks for most processors.
+        ``context`` carries :meth:`pipeline_config`. Return ``None`` to make no tasks.
         """
         return None
 
-    def build_processor(self, context: ProcessorContext) -> DataProcessor:
-        """Build the processor of one scenario with its config, record stage, and record-to-task stage.
+    def build_task2batch(self, context: ProcessorContext) -> Task2Batch:
+        """Build the task-to-batch stage of one scenario: the ``task2batch`` class of :meth:`training_spec`.
 
-        Override this method to give the processor more than its config, for
-        example a plugin built for the scenario.
+        ``context`` carries :meth:`pipeline_config`.
         """
-        processor_class = type(self).training_spec().processor
-        if processor_class is None:
-            raise TypeError(f"{type(self).__name__} declares no processor")
-        configured = context.with_config(self.processor_config())
-        return processor_class(
+        task2batch_class = type(self).training_spec().task2batch
+        if task2batch_class is None:
+            raise TypeError(f"{type(self).__name__} declares no task2batch")
+        return task2batch_class(context)
+
+    def build_pipeline(self, context: ProcessorContext) -> TrainingPipeline:
+        """Build the training pipeline of one scenario from the three stages.
+
+        Override this method when the stages need each other, for example a
+        record-to-task stage that reports finished background work to its
+        record stage.
+        """
+        configured = context.with_config(self.pipeline_config())
+        return TrainingPipeline(
             configured,
             record_stage=self.build_record_stage(configured),
             record2task=self.build_record2task(configured),
+            task2batch=self.build_task2batch(configured),
         )
 
     def build(
@@ -560,7 +569,7 @@ class WeightTrainingRecipe(Recipe):
         algorithm_state: Mapping[str, Any] | None = None,
         experiment_logger: ExperimentLogger | None = None,
     ) -> Trainer:
-        """Build a trainer from this recipe's processor, objective, and report contract.
+        """Build a trainer from this recipe's pipeline, objective, and report contract.
 
         Override with ``Trainer.build`` for bespoke wiring such as a local
         training backend, and pass :attr:`report_type` through there too.
@@ -584,11 +593,10 @@ class WeightTrainingRecipe(Recipe):
         from reef.train.runtime_backend import RuntimeCandidateBackend
 
         spec = type(self).training_spec()
-        processor_class = spec.processor
-        if processor_class is None:
+        if spec.task2batch is None:
             raise TypeError(
-                f"{type(self).__name__} declares no processor: return a DataProcessor subclass "
-                f"as `processor` from training_spec() or override build() for bespoke trainer wiring"
+                f"{type(self).__name__} declares no task2batch: return a Task2Batch subclass "
+                f"as `task2batch` from training_spec() or override build() for bespoke trainer wiring"
             )
         if not spec.objective:
             raise TypeError(
@@ -611,7 +619,7 @@ class WeightTrainingRecipe(Recipe):
         return Trainer.build(
             scenario,
             records,
-            processor_factory=self.build_processor,
+            pipeline_factory=self.build_pipeline,
             candidate_backend=RuntimeCandidateBackend(
                 self.training_runtime,
                 spec.objective,

@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from recipes.sdft.processor import DEFAULT_CONTEXT_TEMPLATE, SDFTProcessor, SDFTTasks, context_block_template
+from recipes.sdft.processor import DEFAULT_CONTEXT_TEMPLATE, SDFTBatches, SDFTTasks, context_block_template
 from reef.core.reports import ReportBase, TeacherContextReport
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
@@ -54,7 +54,7 @@ class SDFTRecipe(WeightTrainingRecipe):
     def training_spec(cls) -> WeightTrainingSpec:
         return WeightTrainingSpec(
             objective="sdft",
-            processor=SDFTProcessor,
+            task2batch=SDFTBatches,
             # Each sample is its own DP unit; the backend's configured step size applies.
             scheduling=StepScheduling(unit="sample"),
         )
@@ -74,7 +74,7 @@ class SDFTRecipe(WeightTrainingRecipe):
         if self.max_teacher_tokens < 0:
             raise ValueError("max_teacher_tokens must be non-negative (0 disables the limit)")
         # A bad template fails the deployment here, not the first scenario.
-        context_block_template(self.processor_config())
+        context_block_template(self.pipeline_config())
 
     @classmethod
     def _validate_config(cls, settings: Mapping[str, Any]) -> None:

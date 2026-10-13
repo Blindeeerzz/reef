@@ -19,7 +19,7 @@ than supervised fine-tuning on the same demonstrations.
 +-------------+------------------------------------------------------------+
 | Package     | ``recipes/sdft/``                                          |
 +-------------+------------------------------------------------------------+
-| Processor   | reported feedback, singleton                               |
+| Pipeline    | reported feedback, singleton                               |
 +-------------+------------------------------------------------------------+
 | Needs       | GPUs, and a backend that captures tokens and log-probs     |
 +-------------+------------------------------------------------------------+
@@ -48,7 +48,7 @@ How Reef implements it
 ----------------------
 
 The record-to-task stage is the shared ``DistillTasks``
-(`Processors <../../developer-guide/processors.rst>`__). It turns every
+(`Training pipeline <../../developer-guide/processors.rst>`__). It turns every
 ``TeacherContextReport`` into one ``TrajectoryItem``. The item carries the
 student's recorded tokens and ``teacher_tokens``. ``teacher_tokens`` is the
 teacher's request rendered with the served model's chat template and

@@ -16,7 +16,7 @@ observation changes the pool, and the next day measures what changed.
 +-------------+--------------------------------------------------------------+
 | Package     | ``recipes/skillclaw/``                                       |
 +-------------+--------------------------------------------------------------+
-| Processor   | reported feedback, producing trace items                     |
+| Pipeline    | reported feedback, producing trace items                     |
 +-------------+--------------------------------------------------------------+
 | Needs       | a Reef process, the ``pi`` binary, and Docker for the        |
 |             | Harbor tasks. Reef itself needs no GPU.                      |

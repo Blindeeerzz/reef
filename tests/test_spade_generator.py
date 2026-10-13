@@ -23,6 +23,7 @@ from reef.core.tasks import (
 )
 from reef.recipe.generated_tasks import GeneratedTaskTasks
 from reef.recipe.generated_tasks.processor import RoundJob
+from reef.recipe.generated_tasks.recipe import task_group_record_stage
 from reef.record2task.generator import TaskNameConflict
 from reef.train.types import ProcessorContext
 
@@ -248,11 +249,12 @@ def test_from_config_reads_its_section_and_keeps_one_state_directory_for_each_sc
 def test_a_round_of_the_generated_task_recipe_runs_spade_end_to_end(tmp_path: Path) -> None:
     service = StandInGenerator(tmp_path / "tasks", refusals={1: "reply refused: no json"})
     generator = spade(tmp_path, service)
+    context = ProcessorContext(
+        "spade", {"plays_per_task": 2, "rounds": 1, "description": DESCRIPTION, "state_dir": str(tmp_path / "rounds")}
+    )
     generation = GeneratedTaskTasks(
-        ProcessorContext(
-            "spade",
-            {"plays_per_task": 2, "rounds": 1, "description": DESCRIPTION, "state_dir": str(tmp_path / "rounds")},
-        ),
+        context,
+        task_group_record_stage(context),
         task_generator=generator,
         task_player=service,
     )

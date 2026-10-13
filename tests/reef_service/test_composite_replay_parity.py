@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from recipes.tttd import TTTDGroupedRolloutReport, TTTDProcessor
+from recipes.tttd import TTTDBatches, TTTDGroupedRolloutReport
 from recipes.tttd.processor import TTTDTasks
 from recipes.tttd.recipe import tttd_record_stage
 from reef.artifact import ArtifactRef, InMemoryRepositoryBackend
@@ -30,10 +30,11 @@ from reef.record2record import GroupDecision, JudgingStage, RecordJudging, Repor
 from reef.record2task import JudgedTasks
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train import ComponentTrainer, Trainer
-from reef.train.processors.computed import ComputedFeedbackProcessor
-from reef.train.types import TrainingBatch
+from reef.train.pipeline import TrainingPipeline
+from reef.train.processors.base import Task2Batch
+from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch
 
-from ._threshold_processor import ThresholdProcessor
+from ._threshold_processor import threshold_pipeline
 from ._trajectories import policy_trajectory
 from .test_component_trainers import HARNESS, WEIGHTS, _ComponentBackend, _JudgedAtOnce, _Judgment, _TwoTrainerRecipe
 
@@ -79,15 +80,21 @@ class _SessionTasks(JudgedTasks):
         )
 
 
-class _SessionProcessor(ComputedFeedbackProcessor):
+class SessionBatches(Task2Batch):
+    """Batches the judged turns of ``_SessionJudging``."""
+
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+        return TrainingBatch(f"{self.scenario}:session:{batch_number}", tasks)
+
+
+def session_pipeline(context: ProcessorContext) -> TrainingPipeline:
     """Trains the judged turns of ``_SessionJudging``; a turn marked declined is unusable."""
-
-    def __init__(self, context: Any) -> None:
-        stage = JudgingStage(_SessionJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness)
-        super().__init__(context, record_stage=stage, record2task=_SessionTasks())
-
-    def make_batch(self, samples: Any, batch_number: int) -> TrainingBatch:
-        return TrainingBatch(f"{self.scenario}:session:{batch_number}", tuple(samples))
+    return TrainingPipeline(
+        context,
+        record_stage=JudgingStage(_SessionJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness),
+        record2task=_SessionTasks(),
+        task2batch=SessionBatches(context),
+    )
 
 
 class _StepGrouping(ReportGrouping):
@@ -108,36 +115,38 @@ class _StepGrouping(ReportGrouping):
         return GroupDecision.READY
 
 
-class _StepProcessor(ThresholdProcessor):
+def step_pipeline(context: ProcessorContext) -> TrainingPipeline:
     """TTTD's shape: a step is one group of two (step, slot) reports, sources are exclusive, a step with a report
     marked mixed is discarded once complete, and a report that names no step is another role's and released."""
+    stage = ReportStage(
+        context.scenario, context.report_type, _StepGrouping(), exclusive_sources=True, ordered_groups=True
+    )
+    return threshold_pipeline(context, record_stage=stage)
 
-    def __init__(self, context: Any) -> None:
-        stage = ReportStage(
-            context.scenario, context.report_type, _StepGrouping(), exclusive_sources=True, ordered_groups=True
-        )
-        super().__init__(context, record_stage=stage)
+
+def tttd_pipeline(context: ProcessorContext) -> TrainingPipeline:
+    """The TTTD recipe's stages, one group of two rollouts per step."""
+    configured = context.with_config({"groups_per_step": 1, "rollouts_per_group": 2})
+    return TrainingPipeline(
+        configured,
+        record_stage=tttd_record_stage(configured),
+        record2task=TTTDTasks(configured),
+        task2batch=TTTDBatches(configured),
+    )
 
 
 @dataclass(frozen=True)
 class _Recipe(_TwoTrainerRecipe):
-    processors: tuple[tuple[str, Any], ...] = ()
+    pipelines: tuple[tuple[str, Any], ...] = ()
 
     def build_trainers(self, scenario, records, *, surface, algorithm_states, experiment_logger=None):
-        processors = dict(self.processors)
+        pipelines = dict(self.pipelines)
 
         def factory_for(component: str):
-            cls = processors[component]
-            if cls is TTTDProcessor:
-
-                def tttd(context: Any) -> TTTDProcessor:
-                    configured = context.with_config({"groups_per_step": 1, "rollouts_per_group": 2})
-                    return TTTDProcessor(
-                        configured, record_stage=tttd_record_stage(configured), record2task=TTTDTasks(configured)
-                    )
-
-                return tttd
-            return lambda context: cls(context.with_config({"batch_size": 1}))
+            build_pipeline = pipelines[component]
+            if build_pipeline is tttd_pipeline:
+                return tttd_pipeline
+            return lambda context: build_pipeline(context.with_config({"batch_size": 1}))
 
         return tuple(
             ComponentTrainer(
@@ -145,25 +154,25 @@ class _Recipe(_TwoTrainerRecipe):
                 Trainer.build(
                     scenario,
                     records,
-                    processor_factory=factory_for(component),
+                    pipeline_factory=factory_for(component),
                     candidate_backend=backend,
                     algorithm_state=algorithm_states.get(component),
                     experiment_logger=experiment_logger,
-                    report_type=TTTDGroupedRolloutReport if processors[component] is TTTDProcessor else None,
+                    report_type=TTTDGroupedRolloutReport if pipelines[component] is tttd_pipeline else None,
                 ),
             )
             for component, backend in self.backends.items()
         )
 
 
-def _dispatcher(tmp_path: Path, processors: dict[str, Any]) -> Dispatcher:
+def _dispatcher(tmp_path: Path, pipelines: dict[str, Any]) -> Dispatcher:
     initial = tmp_path / "initial"
     for component in (WEIGHTS, HARNESS):
         (initial / component).mkdir(parents=True, exist_ok=True)
         (initial / component / f"{component}.txt").write_text(f"{component} seed", encoding="utf-8")
     backends = {component: _ComponentBackend(component, tmp_path / "candidates") for component in (WEIGHTS, HARNESS)}
     return Dispatcher(
-        _Recipe(backends=backends, processors=tuple(processors.items())),
+        _Recipe(backends=backends, pipelines=tuple(pipelines.items())),
         InMemoryRepositoryBackend.factory(initial, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "staged",
         agent_record_dir=tmp_path / "records",
@@ -216,7 +225,7 @@ def _stored(scenario) -> list[str]:
 
 
 def _retry_after_a_sibling_commit(tmp_path: Path, reload: bool) -> tuple[Any, ...]:
-    dispatcher = _dispatcher(tmp_path, {WEIGHTS: ThresholdProcessor, HARNESS: _SessionProcessor})
+    dispatcher = _dispatcher(tmp_path, {WEIGHTS: threshold_pipeline, HARNESS: session_pipeline})
     try:
         scenario = dispatcher.get_or_create_scenario("agent")
         for record in (_turn("X", "u", 1), _turn("X2", "u", 2), _turn("A", "s", 1, declined=True), _report("rA", "A")):
@@ -244,7 +253,7 @@ def test_a_retry_a_session_processor_retired_stays_retired_after_a_reload(tmp_pa
 
 
 def _discarded_step(tmp_path: Path, reload: bool) -> tuple[Any, ...]:
-    dispatcher = _dispatcher(tmp_path, {WEIGHTS: ThresholdProcessor, HARNESS: _StepProcessor})
+    dispatcher = _dispatcher(tmp_path, {WEIGHTS: threshold_pipeline, HARNESS: step_pipeline})
     try:
         scenario = dispatcher.get_or_create_scenario("agent")
         for record in (
@@ -266,7 +275,7 @@ def _discarded_step(tmp_path: Path, reload: bool) -> tuple[Any, ...]:
             scenario = dispatcher._registry.reload("agent")
         assert _step(scenario, HARNESS) is None
         trained = _step(scenario, WEIGHTS)
-        metrics = scenario.trainer_for(HARNESS).processor.operational_metrics()
+        metrics = scenario.trainer_for(HARNESS).pipeline.operational_metrics()
         return trained, metrics["unreserved_reports"], _stored(scenario)
     finally:
         dispatcher.close()
@@ -284,7 +293,7 @@ def test_a_step_a_reported_processor_discarded_stays_discarded_after_a_reload(tm
 
 
 def _another_roles_report(tmp_path: Path, reload: bool) -> tuple[Any, ...]:
-    dispatcher = _dispatcher(tmp_path, {WEIGHTS: _SessionProcessor, HARNESS: _StepProcessor})
+    dispatcher = _dispatcher(tmp_path, {WEIGHTS: session_pipeline, HARNESS: step_pipeline})
     try:
         scenario = dispatcher.get_or_create_scenario("agent")
         for record in (
@@ -306,7 +315,7 @@ def _another_roles_report(tmp_path: Path, reload: bool) -> tuple[Any, ...]:
         assert _step(scenario, HARNESS) is None
         scenario.records.append(_turn("i3b", "s", 2))
         trained = _step(scenario, WEIGHTS)
-        released = scenario.trainer_for(HARNESS).processor.releasable_record_ids()
+        released = scenario.trainer_for(HARNESS).pipeline.releasable_record_ids()
         return trained, "i3" in released, _stored(scenario)
     finally:
         dispatcher.close()
@@ -323,7 +332,7 @@ def test_an_inference_released_with_another_roles_report_stays_released_after_a_
 
 
 def _retry_at_a_discarded_step(tmp_path: Path, point: str, reload: bool) -> tuple[Any, ...]:
-    dispatcher = _dispatcher(tmp_path, {WEIGHTS: ThresholdProcessor, HARNESS: _StepProcessor})
+    dispatcher = _dispatcher(tmp_path, {WEIGHTS: threshold_pipeline, HARNESS: step_pipeline})
     try:
         scenario = dispatcher.get_or_create_scenario("agent")
         records = [
@@ -397,7 +406,7 @@ def _tttd_report(record_id: str, reference: str, rollout: int, score: float) -> 
 
 
 def _tttd_failed_step(tmp_path: Path, reload: bool) -> tuple[Any, ...]:
-    dispatcher = _dispatcher(tmp_path, {WEIGHTS: ThresholdProcessor, HARNESS: TTTDProcessor})
+    dispatcher = _dispatcher(tmp_path, {WEIGHTS: threshold_pipeline, HARNESS: tttd_pipeline})
     try:
         scenario = dispatcher.get_or_create_scenario("agent")
         # Step 0 spans two releases: TTTD fails it.
@@ -420,7 +429,7 @@ def _tttd_failed_step(tmp_path: Path, reload: bool) -> tuple[Any, ...]:
         ):
             scenario.records.append(record)
         resampled = _step(scenario, HARNESS)
-        return first, scenario.trainer_for(HARNESS).processor_status()["failed_steps"], resampled
+        return first, scenario.trainer_for(HARNESS).pipeline_status()["failed_steps"], resampled
     finally:
         dispatcher.close()
 

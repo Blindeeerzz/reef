@@ -14,7 +14,7 @@ the backend's forward passes.
 - Methods can also supply a Tinker loss implementation. TTTD shares one
   preparation method between its Slime and Tinker implementations.
 
-A recipe binds ``WeightTrainingSpec(objective=..., processor=..., scheduling=...)``.
+A recipe binds ``WeightTrainingSpec(objective=..., task2batch=..., scheduling=...)``.
 ``WeightTrainingSpec.loss_family`` derives the family from that objective;
 ``StepSignal`` carries advantages, metrics and proposed state, and the recipe's
 ``StepScheduling`` says how the runtime cuts the batch into optimizer steps.

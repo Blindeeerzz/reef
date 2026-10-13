@@ -1,4 +1,4 @@
-"""Record sets: the records that a processor uses together, and the fields that the pool reads."""
+"""Record sets: the records that a pipeline uses together, and the fields that the pool reads."""
 
 from __future__ import annotations
 
@@ -35,6 +35,14 @@ class RecordSet(ABC):
     @abstractmethod
     def record_ids(self) -> tuple[str, ...]:
         """Return the IDs of the records in the set."""
+
+    def formed_set_ids(self) -> tuple[Hashable, ...]:
+        """Return the IDs of the formed sets whose tasks this set trains on.
+
+        A stage that holds the sets it formed returns ``set_id``. A stage that
+        combines formed sets, such as a ready group, returns their IDs in batch order.
+        """
+        return (self.set_id,)
 
 
 @dataclass(frozen=True, kw_only=True)

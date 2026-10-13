@@ -16,10 +16,10 @@
 """
 
 from recipes.openclawrl.objective import OpenClawRLObjective
-from recipes.openclawrl.processor import OpenClawRLProcessor
+from recipes.openclawrl.processor import OpenClawRLBatches
 from recipes.openclawrl.recipe import OpenClawRLRecipe
 from reef.train.algos.registry import register_loss_family_ref
 
 register_loss_family_ref("openclawrl", "recipes.openclawrl.slime:OpenclawrlAlgorithm")
 
-__all__ = ["OpenClawRLObjective", "OpenClawRLProcessor", "OpenClawRLRecipe"]
+__all__ = ["OpenClawRLBatches", "OpenClawRLObjective", "OpenClawRLRecipe"]

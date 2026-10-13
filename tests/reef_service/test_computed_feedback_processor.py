@@ -1,8 +1,8 @@
-"""Focused unit tests for the computed-feedback processor's state machine.
+"""Focused unit tests for the computed-feedback pipeline's state machine.
 
 test_openclawrl pins the real recipe's behavior; these tests pin the
-engine mechanics themselves with a toy recipe, where recipe policy cannot
-blur the state machine.
+mechanics of a pipeline with a ``JudgingStage`` and ``JudgedTasks`` with a
+toy recipe, where recipe policy cannot blur the state machine.
 """
 
 from __future__ import annotations
@@ -19,8 +19,9 @@ from reef.core import AgentRecord, RequestType
 from reef.core.trajectories import source_record_id
 from reef.record2record import JudgingStage, RecordJudging
 from reef.record2task import JudgedTasks
-from reef.train.processors.computed import ComputedFeedbackProcessor
-from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem
+from reef.train.pipeline import TrainingPipeline
+from reef.train.processors.base import Task2Batch
+from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 pytestmark = pytest.mark.unit
 
@@ -89,7 +90,14 @@ class _ToyTasks(JudgedTasks):
         )
 
 
-class _ToyProcessor(ComputedFeedbackProcessor):
+class ToyBatches(Task2Batch):
+    """Batches the judged samples in the order that the stage selected them."""
+
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+        return TrainingBatch(f"{self.scenario}:toy:{batch_number}", tasks)
+
+
+class _ToyProcessor(TrainingPipeline):
     """Trains the judged records of ``_ToyJudging``. Samples are one-token stubs."""
 
     def __init__(self, context: ProcessorContext, *, worker: Any) -> None:
@@ -97,10 +105,8 @@ class _ToyProcessor(ComputedFeedbackProcessor):
             context,
             record_stage=JudgingStage(_ToyJudging(), worker, max_staleness=context.max_staleness),
             record2task=_ToyTasks(),
+            task2batch=ToyBatches(context),
         )
-
-    def make_batch(self, samples: tuple[TrajectoryItem, ...], batch_number: int) -> TrainingBatch:
-        return TrainingBatch(f"{self.scenario}:toy:{batch_number}", tuple(sample for sample in samples))
 
 
 def _record(agent_record_id: str, **payload) -> AgentRecord:

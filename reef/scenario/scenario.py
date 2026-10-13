@@ -193,7 +193,7 @@ class Scenario:
             raise ValueError("training_mode must be 'auto', 'manual' or 'hybrid'")
         stepping = self.stepping_trainers()
         unsupported = [
-            f"{bound.component} ({type(bound.trainer.processor).__name__})"
+            f"{bound.component} ({type(bound.trainer.pipeline.task2batch).__name__})"
             for bound in stepping
             if not bound.trainer.supports_training_mode(training_mode)
         ]
@@ -339,9 +339,9 @@ class Scenario:
         """Tear down what this scenario instance owns: trainers, then its storage session.
 
         The dispatcher calls this on shutdown and when a durable reload
-        replaces the instance — the one guarantee processors with background
-        workers rely on (see :meth:`DataProcessor.close`). Safe to call more
-        than once; the trainers close first so no processor thread can touch
+        replaces the instance — the one guarantee stages with background
+        workers rely on (see :meth:`TrainingPipeline.close`). Safe to call more
+        than once; the trainers close first so no stage thread can touch
         the record store after it closes.
         """
         with self._committer.lock:

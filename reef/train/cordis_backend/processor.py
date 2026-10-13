@@ -1,15 +1,15 @@
-"""Harness-evolution processor: pair recorded requests with reported scores, unmodified."""
+"""Harness evolution: recorded requests as traces, with reported scores or unscored, batched unmodified."""
 
 from __future__ import annotations
 
 from reef.core import RequestType
-from reef.core.training_request import TrainingRequest
 from reef.core.trajectories import make_trajectory
-from reef.record2record import InferenceStage, RecordSet, SingleRecordSet
+from reef.record2record import InferenceStage, RecordSet, ReportContext, ReportGrouping, ReportStage, SingleRecordSet
 from reef.record2task import Record2Task, ReportTasks, TaskResult
-from reef.train.processors.base import DataProcessor
-from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, reported_task
-from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem
+from reef.train.pipeline import TrainingPipeline
+from reef.train.processors.base import Task2Batch
+from reef.train.processors.reported import reported_task
+from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 
 class TraceTasks(ReportTasks):
@@ -32,80 +32,42 @@ class InferenceTasks(Record2Task):
         return TaskResult.ready((make_trajectory((record_set.record,)),))
 
 
-class CordisProcessor(ReportedFeedbackProcessor):
-    """Pair recorded requests with reported scores and batch them unmodified.
+class TraceBatches(Task2Batch):
+    """Batch trace tasks unmodified; the backends consume them without more processing.
 
-    Requests are recorded post-transform, so a trace shows exactly what the
-    backend served. Every valid report contributes a trace. A report may reference
-    one request or a whole run's worth; several references become one
-    trajectory sample. The backends consume
-    the resulting trace batches without adding processor logic. In ``hybrid``
-    a queued instruction batches with the reported traces an automatic batch
-    would take next, up to ``batch_size``, so the proposer reads the request
-    beside them; in ``manual`` it runs alone.
+    In ``hybrid`` a queued instruction batches with the traces that an
+    automatic batch would take next, up to ``batch_size``, so the proposer
+    reads the request beside them; in ``manual`` it runs alone.
     """
 
-    output_schema = TrainingBatch
     supported_training_modes = frozenset({"auto", "manual", "hybrid"})
     required_request_types = frozenset(RequestType)
 
-    def default_record2task(self) -> TraceTasks:
-        return TraceTasks()
-
-    def make_training_batch(self, batch_number: int, request: TrainingRequest | None) -> TrainingBatch:
-        if request is not None and self.training_mode == "manual":
-            self.record_stage.reserve(0)
-            return TrainingBatch(request.id, ())
-        # In hybrid an instruction takes the units an automatic batch would, none included; the base attaches it.
-        return self._make_pending(batch_number)
-
-    def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
-        return TrainingBatch(f"{self.scenario}:harness_evolve:{batch_number}", items)
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+        return TrainingBatch(f"{self.scenario}:harness_evolve:{batch_number}", tasks)
 
 
-class RecordDrivenTraceProcessor(DataProcessor):
-    """Batch recorded inference traffic every ``batch_size`` requests, unscored.
+def trace_pipeline(context: ProcessorContext, batch_policy: str) -> TrainingPipeline:
+    """The harness-evolution pipeline of one scenario: traces from reports, or from recorded inference traffic.
 
-    The report-free half of harness evolution: a deployment that only serves
-    still evolves. Each recorded inference is one unit, in arrival order
-    (:class:`~reef.record2record.InferenceStage`); when ``batch_size`` have
-    accumulated they batch as trace samples with ``score=None``, and the
-    proposer contract requires handling unscored samples. Reports that arrive
-    under this policy are released untouched; a deployment with real outcome
-    signal selects the reported policy instead, because a measured result
-    beats model self judgment. In ``hybrid`` a queued instruction batches
-    with the oldest held records, up to ``batch_size``, as an automatic batch
-    would; in ``manual`` it runs alone.
+    * ``reports``: pair recorded requests with reported scores. Requests are
+      recorded post-transform, so a trace shows exactly what the backend
+      served. Every valid report contributes one trace; several references
+      become one trajectory sample.
+    * ``records``: batch recorded inference traffic every ``batch_size``
+      requests, unscored, so a deployment that only serves still evolves.
+      Each recorded inference is one set, in arrival order, and reports are
+      released untouched. The proposer contract requires handling unscored
+      samples; a deployment with real outcome signal selects ``reports``,
+      because a measured result beats model self judgment.
     """
-
-    output_schema = TrainingBatch
-    supported_training_modes = frozenset({"auto", "manual", "hybrid"})
-    required_request_types = frozenset(RequestType)
-
-    def default_record_stage(self) -> InferenceStage:
-        return InferenceStage()
-
-    def default_record2task(self) -> InferenceTasks:
-        return InferenceTasks()
-
-    def make_training_batch(self, batch_number: int, request: TrainingRequest | None) -> TrainingBatch:
-        if request is not None and self.training_mode == "manual":
-            self.record_stage.reserve(0)
-            return TrainingBatch(request.id, ())
-        # In hybrid an instruction takes the records an automatic batch would, none included; the base attaches it.
-        return self._make_pending(batch_number)
-
-    def _ready_count(self) -> int:
-        return self.record_stage.available_count()
-
-    def _make_pending(self, batch_number: int) -> TrainingBatch:
-        selected = self.record_stage.reserve(self._batch_size)
-        return TrainingBatch(
-            f"{self.scenario}:harness_evolve:{batch_number}",
-            tuple(task for record_set in selected for task in self.tasks[record_set.set_id]),
+    if batch_policy == "records":
+        return TrainingPipeline(
+            context, record_stage=InferenceStage(), record2task=InferenceTasks(), task2batch=TraceBatches(context)
         )
-
-    def _consume_pending(self) -> frozenset[str]:
-        consumed = self.record_stage.consume_reservation()
-        self.forget_sets(self.record_stage.take_ended())
-        return consumed
+    return TrainingPipeline(
+        context,
+        record_stage=ReportStage(context.scenario, context.report_type, ReportGrouping()),
+        record2task=TraceTasks(),
+        task2batch=TraceBatches(context),
+    )

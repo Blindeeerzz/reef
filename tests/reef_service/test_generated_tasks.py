@@ -30,7 +30,7 @@ from reef.harness.client.tasks import TaskPlay
 from reef.inference.http import InferenceProxyRuntime
 from reef.recipe.errors import RecipeConfigError
 from reef.recipe.generated_tasks import (
-    GeneratedTaskProcessor,
+    GeneratedTaskBatches,
     GeneratedTaskRecipe,
     TaskGenerationConfig,
     TaskGroupObjective,
@@ -45,6 +45,7 @@ from reef.recipe.generated_tasks.processor import (
 from reef.recipe.generated_tasks.recipe import task_group_record_stage
 from reef.record2record import GroupDecision, ReportContext
 from reef.train.algos.registry import resolve_objective
+from reef.train.pipeline import TrainingPipeline
 from reef.train.types import ProcessorContext, TrainingBatch, trajectory_groups
 
 MODULE = "reef_service.test_generated_tasks"
@@ -85,12 +86,16 @@ def report(
     )
 
 
-def processor(**config: object) -> GeneratedTaskProcessor:
+def processor(**config: object) -> TrainingPipeline:
     context = ProcessorContext("tasks", {"tasks_per_step": 2, "plays_per_task": 2, **config})
-    return GeneratedTaskProcessor(context, record_stage=task_group_record_stage(context))
+    batches = GeneratedTaskBatches(context)
+    stage = task_group_record_stage(context)
+    return TrainingPipeline(
+        context, record_stage=stage, record2task=GeneratedTaskTasks(context, stage), task2batch=batches
+    )
 
 
-def played(processor: GeneratedTaskProcessor, task: str, index: int, score: float, **fields: Any) -> None:
+def played(processor: TrainingPipeline, task: str, index: int, score: float, **fields: Any) -> None:
     processor.ingest(inference(f"rec-{task}-{index}"))
     processor.ingest(report(f"rep-{task}-{index}", f"rec-{task}-{index}", task, score, **fields))
 
@@ -153,7 +158,7 @@ def test_measurement_arms_and_reports_without_an_arm_are_released_not_trained() 
 
 
 def test_a_task_group_waits_for_plays_per_task_episodes() -> None:
-    grouping = processor(plays_per_task=3).report_stage.grouping
+    grouping = processor(plays_per_task=3).record_stage.grouping
     one = (ReportContext(inference("a"), 1.0, (inference("a"),)),)
     assert grouping.decide("t", one) is GroupDecision.INCOMPLETE
     assert grouping.decide("t", one * 3) is GroupDecision.READY
@@ -345,7 +350,7 @@ def rounds(
     *,
     worker: InlineWorker | DeferredWorker | None = None,
     **config: object,
-) -> tuple[GeneratedTaskProcessor, StandInGenerator]:
+) -> tuple[TrainingPipeline, StandInGenerator]:
     player = player if player is not None else StandInGenerator(tmp_path / "tasks")
     worker = worker if worker is not None else InlineWorker()
     context = ProcessorContext(
@@ -360,13 +365,16 @@ def rounds(
             **config,
         },
     )
-    generation = GeneratedTaskTasks(context, task_generator=task_generator, task_player=player, worker=worker)
-    built = GeneratedTaskProcessor(context, record_stage=task_group_record_stage(context), record2task=generation)
+    stage = task_group_record_stage(context)
+    generation = GeneratedTaskTasks(context, stage, task_generator=task_generator, task_player=player, worker=worker)
+    built = TrainingPipeline(
+        context, record_stage=stage, record2task=generation, task2batch=GeneratedTaskBatches(context)
+    )
     worker.generation = generation
     return built, player
 
 
-def looked(p: GeneratedTaskProcessor) -> bool:
+def looked(p: TrainingPipeline) -> bool:
     """Look for a batch twice: the inline worker's outcome lands on the look after the one that submitted it."""
     p.ready()
     return p.ready()
@@ -567,10 +575,14 @@ def test_the_real_worker_runs_a_round_off_the_trainers_thread(tmp_path: Path) ->
     context = ProcessorContext(
         "tasks", {"rounds": 1, "description": "shell tasks", "state_dir": str(tmp_path / "state")}
     )
+    stage = task_group_record_stage(context)
     generation = GeneratedTaskTasks(
-        context, task_generator=ScriptedGenerator([generated(0, 0)]), task_player=StandInGenerator(tmp_path / "tasks")
+        context,
+        stage,
+        task_generator=ScriptedGenerator([generated(0, 0)]),
+        task_player=StandInGenerator(tmp_path / "tasks"),
     )
-    p = GeneratedTaskProcessor(context, record_stage=task_group_record_stage(context), record2task=generation)
+    p = TrainingPipeline(context, record_stage=stage, record2task=generation, task2batch=GeneratedTaskBatches(context))
     try:
         assert not p.ready()
         deadline = time.monotonic() + 10.0
@@ -600,7 +612,7 @@ def session(name: str, tags: Mapping[str, str]) -> tuple[AgentRecord, AgentRecor
     return call, report(f"rep-{name}", call.agent_record_id, None, 0.5, arm=None)
 
 
-def sessions(p: GeneratedTaskProcessor, *names: str, tags: Mapping[str, str] | None = None) -> None:
+def sessions(p: TrainingPipeline, *names: str, tags: Mapping[str, str] | None = None) -> None:
     for name in names:
         for record in session(name, {"source": "session"} if tags is None else tags):
             p.ingest(record)
@@ -678,9 +690,8 @@ def test_a_processor_configuration_that_cannot_train_is_refused(config: dict[str
 
 def test_rounds_need_a_description_a_state_dir_and_the_generator_service() -> None:
     def built(**config: object) -> GeneratedTaskTasks:
-        return GeneratedTaskTasks(
-            ProcessorContext("tasks", {"rounds": 1, **config}), task_generator=ScriptedGenerator()
-        )
+        context = ProcessorContext("tasks", {"rounds": 1, **config})
+        return GeneratedTaskTasks(context, task_group_record_stage(context), task_generator=ScriptedGenerator())
 
     with pytest.raises(ValueError, match="description"):
         built()
@@ -700,11 +711,11 @@ def training_recipe(**fields: Any) -> GeneratedTaskRecipe:
 
 def test_the_recipe_binds_the_processor_the_objective_and_its_schedule() -> None:
     spec = GeneratedTaskRecipe.training_spec()
-    assert spec.processor is GeneratedTaskProcessor and spec.objective == "task_group"
+    assert spec.task2batch is GeneratedTaskBatches and spec.objective == "task_group"
     assert spec.loss_family == "importance_sampling"
     assert spec.scheduling.unit == "sample" and spec.scheduling.batch_size == "actual"
     assert GeneratedTaskRecipe.report_type.fget(GeneratedTaskRecipe) is ScoredRolloutReport  # type: ignore[union-attr]
-    config = training_recipe().processor_config()
+    config = training_recipe().pipeline_config()
     assert config["tasks_per_step"] == 4 and config["plays_per_task"] == 4 and config["scaffold_tolerance"] == 8
     assert config["rounds"] == 0 and config["generator_url"] == ""
     with pytest.raises(ValueError, match="scaffold_tolerance"):
@@ -738,10 +749,11 @@ def test_the_section_selects_a_generator_class_built_once_for_each_scenario(tmp_
     assert isinstance(recipe, GeneratedTaskRecipe)
     assert recipe.task_generation == TaskGenerationConfig(PluginReference(ScriptedGenerator, {"count": 3}), environ)
     ScriptedGenerator.built.clear()
-    built = recipe.build_processor(ProcessorContext("one"))
-    assert isinstance(built, GeneratedTaskProcessor) and isinstance(built.generation.task_generator, ScriptedGenerator)
+    built = recipe.build_pipeline(ProcessorContext("one"))
+    assert isinstance(built.task2batch, GeneratedTaskBatches) and isinstance(built.record2task, GeneratedTaskTasks)
+    assert isinstance(built.record2task.task_generator, ScriptedGenerator)
     assert ScriptedGenerator.built == [{"config": {"count": 3}, "scenario": "one", "environ": environ}]
-    assert built.generation.state_dir == tmp_path / "state" / "one"
+    assert built.record2task.state_dir == tmp_path / "state" / "one"
     assert recipe.scenario_state_dirs("one") == (tmp_path / "state" / "one",)
     built.close()
 

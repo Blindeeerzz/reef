@@ -32,8 +32,10 @@ from reef.surface import Surface, TextFileTree, create_config_surface, create_ha
 from reef.surface.config import CONFIG_FILE, ConfigInferenceHooks, ConfigValidator
 from reef.train import CandidateBackend, PreparedStep, Trainer, TrainStepResult
 from reef.train.evaluation import EvaluationResult, UpdateCandidate
+from reef.train.pipeline import TrainingPipeline
+from reef.train.types import ProcessorContext
 
-from ._threshold_processor import ThresholdProcessor
+from ._threshold_processor import ThresholdBatches, threshold_pipeline
 
 
 class _FileBackend(CandidateBackend):
@@ -84,7 +86,7 @@ class _TreeRecipe(Recipe):
         return Trainer.build(
             scenario,
             records,
-            processor_factory=lambda context: ThresholdProcessor(context.with_config({"batch_size": 1})),
+            pipeline_factory=lambda context: threshold_pipeline(context.with_config({"batch_size": 1})),
             candidate_backend=_FileBackend(self.label, self.artifact_dir),
             algorithm_state=algorithm_state,
             report_type=self.report_type,
@@ -93,21 +95,27 @@ class _TreeRecipe(Recipe):
         )
 
 
-class _HybridThresholdProcessor(ThresholdProcessor):
-    """The same processor, taking instructions too."""
+class HybridThresholdBatches(ThresholdBatches):
+    """The same batches, taking instructions too."""
 
     supported_training_modes = frozenset({"auto", "manual", "hybrid"})
 
 
+def hybrid_threshold_pipeline(context: ProcessorContext) -> TrainingPipeline:
+    """The threshold pipeline, one report per batch, taking instructions too."""
+    context = context.with_config({"batch_size": 1})
+    return threshold_pipeline(context, task2batch=HybridThresholdBatches(context))
+
+
 @dataclass(frozen=True)
 class _HybridTreeRecipe(_TreeRecipe):
-    """The tree recipe with a processor that runs in every mode."""
+    """The tree recipe with a pipeline that runs in every mode."""
 
     def build(self, scenario, records, *, algorithm_state=None, experiment_logger=None):
         return Trainer.build(
             scenario,
             records,
-            processor_factory=lambda context: _HybridThresholdProcessor(context.with_config({"batch_size": 1})),
+            pipeline_factory=hybrid_threshold_pipeline,
             candidate_backend=_FileBackend(self.label, self.artifact_dir),
             algorithm_state=algorithm_state,
             report_type=self.report_type,
@@ -597,7 +605,7 @@ def test_components_with_different_report_contracts_admit_what_any_of_them_accep
         surface=mixed.build_surface("agent"),
         algorithm_states={},
     )
-    assert [bound.trainer.processor.context.admitted_report_type is mixed.report_type for bound in trainers] == [
+    assert [bound.trainer.pipeline.context.admitted_report_type is mixed.report_type for bound in trainers] == [
         True,
         True,
     ]
@@ -783,7 +791,7 @@ class _EpisodeTreeRecipe(_TreeRecipe):
         return Trainer.build(
             scenario,
             records,
-            processor_factory=lambda context: ThresholdProcessor(context.with_config({"batch_size": 1})),
+            pipeline_factory=lambda context: threshold_pipeline(context.with_config({"batch_size": 1})),
             candidate_backend=_ClosingBackend(self.label, self.artifact_dir, self.closing, self.episode_done),
             algorithm_state=algorithm_state,
             report_type=self.report_type,
@@ -1288,12 +1296,12 @@ def test_status_and_contract_speak_of_the_trainer_that_steps(tmp_path: Path) -> 
         block = dispatcher.build_training_status()["scenarios"]["agent"]
         assert block["training_mode"] == "hybrid"
         assert block["processor"] == {
-            **harness.processor_status(),
+            **harness.pipeline_status(),
             "pending_instructions": harness.pending_instructions(),
         }
         contract = dispatcher.scenario_contract("agent")
         assert contract["training_mode"] == "hybrid"
-        assert contract["processor"] == type(harness.processor).__name__
+        assert contract["processor"] == type(harness.pipeline.task2batch).__name__
     finally:
         dispatcher.close()
 

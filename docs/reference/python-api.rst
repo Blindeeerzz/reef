@@ -21,7 +21,7 @@ Start with Recipe and add only what the method actually needs.
 | validate feedback at ingress                | `Report <#report>`__                             | methods whose signal arrives |
 |                                             |                                                  | in reports                   |
 +---------------------------------------------+--------------------------------------------------+------------------------------+
-| turn records into a typed batch             | `Processor <#processor>`__                       | every method producing       |
+| turn records into a typed batch             | `Pipeline stages <#pipeline-stages>`__           | every method producing       |
 |                                             |                                                  | updates                      |
 +---------------------------------------------+--------------------------------------------------+------------------------------+
 | carry data to the backend                   | `Batch <#batch>`__                               | every method producing       |
@@ -240,7 +240,7 @@ producing-to-serving version lag, which must match the runtime; and
        @classmethod
        def training_spec(cls) -> WeightTrainingSpec:
            return WeightTrainingSpec(
-               processor=MyMethodProcessor,
+               task2batch=MyMethodBatches,
                objective="my_method.objective:MyObjective",
                scheduling=StepScheduling(unit="sample"),
            )
@@ -262,9 +262,9 @@ parser, and an optional environment fallback:
 Precedence is explicit configuration, then environment, then the default.
 ``from_environment()`` builds the recipe. On weight-training recipes,
 ``service_config()`` forwards declared fields and shared artifact settings
-from the service configuration; override ``processor_config()`` when a
-processor needs renamed or derived keys. Never read deployment YAML from
-inside a processor.
+from the service configuration; override ``pipeline_config()`` when a
+stage needs renamed or derived keys. Never read deployment YAML from
+inside a stage.
 
 Report
 ------
@@ -640,43 +640,50 @@ sweeps. SQLite reuses freed pages without shrinking its file. Indexes and other
 metadata also require disk space. HTTP audit routes remain a separate integration. See
 `Configuration <configuration.rst>`__ for migration and rollback constraints.
 
-Processor
----------
+Pipeline stages
+---------------
 
 .. code:: python
 
-   from reef.record2record import GroupDecision, RecordJudging, ReportContext, ReportGrouping
-   from reef.train.processors import ComputedFeedbackProcessor, DistillProcessor, ReportedFeedbackProcessor
+   from reef.record2record import GroupDecision, RecordJudging, ReportContext, ReportGrouping, ReportStage
+   from reef.record2task import JudgedTasks, ReportTasks, SkippedReport
+   from reef.train.processors import DistillBatches, Task2Batch
 
-A processor turns durable records into typed batches. Each processor owns a
-record-to-record stage (``reef.record2record``). The stage decides which
-records train and in what order: it groups reports, judges records, and drops
-records that can no longer train. The processor turns the stage's record sets
-into samples and batches. Reef owns replay, retention, deduplication, pending
-batches, and exactly-once consumption; the method implements only the hooks
-below. They run synchronously on the trainer thread, so they must not block on
-network or model latency.
+A training pipeline (``reef.train.pipeline.TrainingPipeline``) turns durable
+records into typed batches through three stages that the recipe builds:
 
-Each processor also receives a record-to-task stage
-(``reef.record2task.Record2Task``) as ``record2task``. It turns each record set
-into tasks (``TrainDataItem`` values). The recipe builds it in
-``build_record2task(context)``. Reported feedback supplies a ``make_sample``
-hook on ``reef.record2task.ReportTasks`` that assembles valid reports;
-computed feedback supplies an asynchronous ``judge`` that derives new feedback.
-Reports must reference existing inference records in the same scenario.
+- ``build_record_stage(context)``: the record-to-record stage
+  (``reef.record2record``). It decides which records train and in what order:
+  it groups reports, judges records, and drops records that can no longer
+  train. Without one, each record passes through and nothing trains.
+- ``build_record2task(context)``: the record-to-task stage
+  (``reef.record2task.Record2Task``). It turns each record set into tasks
+  (``TrainDataItem`` values). Reported feedback supplies a ``make_sample`` hook
+  on ``ReportTasks`` that assembles valid reports; computed feedback supplies
+  a ``JudgedTasks`` after an asynchronous ``judge`` derives new feedback.
+- ``build_task2batch(context)``: the task-to-batch stage
+  (``reef.train.processors.Task2Batch``). Its ``make_batch(tasks,
+  batch_number)`` shapes the tasks of the selected sets into a batch. The
+  default builds the ``task2batch`` class of ``training_spec()``.
 
-``DataProcessor.training_mode`` selects automatic, instruction-triggered or
-combined batching on the same processor. Declare ``supported_training_modes`` and
-implement ``make_training_batch(batch_number, request)`` to select inputs;
-``request`` is the queued instruction in ``manual`` and ``hybrid`` and ``None``
-for an automatic batch. Ingestion, acknowledgement, retention,
-buffer release and background derivation are shared. See
-`Processors <../developer-guide/processors.rst>`__ for the instruction queue and batch contract.
+``build_pipeline(context)`` composes them; override it only when two stages
+need each other. Reef owns replay, retention, deduplication, pending batches,
+and exactly-once consumption; the method implements only the hooks below.
+They run synchronously on the trainer thread, so they must not block on
+network or model latency. Reports must reference existing inference records
+in the same scenario.
 
-Every processor gets the scenario's experiment logger as
-``self.experiment_logger``. Log finite numeric metrics under the ``processor``
-namespace; processor code never imports W&B, and the logger is a no-op when
-tracking is off.
+``TrainingPipeline.training_mode`` selects automatic, instruction-triggered or
+combined batching. A ``Task2Batch`` declares ``supported_training_modes``. In
+``manual`` an instruction's batch has no tasks; in ``hybrid`` it takes the sets
+an automatic batch would. Ingestion, acknowledgement, retention, buffer release
+and background derivation are shared. See
+`Training pipeline <../developer-guide/processors.rst>`__ for the instruction queue and batch contract.
+
+Every stage gets the scenario's experiment logger as
+``context.experiment_logger`` (``self.experiment_logger`` on a ``Task2Batch``).
+Log finite numeric metrics under the method's namespace; stage code never
+imports W&B, and the logger is a no-op when tracking is off.
 
 Reported feedback
 ~~~~~~~~~~~~~~~~~
@@ -691,13 +698,14 @@ A reported-feedback recipe implements these hooks:
    * - ``ReportTasks.make_sample(context) -> TrainDataItem | SkippedReport``
      - Assemble one valid report and its resolved inferences; raise on data errors. Return
        ``SkippedReport(reason)`` for a valid report that cannot train; the stage releases it.
-   * - ``ReportedFeedbackProcessor.make_batch(items, batch_number) -> TrainingBatch``
-     - Shape the flat tuple of selected training items into a batch.
+   * - ``Task2Batch.make_batch(tasks, batch_number) -> TrainingBatch``
+     - Shape the flat tuple of selected tasks into a batch.
+
 The recipe owns the report policy. Its ``build_record_stage(context)`` returns
 ``ReportStage(scenario, report_type, grouping, *, exclusive_sources=False,
-ordered_groups=False)``, and ``build_processor`` passes the stage to the
-processor as ``record_stage``. Without one, every report trains by itself. A
-``ReportGrouping`` runs in the record-to-record stage and reads only records:
+ordered_groups=False)``; ``ReportStage(scenario, report_type, ReportGrouping())``
+trains every report by itself. A ``ReportGrouping`` runs in the
+record-to-record stage and reads only records:
 
 .. list-table::
    :header-rows: 1
@@ -714,11 +722,7 @@ processor as ``record_stage``. Without one, every report trains by itself. A
        never assembles it; its sources go with it only under ``exclusive_sources`` or when it references more than
        one inference.
    * - ``status() -> Mapping``
-     - Optional JSON-safe group outcomes, such as steps that can never train. The processor adds them to its status.
-
-A processor class that still defines ``grouping``, ``decide_group``,
-``is_training_report``, ``exclusive_sources``, or ``ordered_groups`` raises
-``TypeError`` when its module is imported.
+     - Optional JSON-safe group outcomes, such as steps that can never train. The pipeline adds them to its status.
 
 ``ReportContext`` carries ``report``, ordered ``inferences``, optional ``score``,
 and the recipe's ``parsed_report``. ``require_score()`` returns a finite reward or
@@ -731,7 +735,7 @@ consumption state stay in the stage; recipes never receive buffered report objec
 and a slot deduplicates retries within that group (None uses the report id).
 This collection group differs from ``TrajectoryItem.group_id``: TTTD waits for
 a complete step, then trains several comparison groups within it.
-``make_batch`` receives items in group/arrival order. Acknowledgement consumes
+``make_batch`` receives tasks in group/arrival order. Acknowledgement consumes
 all selected reports, even when the recipe omits constant-reward groups from
 its output. Reports arriving after reservation remain for a later batch.
 ``output_schema`` declares the batch type. On the stage, ``exclusive_sources``
@@ -748,9 +752,8 @@ Computed feedback
 Use this engine when later traffic completes an earlier record and judging it
 calls a model or another slow service. The recipe writes a ``RecordJudging``.
 Its ``build_record_stage`` returns ``JudgingStage(judging, worker, *,
-max_staleness)``, its ``build_record2task`` returns a ``JudgedTasks``, and the
-processor receives both as ``ComputedFeedbackProcessor(context, *,
-record_stage, record2task)``.
+max_staleness)``, its ``build_record2task`` returns a ``JudgedTasks``, and its
+``Task2Batch`` shapes the judged samples into batches.
 
 +------------------------------------------+-----------------------------------+
 | Hook                                     | Contract                          |
@@ -767,10 +770,10 @@ record_stage, record2task)``.
 | ``JudgedTasks.make_sample(record,``      | a ``TrajectoryItem``, or ``None`` |
 | ``judgment)``                            | to retire the record              |
 +------------------------------------------+-----------------------------------+
-| ``make_batch(samples, batch_number)``    | the declared batch type           |
+| ``make_batch(tasks, batch_number)``      | the declared batch type           |
 +------------------------------------------+-----------------------------------+
 | ``required_request_types``               | optionally restrict which record  |
-|                                          | types reach the processor         |
+|                                          | types reach the pipeline          |
 +------------------------------------------+-----------------------------------+
 
 Before each ``observe``, the stage retires expired records and absorbs finished
@@ -782,7 +785,7 @@ reconstructible from replay.
 
 While no batch is out, the stage retires candidates that are more than
 ``max_staleness`` versions behind the newest candidate, by record arrival. The
-recipe's ``max_staleness`` reaches the processor as
+recipe's ``max_staleness`` reaches the stages as
 ``ProcessorContext.max_staleness``. With the default value 0, only candidates of
 the newest version stay. Runtime admission still checks each batch against the
 serving version.
@@ -808,7 +811,7 @@ Task generation
 ``async record_results(results: tuple[TaskPlayResult, ...])`` is optional. The
 default keeps nothing. The built-in generated-task recipe,
 ``reef.recipe.generated_tasks:GeneratedTaskRecipe``, calls these methods.
-See `Processors <../developer-guide/processors.rst#task-generation-contract>`__
+See `Training pipeline <../developer-guide/processors.rst#task-generation-contract>`__
 for the round and its failure behavior.
 
 ``TaskGenerationRequest(source_records, description, assets=(), asset_files={})``
@@ -950,7 +953,7 @@ Training objective
 Each method defines a ``TrainingObjective`` in its own ``objective.py``. It
 owns full-batch signal preparation and declares the backend loss family.
 Recipes bind it with ``WeightTrainingSpec(objective="my_method.objective:MyObjective",
-processor=MyProcessor, scheduling=StepScheduling(...))``. The dotted reference names a class with a zero-argument
+task2batch=MyBatches, scheduling=StepScheduling(...))``. The dotted reference names a class with a zero-argument
 constructor or an existing instance; its module must be importable in both the
 service and training processes.
 

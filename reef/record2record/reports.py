@@ -2,7 +2,7 @@
 
 ``ReportStage`` reads inference and report records. It validates each report,
 filters the reports that are not training data, and forms one
-``ReportCandidate`` per report for the processor to assemble. It then places
+``ReportCandidate`` per report for the pipeline to assemble. It then places
 each assembled report in its group (``ReportGrouping``) and holds singleton
 reports and ready groups in its pool. It owns deduplication, group slots,
 consumption, and record release.
@@ -115,7 +115,7 @@ class ReportGrouping:
 
 @dataclass(frozen=True, kw_only=True)
 class ReportCandidate(RecordSet):
-    """One valid report and its inference records, before the processor assembles it. ``set_id`` is the report ID."""
+    """One valid report and its inference records, before the pipeline assembles it. ``set_id`` is the report ID."""
 
     context: ReportContext
 
@@ -145,6 +145,9 @@ class ReportSet(RecordSet):
 
     def record_ids(self) -> tuple[str, ...]:
         return tuple(record_id for entry in self.entries for record_id in (*entry.context.references, entry.report_id))
+
+    def formed_set_ids(self) -> tuple[Hashable, ...]:
+        return tuple(entry.report_id for entry in self.entries)
 
 
 def report_sets(pool_sets: tuple[RecordSet, ...]) -> tuple[ReportSet, ...]:
@@ -210,7 +213,7 @@ class ReportStage(Record2RecordStage):
 
     def ingest(self, record: AgentRecord) -> None:
         if record.scenario != self.scenario:
-            raise ReportValidationError("records must belong to the processor's scenario")
+            raise ReportValidationError("records must belong to the pipeline's scenario")
         if record.request_type is RequestType.INFERENCE:
             self.inferences[record.agent_record_id] = record
             return

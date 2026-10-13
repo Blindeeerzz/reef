@@ -1,4 +1,4 @@
-"""CoralProcessor: CORAL sibling groups -> grouped policy batches.
+"""CoralBatches: CORAL sibling groups -> grouped policy batches.
 
 Requires the reef package (and its train stack) importable; skipped
 otherwise so the adapter suite stays standalone.
@@ -13,9 +13,10 @@ from reef.train.types import trajectory_groups
 
 reef_types = pytest.importorskip("reef.train.types", reason="requires a reef checkout")
 
-from recipes.beta.coral.processor import ROOT_GROUP, CoralProcessor, CoralTasks
+from recipes.beta.coral.processor import ROOT_GROUP, CoralBatches, CoralTasks
 from recipes.beta.coral.recipe import coral_record_stage
 from reef.core import AgentRecord, RequestType
+from reef.train.pipeline import TrainingPipeline
 from reef.train.types import ProcessorContext, TrainingBatch
 
 SCENARIO = "coral-demo"
@@ -23,7 +24,12 @@ SCENARIO = "coral-demo"
 
 def _processor(group_size=2):
     context = ProcessorContext(SCENARIO, {"group_size": group_size})
-    return CoralProcessor(context, record_stage=coral_record_stage(context), record2task=CoralTasks(context))
+    return TrainingPipeline(
+        context,
+        record_stage=coral_record_stage(context),
+        record2task=CoralTasks(context),
+        task2batch=CoralBatches(context),
+    )
 
 
 def _inference(record_id, tokens, loss_mask, log_probs):

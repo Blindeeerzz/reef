@@ -1,4 +1,4 @@
-"""Record-to-record stage contracts: how a processor uses its stage, and what a commit records."""
+"""Stage contracts: how the training pipeline drives its three stages, and what a commit records."""
 
 from __future__ import annotations
 
@@ -23,11 +23,11 @@ from reef.record2record import (
 from reef.record2task import Record2Task, ReportTasks, SkippedReport, TaskResult
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.train import ProcessorContext, Trainer
-from reef.train.processors import DataProcessor
-from reef.train.processors.reported import ReportedFeedbackProcessor
+from reef.train.pipeline import TrainingPipeline
+from reef.train.processors import Task2Batch
 from reef.train.types import TaskItem, TrainDataItem, TrainingBatch
 
-from ._threshold_processor import ThresholdProcessor
+from ._threshold_processor import threshold_pipeline
 from .test_record_stage_batch_parity import CountingBackend, inference, instruction, report
 
 
@@ -75,20 +75,33 @@ class RecordingTasks(Record2Task):
         return TaskResult(SetAssembly(AssemblyStatus.INGESTED))
 
 
-class RecordingProcessor(DataProcessor):
-    """Sends records through ``WithholdingStage`` and ``RecordingTasks``. It never becomes ready."""
+class RecordingBatches(Task2Batch):
+    """Takes instructions in every mode, adds its own status, and notes when it closes."""
 
     supported_training_modes = frozenset({"auto", "manual", "hybrid"})
 
     def __init__(self, context: ProcessorContext) -> None:
-        self.recording = RecordingTasks()
-        super().__init__(context, record_stage=WithholdingStage(), record2task=self.recording)
+        super().__init__(context)
+        self.closed = False
 
-    @property
-    def stage(self) -> WithholdingStage:
-        stage = self.record_stage
-        assert isinstance(stage, WithholdingStage)
-        return stage
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+        return TrainingBatch(f"recording:{batch_number}", tasks)
+
+    def status(self) -> Mapping[str, Any]:
+        return {"batch_label": "recording"}
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class RecordingPipeline(TrainingPipeline):
+    """Sends records through ``WithholdingStage``, ``RecordingTasks``, and ``RecordingBatches``. It never becomes ready."""
+
+    def __init__(self, context: ProcessorContext) -> None:
+        self.stage = WithholdingStage()
+        self.recording = RecordingTasks()
+        self.batches = RecordingBatches(context)
+        super().__init__(context, record_stage=self.stage, record2task=self.recording, task2batch=self.batches)
 
 
 class DroppingReportStage(ReportStage):
@@ -101,9 +114,8 @@ class DroppingReportStage(ReportStage):
         super().ingest(record)
 
 
-class DroppingProcessor(ThresholdProcessor):
-    def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context, record_stage=DroppingReportStage(context.scenario, None, ReportGrouping()))
+def dropping_pipeline(context: ProcessorContext) -> TrainingPipeline:
+    return threshold_pipeline(context, record_stage=DroppingReportStage(context.scenario, None, ReportGrouping()))
 
 
 class PairGrouping(ReportGrouping):
@@ -131,16 +143,23 @@ class PairTasks(ReportTasks):
         return TaskItem(Path(context.report.agent_record_id))
 
 
-class PairProcessor(ReportedFeedbackProcessor):
+class PairBatches(Task2Batch):
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+        return TrainingBatch(f"pairs:{batch_number}", tasks)
+
+
+class PairPipeline(TrainingPipeline):
     """Trains pairs of reports."""
 
     def __init__(self) -> None:
-        stage = ReportStage("s", None, PairGrouping(), exclusive_sources=True)
+        context = ProcessorContext("s", {"batch_size": 1})
         self.pair_tasks = PairTasks()
-        super().__init__(ProcessorContext("s", {"batch_size": 1}), record_stage=stage, record2task=self.pair_tasks)
-
-    def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
-        return TrainingBatch(f"pairs:{batch_number}", items)
+        super().__init__(
+            context,
+            record_stage=ReportStage("s", None, PairGrouping(), exclusive_sources=True),
+            record2task=self.pair_tasks,
+            task2batch=PairBatches(context),
+        )
 
 
 def slotted(record_id: str, reference: str, slot: str) -> AgentRecord:
@@ -160,8 +179,8 @@ def test_the_pass_through_stage_forms_one_set_per_record_in_arrival_order() -> N
 
 
 @pytest.mark.unit
-def test_a_processor_keeps_instructions_and_sends_other_records_through_its_stage() -> None:
-    processor = RecordingProcessor(ProcessorContext("s", training_mode="hybrid"))
+def test_the_pipeline_keeps_instructions_and_sends_other_records_through_its_stage() -> None:
+    processor = RecordingPipeline(ProcessorContext("s", training_mode="hybrid"))
     processor.ingest(inference("i1"))
     processor.ingest(inference("drop-1"))
     processor.ingest(instruction("train-1"))
@@ -171,14 +190,20 @@ def test_a_processor_keeps_instructions_and_sends_other_records_through_its_stag
 
 
 @pytest.mark.unit
-def test_a_processor_adds_its_stages_background_work_and_status_and_closes_it() -> None:
-    processor = RecordingProcessor(ProcessorContext("s", training_mode="hybrid"))
+def test_the_pipeline_adds_its_stages_background_work_and_status_and_closes_them() -> None:
+    processor = RecordingPipeline(ProcessorContext("s", training_mode="hybrid"))
     assert not processor.derivation_pending()
     processor.stage.pending = True
     assert processor.derivation_pending()
-    assert processor.status() == {"ready_units": 0, "batch_size": 1, "buffered_requests": 0, "ended_records": 0}
+    assert processor.status() == {
+        "ready_units": 0,
+        "batch_size": 1,
+        "buffered_requests": 0,
+        "ended_records": 0,
+        "batch_label": "recording",
+    }
     processor.close()
-    assert processor.stage.closed
+    assert processor.stage.closed and processor.batches.closed
 
 
 @pytest.mark.unit
@@ -189,7 +214,7 @@ def test_a_record_the_stage_ends_is_consumed_by_the_next_commit_and_then_release
     trainer = Trainer.build(
         "s",
         records,
-        processor_factory=lambda context: DroppingProcessor(context.with_config({"batch_size": 1})),
+        pipeline_factory=lambda context: dropping_pipeline(context.with_config({"batch_size": 1})),
         candidate_backend=CountingBackend(),
     )
     batch = trainer.reserve_training_batch()
@@ -199,15 +224,15 @@ def test_a_record_the_stage_ends_is_consumed_by_the_next_commit_and_then_release
     prepared = trainer.prepare_commit(execution.result)
     assert prepared.consumed_ids == {"i1", "r1", "drop-1"}
     trainer.commit(prepared)
-    assert not trainer.processor.releasable_record_ids()
+    assert not trainer.pipeline.releasable_record_ids()
     assert "drop-1" in trainer.consumed_record_ids
 
 
 @pytest.mark.unit
 def test_the_trainer_reports_the_stages_background_work() -> None:
-    trainer = Trainer.build("s", SQLiteRecordStore(), processor_factory=RecordingProcessor)
-    processor = trainer.processor
-    assert isinstance(processor, RecordingProcessor)
+    trainer = Trainer.build("s", SQLiteRecordStore(), pipeline_factory=RecordingPipeline)
+    processor = trainer.pipeline
+    assert isinstance(processor, RecordingPipeline)
     assert not trainer.derivation_pending()
     processor.stage.pending = True
     assert trainer.derivation_pending()
@@ -215,7 +240,7 @@ def test_the_trainer_reports_the_stages_background_work() -> None:
 
 @pytest.mark.unit
 def test_a_retry_in_a_taken_slot_is_terminal_and_released() -> None:
-    processor = PairProcessor()
+    processor = PairPipeline()
     for record_id in ("i1", "i2", "i3"):
         processor.ingest(inference(record_id))
     processor.ingest(slotted("r1", "i1", "a"))
@@ -229,7 +254,7 @@ def test_a_retry_in_a_taken_slot_is_terminal_and_released() -> None:
 
 @pytest.mark.unit
 def test_a_failed_assembly_keeps_the_report_and_leaves_its_slot_free() -> None:
-    processor = PairProcessor()
+    processor = PairPipeline()
     for record_id in ("i1", "i2"):
         processor.ingest(inference(record_id))
     processor.pair_tasks.fail_assembly = True
@@ -244,7 +269,7 @@ def test_a_failed_assembly_keeps_the_report_and_leaves_its_slot_free() -> None:
 
 @pytest.mark.unit
 def test_a_skipped_report_is_released_and_never_batched() -> None:
-    processor = PairProcessor()
+    processor = PairPipeline()
     processor.ingest(inference("i1"))
     processor.ingest(slotted("skip-1", "i1", "a"))
     assert {"skip-1", "i1"} <= processor.releasable_record_ids()
@@ -252,15 +277,21 @@ def test_a_skipped_report_is_released_and_never_batched() -> None:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("hook", ["grouping", "exclusive_sources"])
-def test_a_processor_that_defines_moved_report_policy_fails_at_import(hook: str) -> None:
-    with pytest.raises(TypeError, match=f"defines {hook}: the report policy moved to the recipe"):
-        type("OldProcessor", (ThresholdProcessor,), {hook: True})
+def test_a_batch_holds_the_tasks_of_every_report_in_a_group_in_arrival_order() -> None:
+    processor = PairPipeline()
+    for record_id in ("i1", "i2"):
+        processor.ingest(inference(record_id))
+    processor.ingest(slotted("r2", "i2", "b"))
+    processor.ingest(slotted("r1", "i1", "a"))
+    batch = processor.build_batch()
+    assert [str(item.task_path) for item in batch.items] == ["r2", "r1"]
+    assert processor.acknowledge(batch.batch_id) == {"i1", "i2", "r1", "r2"}
+    assert not processor.tasks
 
 
 @pytest.mark.unit
-def test_the_default_processor_makes_no_tasks() -> None:
-    processor = DataProcessor(ProcessorContext("s"))
+def test_the_default_pipeline_makes_no_tasks_and_no_batch() -> None:
+    processor = TrainingPipeline(ProcessorContext("s"))
     record_set = SingleRecordSet(set_id="i1", arrival_index=1, record=inference("i1"))
     assert processor.record2task.make_tasks(record_set) == TaskResult(SetAssembly(AssemblyStatus.INGESTED))
     processor.ingest(inference("i1"))

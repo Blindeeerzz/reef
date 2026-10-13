@@ -7,7 +7,7 @@ from collections.abc import Hashable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from recipes.tttd.processor import TTTDProcessor, TTTDTasks, inference_release_id, tttd_grid
+from recipes.tttd.processor import TTTDBatches, TTTDTasks, inference_release_id, tttd_grid
 from recipes.tttd.report import TTTDGroupedRolloutReport
 from reef.core.reports import ReportBase
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
@@ -103,7 +103,7 @@ class TTTDRecipe(WeightTrainingRecipe):
     def training_spec(cls) -> WeightTrainingSpec:
         return WeightTrainingSpec(
             objective="tttd",
-            processor=TTTDProcessor,
+            task2batch=TTTDBatches,
             # One optimizer step over the whole grid, as --global-batch-size does for Slime.
             scheduling=StepScheduling(unit="sample", batch_size="actual"),
         )

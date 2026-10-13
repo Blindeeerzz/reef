@@ -6,18 +6,19 @@ decisions about each record. This package owns those decisions.
 
 Entry point: ``Record2RecordStage`` in ``stage.py``.
 
-* Each processor has one stage, from ``DataProcessor.build_record_stage()``.
-  The processor gives the stage every record except training instructions.
-* The stage forms ``RecordSet`` values: records that a processor uses
-  together. The processor assembles each set and gives the result back
-  (``settle``). The stage holds the assembled sets in its pool, drops the sets
-  that can no longer train, and gives the processor the next batch's sets in
-  order. The stage never calls the processor.
+* Each training pipeline (``reef.train.pipeline.TrainingPipeline``) has one
+  stage, from the recipe's ``build_record_stage(context)``. The pipeline gives
+  the stage every record except training instructions.
+* The stage forms ``RecordSet`` values: records that are used together. The
+  record-to-task stage makes tasks from each set, and the pipeline gives the
+  result back (``settle``). The stage holds the sets that train in its pool,
+  drops the sets that can no longer train, and gives the pipeline the next
+  batch's sets in order. The stage never calls the other stages.
 
 Stages:
 
 * ``PassThroughStage`` (``stage.py``): the default. It forms one set per
-  record, and the processor keeps the records itself.
+  record and decides nothing.
 * ``ReportStage`` (``reports.py``): reports and the inference records that
   they reference, alone or in groups. A recipe's ``ReportGrouping`` decides
   which reports train and how they form groups.
