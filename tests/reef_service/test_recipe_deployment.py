@@ -8,7 +8,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-from reef_service.runtime_stubs import runtime_bindings
+from tests.support.runtime_stubs import runtime_bindings
 
 from reef.service.deploy import orchestrator
 from reef.service.deploy.config_utils import DeployConfigError
@@ -58,7 +58,7 @@ def test_cli_cannot_reintroduce_process_configuration(tmp_path, flag, from_file)
 
 
 def test_recipe_endpoint_follows_cli_over_yaml_without_launching_a_process(tmp_path):
-    from reef_service.runtime_stubs import StubTrainingRuntime
+    from tests.support.runtime_stubs import StubTrainingRuntime
 
     from recipes.openclawrl.recipe import OpenClawRLRecipe
     from reef.service.assembly import _recipe_owned_settings

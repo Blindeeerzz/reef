@@ -7,7 +7,8 @@ import time
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
+from tests.support._policy_recipe import TestPolicyRecipe
+from tests.support.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
 from reef.artifact import InMemoryRepositoryBackend
 from reef.core import AgentRecord, RequestType
@@ -20,8 +21,6 @@ from reef.service.app import RequestService, create_app
 from reef.storage.commit_log import CommitLogScenarioStore
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train.types import TrainStepResult
-
-from ._policy_recipe import TestPolicyRecipe
 
 
 class RollbackRuntime(StubTrainingRuntime):
