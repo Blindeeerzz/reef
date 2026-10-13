@@ -17,8 +17,15 @@ from typing import Any
 from recipes.sdpo.report import SDPOReport
 from reef.core.trajectories import trajectory_reward
 from reef.record2record import ReportContext, ReportStage
+from reef.train.processors.base import Record2Task
 from reef.train.processors.common import recorded_request, recorded_response
-from reef.train.processors.distill import DistillProcessor, normalize_messages_for_template
+from reef.train.processors.distill import (
+    TeacherRenderer,
+    normalize_messages_for_template,
+    recorded_sample,
+    teacher_tokens_limit,
+)
+from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
 #: The reference's reprompt strings (``sdpo.yaml`` at the pin), used verbatim.
@@ -43,50 +50,21 @@ def sdpo_grid(config: Mapping[str, Any]) -> tuple[int, int]:
     return groups_per_step, rollouts_per_group
 
 
-class SDPOProcessor(DistillProcessor):
-    """One complete sampling step, one update; the teacher's context comes from the step's other rollouts.
+class SDPOTasks(ReportTasks):
+    """One rollout as one task, with its grid coordinates, request, and response for the teacher prompt."""
 
-    A report names its rollout's coordinates in the step's grid
-    (``groups_per_step`` questions by ``rollouts_per_group`` attempts), and
-    the coordinates are its retry slot: the first report at one wins. A step
-    trains only complete, sampled from one policy release, with one request
-    per question; anything else is discarded whole and listed in
-    ``status()``. A rollout whose teacher reads no privileged information
-    (no successful sibling, no feedback) keeps the plain request and a sample
-    weight of 0, so an all-unsuccessful step still takes its optimizer step,
-    as the reference does. A teacher sequence over ``max_teacher_tokens``
-    fails the step instead of dropping part of the grid.
-    """
-
-    batch_label = "sdpo"
-
-    def __init__(self, context: ProcessorContext, *, record_stage: ReportStage | None = None) -> None:
-        config = dict(context.config)
-        self.groups_per_step, self.rollouts_per_group = sdpo_grid(config)
-        self.max_teacher_prompt_tokens = int(config.get("max_teacher_prompt_tokens", 10240))
-        self.success_reward_threshold = float(config.get("success_reward_threshold", 0.5))
-        self.allow_own_success_as_demonstration = bool(config.get("allow_own_success_as_demonstration", False))
-        self.remove_thinking_from_demonstration = bool(config.get("remove_thinking_from_demonstration", True))
-        self.include_environment_feedback = bool(config.get("include_environment_feedback", False))
-        self.environment_feedback_only_without_solution = bool(
-            config.get("environment_feedback_only_without_solution", True)
-        )
-        self.enable_thinking = bool(config.get("enable_thinking", False))
-        if not math.isfinite(self.success_reward_threshold):
-            raise ValueError("success_reward_threshold must be finite")
-        # A batch is one unit: the whole step.
-        super().__init__(context.with_config({**config, "batch_size": 1}), record_stage=record_stage)
-        if not 0 < self.max_teacher_prompt_tokens <= self._max_teacher_tokens:
-            raise ValueError("SDPO needs 0 < max_teacher_prompt_tokens <= max_teacher_tokens")
+    def __init__(self, context: ProcessorContext) -> None:
+        self.groups_per_step, self.rollouts_per_group = sdpo_grid(context.config)
+        self.assembly = SampleAssembly.from_config(context)
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
         parsed = context.parsed_report
         if not isinstance(parsed, SDPOReport):
-            raise ValueError("SDPOProcessor requires the SDPOReport schema")
+            raise ValueError("SDPOTasks requires the SDPOReport schema")
         if parsed.group >= self.groups_per_step or parsed.rollout >= self.rollouts_per_group:
             raise ValueError("SDPO report coordinates exceed the configured sampling grid")
         # The score picks the demonstrating rollouts; the teacher's distribution is the target.
-        sample = self.recorded_sample(context, context.require_score())
+        sample = recorded_sample(self.assembly, context, context.require_score())
         payload = context.inferences[0].payload
         messages, tools = sibling_request(context)
         if not messages or messages[-1].get("role") != "user":
@@ -104,6 +82,54 @@ class SDPOProcessor(DistillProcessor):
                 "feedback": parsed.teacher_context,
             }
         )
+
+
+class SDPOProcessor(ReportedFeedbackProcessor):
+    """One complete sampling step, one update; the teacher's context comes from the step's other rollouts.
+
+    A report names its rollout's coordinates in the step's grid
+    (``groups_per_step`` questions by ``rollouts_per_group`` attempts), and
+    the coordinates are its retry slot: the first report at one wins. A step
+    trains only complete, sampled from one policy release, with one request
+    per question; anything else is discarded whole and listed in
+    ``status()``. A rollout whose teacher reads no privileged information
+    (no successful sibling, no feedback) keeps the plain request and a sample
+    weight of 0, so an all-unsuccessful step still takes its optimizer step,
+    as the reference does. A teacher sequence over ``max_teacher_tokens``
+    fails the step instead of dropping part of the grid.
+    """
+
+    batch_label = "sdpo"
+    output_schema = TrainingBatch
+
+    def __init__(
+        self,
+        context: ProcessorContext,
+        *,
+        record_stage: ReportStage | None = None,
+        record2task: Record2Task | None = None,
+    ) -> None:
+        config = dict(context.config)
+        self.groups_per_step, self.rollouts_per_group = sdpo_grid(config)
+        self.max_teacher_tokens = teacher_tokens_limit(config)
+        self.renderer = TeacherRenderer(config)
+        self.max_teacher_prompt_tokens = int(config.get("max_teacher_prompt_tokens", 10240))
+        self.success_reward_threshold = float(config.get("success_reward_threshold", 0.5))
+        self.allow_own_success_as_demonstration = bool(config.get("allow_own_success_as_demonstration", False))
+        self.remove_thinking_from_demonstration = bool(config.get("remove_thinking_from_demonstration", True))
+        self.include_environment_feedback = bool(config.get("include_environment_feedback", False))
+        self.environment_feedback_only_without_solution = bool(
+            config.get("environment_feedback_only_without_solution", True)
+        )
+        self.enable_thinking = bool(config.get("enable_thinking", False))
+        if not math.isfinite(self.success_reward_threshold):
+            raise ValueError("success_reward_threshold must be finite")
+        # A batch is one unit: the whole step.
+        super().__init__(
+            context.with_config({**config, "batch_size": 1}), record_stage=record_stage, record2task=record2task
+        )
+        if not 0 < self.max_teacher_prompt_tokens <= self.max_teacher_tokens:
+            raise ValueError("SDPO needs 0 < max_teacher_prompt_tokens <= max_teacher_tokens")
 
     def demonstration(self, sample: TrajectoryItem, samples: Sequence[TrajectoryItem]) -> str | None:
         """The response of the first successful sibling in rollout order, or None when the question has none."""
@@ -144,14 +170,14 @@ class SDPOProcessor(DistillProcessor):
                 )
                 messages = [*messages[:-1], {"role": "user", "content": prompt}]
             response_length = len(sample.training["loss_mask"])
-            teacher_tokens = self.teacher_tokens(
+            teacher_tokens = self.renderer.teacher_tokens(
                 messages,
                 data["tools"],
                 sample.training["tokens"][-response_length:],
                 max_prompt_tokens=self.max_teacher_prompt_tokens,
                 enable_thinking=self.enable_thinking,
             )
-            if len(teacher_tokens) > self._max_teacher_tokens:
+            if len(teacher_tokens) > self.max_teacher_tokens:
                 raise ValueError(
                     "SDPO teacher sequence exceeds max_teacher_tokens; increase the trainer and teacher windows"
                 )
@@ -171,4 +197,4 @@ class SDPOProcessor(DistillProcessor):
         return TrainingBatch(batch.batch_id, tuple(result))
 
 
-__all__ = ["FEEDBACK_TEMPLATE", "REPROMPT_TEMPLATE", "SOLUTION_TEMPLATE", "SDPOProcessor"]
+__all__ = ["FEEDBACK_TEMPLATE", "REPROMPT_TEMPLATE", "SOLUTION_TEMPLATE", "SDPOProcessor", "SDPOTasks"]

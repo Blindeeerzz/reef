@@ -24,16 +24,18 @@ from typing import Any
 import pytest
 from reef_service._trajectories import policy_trajectory
 
-from recipes.beta.coral.processor import CoralProcessor
+from recipes.beta.coral.processor import CoralProcessor, CoralTasks
 from recipes.beta.coral.recipe import coral_record_stage
 from recipes.sdpo import SDPOProcessor, SDPOReport
+from recipes.sdpo.processor import SDPOTasks
 from recipes.sdpo.recipe import sdpo_record_stage
 from recipes.tttd import TTTDGroupedRolloutReport, TTTDProcessor
+from recipes.tttd.processor import TTTDTasks
 from recipes.tttd.recipe import tttd_record_stage
 from reef.artifact import ArtifactRef
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportBase, TeacherContextReport
-from reef.record2dataset.generated_tasks.processor import GeneratedTaskProcessor
+from reef.record2dataset.generated_tasks.processor import GeneratedTaskProcessor, PlayedTaskTasks
 from reef.record2dataset.generated_tasks.recipe import task_group_record_stage
 from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
 from reef.storage.sqlite import SQLiteRecordStore
@@ -41,9 +43,9 @@ from reef.train import ProcessorContext, Trainer
 from reef.train.backend import CandidateBackend, PreparedStep
 from reef.train.cordis_backend.processor import CordisProcessor
 from reef.train.processors import DataProcessor, DistillProcessor
-from reef.train.processors.computed import ComputedFeedbackProcessor, SupportsReceipt
-from reef.train.processors.distill import distill_record_stage
-from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
+from reef.train.processors.computed import ComputedFeedbackProcessor, JudgedTasks, SupportsReceipt
+from reef.train.processors.distill import DistillTasks, distill_record_stage
+from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks, SampleAssembly
 from reef.train.types import TaskItem, TrainDataItem, TrainingBatch, TrajectoryItem
 
 from ._threshold_processor import ThresholdProcessor
@@ -254,18 +256,24 @@ class AnyGroupReady(SlotGrouping):
         return GroupDecision.READY
 
 
+class AssembledTasks(ReportTasks):
+    """One report as one assembled policy sample."""
+
+    def __init__(self, context: ProcessorContext) -> None:
+        self.assembly = SampleAssembly.from_config(context)
+
+    def make_sample(self, context: ReportContext) -> TrajectoryItem:
+        return self.assembly.build(context, context.require_score())
+
+
 class SlotGroupProcessor(ReportedFeedbackProcessor):
     """Trains the groups of ``SlotGrouping``."""
 
     def __init__(self, context: ProcessorContext) -> None:
-        self.assembly = SampleAssembly.from_config(context)
-        super().__init__(context, record_stage=self.slot_stage(context))
+        super().__init__(context, record_stage=self.slot_stage(context), record2task=AssembledTasks(context))
 
     def slot_stage(self, context: ProcessorContext) -> ReportStage:
         return ReportStage(context.scenario, context.report_type, SlotGrouping(), exclusive_sources=True)
-
-    def make_sample(self, context: ReportContext) -> TrajectoryItem:
-        return self.assembly.build(context, context.require_score())
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"{self.scenario}:slots:{batch_number}", items)
@@ -280,32 +288,33 @@ class OrderedMixProcessor(SlotGroupProcessor):
         )
 
 
-# Each recipe builds its processor's record stage. These processors build the same stage, as the recipe would.
+# Each recipe builds its processor's record stage and record-to-task stage. These processors build the same
+# stages, as the recipe would.
 
 
 class RecipeTTTDProcessor(TTTDProcessor):
     def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context, record_stage=tttd_record_stage(context))
+        super().__init__(context, record_stage=tttd_record_stage(context), record2task=TTTDTasks(context))
 
 
 class RecipeSDPOProcessor(SDPOProcessor):
     def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context, record_stage=sdpo_record_stage(context))
+        super().__init__(context, record_stage=sdpo_record_stage(context), record2task=SDPOTasks(context))
 
 
 class RecipeCoralProcessor(CoralProcessor):
     def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context, record_stage=coral_record_stage(context))
+        super().__init__(context, record_stage=coral_record_stage(context), record2task=CoralTasks(context))
 
 
 class RecipeGeneratedTaskProcessor(GeneratedTaskProcessor):
     def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context, record_stage=task_group_record_stage(context))
+        super().__init__(context, record_stage=task_group_record_stage(context), record2task=PlayedTaskTasks(context))
 
 
 class RecipeDistillProcessor(DistillProcessor):
     def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context, record_stage=distill_record_stage(context))
+        super().__init__(context, record_stage=distill_record_stage(context), record2task=DistillTasks(context))
 
 
 @dataclass(frozen=True)
@@ -352,12 +361,8 @@ class ToyJudging(RecordJudging):
         raise AssertionError("the immediate worker judges without the coroutine")
 
 
-class ToyComputedProcessor(ComputedFeedbackProcessor):
-    """Trains the judged records of ``ToyJudging``."""
-
-    def __init__(self, context: ProcessorContext) -> None:
-        stage = JudgingStage(ToyJudging(), ImmediateWorker(), max_staleness=context.max_staleness)
-        super().__init__(context, record_stage=stage)
+class ToyTasks(JudgedTasks):
+    """One-token stub samples; a judgment that is not good cannot train."""
 
     def make_sample(self, record: AgentRecord, judgment: SupportsReceipt) -> TrajectoryItem | None:
         if not isinstance(judgment, ToyJudgment) or not judgment.good:
@@ -370,6 +375,14 @@ class ToyComputedProcessor(ComputedFeedbackProcessor):
             reward=1.0,
             runtime_load_id=record.payload.get("version"),
         )
+
+
+class ToyComputedProcessor(ComputedFeedbackProcessor):
+    """Trains the judged records of ``ToyJudging``."""
+
+    def __init__(self, context: ProcessorContext) -> None:
+        stage = JudgingStage(ToyJudging(), ImmediateWorker(), max_staleness=context.max_staleness)
+        super().__init__(context, record_stage=stage, record2task=ToyTasks())
 
     def make_batch(self, samples: tuple[TrajectoryItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"{self.scenario}:toy:{batch_number}", samples)

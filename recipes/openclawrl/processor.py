@@ -23,39 +23,18 @@ from reef.core.records_types import AgentRecord, RequestType
 from reef.core.trajectories import source_record_id, trajectory_reward
 from reef.record2record import JudgingStage
 from reef.train.processors.common import make_policy_trajectory
-from reef.train.processors.computed import ComputedFeedbackProcessor
+from reef.train.processors.computed import ComputedFeedbackProcessor, JudgedTasks
 from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem, policy_row_violation
 
 logger = logging.getLogger(__name__)
 
 
-class OpenClawRLProcessor(ComputedFeedbackProcessor):
-    """Judged turns into samples; a turn whose tensors the top-K select loss cannot train on retires.
+class OpenClawRLTasks(JudgedTasks):
+    """One judged turn as one sample; a turn whose tensors the top-K select loss cannot train on retires.
 
     The capture must cover every response token, and every trained sample
     carries at least one teacher candidate.
     """
-
-    output_schema = TrainingBatch
-    required_request_types = frozenset({RequestType.INFERENCE, RequestType.REPORT})
-
-    def __init__(self, context: ProcessorContext, *, record_stage: JudgingStage) -> None:
-        # What the judge actually saw goes to the PRM record file, one line
-        # per batch. Upstream persists this per turn; without it a batch mean
-        # is the only visible number. A file, not a log line: reef configures
-        # no logging, so anything below WARNING is discarded.
-        record_file = str(context.config.get("prm_record_file", "") or "").strip()
-        self._record_path = pathlib.Path(record_file) if record_file else None
-        super().__init__(context, record_stage=record_stage)
-        if not isinstance(self.judging, OpenClawRLJudging):
-            raise TypeError("OpenClawRLProcessor needs a stage with OpenClawRLJudging")
-
-    @property
-    def openclawrl_judging(self) -> OpenClawRLJudging:
-        judging = self.judging
-        if not isinstance(judging, OpenClawRLJudging):
-            raise TypeError("OpenClawRLProcessor needs OpenClawRLJudging")
-        return judging
 
     def make_sample(self, record: AgentRecord, judgment: TurnJudgment) -> TrajectoryItem | None:
         # 1. A declined judgment never trains. (Narrow on the score itself:
@@ -89,6 +68,31 @@ class OpenClawRLProcessor(ComputedFeedbackProcessor):
         if validated is None:
             return None
         return sample.with_training(extras={**sample.training.get("extras", {}), "teacher_cands": list(validated)})
+
+
+class OpenClawRLProcessor(ComputedFeedbackProcessor):
+    """Judged turns into batches, and the PRM record file."""
+
+    output_schema = TrainingBatch
+    required_request_types = frozenset({RequestType.INFERENCE, RequestType.REPORT})
+
+    def __init__(self, context: ProcessorContext, *, record_stage: JudgingStage, record2task: JudgedTasks) -> None:
+        # What the judge actually saw goes to the PRM record file, one line
+        # per batch. Upstream persists this per turn; without it a batch mean
+        # is the only visible number. A file, not a log line: reef configures
+        # no logging, so anything below WARNING is discarded.
+        record_file = str(context.config.get("prm_record_file", "") or "").strip()
+        self._record_path = pathlib.Path(record_file) if record_file else None
+        super().__init__(context, record_stage=record_stage, record2task=record2task)
+        if not isinstance(self.judging, OpenClawRLJudging):
+            raise TypeError("OpenClawRLProcessor needs a stage with OpenClawRLJudging")
+
+    @property
+    def openclawrl_judging(self) -> OpenClawRLJudging:
+        judging = self.judging
+        if not isinstance(judging, OpenClawRLJudging):
+            raise TypeError("OpenClawRLProcessor needs OpenClawRLJudging")
+        return judging
 
     def make_batch(self, samples: tuple[TrajectoryItem, ...], batch_number: int) -> TrainingBatch:
         self._record_batch(samples, batch_number)

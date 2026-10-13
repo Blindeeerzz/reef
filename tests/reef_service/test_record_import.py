@@ -18,7 +18,7 @@ from reef.runtime.interfaces import InferenceHandler
 from reef.service.app import create_app
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train import PreparedStep, Trainer, TrainingBatch
-from reef.train.processors.reported import ReportedFeedbackProcessor
+from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks
 from reef.train.types import TaskItem
 
 from .test_reef_trainer_contracts import ExampleBackend
@@ -44,9 +44,14 @@ def imported(record_id, payload=None, request_type="inference"):
     }
 
 
-class FeedbackProcessor(ReportedFeedbackProcessor):
+class FeedbackTasks(ReportTasks):
     def make_sample(self, context):
         return TaskItem(Path(context.report.agent_record_id), metadata=context.inferences[0].payload)
+
+
+class FeedbackProcessor(ReportedFeedbackProcessor):
+    def default_record2task(self):
+        return FeedbackTasks()
 
     def make_batch(self, items, batch_number):
         return TrainingBatch(f"batch:{batch_number}", items)

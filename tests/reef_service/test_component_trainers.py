@@ -43,7 +43,7 @@ from reef.surface import ComponentSurface, Surface, TextFileTree
 from reef.train import CandidateBackend, ComponentTrainer, PreparedStep, Trainer, TrainStepResult
 from reef.train.evaluation import EvaluationResult, UpdateCandidate
 from reef.train.processors.base import DataProcessor
-from reef.train.processors.computed import ComputedFeedbackProcessor, SupportsReceipt
+from reef.train.processors.computed import ComputedFeedbackProcessor, JudgedTasks, SupportsReceipt
 from reef.train.types import TrainingBatch
 
 from ._threshold_processor import ThresholdProcessor
@@ -1506,12 +1506,8 @@ class _RetiringRetriesJudging(RecordJudging):
         return job
 
 
-class _RetiringRetriesProcessor(ComputedFeedbackProcessor):
-    """Trains the judged turns of ``_RetiringRetriesJudging``."""
-
-    def __init__(self, context: Any) -> None:
-        stage = JudgingStage(_RetiringRetriesJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness)
-        super().__init__(context, record_stage=stage)
+class _RetiringRetriesTasks(JudgedTasks):
+    """One-token stub samples for every judged turn."""
 
     def make_sample(self, record: AgentRecord, judgment: _Judgment) -> Any:
         return policy_trajectory(
@@ -1522,6 +1518,14 @@ class _RetiringRetriesProcessor(ComputedFeedbackProcessor):
             reward=1.0,
             runtime_load_id="v1",
         )
+
+
+class _RetiringRetriesProcessor(ComputedFeedbackProcessor):
+    """Trains the judged turns of ``_RetiringRetriesJudging``."""
+
+    def __init__(self, context: Any) -> None:
+        stage = JudgingStage(_RetiringRetriesJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness)
+        super().__init__(context, record_stage=stage, record2task=_RetiringRetriesTasks())
 
     def make_batch(self, samples: Any, batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"{self.scenario}:retiring:{batch_number}", tuple(samples))

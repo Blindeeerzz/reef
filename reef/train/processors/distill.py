@@ -2,13 +2,13 @@
 
 The distilling recipes make a teacher score the student's own sample. What
 the teacher reads beyond the student's request is the recipe's policy
-(:meth:`DistillProcessor.teacher_request`: a demonstration,
-environment feedback, nothing); rendering it with the served model's chat
-template and shipping it as ``teacher_tokens`` beside the student's policy
-tensors is the mechanism they share, :meth:`DistillProcessor.recorded_sample`
-and :meth:`DistillProcessor.teacher_tokens`. A recipe whose teacher context
-comes from other samples of the same batch, as SDPO's does, composes the
-request in ``make_batch`` and renders it with the same two methods.
+(:meth:`DistillTasks.teacher_request`: a demonstration, environment feedback,
+nothing); rendering it with the served model's chat template and shipping it
+as ``teacher_tokens`` beside the student's policy tensors is the mechanism
+they share, :func:`recorded_sample` and :meth:`TeacherRenderer.teacher_tokens`.
+A recipe whose teacher context comes from other samples of the same batch, as
+SDPO's does, composes the request in ``make_batch`` and renders it with the
+same two.
 """
 
 from __future__ import annotations
@@ -21,7 +21,13 @@ from typing import Any
 from reef.core.reports import TeacherContextReport
 from reef.record2record import ReportGrouping, ReportStage
 from reef.train.processors.common import flatten_content, recorded_request, recorded_response
-from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, SampleAssembly, SkippedReport
+from reef.train.processors.reported import (
+    ReportContext,
+    ReportedFeedbackProcessor,
+    ReportTasks,
+    SampleAssembly,
+    SkippedReport,
+)
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 logger = logging.getLogger(__name__)
@@ -64,39 +70,95 @@ def distill_record_stage(context: ProcessorContext) -> ReportStage:
     return ReportStage(context.scenario, context.report_type, ReportGrouping(), exclusive_sources=True)
 
 
-class DistillProcessor(ReportedFeedbackProcessor):
-    """One report, one distillation sample: the student's policy tensors plus its teacher sequence.
+def teacher_tokens_limit(config: Mapping[str, Any]) -> int:
+    """``max_teacher_tokens`` from the config: the longest teacher sequence the trainer scores (0: no limit)."""
+    max_teacher_tokens = int(config.get("max_teacher_tokens", 0))
+    if max_teacher_tokens < 0:
+        raise ValueError("max_teacher_tokens must be non-negative (0 disables the limit)")
+    return max_teacher_tokens
 
-    A report references one recorded request and carries the teacher's
-    ``teacher_context``. ``teacher_tokens`` is the teacher's request
-    (:meth:`teacher_request`) rendered with the served model's chat template
-    (``tokenizer_path``), followed by the student's response ids verbatim,
-    so a teacher pass scores the student's own tokens. A sequence longer
-    than ``max_teacher_tokens`` cannot be scored by the trainer's window:
-    its report is released with its inference record and counted in
-    ``teacher_overflow_reports``. A recipe's subclass overrides
-    :meth:`teacher_request` with its composition and sets ``batch_label``,
-    its batches' name.
-    """
 
-    output_schema = TrainingBatch
-    batch_label = "teacher"
+class TeacherRenderer:
+    """Render the teacher's request with the served model's chat template (``tokenizer_path``)."""
 
-    def __init__(self, context: ProcessorContext, *, record_stage: ReportStage | None = None) -> None:
-        config = context.config
-        self._assembly = SampleAssembly.from_config(context)
-        self._max_teacher_tokens = int(config.get("max_teacher_tokens", 0))
-        if self._max_teacher_tokens < 0:
-            raise ValueError("max_teacher_tokens must be non-negative (0 disables the limit)")
+    def __init__(self, config: Mapping[str, Any]) -> None:
         tokenizer_path = str(config.get("tokenizer_path", "")).strip()
         if not tokenizer_path:
             raise ValueError("tokenizer_path is required: the served model's tokenizer renders the teacher prompt")
         # transformers belongs to the training environment; the service never renders a prompt.
         from transformers import AutoTokenizer
 
-        self._tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
-        self._overflow_count = 0
-        super().__init__(context, record_stage=record_stage)
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
+
+    def teacher_tokens(
+        self,
+        messages: Sequence[Any],
+        tools: Sequence[Any] | None,
+        response_ids: Sequence[int],
+        *,
+        max_prompt_tokens: int = 0,
+        enable_thinking: bool | None = None,
+    ) -> list[int]:
+        """The teacher sequence: ``messages`` rendered with the chat template, then ``response_ids`` verbatim.
+
+        ``max_prompt_tokens`` keeps only the first that many rendered prompt
+        ids (0 keeps them all). ``enable_thinking`` is handed to the template
+        when set, for templates that render a thinking switch into the
+        generation prompt, so the teacher reads what the engine rendered.
+        """
+        template_options: dict[str, Any] = {}
+        if enable_thinking is not None:
+            template_options["enable_thinking"] = enable_thinking
+        prompt_ids = self.tokenizer.apply_chat_template(
+            list(messages),
+            tools=list(tools) if tools else None,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=False,
+            **template_options,
+        )
+        if max_prompt_tokens > 0:
+            prompt_ids = prompt_ids[:max_prompt_tokens]
+        return [*prompt_ids, *(int(token) for token in response_ids)]
+
+
+def recorded_sample(assembly: SampleAssembly, context: ReportContext, score: float) -> TrajectoryItem:
+    """The student's policy sample from the report's one recorded inference.
+
+    Checks what a teacher sequence needs: one inference, and its recorded
+    prompt and response tokens.
+    """
+    if len(context.inferences) != 1:
+        raise ValueError(
+            f"a teacher sequence covers one recorded request per report; report "
+            f"{context.report.agent_record_id} references {len(context.inferences)}"
+        )
+    sample = assembly.build(context, score)
+    tokens = [int(token) for token in sample.training.get("tokens", [])]
+    response_length = len(sample.training.get("loss_mask", []))
+    if not 0 < response_length < len(tokens):
+        raise ValueError("a teacher sequence requires the recorded prompt and response tokens of the inference")
+    return sample
+
+
+class DistillTasks(ReportTasks):
+    """One report, one distillation task: the student's policy tensors plus its teacher sequence.
+
+    A report references one recorded request and carries the teacher's
+    ``teacher_context``. ``teacher_tokens`` is the teacher's request
+    (:meth:`teacher_request`) rendered with the served model's chat template,
+    followed by the student's response ids verbatim, so a teacher pass scores
+    the student's own tokens. A sequence longer than ``max_teacher_tokens``
+    cannot be scored by the trainer's window: the report is skipped and
+    counted in ``teacher_overflow_reports``. A recipe's subclass overrides
+    :meth:`teacher_request` with its composition.
+    """
+
+    def __init__(self, context: ProcessorContext) -> None:
+        self.assembly = SampleAssembly.from_config(context)
+        self.max_teacher_tokens = teacher_tokens_limit(context.config)
+        self.renderer = TeacherRenderer(context.config)
+        self.overflow_count = 0
 
     def teacher_request(
         self, messages: list[Any], tools: list[Any] | None, response: str, teacher_context: str
@@ -109,85 +171,52 @@ class DistillProcessor(ReportedFeedbackProcessor):
         return messages, tools
 
     def operational_metrics(self) -> Mapping[str, float | int]:
-        return {**super().operational_metrics(), "teacher_overflow_reports": self._overflow_count}
-
-    def recorded_sample(self, context: ReportContext, score: float) -> TrajectoryItem:
-        """The student's policy sample from the report's one recorded inference.
-
-        Checks what a teacher sequence needs: one inference, and its recorded
-        prompt and response tokens.
-        """
-        if len(context.inferences) != 1:
-            raise ValueError(
-                f"a teacher sequence covers one recorded request per report; report "
-                f"{context.report.agent_record_id} references {len(context.inferences)}"
-            )
-        sample = self._assembly.build(context, score)
-        tokens = [int(token) for token in sample.training.get("tokens", [])]
-        response_length = len(sample.training.get("loss_mask", []))
-        if not 0 < response_length < len(tokens):
-            raise ValueError("a teacher sequence requires the recorded prompt and response tokens of the inference")
-        return sample
-
-    def teacher_tokens(
-        self,
-        messages: Sequence[Any],
-        tools: Sequence[Any] | None,
-        response_ids: Sequence[int],
-        *,
-        max_prompt_tokens: int = 0,
-        enable_thinking: bool | None = None,
-    ) -> list[int]:
-        """The teacher sequence: ``messages`` rendered with the served model's chat template, then ``response_ids`` verbatim.
-
-        ``max_prompt_tokens`` keeps only the first that many rendered prompt
-        ids (0 keeps them all). ``enable_thinking`` is handed to the template
-        when set, for templates that render a thinking switch into the
-        generation prompt, so the teacher reads what the engine rendered.
-        """
-        template_options: dict[str, Any] = {}
-        if enable_thinking is not None:
-            template_options["enable_thinking"] = enable_thinking
-        prompt_ids = self._tokenizer.apply_chat_template(
-            list(messages),
-            tools=list(tools) if tools else None,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_dict=False,
-            **template_options,
-        )
-        if max_prompt_tokens > 0:
-            prompt_ids = prompt_ids[:max_prompt_tokens]
-        return [*prompt_ids, *(int(token) for token in response_ids)]
+        return {"teacher_overflow_reports": self.overflow_count}
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem | SkippedReport:
         parsed = context.parsed_report
         if not isinstance(parsed, TeacherContextReport):
             raise ValueError(f"{type(self).__name__} requires the TeacherContextReport schema")
         # The teacher's distribution is the signal; a reported score is metadata only.
-        sample = self.recorded_sample(context, 0.0 if context.score is None else context.score)
+        sample = recorded_sample(self.assembly, context, 0.0 if context.score is None else context.score)
         payload = context.inferences[0].payload
         messages, tools = recorded_request(payload)
         teacher_messages, teacher_tools = self.teacher_request(
             messages, tools, recorded_response(payload), parsed.teacher_context
         )
         response_length = len(sample.training["loss_mask"])
-        teacher_tokens = self.teacher_tokens(
+        teacher_tokens = self.renderer.teacher_tokens(
             teacher_messages, teacher_tools, sample.training["tokens"][-response_length:]
         )
-        if self._max_teacher_tokens and len(teacher_tokens) > self._max_teacher_tokens:
+        if self.max_teacher_tokens and len(teacher_tokens) > self.max_teacher_tokens:
             logger.warning(
                 "report %s skipped: its teacher sequence is %d tokens, over max_teacher_tokens %d",
                 context.report.agent_record_id,
                 len(teacher_tokens),
-                self._max_teacher_tokens,
+                self.max_teacher_tokens,
             )
-            self._overflow_count += 1
+            self.overflow_count += 1
             return SkippedReport("teacher_overflow")
         return sample.with_training(teacher_tokens=teacher_tokens)
+
+
+class DistillProcessor(ReportedFeedbackProcessor):
+    """Batch distillation tasks as they come. A recipe's subclass sets ``batch_label``, its batches' name."""
+
+    output_schema = TrainingBatch
+    batch_label = "teacher"
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"{self.scenario}:{self.batch_label}:{batch_number}", items)
 
 
-__all__ = ["DistillProcessor", "distill_record_stage", "normalize_messages_for_template", "normalize_tool_call"]
+__all__ = [
+    "DistillProcessor",
+    "DistillTasks",
+    "TeacherRenderer",
+    "distill_record_stage",
+    "normalize_messages_for_template",
+    "normalize_tool_call",
+    "recorded_sample",
+    "teacher_tokens_limit",
+]

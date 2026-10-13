@@ -27,7 +27,8 @@ from typing import Any
 
 from reef.core.trajectories import trajectory_reward
 from reef.record2record import ReportContext, ReportStage
-from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
+from reef.train.processors.base import Record2Task
+from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,32 @@ def attempt_release_ids(context: ReportContext) -> set[str]:
     }
 
 
+def coral_assembly(context: ProcessorContext) -> SampleAssembly:
+    """The sample assembly for CORAL attempts: multi-call trajectories are on by default."""
+    return SampleAssembly.from_config(
+        context.with_config({"accept_multi_turn_policy_samples": True, **context.config})
+    )
+
+
+class CoralTasks(ReportTasks):
+    """One scored attempt as one task, with its CORAL metadata, sibling group, and release."""
+
+    def __init__(self, context: ProcessorContext) -> None:
+        self.assembly = coral_assembly(context)
+
+    def make_sample(self, context: ReportContext) -> TrajectoryItem:
+        coral = coral_metadata(context)
+        if coral is None:
+            raise ValueError("CoralProcessor requires metadata.coral with a commit_hash")
+        sample = self.assembly.build(context, context.require_score())
+        release_ids = attempt_release_ids(context)
+        if len(release_ids) > 1:
+            raise ValueError(f"attempt {coral['commit_hash'][:12]} spans releases {sorted(release_ids)}")
+        return sample.with_metadata(
+            coral={**coral, "group": sibling_group(context)[0], "release_id": next(iter(release_ids), None)}
+        )
+
+
 class CoralProcessor(ReportedFeedbackProcessor):
     """One CORAL sibling group = one grouped relative-reward training unit.
 
@@ -79,26 +106,20 @@ class CoralProcessor(ReportedFeedbackProcessor):
 
     output_schema = TrainingBatch
 
-    def __init__(self, context: ProcessorContext, *, record_stage: ReportStage | None = None) -> None:
+    def __init__(
+        self,
+        context: ProcessorContext,
+        *,
+        record_stage: ReportStage | None = None,
+        record2task: Record2Task | None = None,
+    ) -> None:
         config = dict(context.config)
         self.group_size = int(config.get("group_size", 4))
         if self.group_size < 2:
             raise ValueError("group_size must be at least two (relative rewards need contrast)")
         config.setdefault("accept_multi_turn_policy_samples", True)
-        assembly_config = context.with_config(config)
-        self._assembly = SampleAssembly.from_config(assembly_config)
-        super().__init__(context.with_config({**config, "batch_size": 1}), record_stage=record_stage)
-
-    def make_sample(self, context: ReportContext) -> TrajectoryItem:
-        coral = coral_metadata(context)
-        if coral is None:
-            raise ValueError("CoralProcessor requires metadata.coral with a commit_hash")
-        sample = self._assembly.build(context, context.require_score())
-        release_ids = attempt_release_ids(context)
-        if len(release_ids) > 1:
-            raise ValueError(f"attempt {coral['commit_hash'][:12]} spans releases {sorted(release_ids)}")
-        return sample.with_metadata(
-            coral={**coral, "group": sibling_group(context)[0], "release_id": next(iter(release_ids), None)}
+        super().__init__(
+            context.with_config({**config, "batch_size": 1}), record_stage=record_stage, record2task=record2task
         )
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:

@@ -35,7 +35,7 @@ from reef.record2dataset.generated_tasks import (
     TaskGenerationConfig,
     TaskGroupObjective,
 )
-from reef.record2dataset.generated_tasks.processor import RoundJob, reported_task_name, rewards_of
+from reef.record2dataset.generated_tasks.processor import RoundJob, episode_assembly, reported_task_name, rewards_of
 from reef.record2dataset.generated_tasks.recipe import task_group_record_stage
 from reef.record2record import GroupDecision, ReportContext
 from reef.train.algos.registry import resolve_objective
@@ -154,9 +154,9 @@ def test_a_task_group_waits_for_plays_per_task_episodes() -> None:
 
 
 def test_the_assembly_spans_an_episodes_turns_and_realigns_the_think_scaffold() -> None:
-    assembly = processor().assembly
+    assembly = episode_assembly(ProcessorContext("tasks", {}))
     assert assembly.accept_multi_turn and assembly.scaffold_tolerance == 8
-    assert processor(scaffold_tolerance=2).assembly.scaffold_tolerance == 2
+    assert episode_assembly(ProcessorContext("tasks", {"scaffold_tolerance": 2})).scaffold_tolerance == 2
 
 
 def test_the_objective_centers_and_scales_rewards_within_each_task_group() -> None:

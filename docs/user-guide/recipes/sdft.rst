@@ -47,18 +47,18 @@ default ``batch_size`` of 1 each report is one training step.
 How Reef implements it
 ----------------------
 
-The processor is the shared ``DistillProcessor``
+The record-to-task stage is the shared ``DistillTasks``
 (`Processors <../../developer-guide/processors.rst>`__). It turns every
 ``TeacherContextReport`` into one ``TrajectoryItem``. The item carries the
 student's recorded tokens and ``teacher_tokens``. ``teacher_tokens`` is the
 teacher's request rendered with the served model's chat template and
 followed by the student's response ids.
 
-SDFT's processor adds the demonstration block to the request's final user
-message. It adds the block as a new user message when the request ends in a
+SDFT's record-to-task stage (``SDFTTasks``) adds the demonstration block to
+the request's final user message. It adds the block as a new user message when the request ends in a
 tool result. ``context_template`` sets the block's text and its default is
 the reference implementation's wording. A harness that needs another layout
-subclasses the processor and overrides ``teacher_request``.
+subclasses ``SDFTTasks`` and overrides ``teacher_request``.
 
 The ``sdft`` loss family is a thin family on the Slime backend's
 distillation base in ``reef/train/slime_backend/distill/``

@@ -5,9 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from reef.record2record import ReportStage
 from reef.train.processors import DistillProcessor
-from reef.train.processors.distill import normalize_messages_for_template
+from reef.train.processors.distill import DistillTasks, normalize_messages_for_template
 from reef.train.types import ProcessorContext
 
 #: The reference implementation's demonstration block (idanshen/Self-Distillation, ``main.py``).
@@ -26,8 +25,8 @@ def context_block_template(config: Mapping[str, Any]) -> str:
     return template
 
 
-class SDFTProcessor(DistillProcessor):
-    """One rollout and its demonstration, one training unit.
+class SDFTTasks(DistillTasks):
+    """One rollout and its demonstration, one training task.
 
     The teacher reads the student's request with the demonstration block
     appended to its final user message, as ``main.py`` of the reference
@@ -37,16 +36,15 @@ class SDFTProcessor(DistillProcessor):
     block is ``context_template`` with ``{context}`` replaced.
     """
 
-    batch_label = "sdft"
-
-    def __init__(self, context: ProcessorContext, *, record_stage: ReportStage | None = None) -> None:
-        self._template = context_block_template(context.config)
-        super().__init__(context, record_stage=record_stage)
+    def __init__(self, context: ProcessorContext) -> None:
+        # A bad template fails before the tokenizer loads.
+        self.template = context_block_template(context.config)
+        super().__init__(context)
 
     def teacher_request(
         self, messages: list[Any], tools: list[Any] | None, response: str, teacher_context: str
     ) -> tuple[list[Any], list[Any] | None]:
-        block = self._template.replace(CONTEXT_PLACEHOLDER, teacher_context)
+        block = self.template.replace(CONTEXT_PLACEHOLDER, teacher_context)
         rendered = normalize_messages_for_template(messages)
         if rendered and rendered[-1].get("role") == "user":
             last = dict(rendered[-1])
@@ -56,4 +54,10 @@ class SDFTProcessor(DistillProcessor):
         return [*rendered, {"role": "user", "content": block}], tools
 
 
-__all__ = ["CONTEXT_PLACEHOLDER", "DEFAULT_CONTEXT_TEMPLATE", "SDFTProcessor", "context_block_template"]
+class SDFTProcessor(DistillProcessor):
+    """SDFT's batches: distillation tasks as they come."""
+
+    batch_label = "sdft"
+
+
+__all__ = ["CONTEXT_PLACEHOLDER", "DEFAULT_CONTEXT_TEMPLATE", "SDFTProcessor", "SDFTTasks", "context_block_template"]

@@ -7,7 +7,7 @@ from collections.abc import Hashable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from recipes.sdpo.processor import SDPOProcessor, sdpo_grid, sibling_request
+from recipes.sdpo.processor import SDPOProcessor, SDPOTasks, sdpo_grid, sibling_request
 from recipes.sdpo.report import SDPOReport
 from reef.core.reports import ReportBase
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
@@ -135,6 +135,9 @@ class SDPORecipe(WeightTrainingRecipe):
 
     def build_record_stage(self, context: ProcessorContext) -> ReportStage:
         return sdpo_record_stage(context)
+
+    def build_record2task(self, context: ProcessorContext) -> SDPOTasks:
+        return SDPOTasks(context)
 
     def __post_init__(self) -> None:
         super().__post_init__()

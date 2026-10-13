@@ -13,7 +13,7 @@ from reef.train.types import trajectory_groups
 
 reef_types = pytest.importorskip("reef.train.types", reason="requires a reef checkout")
 
-from recipes.beta.coral.processor import ROOT_GROUP, CoralProcessor
+from recipes.beta.coral.processor import ROOT_GROUP, CoralProcessor, CoralTasks
 from recipes.beta.coral.recipe import coral_record_stage
 from reef.core import AgentRecord, RequestType
 from reef.train.types import ProcessorContext, TrainingBatch
@@ -23,7 +23,7 @@ SCENARIO = "coral-demo"
 
 def _processor(group_size=2):
     context = ProcessorContext(SCENARIO, {"group_size": group_size})
-    return CoralProcessor(context, record_stage=coral_record_stage(context))
+    return CoralProcessor(context, record_stage=coral_record_stage(context), record2task=CoralTasks(context))
 
 
 def _inference(record_id, tokens, loss_mask, log_probs):

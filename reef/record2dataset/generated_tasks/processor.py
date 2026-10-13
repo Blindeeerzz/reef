@@ -40,7 +40,8 @@ from reef.core.tasks import GeneratedTask, TaskGenerationRequest, TaskGenerator,
 from reef.harness.client.tasks import TaskPlay
 from reef.record2dataset.client import DuplicateTask, Generator, HttpGenerator, TaskNameConflict
 from reef.record2record import ReportContext, ReportStage
-from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
+from reef.train.processors.base import Record2Task
+from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,33 @@ class RoundOutcome(SupportsReceipt):
     error: str
 
 
+def episode_assembly(context: ProcessorContext) -> SampleAssembly:
+    """The sample assembly for an agent's episode: many model calls that extend one conversation."""
+    return SampleAssembly.from_config(
+        context.with_config(
+            {
+                "accept_multi_turn_policy_samples": True,
+                "scaffold_tolerance": DEFAULT_SCAFFOLD_TOLERANCE,
+                **context.config,
+            }
+        )
+    )
+
+
+class PlayedTaskTasks(ReportTasks):
+    """One played episode of a generated task as one task, in its task's comparison group."""
+
+    def __init__(self, context: ProcessorContext) -> None:
+        self.assembly = episode_assembly(context)
+
+    def make_sample(self, context: ReportContext) -> TrajectoryItem:
+        task_name = reported_task_name(context.report)
+        if task_name is None:
+            raise ValueError("a generated task's report requires metadata.task.name, as the task player sends it")
+        sample = self.assembly.build(context, context.require_score())
+        return replace(sample, group_id=task_name)
+
+
 class GeneratedTaskProcessor(ReportedFeedbackProcessor, BackgroundJobRunner):
     """Groups the training arm's episodes by task and runs the rounds of task generation that produce them."""
 
@@ -121,6 +149,7 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor, BackgroundJobRunner):
         task_player: Generator | None = None,
         worker: BackgroundJobWorker | None = None,
         record_stage: ReportStage | None = None,
+        record2task: Record2Task | None = None,
     ) -> None:
         config = dict(context.config)
         self.tasks_per_step = int(config.get("tasks_per_step", DEFAULT_TASKS_PER_STEP))
@@ -132,9 +161,12 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor, BackgroundJobRunner):
         # An agent's episode is many model calls that extend one conversation; the sample spans them.
         config.setdefault("accept_multi_turn_policy_samples", True)
         config.setdefault("scaffold_tolerance", DEFAULT_SCAFFOLD_TOLERANCE)
-        self.assembly = SampleAssembly.from_config(context.with_config(config))
         # One unit of the batch is one complete task group.
-        super().__init__(context.with_config({**config, "batch_size": self.tasks_per_step}), record_stage=record_stage)
+        super().__init__(
+            context.with_config({**config, "batch_size": self.tasks_per_step}),
+            record_stage=record_stage,
+            record2task=record2task,
+        )
 
         self.rounds = int(config.get("rounds", 0))
         self.batches_per_round = int(config.get("batches_per_round", DEFAULT_BATCHES_PER_ROUND))
@@ -183,15 +215,11 @@ class GeneratedTaskProcessor(ReportedFeedbackProcessor, BackgroundJobRunner):
 
     # ------------------------------------------------------- the reported half
 
-    def make_sample(self, context: ReportContext) -> TrajectoryItem:
-        task_name = reported_task_name(context.report)
-        if task_name is None:
-            raise ValueError("a generated task's report requires metadata.task.name, as the task player sends it")
-        sample = self.assembly.build(context, context.require_score())
-        return replace(sample, group_id=task_name)
-
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"{self.scenario}:generated-tasks:{batch_number}", items)
+
+    def default_record2task(self) -> Record2Task:
+        return PlayedTaskTasks(self.context)
 
     # ---------------------------------------------------------- the round half
 

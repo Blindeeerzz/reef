@@ -8,7 +8,10 @@ from reef_service.runtime_stubs import StubInferenceRuntime, StubTrainingRuntime
 
 import reef.train.processors.reported as reported_module
 from recipes.sao import SAOProcessor
+from recipes.sao.processor import SAOTasks
+from recipes.sao.recipe import sao_record_stage
 from recipes.tttd import TTTDGroupedRolloutReport, TTTDProcessor
+from recipes.tttd.processor import TTTDTasks
 from reef.artifact import InMemoryRepositoryBackend
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportValidationError
@@ -36,6 +39,10 @@ from ._grouped_pg import GroupedPolicyProcessor
 from ._threshold_processor import ThresholdProcessor
 
 NUM_GPUS = 0
+
+
+def sao_processor(context: ProcessorContext) -> SAOProcessor:
+    return SAOProcessor(context, record_stage=sao_record_stage(context), record2task=SAOTasks(context))
 
 
 def policy_plugin(backend: object, policy: type) -> CandidateEvaluationPlugin:
@@ -280,7 +287,9 @@ def test_cookbook_processors_assemble_before_rejecting_multi_turn_reports(
         }
 
     report_type = TTTDGroupedRolloutReport if processor_type is TTTDProcessor else None
-    processor = processor_type(ProcessorContext("math", config, report_type=report_type))
+    context = ProcessorContext("math", config, report_type=report_type)
+    tasks = TTTDTasks(context) if processor_type is TTTDProcessor else SAOTasks(context)
+    processor = processor_type(context, record2task=tasks)
     processor.ingest(training_inference("i1", [10, 20], [1], [-0.1]))
     multi_turn_report = report("r1", ("i1", "i2"), 1.0, **metadata)
     with pytest.raises(ReportValidationError, match="unavailable"):
@@ -885,7 +894,7 @@ def test_sao_processor_defaults_action_mask_for_assembled_episodes() -> None:
     which fills no SAO-only fields; the processor must apply its documented
     single-turn default (action mask = loss mask) instead of rejecting the
     assembled sample on an empty action mask."""
-    processor = SAOProcessor(ProcessorContext("math", {"batch_size": 1, "accept_multi_turn_policy_samples": True}))
+    processor = sao_processor(ProcessorContext("math", {"batch_size": 1, "accept_multi_turn_policy_samples": True}))
     processor.ingest(training_inference("i1", [10, 20], [1], [-0.1]))
     processor.ingest(training_inference("i2", [10, 20, 11, 21], [1], [-0.2]))
     processor.ingest(report("r1", ("i1", "i2"), 1.0))
@@ -902,7 +911,7 @@ def test_sao_processor_defaults_action_mask_for_assembled_episodes() -> None:
 def test_reported_samples_leave_required_tensor_validation_to_training_backend(missing: str) -> None:
     from reef.train.slime_backend.data_builder import to_slime_rollout_data
 
-    processor = SAOProcessor(ProcessorContext("math"))
+    processor = sao_processor(ProcessorContext("math"))
     payload = {"tokens": [10, 20], "loss_mask": [1], "rollout_log_probs": [-0.1]}
     payload.pop(missing)
     processor.ingest(

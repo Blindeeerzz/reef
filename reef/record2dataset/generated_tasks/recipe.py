@@ -22,6 +22,7 @@ from reef.record2dataset.generated_tasks.processor import (
     DEFAULT_TASKS_PER_STEP,
     TRAINING_ARM,
     GeneratedTaskProcessor,
+    PlayedTaskTasks,
     reported_arm,
     reported_task_name,
 )
@@ -153,9 +154,15 @@ class GeneratedTaskRecipe(WeightTrainingRecipe):
     def build_record_stage(self, context: ProcessorContext) -> ReportStage:
         return task_group_record_stage(context)
 
+    def build_record2task(self, context: ProcessorContext) -> PlayedTaskTasks:
+        return PlayedTaskTasks(context)
+
     def build_processor(self, context: ProcessorContext) -> DataProcessor:
         task_generator = None if self.task_generation is None else self.task_generation.build(context.scenario)
         configured = context.with_config(self.processor_config())
         return GeneratedTaskProcessor(
-            configured, task_generator=task_generator, record_stage=self.build_record_stage(configured)
+            configured,
+            task_generator=task_generator,
+            record_stage=self.build_record_stage(configured),
+            record2task=self.build_record2task(configured),
         )

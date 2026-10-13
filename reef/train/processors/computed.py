@@ -1,4 +1,4 @@
-"""Computed-feedback engine: turn judged records into samples and batches.
+"""Computed-feedback engine: judged records as tasks and batches.
 
 The sibling of :class:`~reef.train.processors.reported.ReportedFeedbackProcessor`
 for the other way feedback arrives. A reported-feedback recipe is handed
@@ -10,31 +10,22 @@ judging worker, and the eligibility checks. A recipe writes:
 * a :class:`~reef.record2record.RecordJudging`: the method's correlation
   (``observe``, with the stage's ``dispatch``/``track``/``retire`` verbs),
   its ``judge`` coroutine on the worker thread, and optional ``expire``;
-* ``make_sample(record, judgment)``: one judged record into a
-  :class:`TrajectoryItem`, or ``None`` for a record that cannot train;
-* ``make_batch(samples, batch_number)``: the selected samples into the
-  recipe's batch type.
+* a ``JudgedTasks`` with ``make_sample(record, judgment)``: one judged record
+  into a :class:`TrajectoryItem`, or ``None`` for a record that cannot train;
+* ``make_batch(samples, batch_number)`` on the processor: the selected
+  samples into the recipe's batch type.
 """
 
 from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Hashable
 from typing import Any
 
 from reef.background_jobs import BackgroundJobWorker, Failed, SupportsReceipt
 from reef.core.records_types import AgentRecord
-from reef.record2record import (
-    AssemblyStatus,
-    JudgedSet,
-    JudgingStage,
-    RecordJudging,
-    RecordSet,
-    SetAssembly,
-    judged_sets,
-)
-from reef.train.processors.base import DataProcessor
+from reef.record2record import JudgedSet, JudgingStage, RecordJudging, RecordSet, judged_sets
+from reef.train.processors.base import DataProcessor, Record2Task, TaskResult
 from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem
 
 logger = logging.getLogger(__name__)
@@ -44,24 +35,40 @@ __all__ = [
     "BackgroundJobWorker",
     "ComputedFeedbackProcessor",
     "Failed",
+    "JudgedTasks",
     "SupportsReceipt",
 ]
 
 
+class JudgedTasks(Record2Task, ABC):
+    """Turn one judged record into one task. A recipe implements ``make_sample``."""
+
+    @abstractmethod
+    def make_sample(self, record: AgentRecord, judgment: Any) -> TrajectoryItem | None:
+        """One judged record into a sample; ``None`` cannot train."""
+
+    def make_tasks(self, record_set: RecordSet) -> TaskResult:
+        if not isinstance(record_set, JudgedSet):
+            raise TypeError(f"{type(self).__name__} makes tasks from judged sets, not {type(record_set).__name__}")
+        sample = self.make_sample(record_set.record, record_set.judgment)
+        if sample is None:
+            return TaskResult.skipped()
+        runtime_load_id = sample.training.get("runtime_load_id")
+        return TaskResult.ready((sample,), runtime_load_id if isinstance(runtime_load_id, str) else None)
+
+
 class ComputedFeedbackProcessor(DataProcessor, ABC):
-    """Assemble judged records into batches for computed-feedback recipes.
+    """Shape judged records' tasks into batches for computed-feedback recipes.
 
     The recipe builds the :class:`~reef.record2record.JudgingStage` with its
-    ``RecordJudging`` and worker, and passes it as ``record_stage``. Judged
-    sets wait in the order that their judgments arrived. The stage drops sets
-    more than ``max_staleness`` versions behind the newest one, by record
-    arrival, while no batch is out.
+    ``RecordJudging`` and worker, and passes it as ``record_stage``, with its
+    ``JudgedTasks`` as ``record2task``. Judged sets wait in the order that
+    their judgments arrived. The stage drops sets more than ``max_staleness``
+    versions behind the newest one, by record arrival, while no batch is out.
     """
 
-    def __init__(self, context: ProcessorContext, *, record_stage: JudgingStage) -> None:
-        super().__init__(context, record_stage=record_stage)
-        #: Samples by receipt, until their record trains or ends.
-        self.samples: dict[str, TrajectoryItem] = {}
+    def __init__(self, context: ProcessorContext, *, record_stage: JudgingStage, record2task: JudgedTasks) -> None:
+        super().__init__(context, record_stage=record_stage, record2task=record2task)
 
     @property
     def judging_stage(self) -> JudgingStage:
@@ -78,29 +85,8 @@ class ComputedFeedbackProcessor(DataProcessor, ABC):
     # ------------------------------------------------------- the recipe hooks
 
     @abstractmethod
-    def make_sample(self, record: AgentRecord, judgment: Any) -> TrajectoryItem | None:
-        """One judged record into a sample; ``None`` cannot train."""
-
-    @abstractmethod
     def make_batch(self, samples: tuple[TrajectoryItem, ...], batch_number: int) -> TrainingBatch:
         """Shape the selected samples into this recipe's batch type."""
-
-    # --------------------------------------------------------------- assembly
-
-    def assemble(self, record_set: RecordSet) -> SetAssembly:
-        if not isinstance(record_set, JudgedSet):
-            raise TypeError(f"{type(self).__name__} assembles judged sets, not {type(record_set).__name__}")
-        sample = self.make_sample(record_set.record, record_set.judgment)
-        if sample is None:
-            return SetAssembly(AssemblyStatus.REJECTED)
-        self.samples[record_set.receipt] = sample
-        runtime_load_id = sample.training.get("runtime_load_id")
-        return SetAssembly(AssemblyStatus.READY, runtime_load_id if isinstance(runtime_load_id, str) else None)
-
-    def forget_sets(self, set_ids: frozenset[Hashable]) -> None:
-        for set_id in set_ids:
-            if isinstance(set_id, str):
-                self.samples.pop(set_id, None)
 
     # ----------------------------------------------------------- batch cycle
     #
@@ -112,7 +98,11 @@ class ComputedFeedbackProcessor(DataProcessor, ABC):
 
     def _make_pending(self, batch_number: int) -> TrainingBatch:
         reserved = judged_sets(self.record_stage.reserve(self._batch_size))
-        return self.make_batch(tuple(self.samples[judged_set.receipt] for judged_set in reserved), batch_number)
+        tasks = tuple(task for judged_set in reserved for task in self.tasks[judged_set.set_id])
+        samples = tuple(task for task in tasks if isinstance(task, TrajectoryItem))
+        if len(samples) != len(tasks):
+            raise TypeError("computed-feedback tasks must be trajectories")
+        return self.make_batch(samples, batch_number)
 
     def _consume_pending(self) -> frozenset[str]:
         consumed = self.record_stage.consume_reservation()

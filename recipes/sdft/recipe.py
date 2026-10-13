@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from recipes.sdft.processor import DEFAULT_CONTEXT_TEMPLATE, SDFTProcessor, context_block_template
+from recipes.sdft.processor import DEFAULT_CONTEXT_TEMPLATE, SDFTProcessor, SDFTTasks, context_block_template
 from reef.core.reports import ReportBase, TeacherContextReport
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
@@ -61,6 +61,9 @@ class SDFTRecipe(WeightTrainingRecipe):
 
     def build_record_stage(self, context: ProcessorContext) -> ReportStage:
         return distill_record_stage(context)
+
+    def build_record2task(self, context: ProcessorContext) -> SDFTTasks:
+        return SDFTTasks(context)
 
     def __post_init__(self) -> None:
         super().__post_init__()

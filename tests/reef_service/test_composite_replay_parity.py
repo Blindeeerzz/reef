@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 from recipes.tttd import TTTDGroupedRolloutReport, TTTDProcessor
+from recipes.tttd.processor import TTTDTasks
 from recipes.tttd.recipe import tttd_record_stage
 from reef.artifact import ArtifactRef, InMemoryRepositoryBackend
 from reef.background_jobs import SupportsReceipt
@@ -28,7 +29,7 @@ from reef.dispatcher import Dispatcher
 from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train import ComponentTrainer, Trainer
-from reef.train.processors.computed import ComputedFeedbackProcessor
+from reef.train.processors.computed import ComputedFeedbackProcessor, JudgedTasks
 from reef.train.types import TrainingBatch
 
 from ._threshold_processor import ThresholdProcessor
@@ -61,12 +62,8 @@ class _SessionJudging(RecordJudging):
         return job
 
 
-class _SessionProcessor(ComputedFeedbackProcessor):
-    """Trains the judged turns of ``_SessionJudging``; a turn marked declined is unusable."""
-
-    def __init__(self, context: Any) -> None:
-        stage = JudgingStage(_SessionJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness)
-        super().__init__(context, record_stage=stage)
+class _SessionTasks(JudgedTasks):
+    """One-token stub samples; a turn marked declined is unusable."""
 
     def make_sample(self, record: AgentRecord, judgment: _Judgment) -> Any:
         if record.payload.get("declined"):
@@ -79,6 +76,14 @@ class _SessionProcessor(ComputedFeedbackProcessor):
             reward=1.0,
             runtime_load_id="v1",
         )
+
+
+class _SessionProcessor(ComputedFeedbackProcessor):
+    """Trains the judged turns of ``_SessionJudging``; a turn marked declined is unusable."""
+
+    def __init__(self, context: Any) -> None:
+        stage = JudgingStage(_SessionJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness)
+        super().__init__(context, record_stage=stage, record2task=_SessionTasks())
 
     def make_batch(self, samples: Any, batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"{self.scenario}:session:{batch_number}", tuple(samples))
@@ -126,7 +131,9 @@ class _Recipe(_TwoTrainerRecipe):
 
                 def tttd(context: Any) -> TTTDProcessor:
                     configured = context.with_config({"groups_per_step": 1, "rollouts_per_group": 2})
-                    return TTTDProcessor(configured, record_stage=tttd_record_stage(configured))
+                    return TTTDProcessor(
+                        configured, record_stage=tttd_record_stage(configured), record2task=TTTDTasks(configured)
+                    )
 
                 return tttd
             return lambda context: cls(context.with_config({"batch_size": 1}))

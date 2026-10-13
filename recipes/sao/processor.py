@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from reef.core.records_types import AgentRecord
-from reef.record2record import ReportStage
 from reef.train.processors.common import make_policy_trajectory
-from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, SampleAssembly
+from reef.train.processors.reported import ReportContext, ReportedFeedbackProcessor, ReportTasks, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 
@@ -28,6 +27,19 @@ def make_sao_sample(item: AgentRecord, reward: float) -> TrajectoryItem:
     return base.with_training(action_mask=[int(value) for value in action_mask], rollout_created_at=item.created_at)
 
 
+class SAOTasks(ReportTasks):
+    """One scored rollout as one SAO task, with ``action_mask`` and ``rollout_created_at``."""
+
+    def __init__(self, context: ProcessorContext) -> None:
+        self.assembly = SampleAssembly.from_config(context, make_sample=make_sao_sample)
+
+    def make_sample(self, context: ReportContext) -> TrajectoryItem:
+        sample = self.assembly.build(context, context.require_score())
+        if not sample.training.get("action_mask", []):
+            sample = sample.with_training(action_mask=sample.training.get("loss_mask", []))
+        return sample
+
+
 class SAOProcessor(ReportedFeedbackProcessor):
     """Turn scored rollouts into independently-scheduled SAO samples.
 
@@ -43,16 +55,6 @@ class SAOProcessor(ReportedFeedbackProcessor):
     """
 
     output_schema = TrainingBatch
-
-    def __init__(self, context: ProcessorContext, *, record_stage: ReportStage | None = None) -> None:
-        self._assembly = SampleAssembly.from_config(context, make_sample=make_sao_sample)
-        super().__init__(context, record_stage=record_stage)
-
-    def make_sample(self, context: ReportContext) -> TrajectoryItem:
-        sample = self._assembly.build(context, context.require_score())
-        if not sample.training.get("action_mask", []):
-            sample = sample.with_training(action_mask=sample.training.get("loss_mask", []))
-        return sample
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"{self.scenario}:sao:{batch_number}", items)

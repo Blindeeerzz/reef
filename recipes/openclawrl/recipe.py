@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 
 from recipes.openclawrl.judging import openclawrl_record_stage
-from recipes.openclawrl.processor import OpenClawRLProcessor
+from recipes.openclawrl.processor import OpenClawRLProcessor, OpenClawRLTasks
 from recipes.openclawrl.sessions import DEFAULT_MAX_SESSIONS
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
@@ -75,6 +75,9 @@ class OpenClawRLRecipe(WeightTrainingRecipe):
 
     def build_record_stage(self, context: ProcessorContext) -> JudgingStage:
         return openclawrl_record_stage(context)
+
+    def build_record2task(self, context: ProcessorContext) -> OpenClawRLTasks:
+        return OpenClawRLTasks()
 
     def __post_init__(self) -> None:
         super().__post_init__()

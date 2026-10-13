@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from recipes.sao.processor import SAOProcessor
+from recipes.sao.processor import SAOProcessor, SAOTasks
 from reef.core.reports import ReportBase, ScoredRolloutReport
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
@@ -64,6 +64,9 @@ class SAORecipe(WeightTrainingRecipe):
 
     def build_record_stage(self, context: ProcessorContext) -> ReportStage:
         return sao_record_stage(context)
+
+    def build_record2task(self, context: ProcessorContext) -> SAOTasks:
+        return SAOTasks(context)
 
     def __post_init__(self) -> None:
         super().__post_init__()

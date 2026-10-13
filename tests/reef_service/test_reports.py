@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from recipes.tttd import TTTDGroupedRolloutReport, TTTDProcessor
+from recipes.tttd.processor import TTTDTasks
 from recipes.tttd.recipe import tttd_record_stage
 from reef.artifact.memory import InMemoryRepositoryBackend
 from reef.core import AgentRecord, RequestType
@@ -252,7 +253,7 @@ def test_tttd_raises_for_grid_mismatch_and_schema_violations() -> None:
         {"groups_per_step": 2, "rollouts_per_group": 3},
         report_type=TTTDGroupedRolloutReport,
     )
-    processor = TTTDProcessor(context, record_stage=tttd_record_stage(context))
+    processor = TTTDProcessor(context, record_stage=tttd_record_stage(context), record2task=TTTDTasks(context))
     processor.ingest(
         AgentRecord.create(
             scenario="discovery",

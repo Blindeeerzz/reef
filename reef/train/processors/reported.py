@@ -1,22 +1,22 @@
-"""Reported feedback: assemble reports and their inference records into samples and batches.
+"""Reported feedback: reports and their inference records, as tasks and batches.
 
 The record-to-record stage (:class:`~reef.record2record.ReportStage`) reads
 reports in append order. It validates them, places them in groups, and decides
-which singleton reports and ready groups train. This processor turns each
-report into a sample and each reserved selection of sets into a batch.
+which singleton reports and ready groups train. ``ReportTasks`` turns each
+report into a task (record-to-task), and ``ReportedFeedbackProcessor`` turns
+each reserved selection of sets into a batch (task-to-batch).
 """
 
 from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Hashable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
 from reef.core.records_types import AgentRecord, RequestType
 from reef.record2record import (
-    AssemblyStatus,
     GroupDecision,
     Record2RecordStage,
     RecordSet,
@@ -24,11 +24,10 @@ from reef.record2record import (
     ReportContext,
     ReportGrouping,
     ReportStage,
-    SetAssembly,
     accepted_by,
     report_sets,
 )
-from reef.train.processors.base import DataProcessor
+from reef.train.processors.base import DataProcessor, Record2Task, TaskResult
 from reef.train.processors.common import (
     make_multi_turn_policy_trajectory,
     make_policy_trajectory,
@@ -42,6 +41,7 @@ __all__ = [
     "GroupDecision",
     "ReportContext",
     "ReportGrouping",
+    "ReportTasks",
     "ReportedFeedbackProcessor",
     "SampleAssembly",
     "SkippedReport",
@@ -60,15 +60,46 @@ class SkippedReport:
     reason: str
 
 
-class ReportedFeedbackProcessor(DataProcessor, ABC):
-    """Assemble valid reports and their existing inference records into batches.
+class ReportTasks(Record2Task, ABC):
+    """Turn one valid report and its inference records into one task.
 
-    Recipes implement ``make_sample`` and ``make_batch``. The recipe's
+    A recipe implements ``make_sample``. The stage attaches the report ID and
+    its ordered references to the task's ``source_agent_record_ids``.
+    """
+
+    @abstractmethod
+    def make_sample(self, context: ReportContext) -> TrainDataItem | SkippedReport:
+        """Assemble valid feedback into data; raise on a broken training contract.
+
+        Runs on the trainer thread without network or model calls. Return
+        ``SkippedReport`` for a valid report that cannot train.
+        """
+
+    def make_tasks(self, record_set: RecordSet) -> TaskResult:
+        if not isinstance(record_set, ReportCandidate):
+            raise TypeError(
+                f"{type(self).__name__} makes tasks from report candidates, not {type(record_set).__name__}"
+            )
+        context = record_set.context
+        sample = self.make_sample(context)
+        if isinstance(sample, SkippedReport):
+            return TaskResult.skipped()
+        if not isinstance(sample, (TrajectoryItem, TaskItem)):
+            raise TypeError(f"{type(self).__name__}.make_sample must return a TrainDataItem")
+        report_id = context.report.agent_record_id
+        return TaskResult.ready((replace(sample, source_agent_record_ids=(*context.references, report_id)),))
+
+
+class ReportedFeedbackProcessor(DataProcessor, ABC):
+    """Shape the tasks of valid reports into batches.
+
+    Recipes implement ``make_batch``. The recipe's
     :class:`~reef.record2record.ReportStage`, passed as ``record_stage``,
     owns the report policy (its ``ReportGrouping``), deduplication, group
     slots, selection, consumption, and record release. Without one, every
-    report trains by itself. Invalid references raise immediately; training
-    data failures propagate instead of silently dropping reports.
+    report trains by itself. The recipe's ``ReportTasks``, passed as
+    ``record2task``, makes the tasks. Invalid references raise immediately;
+    training data failures propagate instead of silently dropping reports.
     """
 
     required_request_types = frozenset({RequestType.INFERENCE, RequestType.REPORT})
@@ -89,20 +120,27 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
                 "build_record_stage(), and pass it to the processor as record_stage."
             )
 
-    def __init__(self, context: ProcessorContext, *, record_stage: Record2RecordStage | None = None) -> None:
-        super().__init__(context, record_stage=record_stage)
+    def __init__(
+        self,
+        context: ProcessorContext,
+        *,
+        record_stage: Record2RecordStage | None = None,
+        record2task: Record2Task | None = None,
+    ) -> None:
+        super().__init__(context, record_stage=record_stage, record2task=record2task)
         if not isinstance(self.record_stage, ReportStage):
             raise TypeError(f"{type(self).__name__} needs a ReportStage, not {type(self.record_stage).__name__}")
         # The sample-assembly settings belong to every reported-feedback processor's config
         # surface: validate them here so a bad deployment fails at construction
         # even for recipes that never assemble a policy sample.
         sample_assembly_config_fields(context.config)
-        #: Assembled samples by report ID, until their report trains or ends.
-        self.samples: dict[str, TrainDataItem] = {}
         self.record_stage.limit_available(self.available_set_limit())
 
     def default_record_stage(self) -> ReportStage:
         return ReportStage(self.scenario, self.context.report_type, ReportGrouping())
+
+    def default_record2task(self) -> Record2Task:
+        raise TypeError(f"{type(self).__name__} needs the recipe's ReportTasks as record2task")
 
     @property
     def report_stage(self) -> ReportStage:
@@ -114,40 +152,12 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
     # ------------------------------------------------------- the recipe hooks
 
     @abstractmethod
-    def make_sample(self, context: ReportContext) -> TrainDataItem | SkippedReport:
-        """Assemble valid feedback into data; raise on a broken training contract.
-
-        Runs on the trainer thread without network or model calls. Return
-        ``SkippedReport`` for a valid report that cannot train.
-        """
-
-    @abstractmethod
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         """Build a batch from selected items, in group and arrival order.
 
         The processor tracks consumption independently, including any selected
         items the recipe omits from the resulting batch.
         """
-
-    # --------------------------------------------------------------- assembly
-
-    def assemble(self, record_set: RecordSet) -> SetAssembly:
-        if not isinstance(record_set, ReportCandidate):
-            raise TypeError(f"{type(self).__name__} assembles report candidates, not {type(record_set).__name__}")
-        context = record_set.context
-        sample = self.make_sample(context)
-        if isinstance(sample, SkippedReport):
-            return SetAssembly(AssemblyStatus.REJECTED)
-        if not isinstance(sample, (TrajectoryItem, TaskItem)):
-            raise TypeError(f"{type(self).__name__}.make_sample must return a TrainDataItem")
-        report_id = context.report.agent_record_id
-        self.samples[report_id] = replace(sample, source_agent_record_ids=(*context.references, report_id))
-        return SetAssembly(AssemblyStatus.READY)
-
-    def forget_sets(self, set_ids: frozenset[Hashable]) -> None:
-        for set_id in set_ids:
-            if isinstance(set_id, str):
-                self.samples.pop(set_id, None)
 
     def set_training_mode(self, training_mode: str) -> None:
         super().set_training_mode(training_mode)
@@ -169,7 +179,10 @@ class ReportedFeedbackProcessor(DataProcessor, ABC):
     def _make_pending(self, batch_number: int) -> TrainingBatch:
         report_sets_reserved = report_sets(self.record_stage.reserve(self._batch_size))
         items = tuple(
-            self.samples[entry.report_id] for report_set in report_sets_reserved for entry in report_set.entries
+            task
+            for report_set in report_sets_reserved
+            for entry in report_set.entries
+            for task in self.tasks[entry.report_id]
         )
         return self.make_batch(items, batch_number)
 

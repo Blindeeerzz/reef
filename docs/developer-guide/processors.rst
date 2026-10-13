@@ -29,9 +29,10 @@ none may block:
 Every concrete processor produces ``TrainingBatch.items``, an ordered tuple of
 ``TrainDataItem`` values: ``TrajectoryItem`` for existing trajectories or
 ``TaskItem`` for Harbor tasks that an algorithm will roll out. A batch may mix
-both. ``make_sample`` constructs ATIF trajectory items, including captured
-training tensors and feedback in ``extra.reef``. ``make_batch`` collects the
-items; grouped recipes set ``group_id`` on each member. Assembly, scheduling
+both. The record-to-task stage's ``make_sample`` constructs ATIF trajectory
+items, including captured training tensors and feedback in ``extra.reef``.
+The processor's ``make_batch`` collects the items; grouped recipes set
+``group_id`` on each member. Assembly, scheduling
 and group completeness remain recipe decisions. There is no separate dataset
 container. See `batch values <../reference/python-api.rst#batch>`__ for formats
 and algorithm support.
@@ -189,12 +190,16 @@ not a reason to discard the report.
 
 A reported-feedback recipe implements:
 
-- ``make_sample(context) -> TrainDataItem``: assemble an ATIF trajectory or
-  Harbor task directly. Use ``context.require_score()`` when the method needs
-  a reward. The engine attaches the source and report ids to the returned item.
-- ``make_batch(items, batch_number)``: assemble the flat tuple of selected
-  training items into a batch. Consumption remains the engine's responsibility,
-  including selected items that the recipe removes from training.
+- ``make_sample(context) -> TrainDataItem`` on a ``ReportTasks`` subclass, its
+  record-to-task stage: assemble an ATIF trajectory or Harbor task directly.
+  Use ``context.require_score()`` when the method needs a reward. The stage
+  attaches the source and report ids to the returned item. The recipe's
+  ``build_record2task(context)`` returns it, and ``build_processor`` passes
+  it to the processor as ``record2task``.
+- ``make_batch(items, batch_number)`` on the processor: assemble the flat
+  tuple of selected training items into a batch. Consumption remains the
+  engine's responsibility, including selected items that the recipe removes
+  from training.
 
 A recipe whose method groups or filters reports overrides
 ``build_record_stage`` and returns a ``ReportStage`` with its
@@ -241,7 +246,8 @@ A computed-feedback recipe writes a ``RecordJudging``: correlation in
 ``tracked_record``, and ``retire`` operations, ``async judge``, and ``expire``
 for tracked records that time out. The recipe's ``build_record_stage``
 returns a ``JudgingStage`` with the judging and the worker that runs
-``judge``. The processor receives that stage and supplies ``make_sample`` and
+``judge``. Its ``build_record2task`` returns a ``JudgedTasks`` with
+``make_sample(record, judgment)``. The processor receives both and supplies
 ``make_batch``. The stage holds judged records and drops those more than
 ``max_staleness`` versions behind the newest one.
 
@@ -322,29 +328,30 @@ A record's path to a batch
 
 .. code:: text
 
-   report -> validate existing references -> ingest -> make_sample
-       -> TrainDataItem -> optional group barrier -> make_batch -> batch -> acknowledge
+   report -> record2record: validate references, filter -> record2task: make_sample
+       -> TrainDataItem -> record2record: optional group barrier -> make_batch -> batch -> acknowledge
 
-   computed record -> ingest/track -> dispatch -> async judge
-       -> make_sample -> candidate -> make_batch -> batch -> acknowledge
+   computed record -> record2record: observe/track -> dispatch -> async judge
+       -> record2task: make_sample -> candidate -> make_batch -> batch -> acknowledge
 
 Where a processor lives
 -----------------------
 
 Shared engines live under ``reef/train/processors/``, including
-``DistillProcessor``, the reported engine of the distilling recipes: it
+``DistillTasks``, the record-to-task stage of the distilling recipes: it
 emits the student's rollout plus the teacher sequence, the request the recipe
 composes from the recorded request and the report's ``teacher_context`` (its
-``teacher_request`` override) rendered with the served model's chat template. Concrete method processors
-live in ``recipes/<name>/processor.py``; the harness evolution implementation
-lives in ``reef/train/cordis_backend/processor.py``. Recipe-specific correlation
-and model clients belong beside the method processor.
+``teacher_request`` override) rendered with the served model's chat template.
+Concrete method processors and their record-to-task classes live in
+``recipes/<name>/processor.py``; the harness evolution implementation lives
+in ``reef/train/cordis_backend/processor.py``. Recipe-specific correlation and
+model clients belong beside the method processor.
 
 Compatibility
 -------------
 
-Reported-feedback subclasses must replace ``judge`` and ``ReportDecision`` with
-``make_sample`` returning ``TrainDataItem``. Remove ``WAIT``/``NEVER`` branches: invalid
+Reported-feedback recipes must replace ``judge`` and ``ReportDecision`` with
+``make_sample`` returning ``TrainDataItem`` on a ``ReportTasks`` subclass. Remove ``WAIT``/``NEVER`` branches: invalid
 references fail admission, and training contract failures must raise. Existing
 stored records replay through the new contract; legacy reports with invalid
 references or eligibility flags fail explicitly and need correction before replay.

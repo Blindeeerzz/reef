@@ -11,7 +11,7 @@ import pytest
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportBase, ReportValidationError
 from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
-from reef.train.processors.reported import ReportedFeedbackProcessor
+from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks
 from reef.train.types import ProcessorContext, TaskItem, TrainDataItem, TrainingBatch
 
 
@@ -43,6 +43,20 @@ def exclusive_stage(
     )
 
 
+class SampleTasks(ReportTasks):
+    """Each report becomes a task named after it. ``fail_assembly`` breaks the training contract."""
+
+    def __init__(self) -> None:
+        self.assembled: list[str] = []
+        self.fail_assembly = False
+
+    def make_sample(self, context: ReportContext) -> TrainDataItem:
+        if self.fail_assembly:
+            raise ValueError("broken training data")
+        self.assembled.append(context.report.agent_record_id)
+        return TaskItem(Path(context.report.agent_record_id))
+
+
 class SampleProcessor(ReportedFeedbackProcessor):
     output_schema = TrainingBatch
 
@@ -53,17 +67,27 @@ class SampleProcessor(ReportedFeedbackProcessor):
         grouping: ReportGrouping | None = None,
         ordered_groups: bool = False,
         report_type: type[ReportBase] | None = None,
+        tasks: SampleTasks | None = None,
     ) -> None:
         context = ProcessorContext("math", {"batch_size": batch_size}, report_type=report_type)
-        super().__init__(context, record_stage=exclusive_stage(context, grouping, ordered_groups=ordered_groups))
-        self.assembled: list[str] = []
-        self.fail_assembly = False
+        self.sample_tasks = SampleTasks() if tasks is None else tasks
+        super().__init__(
+            context,
+            record_stage=exclusive_stage(context, grouping, ordered_groups=ordered_groups),
+            record2task=self.sample_tasks,
+        )
 
-    def make_sample(self, context: ReportContext) -> TrainDataItem:
-        if self.fail_assembly:
-            raise ValueError("broken training data")
-        self.assembled.append(context.report.agent_record_id)
-        return TaskItem(Path(context.report.agent_record_id))
+    @property
+    def assembled(self) -> list[str]:
+        return self.sample_tasks.assembled
+
+    @property
+    def fail_assembly(self) -> bool:
+        return self.sample_tasks.fail_assembly
+
+    @fail_assembly.setter
+    def fail_assembly(self, fail: bool) -> None:
+        self.sample_tasks.fail_assembly = fail
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"batch:{batch_number}", items)
@@ -352,11 +376,11 @@ def test_recipe_receives_items_and_omitting_one_does_not_lose_consumption() -> N
 
 
 def test_untyped_assembly_output_fails_and_keeps_report_retryable() -> None:
-    class BrokenProcessor(SampleProcessor):
+    class BrokenTasks(SampleTasks):
         def make_sample(self, context):
             return object() if self.fail_assembly else super().make_sample(context)
 
-    processor = BrokenProcessor()
+    processor = SampleProcessor(tasks=BrokenTasks())
     processor.ingest(inference("i1"))
     processor.fail_assembly = True
     with pytest.raises(TypeError, match="TrainDataItem"):

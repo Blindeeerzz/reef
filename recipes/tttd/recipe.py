@@ -7,7 +7,7 @@ from collections.abc import Hashable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from recipes.tttd.processor import TTTDProcessor, inference_release_id, tttd_grid
+from recipes.tttd.processor import TTTDProcessor, TTTDTasks, inference_release_id, tttd_grid
 from recipes.tttd.report import TTTDGroupedRolloutReport
 from reef.core.reports import ReportBase
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
@@ -110,6 +110,9 @@ class TTTDRecipe(WeightTrainingRecipe):
 
     def build_record_stage(self, context: ProcessorContext) -> ReportStage:
         return tttd_record_stage(context)
+
+    def build_record2task(self, context: ProcessorContext) -> TTTDTasks:
+        return TTTDTasks(context)
 
     def __post_init__(self) -> None:
         super().__post_init__()

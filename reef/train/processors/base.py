@@ -1,13 +1,16 @@
-"""The contract every processor implements.
+"""The record-to-task and task-to-batch contracts.
 
-The two processors that implement it for recipes live beside this module:
-``reported`` (feedback received in a report) and ``computed`` (feedback
-computed from traffic).
+A record set from the record-to-record stage becomes tasks (``Record2Task``),
+and tasks become batches (``DataProcessor``, the task-to-batch stage). A task
+is a ``TrainDataItem``. The two engines that implement both for recipes live
+beside this module: ``reported`` (feedback received in a report) and
+``computed`` (feedback computed from traffic).
 """
 
 from __future__ import annotations
 
 import time
+from abc import ABC, abstractmethod
 from collections.abc import Hashable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -17,7 +20,7 @@ from reef.core.reports import ReportBase
 from reef.core.training_request import TrainingRequest
 from reef.observability import ExperimentLogger
 from reef.record2record import AssemblyStatus, PassThroughStage, Record2RecordStage, RecordSet, SetAssembly
-from reef.train.types import ProcessorContext, TrainingBatch
+from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,51 @@ class InstructionFailure:
 
     error: str
     metrics: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TaskResult:
+    """The tasks made from one record set, and what the record stage does with the set."""
+
+    assembly: SetAssembly
+    tasks: tuple[TrainDataItem, ...] = ()
+
+    @classmethod
+    def ready(cls, tasks: tuple[TrainDataItem, ...], runtime_load_id: str | None = None) -> TaskResult:
+        """The set trains as ``tasks``. ``runtime_load_id`` is the version of their data, when known."""
+        return cls(SetAssembly(AssemblyStatus.READY, runtime_load_id), tasks)
+
+    @classmethod
+    def skipped(cls) -> TaskResult:
+        """The set cannot train. The record stage ends its records."""
+        return cls(SetAssembly(AssemblyStatus.REJECTED))
+
+
+class Record2Task(ABC):
+    """The record-to-task stage: turn one record set into tasks.
+
+    Runs on the trainer thread without network or model calls. Raise on a
+    broken training contract.
+    """
+
+    @abstractmethod
+    def make_tasks(self, record_set: RecordSet) -> TaskResult:
+        """Return the tasks of ``record_set``, or a skip."""
+
+    def status(self) -> Mapping[str, Any]:
+        """Return JSON-safe state that the processor adds to its status."""
+        return {}
+
+    def operational_metrics(self) -> Mapping[str, float | int]:
+        """Return numeric state that the processor adds to its metrics."""
+        return {}
+
+
+class NoTasks(Record2Task):
+    """Make no tasks. The record stage forgets each set; the no-update default."""
+
+    def make_tasks(self, record_set: RecordSet) -> TaskResult:
+        return TaskResult(SetAssembly(AssemblyStatus.INGESTED))
 
 
 class DataProcessor:
@@ -81,7 +129,13 @@ class DataProcessor:
     required_request_types: frozenset[RequestType] = frozenset({RequestType.INFERENCE, RequestType.REPORT})
     supported_training_modes: frozenset[str] = frozenset({"auto"})
 
-    def __init__(self, context: ProcessorContext, *, record_stage: Record2RecordStage | None = None) -> None:
+    def __init__(
+        self,
+        context: ProcessorContext,
+        *,
+        record_stage: Record2RecordStage | None = None,
+        record2task: Record2Task | None = None,
+    ) -> None:
         self._context = context
         # The two modes that take an instruction go together: a recipe that cannot run one cannot run it in either.
         if not context.config.get("manual_enabled", True):
@@ -103,10 +157,18 @@ class DataProcessor:
         self._batch_number = 0
         #: The record-to-record stage that turns this processor's records into record sets.
         self.record_stage = self.default_record_stage() if record_stage is None else record_stage
+        #: The record-to-task stage that turns each record set into tasks.
+        self.record2task = self.default_record2task() if record2task is None else record2task
+        #: Tasks by the ID of the record set that made them, until the set trains or ends.
+        self.tasks: dict[Hashable, tuple[TrainDataItem, ...]] = {}
 
     def default_record_stage(self) -> Record2RecordStage:
         """Return the stage to use when the recipe gives none. It has no method policy: each record passes through."""
         return PassThroughStage()
+
+    def default_record2task(self) -> Record2Task:
+        """Return the record-to-task stage to use when the recipe gives none. The default makes no tasks."""
+        return NoTasks()
 
     @property
     def context(self) -> ProcessorContext:
@@ -168,21 +230,18 @@ class DataProcessor:
     #: The batch type ``build_batch`` returns; the trainer validates it.
     output_schema: type[TrainingBatch] = TrainingBatch
 
-    def assemble(self, record_set: RecordSet) -> SetAssembly:
-        """Make training data from one record set that the record-to-record stage formed.
-
-        Raise on a broken training contract. The no-update default keeps nothing.
-        """
-        return SetAssembly(AssemblyStatus.INGESTED)
-
     def forget_sets(self, set_ids: frozenset[Hashable]) -> None:
-        """Forget the training data of sets that the stage ended. The default keeps nothing."""
-        return
+        """Forget the tasks of sets that the stage ended."""
+        for set_id in set_ids:
+            self.tasks.pop(set_id, None)
 
     def assemble_formed(self) -> None:
-        """Assemble each set that the stage formed, give the results back, and forget the sets that ended."""
+        """Make tasks from each set that the stage formed, give each result back, and forget the sets that ended."""
         for record_set in self.record_stage.take_formed():
-            self.record_stage.settle(record_set, self.assemble(record_set))
+            result = self.record2task.make_tasks(record_set)
+            if result.assembly.status is AssemblyStatus.READY:
+                self.tasks[record_set.set_id] = result.tasks
+            self.record_stage.settle(record_set, result.assembly)
         self.forget_sets(self.record_stage.take_ended())
 
     def ingest(self, item: AgentRecord) -> None:
@@ -327,7 +386,11 @@ class DataProcessor:
 
     def operational_metrics(self) -> Mapping[str, float | int]:
         """Numeric queue state, sampled under the trainer lock without advancing work."""
-        return {"buffered_requests": self.buffered_requests(), **self.record_stage.operational_metrics()}
+        return {
+            "buffered_requests": self.buffered_requests(),
+            **self.record_stage.operational_metrics(),
+            **self.record2task.operational_metrics(),
+        }
 
     def status(self) -> Mapping[str, Any]:
         """Return JSON-safe state that callers need while waiting.
@@ -346,7 +409,7 @@ class DataProcessor:
         state: dict[str, Any] = {"ready_units": self._ready_count(), "batch_size": self._batch_size}
         if self.supported_training_modes & {"manual", "hybrid"}:
             state["buffered_requests"] = self.buffered_requests()
-        return {**state, **self.record_stage.status()}
+        return {**state, **self.record_stage.status(), **self.record2task.status()}
 
     def close(self) -> None:
         """Release resources the processor owns; safe to call more than once.

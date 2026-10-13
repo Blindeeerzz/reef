@@ -21,7 +21,7 @@ from reef.core.trajectories import source_record_id
 from reef.train import ProcessorContext
 from reef.train.processors import DistillProcessor
 from reef.train.processors.common import recorded_response
-from reef.train.processors.distill import distill_record_stage
+from reef.train.processors.distill import DistillTasks, TeacherRenderer, distill_record_stage
 from reef.train.types import TrainingBatch
 
 STUDENT_TOKENS = (5, 6, 7, 1, 2, 3)  # three prompt ids, three response ids
@@ -72,9 +72,13 @@ def tokenizer(monkeypatch: pytest.MonkeyPatch) -> CountingTokenizer:
 
 
 class FeedbackProcessor(DistillProcessor):
-    """A recipe's composition: the student's own answer and the teacher context as a system message, no tools."""
+    """A recipe's batches, named ``feedback``."""
 
     batch_label = "feedback"
+
+
+class FeedbackTasks(DistillTasks):
+    """A recipe's composition: the student's own answer and the teacher context as a system message, no tools."""
 
     def teacher_request(
         self, messages: list[Any], tools: list[Any] | None, response: str, teacher_context: str
@@ -120,7 +124,7 @@ def _processor(**config: Any) -> DistillProcessor:
     context = ProcessorContext(
         "science", {"batch_size": 1, "tokenizer_path": "/models/science", **config}, TeacherContextReport
     )
-    return DistillProcessor(context, record_stage=distill_record_stage(context))
+    return DistillProcessor(context, record_stage=distill_record_stage(context), record2task=DistillTasks(context))
 
 
 @pytest.mark.unit
@@ -149,7 +153,9 @@ def test_by_default_the_teacher_reads_the_request_as_recorded(tokenizer: Countin
 @pytest.mark.unit
 def test_a_recipe_composes_the_teacher_request_from_the_response_and_the_context(tokenizer: CountingTokenizer) -> None:
     context = ProcessorContext("science", {"batch_size": 1, "tokenizer_path": "/models/science"}, TeacherContextReport)
-    processor = FeedbackProcessor(context, record_stage=distill_record_stage(context))
+    processor = FeedbackProcessor(
+        context, record_stage=distill_record_stage(context), record2task=FeedbackTasks(context)
+    )
     processor.ingest(_inference("i1"))
     processor.ingest(_report("r1", ("i1",), teacher_context="Too low."))
 
@@ -189,13 +195,13 @@ def test_the_processor_skips_and_counts_a_teacher_sequence_over_the_window(token
 def test_teacher_tokens_render_the_request_cut_the_prompt_and_append_the_response(
     tokenizer: CountingTokenizer,
 ) -> None:
-    processor = _processor()
     messages = [{"role": "user", "content": QUESTION}]
     prompt_ids = tokenizer.count_ids(messages)
 
-    assert processor.teacher_tokens(messages, None, (1, 2, 3)) == [*prompt_ids, 1, 2, 3]
+    renderer = TeacherRenderer({"tokenizer_path": "/models/science"})
+    assert renderer.teacher_tokens(messages, None, (1, 2, 3)) == [*prompt_ids, 1, 2, 3]
     # A prompt window cuts the rendered prompt on the right and leaves the response whole.
-    assert processor.teacher_tokens(messages, None, (1, 2, 3), max_prompt_tokens=2) == [*prompt_ids[:2], 1, 2, 3]
+    assert renderer.teacher_tokens(messages, None, (1, 2, 3), max_prompt_tokens=2) == [*prompt_ids[:2], 1, 2, 3]
 
 
 @pytest.mark.unit

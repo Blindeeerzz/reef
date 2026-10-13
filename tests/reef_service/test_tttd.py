@@ -10,6 +10,7 @@ from reef_service._trajectories import policy_trajectory
 
 from recipes.tttd import TTTDGroupedRolloutReport, TTTDProcessor
 from recipes.tttd.objective import TttdObjective
+from recipes.tttd.processor import TTTDTasks
 from recipes.tttd.recipe import tttd_record_stage
 from reef.artifact import ArtifactRef
 from reef.core import AgentRecord, RequestType
@@ -87,7 +88,7 @@ def _processor(experiment_logger=None) -> TTTDProcessor:
         report_type=TTTDGroupedRolloutReport,
         experiment_logger=experiment_logger or _ExperimentLogger(),
     )
-    return TTTDProcessor(context, record_stage=tttd_record_stage(context))
+    return TTTDProcessor(context, record_stage=tttd_record_stage(context), record2task=TTTDTasks(context))
 
 
 @pytest.mark.unit

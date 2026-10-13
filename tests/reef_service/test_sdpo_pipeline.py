@@ -18,6 +18,7 @@ import pytest
 from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
 from recipes.sdpo import SDPOProcessor, SDPORecipe, SDPOReport
+from recipes.sdpo.processor import SDPOTasks
 from recipes.sdpo.recipe import sdpo_record_stage
 from recipes.sdpo.slime import SdpoAlgorithm, SdpoSettings
 from reef.core import AgentRecord, RequestType
@@ -64,7 +65,7 @@ def processor(**config: Any) -> SDPOProcessor:
         },
         SDPOReport,
     )
-    return SDPOProcessor(context, record_stage=sdpo_record_stage(context))
+    return SDPOProcessor(context, record_stage=sdpo_record_stage(context), record2task=SDPOTasks(context))
 
 
 def ingest(

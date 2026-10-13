@@ -18,7 +18,7 @@ from recipes.openclawrl.prm import (
     collect_hint_candidates,
     parse_hint_judgment,
 )
-from recipes.openclawrl.processor import OpenClawRLProcessor
+from recipes.openclawrl.processor import OpenClawRLProcessor, OpenClawRLTasks
 from recipes.openclawrl.turns import TurnJob
 from reef.core.trajectories import source_record_id
 from reef.train.algos import StepScheduling
@@ -471,7 +471,9 @@ def _judge_one_turn(judge, teacher):
     context = ProcessorContext("s", {"batch_size": 1})
 
     processor = OpenClawRLProcessor(
-        context, record_stage=openclawrl_record_stage(context, clients=(judge, teacher, None))
+        context,
+        record_stage=openclawrl_record_stage(context, clients=(judge, teacher, None)),
+        record2task=OpenClawRLTasks(),
     )
     job = TurnJob(
         receipt="r1",
@@ -578,7 +580,9 @@ def test_processor_attaches_topk_and_candidates() -> None:
 
     worker = FakeWorker()
     context = ProcessorContext("s", {"batch_size": 2})
-    processor = OpenClawRLProcessor(context, record_stage=openclawrl_record_stage(context, worker=worker))
+    processor = OpenClawRLProcessor(
+        context, record_stage=openclawrl_record_stage(context, worker=worker), record2task=OpenClawRLTasks()
+    )
     # Two sessions with distinct prefixes; each first turn gets a successor.
     for index, opening in enumerate(["q-alpha", "q-beta"]):
         first = [{"role": "user", "content": opening}]

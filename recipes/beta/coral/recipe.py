@@ -23,7 +23,7 @@ from typing import Any
 # The tttd training objective and loss-family reference live in the repository
 # cookbook; importing them is what registers both names this recipe binds.
 import recipes.tttd  # noqa: F401  (registration side effect)
-from recipes.beta.coral.processor import CoralProcessor, attempt_release_ids, sibling_group
+from recipes.beta.coral.processor import CoralProcessor, CoralTasks, attempt_release_ids, sibling_group
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
@@ -99,6 +99,9 @@ class CoralRecipe(WeightTrainingRecipe):
 
     def build_record_stage(self, context: ProcessorContext) -> ReportStage:
         return coral_record_stage(context)
+
+    def build_record2task(self, context: ProcessorContext) -> CoralTasks:
+        return CoralTasks(context)
 
     def __post_init__(self) -> None:
         # Validate our own field first: the group barrier is checkable

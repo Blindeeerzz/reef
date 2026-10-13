@@ -225,10 +225,10 @@ def test_request_only_batch_preserves_manual_training_contract():
 
 
 def test_report_processor_reserves_and_acknowledges_mixed_data():
-    from reef.train.processors.reported import ReportedFeedbackProcessor
+    from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks
     from reef.train.types import ProcessorContext
 
-    class MixedProcessor(ReportedFeedbackProcessor):
+    class MixedTasks(ReportTasks):
         def make_sample(self, context):
             source = context.inferences[0]
             return (
@@ -237,6 +237,7 @@ def test_report_processor_reserves_and_acknowledges_mixed_data():
                 else make_trajectory(context.inferences)
             )
 
+    class MixedProcessor(ReportedFeedbackProcessor):
         def make_batch(self, items, batch_number):
             return TrainingBatch(str(batch_number), items)
 
@@ -244,7 +245,9 @@ def test_report_processor_reserves_and_acknowledges_mixed_data():
 
     context = ProcessorContext("mixed", {"batch_size": 2})
     processor = MixedProcessor(
-        context, record_stage=ReportStage("mixed", None, ReportGrouping(), exclusive_sources=True)
+        context,
+        record_stage=ReportStage("mixed", None, ReportGrouping(), exclusive_sources=True),
+        record2task=MixedTasks(),
     )
     for index, payload in enumerate(
         ({"messages": [{"role": "user", "content": "hi"}]}, {"task_path": "tasks/example"})

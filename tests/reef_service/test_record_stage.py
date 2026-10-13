@@ -23,7 +23,8 @@ from reef.record2record import (
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.train import ProcessorContext, Trainer
 from reef.train.processors import DataProcessor
-from reef.train.processors.reported import ReportedFeedbackProcessor, SkippedReport
+from reef.train.processors.base import Record2Task, TaskResult
+from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks, SkippedReport
 from reef.train.types import TaskItem, TrainDataItem, TrainingBatch
 
 from ._threshold_processor import ThresholdProcessor
@@ -63,24 +64,31 @@ class WithholdingStage(PassThroughStage):
         self.closed = True
 
 
+class RecordingTasks(Record2Task):
+    """Keeps the record IDs of every set that it sees, and makes no tasks."""
+
+    def __init__(self) -> None:
+        self.assembled: list[str] = []
+
+    def make_tasks(self, record_set: RecordSet) -> TaskResult:
+        self.assembled.extend(record_set.record_ids())
+        return TaskResult(SetAssembly(AssemblyStatus.INGESTED))
+
+
 class RecordingProcessor(DataProcessor):
-    """Keeps the ID of every set that its stage forms. It never becomes ready."""
+    """Sends records through ``WithholdingStage`` and ``RecordingTasks``. It never becomes ready."""
 
     supported_training_modes = frozenset({"auto", "manual", "hybrid"})
 
     def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context, record_stage=WithholdingStage())
-        self.assembled: list[str] = []
+        self.recording = RecordingTasks()
+        super().__init__(context, record_stage=WithholdingStage(), record2task=self.recording)
 
     @property
     def stage(self) -> WithholdingStage:
         stage = self.record_stage
         assert isinstance(stage, WithholdingStage)
         return stage
-
-    def assemble(self, record_set: RecordSet) -> SetAssembly:
-        self.assembled.extend(record_set.record_ids())
-        return SetAssembly(AssemblyStatus.INGESTED)
 
 
 class DroppingReportStage(ReportStage):
@@ -109,12 +117,10 @@ class PairGrouping(ReportGrouping):
         return GroupDecision.READY if len(members) >= 2 else GroupDecision.INCOMPLETE
 
 
-class PairProcessor(ReportedFeedbackProcessor):
-    """Trains pairs of reports. Reports whose ID starts with ``skip`` cannot train."""
+class PairTasks(ReportTasks):
+    """Each report becomes a task named after it. Reports whose ID starts with ``skip`` cannot train."""
 
     def __init__(self) -> None:
-        stage = ReportStage("s", None, PairGrouping(), exclusive_sources=True)
-        super().__init__(ProcessorContext("s", {"batch_size": 1}), record_stage=stage)
         self.fail_assembly = False
 
     def make_sample(self, context: ReportContext) -> TrainDataItem | SkippedReport:
@@ -123,6 +129,15 @@ class PairProcessor(ReportedFeedbackProcessor):
         if context.report.agent_record_id.startswith("skip"):
             return SkippedReport("test")
         return TaskItem(Path(context.report.agent_record_id))
+
+
+class PairProcessor(ReportedFeedbackProcessor):
+    """Trains pairs of reports."""
+
+    def __init__(self) -> None:
+        stage = ReportStage("s", None, PairGrouping(), exclusive_sources=True)
+        self.pair_tasks = PairTasks()
+        super().__init__(ProcessorContext("s", {"batch_size": 1}), record_stage=stage, record2task=self.pair_tasks)
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"pairs:{batch_number}", items)
@@ -150,7 +165,7 @@ def test_a_processor_keeps_instructions_and_sends_other_records_through_its_stag
     processor.ingest(inference("i1"))
     processor.ingest(inference("drop-1"))
     processor.ingest(instruction("train-1"))
-    assert processor.assembled == ["i1"]
+    assert processor.recording.assembled == ["i1"]
     assert processor.buffered_requests() == 1
     assert processor.releasable_record_ids() == {"drop-1"}
 
@@ -209,7 +224,7 @@ def test_a_retry_in_a_taken_slot_is_terminal_and_released() -> None:
     batch = processor.build_batch()
     assert [str(item.task_path) for item in batch.items] == ["r1", "r3"]
     assert {"r2", "i2"} <= processor.releasable_record_ids()
-    assert "r2" not in processor.samples
+    assert "r2" not in processor.tasks
 
 
 @pytest.mark.unit
@@ -217,11 +232,11 @@ def test_a_failed_assembly_keeps_the_report_and_leaves_its_slot_free() -> None:
     processor = PairProcessor()
     for record_id in ("i1", "i2"):
         processor.ingest(inference(record_id))
-    processor.fail_assembly = True
+    processor.pair_tasks.fail_assembly = True
     with pytest.raises(ValueError, match="broken training data"):
         processor.ingest(slotted("r1", "i1", "a"))
     assert not processor.releasable_record_ids() & {"r1", "i1"}
-    processor.fail_assembly = False
+    processor.pair_tasks.fail_assembly = False
     processor.ingest(slotted("r1", "i1", "a"))
     processor.ingest(slotted("r2", "i2", "b"))
     assert [str(item.task_path) for item in processor.build_batch().items] == ["r1", "r2"]
@@ -244,9 +259,9 @@ def test_a_processor_that_defines_moved_report_policy_fails_at_import(hook: str)
 
 
 @pytest.mark.unit
-def test_the_default_processor_assembly_keeps_nothing() -> None:
+def test_the_default_processor_makes_no_tasks() -> None:
     processor = DataProcessor(ProcessorContext("s"))
     record_set = SingleRecordSet(set_id="i1", arrival_index=1, record=inference("i1"))
-    assert processor.assemble(record_set) == SetAssembly(AssemblyStatus.INGESTED)
+    assert processor.record2task.make_tasks(record_set) == TaskResult(SetAssembly(AssemblyStatus.INGESTED))
     processor.ingest(inference("i1"))
     assert not processor.ready() and not processor.releasable_record_ids()

@@ -657,7 +657,10 @@ batches, and exactly-once consumption; the method implements only the hooks
 below. They run synchronously on the trainer thread, so they must not block on
 network or model latency.
 
-Reported feedback supplies a ``make_sample`` hook that assembles valid reports;
+Each processor also receives a record-to-task stage (``Record2Task``) as
+``record2task``. It turns each record set into tasks (``TrainDataItem``
+values). The recipe builds it in ``build_record2task(context)``. Reported
+feedback supplies a ``make_sample`` hook that assembles valid reports;
 computed feedback supplies an asynchronous ``judge`` that derives new feedback.
 Reports must reference existing inference records in the same scenario.
 
@@ -677,17 +680,17 @@ tracking is off.
 Reported feedback
 ~~~~~~~~~~~~~~~~~
 
-``ReportedFeedbackProcessor`` exposes these recipe hooks:
+A reported-feedback recipe implements these hooks:
 
 .. list-table::
    :header-rows: 1
 
    * - Hook
      - Contract
-   * - ``make_sample(context) -> TrainDataItem | SkippedReport``
+   * - ``ReportTasks.make_sample(context) -> TrainDataItem | SkippedReport``
      - Assemble one valid report and its resolved inferences; raise on data errors. Return
        ``SkippedReport(reason)`` for a valid report that cannot train; the stage releases it.
-   * - ``make_batch(items, batch_number) -> TrainingBatch``
+   * - ``ReportedFeedbackProcessor.make_batch(items, batch_number) -> TrainingBatch``
      - Shape the flat tuple of selected training items into a batch.
 The recipe owns the report policy. Its ``build_record_stage(context)`` returns
 ``ReportStage(scenario, report_type, grouping, *, exclusive_sources=False,
@@ -720,7 +723,7 @@ A processor class that still defines ``grouping``, ``decide_group``,
 and the recipe's ``parsed_report``. ``require_score()`` returns a finite reward or
 raises if the training method cannot use the supplied feedback.
 
-``make_sample`` returns a trajectory or task directly. The processor adds the
+``make_sample`` returns a trajectory or task directly. ``ReportTasks`` adds the
 report id and ordered references to ``source_agent_record_ids``. Grouping and
 consumption state stay in the stage; recipes never receive buffered report objects.
 ``placement`` returns ``(None, None)`` by default. A group key collects reports,
@@ -744,8 +747,9 @@ Computed feedback
 Use this engine when later traffic completes an earlier record and judging it
 calls a model or another slow service. The recipe writes a ``RecordJudging``.
 Its ``build_record_stage`` returns ``JudgingStage(judging, worker, *,
-max_staleness)``, and the processor receives it as
-``ComputedFeedbackProcessor(context, *, record_stage)``.
+max_staleness)``, its ``build_record2task`` returns a ``JudgedTasks``, and the
+processor receives both as ``ComputedFeedbackProcessor(context, *,
+record_stage, record2task)``.
 
 +------------------------------------------+-----------------------------------+
 | Hook                                     | Contract                          |
@@ -759,8 +763,8 @@ max_staleness)``, and the processor receives it as
 | ``RecordJudging.expire(now)``            | optionally return receipts whose  |
 |                                          | completion window ended           |
 +------------------------------------------+-----------------------------------+
-| ``make_sample(record, judgment)``        | a ``TrajectoryItem``, or ``None`` |
-|                                          | to retire the record              |
+| ``JudgedTasks.make_sample(record,``      | a ``TrajectoryItem``, or ``None`` |
+| ``judgment)``                            | to retire the record              |
 +------------------------------------------+-----------------------------------+
 | ``make_batch(samples, batch_number)``    | the declared batch type           |
 +------------------------------------------+-----------------------------------+

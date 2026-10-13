@@ -18,7 +18,7 @@ from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Faile
 from reef.core import AgentRecord, RequestType
 from reef.core.trajectories import source_record_id
 from reef.record2record import JudgingStage, RecordJudging
-from reef.train.processors.computed import ComputedFeedbackProcessor
+from reef.train.processors.computed import ComputedFeedbackProcessor, JudgedTasks
 from reef.train.types import ProcessorContext, TrainingBatch, TrajectoryItem
 
 pytestmark = pytest.mark.unit
@@ -72,13 +72,8 @@ class _ToyJudging(RecordJudging):
         return _Judgment(job.receipt)
 
 
-class _ToyProcessor(ComputedFeedbackProcessor):
-    """Trains the judged records of ``_ToyJudging``. Samples are one-token stubs."""
-
-    def __init__(self, context: ProcessorContext, *, worker: Any) -> None:
-        super().__init__(
-            context, record_stage=JudgingStage(_ToyJudging(), worker, max_staleness=context.max_staleness)
-        )
+class _ToyTasks(JudgedTasks):
+    """One-token stub samples; a judgment that is not good cannot train."""
 
     def make_sample(self, record: AgentRecord, judgment: _Judgment) -> TrajectoryItem | None:
         if not judgment.good:
@@ -90,6 +85,17 @@ class _ToyProcessor(ComputedFeedbackProcessor):
             rollout_log_probs=(-0.1,),
             reward=1.0,
             runtime_load_id=record.payload.get("version", "v1"),
+        )
+
+
+class _ToyProcessor(ComputedFeedbackProcessor):
+    """Trains the judged records of ``_ToyJudging``. Samples are one-token stubs."""
+
+    def __init__(self, context: ProcessorContext, *, worker: Any) -> None:
+        super().__init__(
+            context,
+            record_stage=JudgingStage(_ToyJudging(), worker, max_staleness=context.max_staleness),
+            record2task=_ToyTasks(),
         )
 
     def make_batch(self, samples: tuple[TrajectoryItem, ...], batch_number: int) -> TrainingBatch:

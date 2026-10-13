@@ -18,7 +18,7 @@ import pytest
 from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
 from recipes.sdft import SdftObjective, SDFTProcessor, SDFTRecipe
-from recipes.sdft.processor import DEFAULT_CONTEXT_TEMPLATE
+from recipes.sdft.processor import DEFAULT_CONTEXT_TEMPLATE, SDFTTasks
 from recipes.sdft.slime import SdftSettings
 from reef.artifact.artifact import LiveWeightArtifactRef
 from reef.core import AgentRecord, RequestType
@@ -116,7 +116,7 @@ def _processor(**config: Any) -> SDFTProcessor:
     context = ProcessorContext(
         "science", {"batch_size": 1, "tokenizer_path": TOKENIZER_PATH, **config}, TeacherContextReport
     )
-    return SDFTProcessor(context, record_stage=distill_record_stage(context))
+    return SDFTProcessor(context, record_stage=distill_record_stage(context), record2task=SDFTTasks(context))
 
 
 # --- the teacher's request --------------------------------------------------
@@ -130,7 +130,7 @@ def test_the_demonstration_block_is_added_to_the_final_user_message(tokenizer: C
     ]
     tools = [{"type": "function", "function": {"name": "lookup"}}]
 
-    messages, teacher_tools = _processor().teacher_request(request, tools, "", "The answer.")
+    messages, teacher_tools = _processor().record2task.teacher_request(request, tools, "", "The answer.")
 
     assert messages == [
         {"role": "system", "content": "Be brief."},
@@ -150,7 +150,7 @@ def test_the_block_becomes_a_user_message_after_a_tool_result(tokenizer: Countin
     ]
     processor = _processor(context_template="Demonstration: {context}")
 
-    messages, teacher_tools = processor.teacher_request(request, None, "", "call bash with cat a.txt")
+    messages, teacher_tools = processor.record2task.teacher_request(request, None, "", "call bash with cat a.txt")
 
     assert messages[-1] == {"role": "user", "content": "Demonstration: call bash with cat a.txt"}
     assert messages[:3] == [

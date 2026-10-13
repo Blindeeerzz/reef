@@ -10,7 +10,8 @@ from typing import Any
 
 from reef.core.trajectories import trajectory_reward
 from reef.record2record import ReportContext, ReportStage
-from reef.train.processors.reported import ReportedFeedbackProcessor, SampleAssembly
+from reef.train.processors.base import Record2Task
+from reef.train.processors.reported import ReportedFeedbackProcessor, ReportTasks, SampleAssembly
 from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,33 @@ def tttd_grid(config: Mapping[str, Any]) -> tuple[int, int]:
     if rollouts_per_group < 2:
         raise ValueError("rollouts_per_group must be at least two")
     return groups_per_step, rollouts_per_group
+
+
+class TTTDTasks(ReportTasks):
+    """One rollout as one task, checked against the scenario's step grid, with its grid coordinates."""
+
+    def __init__(self, context: ProcessorContext) -> None:
+        self.groups_per_step, self.rollouts_per_group = tttd_grid(context.config)
+        self.assembly = SampleAssembly.from_config(context)
+
+    def make_sample(self, context: ReportContext) -> TrajectoryItem:
+        parsed: Any = context.parsed_report
+        if parsed is None:
+            raise ValueError("TTTD requires the recipe's report schema")
+        if parsed.groups_per_step != self.groups_per_step or parsed.rollouts_per_group != self.rollouts_per_group:
+            raise ValueError(
+                f"report announces a {parsed.groups_per_step}x{parsed.rollouts_per_group} grid; "
+                f"this scenario trains on {self.groups_per_step}x{self.rollouts_per_group}"
+            )
+        sample = self.assembly.build(context, context.require_score())
+        return sample.with_metadata(
+            tttd={
+                "step": parsed.step,
+                "group": parsed.group,
+                "rollout": parsed.rollout,
+                "release_id": inference_release_id(context),
+            }
+        )
 
 
 class TTTDProcessor(ReportedFeedbackProcessor):
@@ -55,29 +83,17 @@ class TTTDProcessor(ReportedFeedbackProcessor):
 
     output_schema = TrainingBatch
 
-    def __init__(self, context: ProcessorContext, *, record_stage: ReportStage | None = None) -> None:
+    def __init__(
+        self,
+        context: ProcessorContext,
+        *,
+        record_stage: ReportStage | None = None,
+        record2task: Record2Task | None = None,
+    ) -> None:
         config = dict(context.config)
         self.groups_per_step, self.rollouts_per_group = tttd_grid(config)
-        self._assembly = SampleAssembly.from_config(context)
-        super().__init__(context.with_config({**config, "batch_size": 1}), record_stage=record_stage)
-
-    def make_sample(self, context: ReportContext) -> TrajectoryItem:
-        parsed: Any = context.parsed_report
-        if parsed is None:
-            raise ValueError("TTTDProcessor requires the recipe's report schema")
-        if parsed.groups_per_step != self.groups_per_step or parsed.rollouts_per_group != self.rollouts_per_group:
-            raise ValueError(
-                f"report announces a {parsed.groups_per_step}x{parsed.rollouts_per_group} grid; "
-                f"this scenario trains on {self.groups_per_step}x{self.rollouts_per_group}"
-            )
-        sample = self._assembly.build(context, context.require_score())
-        return sample.with_metadata(
-            tttd={
-                "step": parsed.step,
-                "group": parsed.group,
-                "rollout": parsed.rollout,
-                "release_id": inference_release_id(context),
-            }
+        super().__init__(
+            context.with_config({**config, "batch_size": 1}), record_stage=record_stage, record2task=record2task
         )
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:

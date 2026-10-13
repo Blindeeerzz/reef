@@ -31,7 +31,7 @@ from reef.surface.weights import create_weight_surface
 from reef.train.algos import StepScheduling
 from reef.train.algos.registry import resolve_objective
 from reef.train.evaluation import CandidateEvaluationConfig, CandidateEvaluationConfigError, build_candidate_evaluation
-from reef.train.processors.base import DataProcessor
+from reef.train.processors.base import DataProcessor, Record2Task
 from reef.train.trainer import ComponentTrainer, Trainer
 from reef.train.types import ProcessorContext
 
@@ -527,8 +527,16 @@ class WeightTrainingRecipe(Recipe):
         """
         return None
 
+    def build_record2task(self, context: ProcessorContext) -> Record2Task | None:
+        """Build the record-to-task stage of one scenario: how this method turns a record set into tasks.
+
+        ``context`` carries :meth:`processor_config`. Return ``None`` to use
+        the processor's default, which makes no tasks for most processors.
+        """
+        return None
+
     def build_processor(self, context: ProcessorContext) -> DataProcessor:
-        """Build the processor of one scenario with :meth:`processor_config` and :meth:`build_record_stage`.
+        """Build the processor of one scenario with its config, record stage, and record-to-task stage.
 
         Override this method to give the processor more than its config, for
         example a plugin built for the scenario.
@@ -537,7 +545,11 @@ class WeightTrainingRecipe(Recipe):
         if processor_class is None:
             raise TypeError(f"{type(self).__name__} declares no processor")
         configured = context.with_config(self.processor_config())
-        return processor_class(configured, record_stage=self.build_record_stage(configured))
+        return processor_class(
+            configured,
+            record_stage=self.build_record_stage(configured),
+            record2task=self.build_record2task(configured),
+        )
 
     def build(
         self,

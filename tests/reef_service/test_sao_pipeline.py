@@ -16,7 +16,8 @@ from reef_service._trajectories import policy_trajectory
 from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
 from recipes.sao import SAORecipe
-from recipes.sao.processor import SAOProcessor
+from recipes.sao.processor import SAOProcessor, SAOTasks
+from recipes.sao.recipe import sao_record_stage
 from reef.artifact import InMemoryRepositoryBackend
 from reef.artifact.artifact import LiveWeightArtifactRef
 from reef.core import AgentRecord, RequestType
@@ -33,6 +34,10 @@ from reef.train.backend import CandidateBackend, PreparedStep
 from reef.train.slime_backend.data_builder import to_slime_rollout_data
 from reef.train.slime_backend.reef_adapters.preparation import prepare_slime_step
 from reef.train.types import TrainingBatch
+
+
+def sao_processor(context: ProcessorContext) -> SAOProcessor:
+    return SAOProcessor(context, record_stage=sao_record_stage(context), record2task=SAOTasks(context))
 
 
 class _StateOnlySaoBackend(CandidateBackend):
@@ -160,7 +165,7 @@ def test_sao_recipe_rejects_backend_objective_config() -> None:
 
 @pytest.mark.unit
 def test_processor_emits_one_independently_scheduled_sample_per_rollout() -> None:
-    processor = SAOProcessor(ProcessorContext("math", {"batch_size": 1}))
+    processor = sao_processor(ProcessorContext("math", {"batch_size": 1}))
     processor.ingest(_sao_inference("i1"))
     processor.ingest(_sao_report("r1", "i1", 0.75))
 
@@ -198,7 +203,7 @@ def test_processor_reads_runtime_load_id_from_the_payload_when_ref_is_not_live()
         agent_record_id="i1",
         artifact_ref=None,
     )
-    processor = SAOProcessor(ProcessorContext("math", {"batch_size": 1}))
+    processor = sao_processor(ProcessorContext("math", {"batch_size": 1}))
     processor.ingest(inference)
     processor.ingest(_sao_report("r1", "i1", 0.5))
 
@@ -209,7 +214,7 @@ def test_processor_reads_runtime_load_id_from_the_payload_when_ref_is_not_live()
 
 @pytest.mark.unit
 def test_processor_preserves_explicit_observation_boundaries() -> None:
-    processor = SAOProcessor(ProcessorContext("math", {"batch_size": 1}))
+    processor = sao_processor(ProcessorContext("math", {"batch_size": 1}))
     # Response tokens: action, observation, action. loss_mask trains only the
     # action tokens.
     processor.ingest(
@@ -234,7 +239,7 @@ def test_backend_rejects_rollout_that_trains_a_non_action_token() -> None:
     # loss_mask trains index 1, but the action mask marks it an observation.
     # Skip-observation GAE would give it zero advantage: reject the rollout
     # rather than silently waste gradient on it.
-    processor = SAOProcessor(ProcessorContext("math", {"batch_size": 1}))
+    processor = sao_processor(ProcessorContext("math", {"batch_size": 1}))
     processor.ingest(
         _sao_inference(
             "i1",
@@ -254,7 +259,7 @@ def test_backend_rejects_rollout_that_trains_a_non_action_token() -> None:
 
 @pytest.mark.unit
 def test_backend_rejects_rollout_with_logprob_length_mismatch() -> None:
-    processor = SAOProcessor(ProcessorContext("math", {"batch_size": 1}))
+    processor = sao_processor(ProcessorContext("math", {"batch_size": 1}))
     processor.ingest(_sao_inference("i1", loss_mask=(1, 1, 1), rollout_log_probs=(-0.1, -0.2)))
     processor.ingest(_sao_report("r1", "i1", 1.0))
 
@@ -267,7 +272,7 @@ def test_backend_rejects_rollout_with_logprob_length_mismatch() -> None:
 
 @pytest.mark.unit
 def test_processor_rejects_non_finite_report_scores() -> None:
-    processor = SAOProcessor(ProcessorContext("math", {"batch_size": 1}))
+    processor = sao_processor(ProcessorContext("math", {"batch_size": 1}))
     processor.ingest(_sao_inference("i1"))
     with pytest.raises(ReportValidationError, match="finite"):
         processor.ingest(_sao_report("r1", "i1", float("nan")))
@@ -277,7 +282,7 @@ def test_processor_rejects_non_finite_report_scores() -> None:
 
 @pytest.mark.unit
 def test_malformed_training_data_is_preserved_until_backend_validation() -> None:
-    processor = SAOProcessor(ProcessorContext("math", {"batch_size": 1}))
+    processor = sao_processor(ProcessorContext("math", {"batch_size": 1}))
     processor.ingest(_sao_inference("i1", loss_mask=(0, 0, 0)))
     processor.ingest(_sao_report("r1", "i1", 1.0))
     batch = processor.build_batch()
@@ -292,7 +297,7 @@ def test_malformed_training_data_is_preserved_until_backend_validation() -> None
 def test_invalid_eligibility_report_does_not_block_valid_feedback(dead_report_first: bool) -> None:
     # Invalid eligibility flags never claim or consume the source record;
     # a valid report is processed independently of arrival order.
-    processor = SAOProcessor(ProcessorContext("math", {"batch_size": 1}))
+    processor = sao_processor(ProcessorContext("math", {"batch_size": 1}))
     processor.ingest(_sao_inference("i1"))
     dead = AgentRecord.create(
         scenario="math",
@@ -629,7 +634,7 @@ def test_sao_train_step_recovers_across_a_restart(tmp_path) -> None:
         first = Trainer.build(
             "math",
             first_store,
-            processor_factory=lambda context: SAOProcessor(context.with_config({"batch_size": 1})),
+            processor_factory=lambda context: sao_processor(context.with_config({"batch_size": 1})),
             candidate_backend=_StateOnlySaoBackend(),
         )
         batch = first.reserve_training_batch()
@@ -644,7 +649,7 @@ def test_sao_train_step_recovers_across_a_restart(tmp_path) -> None:
         second = Trainer.build(
             "math",
             second_store,
-            processor_factory=lambda context: SAOProcessor(context.with_config({"batch_size": 1})),
+            processor_factory=lambda context: sao_processor(context.with_config({"batch_size": 1})),
             candidate_backend=_StateOnlySaoBackend(),
             algorithm_state=prepared.algorithm_state,
         )
