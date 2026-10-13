@@ -54,6 +54,14 @@ class _ArtifactHeadSync:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class CommitHeads:
+    """Heads observed before publication, retained for compare-and-swap installation."""
+
+    serving: ArtifactRef
+    checkpoint: ArtifactRef
+
+
 class SettledTrainingResultError(ReefError):
     """A trainer's result is on record already: another trainer's commit settled its durable record first.
 
@@ -379,9 +387,7 @@ class ScenarioCommitter:
             prepared = self._trainer.prepare_commit(None)
             recorded = self._recorded_operation_retry(prepared, operation, release_id, next_step)
             if recorded is not None:
-                recorded = self._store.commit_step(expected_step=self._step, commit=recorded)
-                self._reconcile_recorded_artifact(recorded)
-                self._settle_trainer_commit(prepared, recorded, next_step, self._trainer)
+                recorded = self.finish_recorded_retry(recorded, prepared, self._trainer)
                 if self.recorded_rollback_restored_weights(recorded):
                     self._resume_restored_weights()
                 return recorded.artifact_ref
@@ -470,15 +476,11 @@ class ScenarioCommitter:
                     rollback_target_release_id=release_id,
                     components=self.recorded_components(source),
                 )
-                if durable:
-                    self._install_committed_checkpoint(
-                        published_ref, expected=current_ref, expected_checkpoint=checkpoint
-                    )
             except Exception:
                 if staged is not None:
                     artifacts.discard(staged)
                 raise
-            self._settle_trainer_commit(prepared, record, next_step, self._trainer)
+            self.finish_committed_step(prepared, record, self._trainer, heads=CommitHeads(current_ref, checkpoint))
             if restore_weights:
                 # A rollback that left the weights alone paused nothing; resuming here would open admission
                 # under a dispatched job that still holds it and call its unpublished version served.
@@ -645,9 +647,7 @@ class ScenarioCommitter:
             prepared = trainer.prepare_commit(result)
             recorded = self._recorded_training_retry(prepared, result, next_step, component)
             if recorded is not None:
-                recorded = self._store.commit_step(expected_step=self._step, commit=recorded)
-                self._reconcile_recorded_artifact(recorded)
-                self._settle_trainer_commit(prepared, recorded, next_step, trainer)
+                self.finish_recorded_retry(recorded, prepared, trainer)
                 return result.state
 
             if self._store.durable:
@@ -711,9 +711,7 @@ class ScenarioCommitter:
             checkpoint=False,
             prepared=prepared,
         )
-        if self._store.durable:
-            artifacts.advance(live_ref, expected=head)
-        self._settle_trainer_commit(prepared, record, next_step, trainer)
+        self.finish_committed_step(prepared, record, trainer, heads=CommitHeads(head, artifacts.checkpoint))
         return result.state
 
     def _commit_without_artifact(
@@ -728,7 +726,9 @@ class ScenarioCommitter:
             prepared=prepared,
             component=component,
         )
-        self._settle_trainer_commit(prepared, record, next_step, trainer)
+        self.finish_committed_step(
+            prepared, record, trainer, heads=CommitHeads(self._artifacts.current, self._artifacts.checkpoint)
+        )
         return result.state
 
     def _commit_saved_artifact(
@@ -806,11 +806,6 @@ class ScenarioCommitter:
                     component=component,
                     components=self.recorded_components(local_artifact),
                 )
-            if not pending:
-                if checkpointed and durable:
-                    self._install_committed_checkpoint(published_ref, expected=head, expected_checkpoint=checkpoint)
-                elif not checkpointed and durable:
-                    artifacts.advance(local_artifact.ref, expected=head)
         except Exception:
             # A lost append acknowledgment can leave a committed local release.
             # Its bytes must survive so retry can settle that exact record.
@@ -818,7 +813,7 @@ class ScenarioCommitter:
                 artifacts.discard(local_artifact)
             raise
 
-        self._settle_trainer_commit(prepared, record, next_step, trainer)
+        self.finish_committed_step(prepared, record, trainer, heads=CommitHeads(head, checkpoint))
         return result.state
 
     def _install_committed_checkpoint(
@@ -891,17 +886,45 @@ class ScenarioCommitter:
         previous = Artifact(self._artifacts.current, self._artifacts.repository)
         self._binding.surface.activate(artifact, self._binding.runtime, source=source, previous=previous)
 
-    def _settle_trainer_commit(
-        self, prepared: PreparedCommit, record: CommitRecord, next_step: int, trainer: Trainer
+    def finish_committed_step(
+        self, prepared: PreparedCommit, record: CommitRecord, trainer: Trainer, *, heads: CommitHeads
     ) -> None:
-        """Finish recoverable effects before exposing the prepared state."""
+        """Complete a recorded step before exposing trainer state; callers hold both commit locks.
+
+        Normal commits and retries install the same recorded release. A pending
+        release moves neither head. Repository pointer failures remain visible
+        through ``commit_status`` without repeating an already committed step.
+        Backend settlement and trainer bookkeeping must finish before the scenario
+        step advances, so a failed completion can retry the same record.
+        """
+        if not record.pending:
+            if self._artifacts.current == record.artifact_ref:
+                if record.checkpoint and self._store.durable:
+                    self._refresh_committed_checkpoint()
+            elif record.checkpoint:
+                self._install_committed_checkpoint(
+                    record.artifact_ref, expected=heads.serving, expected_checkpoint=heads.checkpoint
+                )
+            else:
+                self._artifacts.advance(record.artifact_ref, expected=heads.serving)
         trainer.commit_applied(prepared.algorithm_state)
         trainer.commit(prepared)
         if not self._store.durable:
             self._artifact_head_sync = _ArtifactHeadSync("synchronized", self._artifacts.checkpoint.release_id)
         if record.operation == "training":
             self._latest_training_record = record
-        self.advance_to(next_step)
+        self.advance_to(record.step)
+
+    def finish_recorded_retry(self, record: CommitRecord, prepared: PreparedCommit, trainer: Trainer) -> CommitRecord:
+        """Retry storage settlement, then complete the exact release already on record."""
+        record = self._store.commit_step(expected_step=self._step, commit=record)
+        records = self._store.history()
+        previous = next(
+            (prior.artifact_ref for prior in reversed(records[:-1]) if not prior.pending),
+            self._releases.creation_artifact,
+        )
+        self.finish_committed_step(prepared, record, trainer, heads=CommitHeads(previous, self._artifacts.checkpoint))
+        return record
 
     def settle_sibling_record(self, component: str | None) -> None:
         """Settle another trainer's commit that reached the log but not memory, before ``component`` commits.
@@ -925,9 +948,7 @@ class ScenarioCommitter:
             prepared = bound.trainer.pending_prepared_commit
             if prepared is None or not self._record_matches_prepared(record, prepared):
                 return
-            record = self._store.commit_step(expected_step=self._step, commit=record)
-            self._reconcile_recorded_artifact(record)
-            self._settle_trainer_commit(prepared, record, self._step + 1, bound.trainer)
+            record = self.finish_recorded_retry(record, prepared, bound.trainer)
             self.settled_sibling = record
             return
 
@@ -981,26 +1002,6 @@ class ScenarioCommitter:
             and record.metrics == prepared.metrics
             and record.training_job_id == prepared.training_job_id
         )
-
-    def _reconcile_recorded_artifact(self, record: CommitRecord) -> None:
-        current = self._artifacts.current
-        if record.pending:
-            return
-        if current == record.artifact_ref:
-            if record.checkpoint:
-                self._refresh_committed_checkpoint()
-            return
-        records = self._store.history()
-        previous = next(
-            (prior.artifact_ref for prior in reversed(records[:-1]) if not prior.pending),
-            self._releases.creation_artifact,
-        )
-        if record.checkpoint:
-            self._install_committed_checkpoint(
-                record.artifact_ref, expected=previous, expected_checkpoint=self._artifacts.checkpoint
-            )
-        else:
-            self._artifacts.advance(record.artifact_ref, expected=previous)
 
     def _append_commit_record(
         self,
