@@ -291,7 +291,9 @@ class Campaign:
             if json.loads(metric_path.read_text()).get("reused_from") != str(self.args.baseline_eval):
                 raise ValueError("eval-0000 was not reused from the configured --baseline-eval")
             return
-        rows = [json.loads(line) for line in self.args.baseline_eval.read_text().splitlines() if line.strip()]
+        # Split on newlines only: a response may contain Unicode line separators that splitlines() would honor.
+        with self.args.baseline_eval.open(encoding="utf-8") as handle:
+            rows = [json.loads(line) for line in handle if line.strip()]
         expected = {(q.id, self.args.seed + repeat) for q in questions for repeat in range(self.args.eval_repeats)}
         if {(row["question_id"], row["seed"]) for row in rows} != expected or len(rows) != len(expected):
             raise ValueError("--baseline-eval does not cover exactly this campaign's evaluation questions and seeds")

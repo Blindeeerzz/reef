@@ -420,6 +420,8 @@ def test_baseline_eval_reuses_an_earlier_evaluation_without_calling_the_service(
             "correct": seed == 0,
             "finish_reason": "stop",
             "usage": {"completion_tokens": 5},
+            # A real response can hold a Unicode line separator; only newlines end a record.
+            "response": "step one\u2028step two \\boxed{42}",
         }
         for seed in range(2)
     ]
