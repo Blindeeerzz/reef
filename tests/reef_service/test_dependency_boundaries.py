@@ -103,6 +103,13 @@ def test_core_package_does_not_depend_on_artifacts() -> None:
         assert _imports_of(imported, "reef.artifact") == [], name
 
 
+def test_harbor_task_values_and_validation_do_not_depend_on_harness() -> None:
+    for module_name in ("reef.core.tasks.harbor", "reef.record2task.generator.harbor"):
+        module = importlib.import_module(module_name)
+        imported = _imported_modules(ast.parse(inspect.getsource(module)), package=module_name.rpartition(".")[0])
+        assert _imports_of(imported, "reef.harness") == [], module_name
+
+
 def test_release_id_chain_does_not_depend_on_scenario_or_trainer() -> None:
     module = importlib.import_module("reef.artifact.release_chain")
     tree = ast.parse(inspect.getsource(module))
