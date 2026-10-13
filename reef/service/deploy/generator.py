@@ -4,8 +4,9 @@ A deployment with a ``generator`` section gets a ``generator`` service before th
 depends on it, so ``${endpoints.generator}`` is published by the time the HTTP child and its recipe read
 their configuration. The generator reads the same resolved deployment through ``REEF_CONFIG``; it needs
 no arguments. Its executor is the ``generator`` role of ``execution:``, so a deployment can place it on a
-host with Docker and the ``harbor`` command line while the rest stays local. It runs under the
-same interpreter as the other children (``REEF_PYTHON``, otherwise the launcher's).
+host with the ``harbor`` command line and Docker (or E2B access, with ``environment: e2b``) while the rest
+stays local. It runs under the same interpreter as the other children (``REEF_PYTHON``, otherwise the
+launcher's).
 """
 
 from __future__ import annotations
@@ -51,6 +52,9 @@ class GeneratorSettings:
     harbor: str | None = config_option(
         None, help="The harbor command line for the oracle check; found on PATH by default."
     )
+    environment: str = config_option(
+        "docker", help="Where Harbor runs the checks and plays: docker, or e2b (E2B_API_KEY and the e2b extra)."
+    )
     concurrency: int = config_option(DEFAULT_CONCURRENCY, help="Episodes in flight per play request.")
     designer_url: str | None = config_option(
         None, help="A Reef service the designer calls go to instead of this deployment's."
@@ -87,6 +91,8 @@ class GeneratorSettings:
             raise ValueError("generator.port must be between 1 and 65535")
         if self.concurrency < 1:
             raise ValueError("generator.concurrency must be at least 1")
+        if self.environment not in ("docker", "e2b"):
+            raise ValueError("generator.environment must be docker or e2b")
         if self.designer_timeout_s <= 0:
             raise ValueError("generator.designer-timeout-s must be positive")
         if self.designer_api not in (None, "openai", "responses"):

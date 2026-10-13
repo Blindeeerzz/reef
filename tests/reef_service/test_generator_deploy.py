@@ -158,3 +158,17 @@ def test_the_designer_asks_in_the_api_the_section_names_or_the_upstreams(
     settings = service_config_from_mapping(resolved)
     built = generator_main.generator_service(settings, generator_settings(settings.generator_settings))
     assert built.designer.api == designer_api
+
+
+def test_an_e2b_generator_checks_and_plays_one_prepared_copy_under_the_work_dir(tmp_path: Path) -> None:
+    deployment = {
+        "reef": {"host": "127.0.0.1", "port": 8900},
+        "inference": {"upstream-url": "http://localhost:8000", "upstream-model": "m"},
+        "generator": {"tasks-root": str(tmp_path / "tasks"), "environment": "e2b"},
+    }
+    resolved, _ = resolve_deployment_config(deployment, None, tmp_path / "serve.yaml")
+    settings = service_config_from_mapping(resolved)
+    built = generator_main.generator_service(settings, generator_settings(settings.generator_settings))
+    environment = built.checks.environment
+    assert built.plays.environment is environment and environment.root == tmp_path / "tasks" / ".play" / "e2b"
+    assert "docker" not in [probe.name for probe in built.probes]

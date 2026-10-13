@@ -14,8 +14,9 @@ them run here, in a process ``reef serve`` starts beside the HTTP service (see `
 - ``POST /plays``: an agent plays a written task through the task player, episodes reported to Reef (a job).
 - ``POST /manifests``: the split manifest of one generation's tasks under the tasks root.
 - ``GET /jobs/{id}``: a job's state and result.
-- ``GET /healthz``: ok once reef-eval imports, the harbor command line resolves and Docker answers; until
-  then 503 naming what is missing, so ``reef serve`` waits on a generator that cannot check or play.
+- ``GET /healthz``: ok once reef-eval imports, the harbor command line resolves and Docker answers (for
+  E2B: the e2b package imports and ``E2B_API_KEY`` is set); until then 503 naming what is missing, so
+  ``reef serve`` waits on a generator that cannot check or play.
 
 Jobs run one after another on a private thread; closing the service stops the harbor runs a job has in
 flight, so ``reef serve`` leaves no container behind. Everything here is stateless beyond the tasks
@@ -29,6 +30,7 @@ import hashlib
 import importlib.util
 import json
 import logging
+import os
 import queue
 import shutil
 import subprocess
@@ -52,7 +54,7 @@ from reef.core.tasks import (
     write_split_manifest,
 )
 from reef.core.tasks.harbor import TASK_NAME_PATTERN
-from reef.harness.client.tasks import TaskPlay, TaskPlayer
+from reef.harness.client.tasks import EpisodeRow, ReefEvalLab, TaskLab, TaskPlay, TaskPlayer
 from reef.record2task.generator.designer import (
     Designer,
     DesignerError,
@@ -61,10 +63,13 @@ from reef.record2task.generator.designer import (
     designer_messages,
     parse_harbor_reply,
 )
+from reef.record2task.generator.e2b_environment import E2BTaskEnvironment
 from reef.record2task.generator.harbor import (
+    DockerTaskEnvironment,
     GeneratedHarborTask,
     HarborRuns,
     OracleResult,
+    TaskEnvironment,
     content_hash,
     harbor_task,
     oracle_check,
@@ -153,13 +158,34 @@ class DockerProbe(ReadinessProbe):
         return ""
 
 
-def readiness_probes(*, harbor: str | None = None) -> tuple[ReadinessProbe, ...]:
-    """What playing and checking a task takes: reef-eval, the harbor command line and Docker."""
-    return (
+class EnvironmentVariableProbe(ReadinessProbe):
+    """A variable is set in the generator's environment, which the harbor runs it starts inherit."""
+
+    def __init__(self, variable: str, *, hint: str) -> None:
+        self.name = variable
+        self.hint = hint
+
+    def missing(self) -> str:
+        if os.environ.get(self.name):
+            return ""
+        return f"{self.name} is not set in the generator's environment; {self.hint}"
+
+
+def readiness_probes(
+    *, harbor: str | None = None, environment: str = DockerTaskEnvironment.name
+) -> tuple[ReadinessProbe, ...]:
+    """What playing and checking a task takes: reef-eval, the harbor command line, and Docker or E2B access."""
+    shared_probes: tuple[ReadinessProbe, ...] = (
         ModuleProbe("reef_eval", hint="a dependency of reef-infra; reinstall reef-infra"),
         HarborProbe(harbor=harbor),
-        DockerProbe(),
     )
+    if environment == E2BTaskEnvironment.name:
+        return (
+            *shared_probes,
+            ModuleProbe("e2b", hint="Harbor's E2B environment needs it; install reef-infra[e2b]"),
+            EnvironmentVariableProbe("E2B_API_KEY", hint="Harbor's E2B environment authenticates with it"),
+        )
+    return (*shared_probes, DockerProbe())
 
 
 # reef serve kills the generator 30 s after its term; the harbor grace and the join must both fit in that window.
@@ -179,12 +205,15 @@ class TaskChecks(ABC):
 class HarborChecks(TaskChecks):
     """The checks through the harbor command line; ``runs`` shared with the job runner so closing it stops a check."""
 
-    def __init__(self, *, harbor: str | None = None, runs: HarborRuns | None = None) -> None:
+    def __init__(
+        self, *, harbor: str | None = None, runs: HarborRuns | None = None, environment: TaskEnvironment | None = None
+    ) -> None:
         self.harbor = harbor
         self.runs = runs
+        self.environment = environment
 
     def oracle(self, task_path: Path) -> OracleResult:
-        return oracle_check(task_path, harbor=self.harbor, runs=self.runs)
+        return oracle_check(task_path, harbor=self.harbor, runs=self.runs, environment=self.environment)
 
 
 class TaskPlays(ABC):
@@ -205,6 +234,25 @@ class TaskPlays(ABC):
     ) -> tuple[TaskPlay, ...]: ...
 
 
+class PreparedTaskLab(TaskLab):
+    """Plays the task environment's copy of a task in its place; the player still names and reports the task."""
+
+    def __init__(self, lab: TaskLab, run_path: Path) -> None:
+        self.lab = lab
+        self.run_path = run_path
+
+    async def run(
+        self,
+        task_path: Path,
+        agent: Mapping[str, object],
+        *,
+        key: str,
+        tags: Mapping[str, str],
+        overrides: Mapping[str, object],
+    ) -> EpisodeRow:
+        return await self.lab.run(self.run_path, agent, key=key, tags=tags, overrides=overrides)
+
+
 class ReefTaskPlays(TaskPlays):
     """A task player per call, its episodes tagged with the arm."""
 
@@ -217,6 +265,8 @@ class ReefTaskPlays(TaskPlays):
         agent: Mapping[str, object] | None = None,
         agent_host: str | None = None,
         concurrency: int = 2,
+        environment: TaskEnvironment | None = None,
+        lab: TaskLab | None = None,
     ) -> None:
         self.reef_url = reef_url
         self.work_dir = Path(work_dir)
@@ -224,6 +274,8 @@ class ReefTaskPlays(TaskPlays):
         self.agent = agent
         self.agent_host = agent_host
         self.concurrency = concurrency
+        self.environment = environment if environment is not None else DockerTaskEnvironment()
+        self.lab = lab if lab is not None else ReefEvalLab(self.work_dir / "lab")
 
     def play(
         self,
@@ -247,11 +299,13 @@ class ReefTaskPlays(TaskPlays):
             token=self.token,
             agent=self.agent,
             agent_host=self.agent_host,
+            environment=self.environment.name,
             labels={**tags, "arm": arm},
             extra_instruction_paths=extra_instruction_paths,
             is_reporting=is_reporting,
             # The task's verifier finished for its oracle, so a verifier still running at its timeout is the agent's.
             verifier_timeout_reward=0.0,
+            lab=PreparedTaskLab(self.lab, self.environment.prepare(task_path)),
         )
         return player.play_concurrently([task_path] * plays, concurrency=min(self.concurrency, plays))
 

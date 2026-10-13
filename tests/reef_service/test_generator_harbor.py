@@ -82,6 +82,7 @@ if script.get("sleep_s"):
     time.sleep(script["sleep_s"])
 trial = jobs / "job" / "trial"
 trial.mkdir(parents=True)
+(jobs / "arguments.json").write_text(json.dumps(arguments))
 reward = script["rewards"].get(agent)
 reward_map = script.get("reward_maps", {{}}).get(agent)
 exception = script.get("exceptions", {{}}).get(agent)

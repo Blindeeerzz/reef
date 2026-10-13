@@ -11,7 +11,8 @@ from pathlib import Path
 from aiohttp import web
 
 from reef.record2task.generator.designer import ReefDesigner
-from reef.record2task.generator.harbor import HarborRuns
+from reef.record2task.generator.e2b_environment import E2BTaskEnvironment
+from reef.record2task.generator.harbor import DockerTaskEnvironment, HarborRuns, TaskEnvironment
 from reef.record2task.generator.service import (
     GeneratorService,
     HarborChecks,
@@ -45,6 +46,12 @@ def generator_service(settings: ServiceConfig, generator: GeneratorSettings) -> 
         timeout_s=generator.designer_timeout_s,
         api=designer_api,
     )
+    # One environment for the checks and the plays: with E2B they run the same prepared copy of a task.
+    environment: TaskEnvironment = (
+        E2BTaskEnvironment(work_dir / "e2b")
+        if generator.environment == E2BTaskEnvironment.name
+        else DockerTaskEnvironment()
+    )
     plays = ReefTaskPlays(
         reef_url=reef_url,
         work_dir=work_dir,
@@ -52,16 +59,17 @@ def generator_service(settings: ServiceConfig, generator: GeneratorSettings) -> 
         agent=generator.agent,
         agent_host=generator.agent_host,
         concurrency=generator.concurrency,
+        environment=environment,
     )
     runs = HarborRuns()
     return GeneratorService(
         tasks_root=tasks_root,
         designer=designer,
-        checks=HarborChecks(harbor=generator.harbor, runs=runs),
+        checks=HarborChecks(harbor=generator.harbor, runs=runs, environment=environment),
         plays=plays,
         default_model=settings.upstream_model or settings.model_path,
         designer_model=generator.designer_model,
-        probes=readiness_probes(harbor=generator.harbor),
+        probes=readiness_probes(harbor=generator.harbor, environment=generator.environment),
         jobs=JobRunner(runs),
     )
 

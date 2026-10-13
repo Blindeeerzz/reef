@@ -14,6 +14,8 @@ and the recipe and the generator drive it over HTTP:
 - ``terminus``: Terminus 2 for the generator's plays, whose episode is still verified when the agent fills its
   context or a send-keys to its terminal fails (selected by ``import_path``; the only module here that imports
   harbor).
+- ``e2b_environment``: Harbor's E2B environment in place of Docker, each task run from a copy that states
+  the environment its base image and Dockerfile declare.
 - ``service``: the HTTP API and its job runner; ``client``: the same steps as asynchronous calls; ``wire``:
   the JSON forms. The ``generator`` section that starts the service is parsed in
   ``reef.service.deploy.generator``, and ``reef.service.deploy.generator_process`` runs the process.
@@ -43,11 +45,15 @@ from reef.record2task.generator.designer import (
     designer_prompt,
     parse_harbor_reply,
 )
+from reef.record2task.generator.e2b_environment import E2BTaskEnvironment
 from reef.record2task.generator.harbor import (
+    DockerTaskEnvironment,
     GeneratedHarborTask,
     HarborRuns,
     OracleResult,
     OracleUnavailable,
+    TaskEnvironment,
+    UnrunnableTask,
     content_hash,
     harbor_task,
     oracle_check,
@@ -71,7 +77,9 @@ __all__ = [
     "DesignerError",
     "DesignerReplyError",
     "DesignerRequest",
+    "DockerTaskEnvironment",
     "DuplicateTask",
+    "E2BTaskEnvironment",
     "GeneratedHarborTask",
     "Generator",
     "GeneratorError",
@@ -88,8 +96,10 @@ __all__ = [
     "ReefDesigner",
     "ReefTaskPlays",
     "TaskChecks",
+    "TaskEnvironment",
     "TaskNameConflict",
     "TaskPlays",
+    "UnrunnableTask",
     "WrittenTask",
     "content_hash",
     "designer_messages",

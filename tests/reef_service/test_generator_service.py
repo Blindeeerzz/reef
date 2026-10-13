@@ -559,10 +559,18 @@ def test_healthz_is_503_naming_what_is_missing_and_200_once_every_probe_passes(
     assert not caplog.records[len(warnings) :], "a ready generator adds nothing to the log"
 
 
-def test_the_stack_probes_look_for_reef_eval_harbor_and_docker(
+def test_the_stack_probes_look_for_reef_eval_harbor_and_docker_or_e2b(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     assert [probe.name for probe in readiness_probes(harbor="/opt/harbor")] == ["reef_eval", "harbor", "docker"]
+    e2b = readiness_probes(environment="e2b")
+    assert [probe.name for probe in e2b] == ["reef_eval", "harbor", "e2b", "E2B_API_KEY"], "E2B needs no Docker"
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+    assert e2b[-1].missing() == (
+        "E2B_API_KEY is not set in the generator's environment; Harbor's E2B environment authenticates with it"
+    )
+    monkeypatch.setenv("E2B_API_KEY", "e2b-key")
+    assert e2b[-1].missing() == ""
     assert ModuleProbe("json").missing() == ""
     reason = ModuleProbe("no_such_module_anywhere", hint="install it").missing()
     assert (
@@ -627,6 +635,7 @@ def test_the_generator_section_is_parsed_in_either_spelling_and_unknown_fields_a
         ({"tasks-root": "/tmp/t", "port": 0}, "port must be"),
         ({"tasks-root": "/tmp/t", "tasks_root": "/tmp/u"}, "twice"),
         ({"tasks-root": "/tmp/t", "designer-api": "anthropic"}, "designer-api must be openai or responses"),
+        ({"tasks-root": "/tmp/t", "environment": "podman"}, "environment must be docker or e2b"),
     ):
         with pytest.raises(ValueError, match=message):
             generator_settings(section)

@@ -1202,19 +1202,22 @@ Absent by default. When present, ``reef serve`` starts the generator service
 it, and publishes its address as ``${endpoints.generator}`` for the
 generated-task stages to consume. The generator writes, checks and plays Harbor tasks for the
 generated-task recipe and for a task generator such as SPADE, under the same
-interpreter as the Reef service (``REEF_PYTHON``, otherwise the launcher's). Its host needs Docker and the
-``harbor`` command line; the Reef service itself does not. ``execution.generator`` selects its executor, so a deployment can
-place it on the host that has Docker.
+interpreter as the Reef service (``REEF_PYTHON``, otherwise the launcher's). Its
+host needs the ``harbor`` command line and Docker, or E2B access with
+``environment: e2b`` (below); the Reef service itself needs neither.
+``execution.generator`` selects its executor, so a deployment can place it on a
+host that has them.
 
 .. config::
 
    generator.tasks-root | the directory generated tasks, manifests and Harbor job files live under. Required.
    generator.host | 127.0.0.1 | bind address
    generator.port | 8910 | bind port
-   generator.work-dir | ``<tasks-root>/.play`` | where the task player keeps trials
+   generator.work-dir | ``<tasks-root>/.play`` | where the task player keeps trials, and the E2B copies of tasks under ``e2b/``
    generator.agent | terminus-2 | the Harbor agent the task player runs, with ``{model}``, ``{base_url}`` and ``{api_key}`` placeholders. ``import_path: reef.record2task.generator.terminus:VerifiedTerminus2`` in place of ``name: terminus-2`` also scores an episode whose agent filled its context or lost its terminal, which Terminus 2 leaves without a reward
    generator.agent-host | an address of the host the task container can reach, for an agent that runs inside the container
    generator.harbor | ``harbor`` on PATH | the harbor command line for the oracle check
+   generator.environment | docker | where Harbor runs the checks and plays: ``docker``, or ``e2b`` for E2B sandboxes
    generator.concurrency | 2 | episodes in flight per play request
    generator.designer-url | a Reef service the designer calls go to instead of this deployment's
    generator.designer-token | the token for ``designer-url``
@@ -1240,6 +1243,33 @@ other children: the Reef address from ``reef.host`` and ``reef.port``, the
 token from ``reef.token``, and the served model from ``inference.model-path``
 or ``inference.upstream-model``. Without ``reef serve``,
 ``python -m reef.service.deploy.generator_process -c serve.yaml`` runs it from the same file.
+
+With ``environment: e2b``, Harbor runs every check and play in an `E2B
+<https://e2b.dev>`__ sandbox instead of a local container. Use it on a host
+without a usable Docker, such as Docker Desktop on macOS, which cannot enforce
+a task's ``network_mode = "no-network"``. It needs:
+
+- ``E2B_API_KEY`` in the generator's environment; ``/healthz`` names it while
+  it is missing;
+- the ``e2b`` package: ``pip install 'reef-infra[e2b]'``;
+- network access to the registries of the tasks' base images;
+- for an agent that runs inside the sandbox, an ``agent-host`` that E2B
+  sandboxes can reach. An agent that runs in the generator's process, such as
+  ``terminus-2``, needs none.
+
+E2B's builder does not apply the environment variables that Docker gives a
+Dockerfile's steps and container. So the generator runs each task from a copy
+under ``<work-dir>/e2b/`` that sets them, and reads the base image's variables
+from its registry. The check refuses a task that E2B cannot run, and gives the
+reason:
+
+- a multi-stage Dockerfile;
+- a prebuilt ``environment.docker_image``;
+- a base image that its registry does not serve anonymously, or that has no
+  ``linux/amd64`` build.
+
+A registry that cannot be read, for example one still rate limited after
+retries, fails the check job instead.
 
 Experiment tracking
 -------------------

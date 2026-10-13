@@ -12,7 +12,8 @@ solvable, and not for free. A check that could not run, because ``harbor`` is no
 ended without a trial to read (an exit code, a timeout, no Docker daemon), raises ``OracleUnavailable``
 rather than refusing the task. One gate is reef's own: the team requires a pytest file under ``tests/``,
 reef requires a file under ``tests/`` that names the reward file, since its verifiers are shell scripts
-that write it.
+that write it. The runs use a ``TaskEnvironment``: Docker runs the task as written; E2B runs a prepared
+copy (``reef.record2task.generator.e2b_environment``), and a task E2B cannot run is refused.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ import signal
 import subprocess
 import threading
 import time
+from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -136,6 +138,29 @@ class OracleResult:
 
 class OracleUnavailable(RuntimeError):
     """The check could not run: harbor is not installed, or a harbor run ended without a trial to read."""
+
+
+class UnrunnableTask(ValueError):
+    """The task cannot run in the chosen Harbor environment (E2B cannot pull its base image, say): a refusal."""
+
+
+class TaskEnvironment(ABC):
+    """Where Harbor runs a task (the ``-e`` environment type), and the task directory Harbor is handed for it."""
+
+    name: str = ""
+
+    @abstractmethod
+    def prepare(self, task_path: Path) -> Path:
+        """The directory Harbor runs for the task at ``task_path``; ``UnrunnableTask`` when it cannot run here."""
+
+
+class DockerTaskEnvironment(TaskEnvironment):
+    """Harbor's Docker environment: it builds and runs the task as written."""
+
+    name = "docker"
+
+    def prepare(self, task_path: Path) -> Path:
+        return task_path
 
 
 def dockerfile_logical_lines(text: str) -> list[str]:
@@ -413,10 +438,17 @@ class HarborRuns:
 
 
 def run_harbor_agent(
-    task_path: Path, agent: str, jobs_path: Path, *, harbor: str, timeout_s: float, runs: HarborRuns | None = None
+    task_path: Path,
+    agent: str,
+    jobs_path: Path,
+    *,
+    harbor: str,
+    timeout_s: float,
+    runs: HarborRuns | None = None,
+    environment: str = DockerTaskEnvironment.name,
 ) -> TrialOutcome:
     """Run ``agent`` on the task through the harbor command line, in its own process group, and read the trial."""
-    command = [harbor, "run", "-p", str(task_path), "-a", agent, "-e", "docker", "-o", str(jobs_path), "-n", "1"]
+    command = [harbor, "run", "-p", str(task_path), "-a", agent, "-e", environment, "-o", str(jobs_path), "-n", "1"]
     registry = runs if runs is not None else HarborRuns()
     process = registry.start(command)
     try:
@@ -439,19 +471,37 @@ def run_harbor_agent(
 
 
 def oracle_check(
-    task_path: Path, *, harbor: str | None = None, timeout_s: float = ORACLE_TIMEOUT_S, runs: HarborRuns | None = None
+    task_path: Path,
+    *,
+    harbor: str | None = None,
+    timeout_s: float = ORACLE_TIMEOUT_S,
+    runs: HarborRuns | None = None,
+    environment: TaskEnvironment | None = None,
 ) -> OracleResult:
     """Solvable, and not for free: the reference solution scores 1 and doing nothing scores below 1 under Harbor."""
     executable = harbor if harbor is not None else shutil.which("harbor")
     if executable is None:
         raise OracleUnavailable("the harbor command line is not installed")
+    task_environment = environment if environment is not None else DockerTaskEnvironment()
     jobs_path = task_path.parent / JOBS_DIRECTORY / task_path.name
     if jobs_path.exists():
         shutil.rmtree(jobs_path)
+    try:
+        run_path = task_environment.prepare(task_path)
+    except UnrunnableTask as exc:
+        return OracleResult(is_solvable=False, reason=str(exc))
+    except (RuntimeError, OSError) as exc:
+        raise OracleUnavailable(str(exc)[:500]) from exc
     # A run that left no trial to read says nothing about the task; only a trial's verdict can refuse it.
     try:
         oracle = run_harbor_agent(
-            task_path, "oracle", jobs_path / "oracle", harbor=executable, timeout_s=timeout_s, runs=runs
+            run_path,
+            "oracle",
+            jobs_path / "oracle",
+            harbor=executable,
+            timeout_s=timeout_s,
+            runs=runs,
+            environment=task_environment.name,
         )
     except (RuntimeError, ValueError, OSError) as exc:
         raise OracleUnavailable(str(exc)[:500]) from exc
@@ -464,7 +514,15 @@ def oracle_check(
             reason = f"{reason}; {oracle.agent_note}"
         return OracleResult(is_solvable=False, reason=reason, oracle_reward=oracle.reward)
     try:
-        nop = run_harbor_agent(task_path, "nop", jobs_path / "nop", harbor=executable, timeout_s=timeout_s, runs=runs)
+        nop = run_harbor_agent(
+            run_path,
+            "nop",
+            jobs_path / "nop",
+            harbor=executable,
+            timeout_s=timeout_s,
+            runs=runs,
+            environment=task_environment.name,
+        )
     except (RuntimeError, ValueError, OSError) as exc:
         raise OracleUnavailable(str(exc)[:500]) from exc
     if nop.reward is None or nop.reward >= 1.0:
