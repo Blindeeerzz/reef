@@ -9,6 +9,7 @@ generated-task recipe plays the tasks and trains on them.
 - ``sources``: the sources file (session records and their repositories) and the session renderer.
 - ``author``: the author contract and its two implementations: the agent, pi in an E2B sandbox behind a
   gateway that records its model calls on Reef, and the one-reply prompt Designer.
+- ``checks``: the task checks: Harbor's oracle and nop agents, and the test review.
 """
 
 from recipes.beta.autoenvscaling.author import (
@@ -21,6 +22,7 @@ from recipes.beta.autoenvscaling.author import (
     TaskAuthor,
     workspace_reply,
 )
+from recipes.beta.autoenvscaling.checks import CheckResult, OracleCheck, ReviewCheck, ReviewFinding, TaskCheck
 from recipes.beta.autoenvscaling.sources import Repository, SessionSource, load_sources, render_session
 
 __all__ = [
@@ -28,11 +30,16 @@ __all__ = [
     "AuthorError",
     "AuthoredTask",
     "CandidateChecks",
+    "CheckResult",
+    "OracleCheck",
     "PromptAuthor",
     "Repository",
+    "ReviewCheck",
+    "ReviewFinding",
     "SessionSource",
     "SourceError",
     "TaskAuthor",
+    "TaskCheck",
     "load_sources",
     "render_session",
     "workspace_reply",
