@@ -45,9 +45,15 @@ This branch has the fix: `reef.record2task.generator.e2b_environment.E2BTaskEnvi
 
 ## Inputs
 
-**Code:** this branch, `r2d/training`. It is Reef `main` (9336c39d) + PRs #789, #790 and #791 + the E2B task environment. Set up the environment as `AGENTS.md` says. Inside the Slime image, install with `--no-deps` as it says, and add the `e2b` extra.
+**Code:** this branch, `r2d/training` on GitHub (`Human-Agent-Society/reef`). It is Reef `main` (9336c39d) + PRs #789, #790 and #791 + the E2B task environment. The user may push more commits to it; `git pull` when the user says so. Set up the environment as `AGENTS.md` says. Inside the Slime image, install with `--no-deps` as it says, and add the `e2b` extra.
 
-**Data**, in parts. The user copies each archive to you. Check each archive's `SHA256SUMS` first.
+**Data**, in parts, in the private Hugging Face dataset repository `reef-record/r2d-handoff`. Download each archive when the user says it is there, check its `.sha256`, and extract it. Then check the files with its `SHA256SUMS`.
+
+```bash
+hf download reef-record/r2d-handoff --repo-type dataset --include "r2d-handoff-1.*" --local-dir data
+cd data && sha256sum -c r2d-handoff-1.tar.gz.sha256 && tar xzf r2d-handoff-1.tar.gz
+```
+
 1. **Now:** `r2d-handoff-1.tar.gz`
    - `dryrun/`: 5 AES tasks from the user's pilot, for the Slime dry run. They are not in the training pools. `rewards.jsonl` gives 9B's rewards on 4 plays of each; each was solved 1 to 3 times.
    - `eval/swe-together/`: 47 strict and 15 capped tasks (the sets in `eval-sets.json`), `verifier_fixes.py`, and our earlier oracle results. Its `README.md` says how to use them.
@@ -56,7 +62,7 @@ This branch has the fix: `reef.record2task.generator.e2b_environment.E2BTaskEnvi
 
 SWE-bench Verified is not in an archive. Use Harbor's registry dataset `swebench-verified@1.0`, all 500 tasks.
 
-**Credentials:** the user gives you environment files, mode 600: `E2B_API_KEY`, and `HF_TOKEN` if a model download needs it.
+**Credentials:** the user gives you environment files, mode 600: `E2B_API_KEY`, and `HF_TOKEN` with read access to `reef-record/r2d-handoff`.
 - Never print or log a credential.
 - Never use OpenAI or Anthropic API keys. No step here needs a hosted model.
 - Ask the user for the E2B account's concurrent sandbox limit. Do not exceed it.
