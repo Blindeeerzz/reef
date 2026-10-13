@@ -202,8 +202,8 @@ class JudgingRecord2Record(Record2Record):
     # --------------------------------------------------------- background work
 
     def derivation_pending(self) -> bool:
-        """In-flight judgments resolve and tracked records expire without a new record; poll while either exists."""
-        return bool(self.in_flight or self.tracked)
+        """Poll while judgments are in flight. Expiry only retires records, so it waits for the next ``ready``."""
+        return bool(self.in_flight)
 
     def close(self) -> None:
         if self.worker is not None:

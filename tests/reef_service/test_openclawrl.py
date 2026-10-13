@@ -237,9 +237,9 @@ def test_derivation_pending_and_close_propagation() -> None:
     processor = _processor(worker=worker)
     assert not processor.derivation_pending()
     processor.ingest(_turn("t1", Q1))
-    assert processor.derivation_pending()  # tracked turn awaits its TTL or successor
+    assert not processor.derivation_pending()  # an idle tracked turn does not keep the training thread polling
     processor.ingest(_turn("t2", _successor(Q1, "ok")))
-    assert processor.derivation_pending()  # t1 in flight, t2 tracked
+    assert processor.derivation_pending()  # t1 in flight
     processor.close()
     assert worker.closed
 
