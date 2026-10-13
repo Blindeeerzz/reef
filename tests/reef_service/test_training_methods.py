@@ -22,7 +22,7 @@ from reef.train.algos import StepScheduling
 from reef.train.runtime_backend import FixedTrainingMethodSelector, RuntimeCandidateBackend, TrainingMethodSelector
 from reef.train.types import TrainingBatch
 
-from .test_recipe_config_fields import ConfiguredRecipe
+from .test_recipe_config_fields import StagedRecipe
 
 SFT = LearningRateSchedule("sft", 2e-5, warmup_steps=4, decay_style="cosine", decay_steps=8, min_learning_rate=2e-6)
 RL = LearningRateSchedule("rl", 1e-6, warmup_steps=2)
@@ -183,7 +183,7 @@ def test_the_backend_refuses_a_selector_that_returns_no_method() -> None:
 @pytest.mark.unit
 def test_a_single_method_recipe_trains_every_job_with_its_spec_objective() -> None:
     runtime = RecordingRuntime()
-    recipe = ConfiguredRecipe(training_runtime=runtime, runtime=runtime.inference)
+    recipe = StagedRecipe(training_runtime=runtime, runtime=runtime.inference)
     selector = recipe.training_method_selector()
     assert isinstance(selector, FixedTrainingMethodSelector)
     assert selector.select(TrainingBatch("batch"), {"steps": 40}) == TrainingMethod("sft")
@@ -196,12 +196,12 @@ def test_a_single_method_recipe_trains_every_job_with_its_spec_objective() -> No
 
 @pytest.mark.unit
 def test_a_recipe_selector_reaches_the_runtime_through_the_default_build() -> None:
-    class SwitchingRecipe(ConfiguredRecipe):
+    class SwitchingRecipe(StagedRecipe):
         def training_method_selector(self) -> TrainingMethodSelector:
-            return SupervisedThenPolicy(supervised_steps=self.batch_size)
+            return SupervisedThenPolicy(supervised_steps=1)
 
     runtime = RecordingRuntime()
-    trainer = SwitchingRecipe(training_runtime=runtime, runtime=runtime.inference, batch_size=1).build(
+    trainer = SwitchingRecipe(training_runtime=runtime, runtime=runtime.inference).build(
         "scenario", SQLiteRecordStore()
     )
     backend = trainer.candidate_backend
