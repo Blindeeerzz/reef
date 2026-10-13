@@ -29,7 +29,7 @@ from recipes.openclawrl.turns import TurnJob, TurnJudgment, main_turn_message, t
 from reef.background_jobs import BackgroundJobWorker
 from reef.core.records_types import AgentRecord, RequestType
 from reef.record2record import JudgingStage, RecordJudging
-from reef.train.types import ProcessorContext
+from reef.train.types import PipelineContext
 
 logger = logging.getLogger(__name__)
 
@@ -249,7 +249,7 @@ class OpenClawRLJudging(RecordJudging):
 
 
 def openclawrl_record_stage(
-    context: ProcessorContext,
+    context: PipelineContext,
     *,
     worker: BackgroundJobWorker | None = None,
     clients: tuple[Any, Any, Any] | None = None,

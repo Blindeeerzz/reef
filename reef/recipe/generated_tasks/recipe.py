@@ -29,7 +29,7 @@ from reef.recipe.generated_tasks.processor import (
 from reef.record2record import GroupDecision, ReportContext, RoundGrouping, RoundStage
 from reef.train.algos import StepScheduling
 from reef.train.pipeline import TrainingPipeline
-from reef.train.types import ProcessorContext
+from reef.train.types import PipelineContext
 
 
 def source_tag_of(setting: str) -> tuple[str, str] | None:
@@ -80,7 +80,7 @@ class TaskGroupGrouping(RoundGrouping):
         return all(inference_tags(inference).get(name) == value for inference in context.inferences)
 
 
-def task_group_record_stage(context: ProcessorContext) -> RoundStage:
+def task_group_record_stage(context: PipelineContext) -> RoundStage:
     """The generated-task record stage: one group per task, and a round request every ``batches_per_round`` batches.
 
     Each request takes at most ``source_records_per_round`` source sessions. A terminal report owns its sources.
@@ -199,7 +199,7 @@ class GeneratedTaskRecipe(WeightTrainingRecipe):
         """The scenario's round summaries: what a delete archives beside the record store."""
         return (Path(self.state_dir).expanduser() / scenario,) if self.state_dir else ()
 
-    def build_pipeline(self, context: ProcessorContext) -> TrainingPipeline:
+    def build_pipeline(self, context: PipelineContext) -> TrainingPipeline:
         # The record-to-task stage tells the record stage when each round finished, so both share one stage.
         configured = context.with_config(self.pipeline_config())
         round_stage = task_group_record_stage(configured)

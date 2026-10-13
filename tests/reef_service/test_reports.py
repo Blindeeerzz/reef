@@ -19,7 +19,7 @@ from reef.core.reports import ReportBase, ReportValidationError, ScoredRolloutRe
 from reef.dispatcher import Dispatcher
 from reef.recipe.base import Recipe
 from reef.storage.sqlite import SQLiteScenarioStorage
-from reef.train import ProcessorContext
+from reef.train import PipelineContext
 from reef.train.pipeline import TrainingPipeline
 
 
@@ -249,7 +249,7 @@ def test_undeclared_recipe_keeps_open_ingress_via_anyreport() -> None:
 
 
 def test_tttd_raises_for_grid_mismatch_and_schema_violations() -> None:
-    context = ProcessorContext(
+    context = PipelineContext(
         "discovery",
         {"groups_per_step": 2, "rollouts_per_group": 3},
         report_type=TTTDGroupedRolloutReport,

@@ -14,7 +14,7 @@ from typing import Any
 
 from reef.core.records_types import RequestType
 from reef.observability import ExperimentLogger
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch
+from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch
 
 
 class Task2Batch(ABC):
@@ -33,7 +33,7 @@ class Task2Batch(ABC):
     #: The kinds of record that the trainer gives the pipeline.
     required_request_types: frozenset[RequestType] = frozenset({RequestType.INFERENCE, RequestType.REPORT})
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         self.context = context
         self.scenario = context.scenario
         batch_size = int(context.config.get("batch_size", 1))

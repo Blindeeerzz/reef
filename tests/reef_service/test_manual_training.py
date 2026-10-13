@@ -27,7 +27,7 @@ from reef.train.cordis_backend.processor import InferenceTasks, trace_pipeline
 from reef.train.pipeline import TrainingPipeline
 from reef.train.processors.base import Task2Batch
 from reef.train.trainer import Trainer
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch
+from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch
 
 from .runtime_stubs import StubTrainingRuntime
 from .test_harness_proposals import _dispatcher, _recipe
@@ -295,7 +295,7 @@ def test_manual_is_a_native_contract_for_arbitrary_batch_schemas():
         return TrainingPipeline(context, task2batch=InstructionBatches(context))
 
     with pytest.raises(NotImplementedError, match="training_mode='auto'"):
-        instruction_pipeline(ProcessorContext("s"))
+        instruction_pipeline(PipelineContext("s"))
     records, backend = SQLiteRecordStore(), CaptureBackend()
     trainer = build(records, backend, instruction_pipeline)
     records.append(instruction("change"))
@@ -309,8 +309,8 @@ def test_manual_is_a_native_contract_for_arbitrary_batch_schemas():
     records.close()
 
 
-def test_processor_context_keeps_mode_when_recipe_applies_config():
-    context = ProcessorContext("s", training_mode="manual")
+def test_pipeline_context_keeps_mode_when_recipe_applies_config():
+    context = PipelineContext("s", training_mode="manual")
     configured = context.with_config({"batch_size": 100})
     assert configured.training_mode == "manual"
     assert configured.config == {"batch_size": 100}
@@ -326,11 +326,11 @@ def test_missing_mode_implementation_fails_at_processor_initialization():
             return TrainingBatch(f"{self.scenario}:{batch_number}", tasks)
 
     for mode in ("manual", "hybrid"):
-        context = ProcessorContext("s", training_mode=mode)
+        context = PipelineContext("s", training_mode=mode)
         with pytest.raises(NotImplementedError, match=rf"AutoOnlyBatches.*{mode}"):
             TrainingPipeline(context, task2batch=AutoOnlyBatches(context))
     with pytest.raises(ValueError, match="training_mode"):
-        ProcessorContext("s", training_mode="invalid")
+        PipelineContext("s", training_mode="invalid")
 
 
 def test_manual_instruction_batch_never_falls_back_to_auto():
@@ -340,7 +340,7 @@ def test_manual_instruction_batch_never_falls_back_to_auto():
         def make_batch(self, tasks, batch_number):
             return TrainingBatch(f"{self.scenario}:{batch_number}", tasks)
 
-    context = ProcessorContext("s", training_mode="manual")
+    context = PipelineContext("s", training_mode="manual")
     pipeline = TrainingPipeline(
         context, record_stage=InferenceStage(), record2task=InferenceTasks(), task2batch=TraceOnlyBatches(context)
     )
@@ -375,7 +375,7 @@ def test_status_shows_how_far_a_partly_filled_batch_still_has_to_go():
 
     stage = CountingStage()
     pipeline = TrainingPipeline(
-        ProcessorContext("s", config={"batch_size": 4}, training_mode="auto"), record_stage=stage
+        PipelineContext("s", config={"batch_size": 4}, training_mode="auto"), record_stage=stage
     )
     assert pipeline.status() == {"ready_units": 0, "batch_size": 4}
     stage.held = 3
@@ -394,12 +394,12 @@ def test_status_reports_buffered_requests_when_a_processor_takes_instructions_in
         def make_batch(self, tasks, batch_number):
             return TrainingBatch(f"{self.scenario}:{batch_number}", tasks)
 
-    context = ProcessorContext("s", training_mode="hybrid")
+    context = PipelineContext("s", training_mode="hybrid")
     pipeline = TrainingPipeline(context, task2batch=HybridOnlyBatches(context))
     pipeline.ingest(instruction("one"))
     assert pipeline.status()["buffered_requests"] == 1
     pipeline.close()
-    auto_only = TrainingPipeline(ProcessorContext("s"))
+    auto_only = TrainingPipeline(PipelineContext("s"))
     auto_only.ingest(instruction("one"))
     assert "buffered_requests" not in auto_only.status()
     auto_only.close()
@@ -1139,9 +1139,9 @@ def test_hybrid_is_a_recipe_and_processor_mode_and_a_fourth_value_is_refused(tmp
         with pytest.raises(ValueError, match="training_mode"):
             replace(recipe, training_mode="either")
         with pytest.raises(ValueError, match="training_mode"):
-            ProcessorContext("s", training_mode="either")
+            PipelineContext("s", training_mode="either")
         with pytest.raises(ValueError, match="training_mode"):
-            reports_pipeline(ProcessorContext("s")).set_training_mode("either")
+            reports_pipeline(PipelineContext("s")).set_training_mode("either")
     finally:
         records.close()
 
@@ -1197,7 +1197,7 @@ def test_hybrid_runs_a_queued_instruction_with_the_held_units_as_samples(process
 
 
 def test_hybrid_runs_two_queued_instructions_oldest_first_one_per_step():
-    processor = reports_pipeline(ProcessorContext("s", {"batch_size": 1}, training_mode="hybrid"))
+    processor = reports_pipeline(PipelineContext("s", {"batch_size": 1}, training_mode="hybrid"))
     processor.ingest(instruction("first"))
     processor.ingest(instruction("second"))
     assert processor.status()["buffered_requests"] == 2
@@ -1214,7 +1214,7 @@ def test_hybrid_runs_two_queued_instructions_oldest_first_one_per_step():
 
 
 def test_hybrid_batches_as_auto_does_without_an_instruction():
-    processor = reports_pipeline(ProcessorContext("s", {"batch_size": 1}, training_mode="hybrid"))
+    processor = reports_pipeline(PipelineContext("s", {"batch_size": 1}, training_mode="hybrid"))
     processor.ingest(inference("a"))
     processor.ingest(report("a"))
     batch = processor.build_batch()
@@ -1380,7 +1380,7 @@ def test_the_proposal_route_refuses_in_manual_mode_and_admits_again_in_a_batchin
 
 def test_manual_mode_caps_held_units_at_four_batches_and_the_batching_modes_hold_them_all(caplog):
     def fill(mode):
-        processor = reports_pipeline(ProcessorContext("s", {"batch_size": 1}, training_mode=mode))
+        processor = reports_pipeline(PipelineContext("s", {"batch_size": 1}, training_mode=mode))
         for i in range(20):
             processor.ingest(inference(f"inf-{i}"))
             processor.ingest(

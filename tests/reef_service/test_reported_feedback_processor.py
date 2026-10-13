@@ -14,7 +14,7 @@ from reef.record2record import GroupDecision, ReportContext, ReportGrouping, Rep
 from reef.record2task import ReportTasks
 from reef.train.pipeline import TrainingPipeline
 from reef.train.processors.base import Task2Batch
-from reef.train.types import ProcessorContext, TaskItem, TrainDataItem, TrainingBatch
+from reef.train.types import PipelineContext, TaskItem, TrainDataItem, TrainingBatch
 
 
 def inference(record_id: str) -> AgentRecord:
@@ -33,7 +33,7 @@ def report(record_id: str, *references: str, score: float = 1.0) -> AgentRecord:
 
 
 def exclusive_stage(
-    context: ProcessorContext, grouping: ReportGrouping | None = None, *, ordered_groups: bool = False
+    context: PipelineContext, grouping: ReportGrouping | None = None, *, ordered_groups: bool = False
 ) -> ReportStage:
     """A report stage in which a terminal report owns its sources."""
     return ReportStage(
@@ -77,7 +77,7 @@ class SamplePipeline(TrainingPipeline):
         tasks: SampleTasks | None = None,
         batches: type[SampleBatches] = SampleBatches,
     ) -> None:
-        context = ProcessorContext("math", {"batch_size": batch_size}, report_type=report_type)
+        context = PipelineContext("math", {"batch_size": batch_size}, report_type=report_type)
         self.sample_tasks = SampleTasks() if tasks is None else tasks
         super().__init__(
             context,

@@ -21,7 +21,7 @@ from reef.record2record import JudgingStage, RecordJudging
 from reef.record2task import JudgedTasks
 from reef.train.pipeline import TrainingPipeline
 from reef.train.processors.base import Task2Batch
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
+from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 pytestmark = pytest.mark.unit
 
@@ -100,7 +100,7 @@ class ToyBatches(Task2Batch):
 class _ToyProcessor(TrainingPipeline):
     """Trains the judged records of ``_ToyJudging``. Samples are one-token stubs."""
 
-    def __init__(self, context: ProcessorContext, *, worker: Any) -> None:
+    def __init__(self, context: PipelineContext, *, worker: Any) -> None:
         super().__init__(
             context,
             record_stage=JudgingStage(_ToyJudging(), worker, max_staleness=context.max_staleness),
@@ -117,7 +117,7 @@ def _record(agent_record_id: str, **payload) -> AgentRecord:
 
 def _engine(batch_size: int = 1, worker=None) -> tuple[_ToyProcessor, _FakeWorker]:
     worker = worker if worker is not None else _FakeWorker()
-    processor = _ToyProcessor(ProcessorContext("s", {"batch_size": batch_size}), worker=worker)
+    processor = _ToyProcessor(PipelineContext("s", {"batch_size": batch_size}), worker=worker)
     return processor, worker
 
 
@@ -185,7 +185,7 @@ def test_stale_runtime_load_ids_drop_by_record_arrival() -> None:
 
 def test_candidates_within_max_staleness_of_the_newest_record_stay() -> None:
     worker = _FakeWorker()
-    processor = _ToyProcessor(ProcessorContext("s", {"batch_size": 3}, max_staleness=1), worker=worker)
+    processor = _ToyProcessor(PipelineContext("s", {"batch_size": 3}, max_staleness=1), worker=worker)
     for name, version in (("v3", "e:3"), ("v4", "e:4"), ("v5", "e:5")):
         processor.ingest(_record(name, track=True, version=version))
         processor.ingest(_record(f"done-{name}", completes=name))
@@ -196,7 +196,7 @@ def test_candidates_within_max_staleness_of_the_newest_record_stay() -> None:
 
 
 def test_correlate_only_mode_without_a_worker() -> None:
-    processor = _ToyProcessor(ProcessorContext("s", {"batch_size": 1}), worker=None)
+    processor = _ToyProcessor(PipelineContext("s", {"batch_size": 1}), worker=None)
     processor.ingest(_record("r1", track=True))
     processor.ingest(_record("r2", completes="r1"))
     assert "r1" in processor.releasable_record_ids()

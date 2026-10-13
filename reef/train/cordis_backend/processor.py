@@ -9,7 +9,7 @@ from reef.record2task import Record2Task, ReportTasks, TaskResult
 from reef.train.pipeline import TrainingPipeline
 from reef.train.processors.base import Task2Batch
 from reef.train.processors.reported import reported_task
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
+from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 
 class TraceTasks(ReportTasks):
@@ -47,7 +47,7 @@ class TraceBatches(Task2Batch):
         return TrainingBatch(f"{self.scenario}:harness_evolve:{batch_number}", tasks)
 
 
-def trace_pipeline(context: ProcessorContext, batch_policy: str) -> TrainingPipeline:
+def trace_pipeline(context: PipelineContext, batch_policy: str) -> TrainingPipeline:
     """The harness-evolution pipeline of one scenario: traces from reports, or from recorded inference traffic.
 
     * ``reports``: pair recorded requests with reported scores. Requests are

@@ -13,7 +13,7 @@ from reef.record2record import ReportContext
 from reef.record2task import ReportTasks
 from reef.train.processors.base import Task2Batch
 from reef.train.processors.reported import SampleAssembly
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
+from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ def tttd_grid(config: Mapping[str, Any]) -> tuple[int, int]:
 class TTTDTasks(ReportTasks):
     """One rollout as one task, checked against the scenario's step grid, with its grid coordinates."""
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         self.groups_per_step, self.rollouts_per_group = tttd_grid(context.config)
         self.assembly = SampleAssembly.from_config(context)
 
@@ -82,7 +82,7 @@ class TTTDBatches(Task2Batch):
     reference behavior.
     """
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         config = dict(context.config)
         self.groups_per_step, self.rollouts_per_group = tttd_grid(config)
         super().__init__(context.with_config({**config, "batch_size": 1}))

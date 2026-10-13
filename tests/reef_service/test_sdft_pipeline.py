@@ -27,7 +27,7 @@ from reef.core.trajectories import source_record_id
 from reef.recipe.checkpoint_strategy import EveryNVersions
 from reef.recipe.errors import RecipeConfigError
 from reef.recipe.registry import build_recipe, recipe_class_for
-from reef.train import ProcessorContext
+from reef.train import PipelineContext
 from reef.train.algos import StepScheduling
 from reef.train.pipeline import TrainingPipeline
 from reef.train.processors.distill import distill_record_stage
@@ -114,7 +114,7 @@ def _report(
 
 
 def _processor(**config: Any) -> TrainingPipeline:
-    context = ProcessorContext(
+    context = PipelineContext(
         "science", {"batch_size": 1, "tokenizer_path": TOKENIZER_PATH, **config}, TeacherContextReport
     )
     return TrainingPipeline(

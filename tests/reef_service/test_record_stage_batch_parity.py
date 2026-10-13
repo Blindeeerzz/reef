@@ -41,7 +41,7 @@ from reef.recipe.generated_tasks.recipe import task_group_record_stage
 from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
 from reef.record2task import JudgedTasks, ReportTasks
 from reef.storage.sqlite import SQLiteRecordStore
-from reef.train import ProcessorContext, Trainer
+from reef.train import PipelineContext, Trainer
 from reef.train.backend import CandidateBackend, PreparedStep
 from reef.train.cordis_backend.processor import TraceBatches, TraceTasks
 from reef.train.pipeline import TrainingPipeline
@@ -261,7 +261,7 @@ class AnyGroupReady(SlotGrouping):
 class AssembledTasks(ReportTasks):
     """One report as one assembled policy sample."""
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         self.assembly = SampleAssembly.from_config(context)
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
@@ -279,7 +279,7 @@ class SlotBatches(Task2Batch):
 class ThresholdPipeline(TrainingPipeline):
     """Every report by itself."""
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
             record_stage=ReportStage(context.scenario, context.report_type, ReportGrouping()),
@@ -291,7 +291,7 @@ class ThresholdPipeline(TrainingPipeline):
 class SlotGroupPipeline(TrainingPipeline):
     """Trains the groups of ``SlotGrouping``."""
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
             record_stage=ReportStage(context.scenario, context.report_type, SlotGrouping(), exclusive_sources=True),
@@ -303,7 +303,7 @@ class SlotGroupPipeline(TrainingPipeline):
 class OrderedMixPipeline(TrainingPipeline):
     """Reports with a ``metadata.group`` form groups that batch in key order after singletons."""
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
             record_stage=ReportStage(
@@ -315,7 +315,7 @@ class OrderedMixPipeline(TrainingPipeline):
 
 
 class TTTDPipeline(TrainingPipeline):
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
             record_stage=tttd_record_stage(context),
@@ -325,7 +325,7 @@ class TTTDPipeline(TrainingPipeline):
 
 
 class SDPOPipeline(TrainingPipeline):
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
             record_stage=sdpo_record_stage(context),
@@ -335,7 +335,7 @@ class SDPOPipeline(TrainingPipeline):
 
 
 class CoralPipeline(TrainingPipeline):
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
             record_stage=coral_record_stage(context),
@@ -345,7 +345,7 @@ class CoralPipeline(TrainingPipeline):
 
 
 class GeneratedTaskPipeline(TrainingPipeline):
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         round_stage = task_group_record_stage(context)
         super().__init__(
             context,
@@ -356,7 +356,7 @@ class GeneratedTaskPipeline(TrainingPipeline):
 
 
 class DistillPipeline(TrainingPipeline):
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
             record_stage=distill_record_stage(context),
@@ -368,7 +368,7 @@ class DistillPipeline(TrainingPipeline):
 class TracePipeline(TrainingPipeline):
     """The harness-evolution pipeline of reported traces."""
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
             record_stage=ReportStage(context.scenario, context.report_type, ReportGrouping()),
@@ -445,7 +445,7 @@ class ToyBatches(Task2Batch):
 class ToyComputedPipeline(TrainingPipeline):
     """Trains the judged records of ``ToyJudging``."""
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         stage = JudgingStage(ToyJudging(), ImmediateWorker(), max_staleness=context.max_staleness)
         super().__init__(context, record_stage=stage, record2task=ToyTasks(), task2batch=ToyBatches(context))
 

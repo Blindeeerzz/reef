@@ -35,13 +35,13 @@ from reef.train.backend import CandidateBackend, PreparedStep, StepExecution
 from reef.train.pipeline import TrainingPipeline
 from reef.train.processors.base import Task2Batch
 from reef.train.trainer import ComponentTrainer, Trainer
-from reef.train.types import ProcessorContext, TaskItem, TrainDataItem, TrainingBatch, TrainStepResult, TrajectoryItem
+from reef.train.types import PipelineContext, TaskItem, TrainDataItem, TrainingBatch, TrainStepResult, TrajectoryItem
 
 __all__ = [
     "CandidateBackend",
     "ComponentTrainer",
+    "PipelineContext",
     "PreparedStep",
-    "ProcessorContext",
     "StepExecution",
     "Task2Batch",
     "TaskItem",

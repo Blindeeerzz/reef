@@ -31,7 +31,7 @@ from reef.storage.records import RecordStore
 from reef.train.backend import CandidateBackend, PreparedStep, StepExecution
 from reef.train.evaluation.evaluators import BackendAlwaysSelectPlugin
 from reef.train.pipeline import InstructionFailure, TrainingPipeline
-from reef.train.types import PreparedCommit, ProcessorContext, TrainingBatch, TrainStepResult
+from reef.train.types import PipelineContext, PreparedCommit, TrainingBatch, TrainStepResult
 
 
 @dataclass
@@ -87,7 +87,7 @@ class Trainer:
         scenario: str,
         records: RecordStore,
         *,
-        pipeline_factory: Callable[[ProcessorContext], TrainingPipeline],
+        pipeline_factory: Callable[[PipelineContext], TrainingPipeline],
         candidate_backend: CandidateBackend | None = None,
         candidate_evaluator: CandidateEvaluationPlugin | None = None,
         algorithm_state: Mapping[str, Any] | None = None,
@@ -101,7 +101,7 @@ class Trainer:
         if candidate_evaluator is not None and not isinstance(candidate_evaluator, CandidateEvaluationPlugin):
             raise TypeError("candidate_evaluator must inherit CandidateEvaluationPlugin")
         pipeline = pipeline_factory(
-            ProcessorContext(
+            PipelineContext(
                 scenario=scenario,
                 report_type=report_type,
                 experiment_logger=(experiment_logger if experiment_logger is not None else NullExperimentLogger()),

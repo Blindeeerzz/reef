@@ -35,7 +35,7 @@ from reef.observability import ExperimentLogger
 from reef.record2record import AssemblyStatus, PassThroughStage, Record2RecordStage
 from reef.record2task import NoTasks, Record2Task
 from reef.train.processors.base import NoBatches, Task2Batch
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch
+from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch
 
 #: In manual mode the pipeline holds at most this many batches of sets; it releases older ones.
 MANUAL_HELD_BATCHES = 4
@@ -66,7 +66,7 @@ class TrainingPipeline:
 
     def __init__(
         self,
-        context: ProcessorContext,
+        context: PipelineContext,
         *,
         record_stage: Record2RecordStage | None = None,
         record2task: Record2Task | None = None,

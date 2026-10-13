@@ -23,7 +23,7 @@ from reef.train.algos import StepScheduling
 from reef.train.pipeline import TrainingPipeline
 from reef.train.runtime_backend import RuntimeCandidateBackend
 from reef.train.slime_backend.reef_adapters.preparation import prepare_slime_step
-from reef.train.types import ProcessorContext, TrainingBatch
+from reef.train.types import PipelineContext, TrainingBatch
 
 
 class FakeWorker:
@@ -94,7 +94,7 @@ def _successor(prior_messages, next_state: str):
 
 
 def _processor(batch_size: int = 1, *, worker=None, ttl_s: float = 900.0, clients=None, **config):
-    context = ProcessorContext("s", {"batch_size": batch_size, "session_ttl_s": ttl_s, **config})
+    context = PipelineContext("s", {"batch_size": batch_size, "session_ttl_s": ttl_s, **config})
     stage = openclawrl_record_stage(context, worker=worker, clients=clients)
     return TrainingPipeline(
         context,
@@ -485,7 +485,7 @@ def test_the_prm_record_file_reports_the_judged_population(tmp_path) -> None:
     """A batch mean cannot tell "the judges disagree" from "they never ran"."""
     record = tmp_path / "prm-records.jsonl"
     worker = FakeWorker()
-    context = ProcessorContext("s", {"batch_size": 1, "prm_record_file": str(record)})
+    context = PipelineContext("s", {"batch_size": 1, "prm_record_file": str(record)})
     stage = openclawrl_record_stage(context, worker=worker)
     processor = TrainingPipeline(
         context,

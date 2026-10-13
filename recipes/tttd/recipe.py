@@ -14,7 +14,7 @@ from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
 from reef.train.algos import StepScheduling
-from reef.train.types import ProcessorContext
+from reef.train.types import PipelineContext
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ class TTTDGrouping(ReportGrouping):
         }
 
 
-def tttd_record_stage(context: ProcessorContext) -> ReportStage:
+def tttd_record_stage(context: PipelineContext) -> ReportStage:
     """TTTD's record stage: one group per step, in step order; a terminal report owns its sources."""
     groups_per_step, rollouts_per_group = tttd_grid(context.config)
     return ReportStage(
@@ -108,10 +108,10 @@ class TTTDRecipe(WeightTrainingRecipe):
             scheduling=StepScheduling(unit="sample", batch_size="actual"),
         )
 
-    def build_record_stage(self, context: ProcessorContext) -> ReportStage:
+    def build_record_stage(self, context: PipelineContext) -> ReportStage:
         return tttd_record_stage(context)
 
-    def build_record2task(self, context: ProcessorContext) -> TTTDTasks:
+    def build_record2task(self, context: PipelineContext) -> TTTDTasks:
         return TTTDTasks(context)
 
     def __post_init__(self) -> None:

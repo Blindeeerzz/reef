@@ -7,13 +7,13 @@ from reef.record2task import ReportTasks
 from reef.train.pipeline import TrainingPipeline
 from reef.train.processors.base import Task2Batch
 from reef.train.processors.reported import SampleAssembly
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
+from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 
 class ThresholdTasks(ReportTasks):
     """One report becomes one sample, with no score filtering."""
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         self.assembly = SampleAssembly.from_config(context)
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
@@ -28,7 +28,7 @@ class ThresholdBatches(Task2Batch):
 
 
 def threshold_pipeline(
-    context: ProcessorContext,
+    context: PipelineContext,
     *,
     record_stage: ReportStage | None = None,
     task2batch: Task2Batch | None = None,

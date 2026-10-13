@@ -228,7 +228,7 @@ def test_report_processor_reserves_and_acknowledges_mixed_data():
     from reef.record2task import ReportTasks
     from reef.train.pipeline import TrainingPipeline
     from reef.train.processors.base import Task2Batch
-    from reef.train.types import ProcessorContext
+    from reef.train.types import PipelineContext
 
     class MixedTasks(ReportTasks):
         def make_sample(self, context):
@@ -245,7 +245,7 @@ def test_report_processor_reserves_and_acknowledges_mixed_data():
 
     from reef.record2record import ReportGrouping, ReportStage
 
-    context = ProcessorContext("mixed", {"batch_size": 2})
+    context = PipelineContext("mixed", {"batch_size": 2})
     processor = TrainingPipeline(
         context,
         record_stage=ReportStage("mixed", None, ReportGrouping(), exclusive_sources=True),

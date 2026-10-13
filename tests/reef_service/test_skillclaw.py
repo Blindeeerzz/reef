@@ -28,7 +28,7 @@ from reef.recipe.registry import build_recipe
 from reef.train.cordis_backend import Mutation
 from reef.train.cordis_backend.processor import trace_pipeline
 from reef.train.evaluation.evaluators import BackendAlwaysSelectPlugin
-from reef.train.types import ProcessorContext
+from reef.train.types import PipelineContext
 
 from ._strategies import resolve_episode_scorer, resolve_proposer
 
@@ -431,7 +431,7 @@ def test_the_days_last_report_completes_the_batch_passes_included() -> None:
             agent_record_id=agent_record_id,
         )
 
-    processor = trace_pipeline(ProcessorContext("s", {"batch_size": 3}), "reports")
+    processor = trace_pipeline(PipelineContext("s", {"batch_size": 3}), "reports")
     for index, score in enumerate((1.0, 0.0), start=1):
         processor.ingest(_inference(f"inf-{index}"))
         processor.ingest(_report(f"rep-{index}", score, f"inf-{index}"))

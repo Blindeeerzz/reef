@@ -46,7 +46,7 @@ from reef.recipe.generated_tasks.recipe import task_group_record_stage
 from reef.record2record import GroupDecision, ReportContext
 from reef.train.algos.registry import resolve_objective
 from reef.train.pipeline import TrainingPipeline
-from reef.train.types import ProcessorContext, TrainingBatch, trajectory_groups
+from reef.train.types import PipelineContext, TrainingBatch, trajectory_groups
 
 MODULE = "reef_service.test_generated_tasks"
 DESCRIPTION = "shell tasks with hidden state under /var and /etc"
@@ -87,7 +87,7 @@ def report(
 
 
 def processor(**config: object) -> TrainingPipeline:
-    context = ProcessorContext("tasks", {"tasks_per_step": 2, "plays_per_task": 2, **config})
+    context = PipelineContext("tasks", {"tasks_per_step": 2, "plays_per_task": 2, **config})
     batches = GeneratedTaskBatches(context)
     stage = task_group_record_stage(context)
     return TrainingPipeline(
@@ -165,9 +165,9 @@ def test_a_task_group_waits_for_plays_per_task_episodes() -> None:
 
 
 def test_the_assembly_spans_an_episodes_turns_and_realigns_the_think_scaffold() -> None:
-    assembly = episode_assembly(ProcessorContext("tasks", {}))
+    assembly = episode_assembly(PipelineContext("tasks", {}))
     assert assembly.accept_multi_turn and assembly.scaffold_tolerance == 8
-    assert episode_assembly(ProcessorContext("tasks", {"scaffold_tolerance": 2})).scaffold_tolerance == 2
+    assert episode_assembly(PipelineContext("tasks", {"scaffold_tolerance": 2})).scaffold_tolerance == 2
 
 
 def test_the_objective_centers_and_scales_rewards_within_each_task_group() -> None:
@@ -353,7 +353,7 @@ def rounds(
 ) -> tuple[TrainingPipeline, StandInGenerator]:
     player = player if player is not None else StandInGenerator(tmp_path / "tasks")
     worker = worker if worker is not None else InlineWorker()
-    context = ProcessorContext(
+    context = PipelineContext(
         "tasks",
         {
             "tasks_per_step": 2,
@@ -572,7 +572,7 @@ def test_a_round_that_never_finishes_is_named_in_the_status(tmp_path: Path) -> N
 
 
 def test_the_real_worker_runs_a_round_off_the_trainers_thread(tmp_path: Path) -> None:
-    context = ProcessorContext(
+    context = PipelineContext(
         "tasks", {"rounds": 1, "description": "shell tasks", "state_dir": str(tmp_path / "state")}
     )
     stage = task_group_record_stage(context)
@@ -690,7 +690,7 @@ def test_a_processor_configuration_that_cannot_train_is_refused(config: dict[str
 
 def test_rounds_need_a_description_a_state_dir_and_the_generator_service() -> None:
     def built(**config: object) -> GeneratedTaskTasks:
-        context = ProcessorContext("tasks", {"rounds": 1, **config})
+        context = PipelineContext("tasks", {"rounds": 1, **config})
         return GeneratedTaskTasks(context, task_group_record_stage(context), task_generator=ScriptedGenerator())
 
     with pytest.raises(ValueError, match="description"):
@@ -749,7 +749,7 @@ def test_the_section_selects_a_generator_class_built_once_for_each_scenario(tmp_
     assert isinstance(recipe, GeneratedTaskRecipe)
     assert recipe.task_generation == TaskGenerationConfig(PluginReference(ScriptedGenerator, {"count": 3}), environ)
     ScriptedGenerator.built.clear()
-    built = recipe.build_pipeline(ProcessorContext("one"))
+    built = recipe.build_pipeline(PipelineContext("one"))
     assert isinstance(built.task2batch, GeneratedTaskBatches) and isinstance(built.record2task, GeneratedTaskTasks)
     assert isinstance(built.record2task.task_generator, ScriptedGenerator)
     assert ScriptedGenerator.built == [{"config": {"count": 3}, "scenario": "one", "environ": environ}]

@@ -7,7 +7,7 @@ from typing import Any
 
 from reef.train.processors import DistillBatches
 from reef.train.processors.distill import DistillTasks, normalize_messages_for_template
-from reef.train.types import ProcessorContext
+from reef.train.types import PipelineContext
 
 #: The reference implementation's demonstration block (idanshen/Self-Distillation, ``main.py``).
 DEFAULT_CONTEXT_TEMPLATE = (
@@ -36,7 +36,7 @@ class SDFTTasks(DistillTasks):
     block is ``context_template`` with ``{context}`` replaced.
     """
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         # A bad template fails before the tokenizer loads.
         self.template = context_block_template(context.config)
         super().__init__(context)

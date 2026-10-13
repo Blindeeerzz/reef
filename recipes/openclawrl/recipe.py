@@ -12,7 +12,7 @@ from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.train.algos import StepScheduling
 from reef.train.pipeline import TrainingPipeline
-from reef.train.types import ProcessorContext
+from reef.train.types import PipelineContext
 
 _logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ class OpenClawRLRecipe(WeightTrainingRecipe):
             scheduling=StepScheduling(unit="sample"),
         )
 
-    def build_pipeline(self, context: ProcessorContext) -> TrainingPipeline:
+    def build_pipeline(self, context: PipelineContext) -> TrainingPipeline:
         # The batches write what the stage's judging saw, so both share one judging.
         configured = context.with_config(self.pipeline_config())
         record_stage = openclawrl_record_stage(configured)

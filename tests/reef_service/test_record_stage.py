@@ -22,7 +22,7 @@ from reef.record2record import (
 )
 from reef.record2task import Record2Task, ReportTasks, SkippedReport, TaskResult
 from reef.storage.sqlite import SQLiteRecordStore
-from reef.train import ProcessorContext, Trainer
+from reef.train import PipelineContext, Trainer
 from reef.train.pipeline import TrainingPipeline
 from reef.train.processors import Task2Batch
 from reef.train.types import TaskItem, TrainDataItem, TrainingBatch
@@ -80,7 +80,7 @@ class RecordingBatches(Task2Batch):
 
     supported_training_modes = frozenset({"auto", "manual", "hybrid"})
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         super().__init__(context)
         self.closed = False
 
@@ -97,7 +97,7 @@ class RecordingBatches(Task2Batch):
 class RecordingPipeline(TrainingPipeline):
     """Sends records through ``WithholdingStage``, ``RecordingTasks``, and ``RecordingBatches``. It never becomes ready."""
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         self.stage = WithholdingStage()
         self.recording = RecordingTasks()
         self.batches = RecordingBatches(context)
@@ -114,7 +114,7 @@ class DroppingReportStage(ReportStage):
         super().ingest(record)
 
 
-def dropping_pipeline(context: ProcessorContext) -> TrainingPipeline:
+def dropping_pipeline(context: PipelineContext) -> TrainingPipeline:
     return threshold_pipeline(context, record_stage=DroppingReportStage(context.scenario, None, ReportGrouping()))
 
 
@@ -152,7 +152,7 @@ class PairPipeline(TrainingPipeline):
     """Trains pairs of reports."""
 
     def __init__(self) -> None:
-        context = ProcessorContext("s", {"batch_size": 1})
+        context = PipelineContext("s", {"batch_size": 1})
         self.pair_tasks = PairTasks()
         super().__init__(
             context,
@@ -180,7 +180,7 @@ def test_the_pass_through_stage_forms_one_set_per_record_in_arrival_order() -> N
 
 @pytest.mark.unit
 def test_the_pipeline_keeps_instructions_and_sends_other_records_through_its_stage() -> None:
-    processor = RecordingPipeline(ProcessorContext("s", training_mode="hybrid"))
+    processor = RecordingPipeline(PipelineContext("s", training_mode="hybrid"))
     processor.ingest(inference("i1"))
     processor.ingest(inference("drop-1"))
     processor.ingest(instruction("train-1"))
@@ -191,7 +191,7 @@ def test_the_pipeline_keeps_instructions_and_sends_other_records_through_its_sta
 
 @pytest.mark.unit
 def test_the_pipeline_adds_its_stages_background_work_and_status_and_closes_them() -> None:
-    processor = RecordingPipeline(ProcessorContext("s", training_mode="hybrid"))
+    processor = RecordingPipeline(PipelineContext("s", training_mode="hybrid"))
     assert not processor.derivation_pending()
     processor.stage.pending = True
     assert processor.derivation_pending()
@@ -291,7 +291,7 @@ def test_a_batch_holds_the_tasks_of_every_report_in_a_group_in_arrival_order() -
 
 @pytest.mark.unit
 def test_the_default_pipeline_makes_no_tasks_and_no_batch() -> None:
-    processor = TrainingPipeline(ProcessorContext("s"))
+    processor = TrainingPipeline(PipelineContext("s"))
     record_set = SingleRecordSet(set_id="i1", arrival_index=1, record=inference("i1"))
     assert processor.record2task.make_tasks(record_set) == TaskResult(SetAssembly(AssemblyStatus.INGESTED))
     processor.ingest(inference("i1"))

@@ -43,7 +43,7 @@ from reef.record2task import ReportTasks, TaskResult
 from reef.record2task.generator.client import DuplicateTask, Generator, HttpGenerator, TaskNameConflict
 from reef.train.processors.base import Task2Batch
 from reef.train.processors.reported import SampleAssembly
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
+from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +123,7 @@ class RoundOutcome(SupportsReceipt):
     error: str
 
 
-def episode_assembly(context: ProcessorContext) -> SampleAssembly:
+def episode_assembly(context: PipelineContext) -> SampleAssembly:
     """The sample assembly for an agent's episode: many model calls that extend one conversation."""
     return SampleAssembly.from_config(
         context.with_config(
@@ -150,7 +150,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
 
     def __init__(
         self,
-        context: ProcessorContext,
+        context: PipelineContext,
         round_stage: RoundStage,
         *,
         task_generator: TaskGenerator | None = None,
@@ -388,7 +388,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
 class GeneratedTaskBatches(Task2Batch):
     """Batch the training arm's complete task groups, ``tasks_per_step`` groups to a batch."""
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         tasks_per_step = int(context.config.get("tasks_per_step", DEFAULT_TASKS_PER_STEP))
         plays_per_task = int(context.config.get("plays_per_task", DEFAULT_PLAYS_PER_TASK))
         if tasks_per_step <= 0:

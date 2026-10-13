@@ -35,7 +35,7 @@ from reef.train.evaluation import CandidateEvaluationConfig, CandidateEvaluation
 from reef.train.pipeline import TrainingPipeline
 from reef.train.processors.base import Task2Batch
 from reef.train.trainer import ComponentTrainer, Trainer
-from reef.train.types import ProcessorContext
+from reef.train.types import PipelineContext
 
 
 @dataclass(frozen=True)
@@ -370,7 +370,7 @@ class WeightTrainingRecipe(Recipe):
     exact-version training; a positive value admits same-incarnation samples
     up to that lag before the existing training path runs. The default
     :meth:`build` also gives it to the pipeline as
-    ``ProcessorContext.max_staleness``.
+    ``PipelineContext.max_staleness``.
 
     ``candidate_evaluation`` is framework-owned configuration derived from an
     optional top-level ``evaluation`` section. The plugin class it names builds one
@@ -512,7 +512,7 @@ class WeightTrainingRecipe(Recipe):
 
         Defaults to this recipe's data config field values. The shared
         ``max_staleness`` field is not included: the default :meth:`build`
-        passes it as the typed ``ProcessorContext.max_staleness`` instead.
+        passes it as the typed ``PipelineContext.max_staleness`` instead.
         Override this method to rename keys or add stage-only entries.
         """
         return {
@@ -521,7 +521,7 @@ class WeightTrainingRecipe(Recipe):
             if name not in ("max_staleness", "training_mode")
         }
 
-    def build_record_stage(self, context: ProcessorContext) -> Record2RecordStage | None:
+    def build_record_stage(self, context: PipelineContext) -> Record2RecordStage | None:
         """Build the record-to-record stage of one scenario: this method's grouping, judging, and eligibility.
 
         ``context`` carries :meth:`pipeline_config`. Return ``None`` to use
@@ -529,14 +529,14 @@ class WeightTrainingRecipe(Recipe):
         """
         return None
 
-    def build_record2task(self, context: ProcessorContext) -> Record2Task | None:
+    def build_record2task(self, context: PipelineContext) -> Record2Task | None:
         """Build the record-to-task stage of one scenario: how this method turns a record set into tasks.
 
         ``context`` carries :meth:`pipeline_config`. Return ``None`` to make no tasks.
         """
         return None
 
-    def build_task2batch(self, context: ProcessorContext) -> Task2Batch:
+    def build_task2batch(self, context: PipelineContext) -> Task2Batch:
         """Build the task-to-batch stage of one scenario: the ``task2batch`` class of :meth:`training_spec`.
 
         ``context`` carries :meth:`pipeline_config`.
@@ -546,7 +546,7 @@ class WeightTrainingRecipe(Recipe):
             raise TypeError(f"{type(self).__name__} declares no task2batch")
         return task2batch_class(context)
 
-    def build_pipeline(self, context: ProcessorContext) -> TrainingPipeline:
+    def build_pipeline(self, context: PipelineContext) -> TrainingPipeline:
         """Build the training pipeline of one scenario from the three stages.
 
         Override this method when the stages need each other, for example a

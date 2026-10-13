@@ -794,7 +794,7 @@ policy.
 For a dotted weight-training deployment this field is also accepted as
 ``reef.training_mode``. Named presets set it in their own ``data`` section.
 
-The training pipeline receives ``ProcessorContext.training_mode`` as its
+The training pipeline receives ``PipelineContext.training_mode`` as its
 initial batching mode. The modes share ingestion and retention. In ``manual``
 an instruction's batch has no record sets; in ``hybrid`` it takes the sets that
 an automatic batch would. A recipe's ``Task2Batch`` declares

@@ -15,7 +15,7 @@ from reef.recipe.config_fields import config_field
 from reef.recipe.errors import RecipeConfigError
 from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
 from reef.train.algos import StepScheduling
-from reef.train.types import ProcessorContext
+from reef.train.types import PipelineContext
 
 
 class SDPOGrouping(ReportGrouping):
@@ -65,7 +65,7 @@ class SDPOGrouping(ReportGrouping):
         }
 
 
-def sdpo_record_stage(context: ProcessorContext) -> ReportStage:
+def sdpo_record_stage(context: PipelineContext) -> ReportStage:
     """SDPO's record stage: one group per sampling step, in step order; a terminal report owns its source."""
     groups_per_step, rollouts_per_group = sdpo_grid(context.config)
     return ReportStage(
@@ -133,10 +133,10 @@ class SDPORecipe(WeightTrainingRecipe):
             scheduling=StepScheduling(unit="sample", batch_size="actual"),
         )
 
-    def build_record_stage(self, context: ProcessorContext) -> ReportStage:
+    def build_record_stage(self, context: PipelineContext) -> ReportStage:
         return sdpo_record_stage(context)
 
-    def build_record2task(self, context: ProcessorContext) -> SDPOTasks:
+    def build_record2task(self, context: PipelineContext) -> SDPOTasks:
         return SDPOTasks(context)
 
     def __post_init__(self) -> None:

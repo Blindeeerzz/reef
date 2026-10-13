@@ -30,7 +30,7 @@ from reef.record2record import ReportContext
 from reef.record2task import ReportTasks
 from reef.train.processors.base import Task2Batch
 from reef.train.processors.reported import SampleAssembly
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
+from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ def attempt_release_ids(context: ReportContext) -> set[str]:
     }
 
 
-def coral_assembly(context: ProcessorContext) -> SampleAssembly:
+def coral_assembly(context: PipelineContext) -> SampleAssembly:
     """The sample assembly for CORAL attempts: multi-call trajectories are on by default."""
     return SampleAssembly.from_config(
         context.with_config({"accept_multi_turn_policy_samples": True, **context.config})
@@ -78,7 +78,7 @@ def coral_assembly(context: ProcessorContext) -> SampleAssembly:
 class CoralTasks(ReportTasks):
     """One scored attempt as one task, with its CORAL metadata, sibling group, and release."""
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         self.assembly = coral_assembly(context)
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
@@ -105,7 +105,7 @@ class CoralBatches(Task2Batch):
       enough scored children simply never train.
     """
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         config = dict(context.config)
         self.group_size = int(config.get("group_size", 4))
         if self.group_size < 2:

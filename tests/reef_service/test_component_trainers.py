@@ -46,7 +46,7 @@ from reef.train import CandidateBackend, ComponentTrainer, PreparedStep, Trainer
 from reef.train.evaluation import EvaluationResult, UpdateCandidate
 from reef.train.pipeline import TrainingPipeline
 from reef.train.processors.base import Task2Batch
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch
+from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch
 
 from ._threshold_processor import ThresholdBatches, threshold_pipeline
 from ._trajectories import policy_trajectory
@@ -209,7 +209,7 @@ class _TwoTrainerRecipe(Recipe):
             }
         )
 
-    def pipeline_for(self, component: str, context: ProcessorContext) -> TrainingPipeline:
+    def pipeline_for(self, component: str, context: PipelineContext) -> TrainingPipeline:
         if component in self.hybrid_components:
             return threshold_pipeline(context, task2batch=HybridThresholdBatches(context))
         return threshold_pipeline(context)
@@ -1233,7 +1233,7 @@ class _SlotGrouping(ReportGrouping):
 class _SlottedRecipe(_TwoTrainerRecipe):
     """The two trainer recipe whose harness batches reports by group and retry slot."""
 
-    def pipeline_for(self, component: str, context: ProcessorContext) -> TrainingPipeline:
+    def pipeline_for(self, component: str, context: PipelineContext) -> TrainingPipeline:
         if component == HARNESS:
             # The threshold pipeline with ``_SlotGrouping``.
             return threshold_pipeline(
@@ -1532,7 +1532,7 @@ class RetiringRetriesBatches(Task2Batch):
 class _ComputedWeightsRecipe(_TwoTrainerRecipe):
     """The two trainer recipe whose weights trainer computes its own feedback."""
 
-    def pipeline_for(self, component: str, context: ProcessorContext) -> TrainingPipeline:
+    def pipeline_for(self, component: str, context: PipelineContext) -> TrainingPipeline:
         if component == WEIGHTS:
             # Trains the judged turns of ``_RetiringRetriesJudging``.
             return TrainingPipeline(

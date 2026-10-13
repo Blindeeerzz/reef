@@ -28,7 +28,7 @@ from reef.train.algos.helpers import next_steps
 from reef.train.pipeline import TrainingPipeline
 from reef.train.processors.base import Task2Batch
 from reef.train.processors.reported import SampleAssembly
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectory_groups
+from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectory_groups
 
 GROUPED_PG_OBJECTIVE = "reef_service._grouped_pg:GroupedPolicyObjective"
 
@@ -68,7 +68,7 @@ class ComparisonSetGrouping(ReportGrouping):
 class ComparisonSetTasks(ReportTasks):
     """One report as one sample in its comparison set."""
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         self.assembly = SampleAssembly.from_config(context)
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
@@ -83,7 +83,7 @@ class GroupedPolicyBatches(Task2Batch):
         return TrainingBatch(f"{self.scenario}:grouped:{batch_number}", tasks)
 
 
-def grouped_policy_pipeline(context: ProcessorContext) -> TrainingPipeline:
+def grouped_policy_pipeline(context: PipelineContext) -> TrainingPipeline:
     """Reports grouped by ``metadata.comparison_set``, two to a group."""
     return TrainingPipeline(
         context,

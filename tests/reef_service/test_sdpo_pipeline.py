@@ -23,7 +23,7 @@ from recipes.sdpo.recipe import sdpo_record_stage
 from recipes.sdpo.slime import SdpoAlgorithm, SdpoSettings
 from reef.core import AgentRecord, RequestType
 from reef.recipe.errors import RecipeConfigError
-from reef.train import ProcessorContext
+from reef.train import PipelineContext
 from reef.train.algos import StepScheduling
 from reef.train.pipeline import TrainingPipeline
 from reef.train.slime_backend.data_builder import to_slime_rollout_data
@@ -55,7 +55,7 @@ def tokenizer(monkeypatch: pytest.MonkeyPatch) -> SDPOTokenizer:
 
 
 def processor(**config: Any) -> TrainingPipeline:
-    context = ProcessorContext(
+    context = PipelineContext(
         "science",
         {
             "groups_per_step": 1,

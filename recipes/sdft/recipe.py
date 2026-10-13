@@ -14,7 +14,7 @@ from reef.recipe.errors import RecipeConfigError
 from reef.record2record import ReportStage
 from reef.train.algos import StepScheduling
 from reef.train.processors.distill import distill_record_stage
-from reef.train.types import ProcessorContext
+from reef.train.types import PipelineContext
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -59,10 +59,10 @@ class SDFTRecipe(WeightTrainingRecipe):
             scheduling=StepScheduling(unit="sample"),
         )
 
-    def build_record_stage(self, context: ProcessorContext) -> ReportStage:
+    def build_record_stage(self, context: PipelineContext) -> ReportStage:
         return distill_record_stage(context)
 
-    def build_record2task(self, context: ProcessorContext) -> SDFTTasks:
+    def build_record2task(self, context: PipelineContext) -> SDFTTasks:
         return SDFTTasks(context)
 
     def __post_init__(self) -> None:

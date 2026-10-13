@@ -10,8 +10,8 @@ from reef.core import AgentRecord, RequestType
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.train import (
     CandidateBackend,
+    PipelineContext,
     PreparedStep,
-    ProcessorContext,
     Trainer,
     TrainingBatch,
     TrainingPipeline,
@@ -34,7 +34,7 @@ class ExamplePipeline(TrainingPipeline):
     def output_schema(self) -> type[ExampleBatch]:
         return ExampleBatch
 
-    def __init__(self, context: ProcessorContext, events: list[str]) -> None:
+    def __init__(self, context: PipelineContext, events: list[str]) -> None:
         super().__init__(context)
         self.events = events
         self.items: list[AgentRecord] = []
@@ -102,7 +102,7 @@ class ExampleBackend(CandidateBackend):
 
 @pytest.mark.unit
 def test_training_pipeline_is_the_no_update_default() -> None:
-    processor = TrainingPipeline(ProcessorContext(scenario="math"))
+    processor = TrainingPipeline(PipelineContext(scenario="math"))
     assert processor.ready() is False
     record = AgentRecord.create(scenario="math", request_type=RequestType.REPORT, payload={}, agent_record_id="r1")
     processor.ingest(record)
@@ -135,7 +135,7 @@ def test_prepared_step_enforces_its_single_outcome() -> None:
 
 @pytest.mark.unit
 def test_custom_pipelines_default_to_releasing_no_records() -> None:
-    processor = ExamplePipeline(ProcessorContext("math"), [])
+    processor = ExamplePipeline(PipelineContext("math"), [])
 
     assert processor.releasable_record_ids() == frozenset()
 

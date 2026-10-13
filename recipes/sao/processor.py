@@ -8,7 +8,7 @@ from reef.record2task import ReportTasks
 from reef.train.processors.base import Task2Batch
 from reef.train.processors.common import make_policy_trajectory
 from reef.train.processors.reported import SampleAssembly
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
+from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 
 def make_sao_sample(item: AgentRecord, reward: float) -> TrajectoryItem:
@@ -33,7 +33,7 @@ def make_sao_sample(item: AgentRecord, reward: float) -> TrajectoryItem:
 class SAOTasks(ReportTasks):
     """One scored rollout as one SAO task, with ``action_mask`` and ``rollout_created_at``."""
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         self.assembly = SampleAssembly.from_config(context, make_sample=make_sao_sample)
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:

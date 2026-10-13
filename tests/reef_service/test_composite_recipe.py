@@ -33,7 +33,7 @@ from reef.surface.config import CONFIG_FILE, ConfigInferenceHooks, ConfigValidat
 from reef.train import CandidateBackend, PreparedStep, Trainer, TrainStepResult
 from reef.train.evaluation import EvaluationResult, UpdateCandidate
 from reef.train.pipeline import TrainingPipeline
-from reef.train.types import ProcessorContext
+from reef.train.types import PipelineContext
 
 from ._threshold_processor import ThresholdBatches, threshold_pipeline
 
@@ -101,7 +101,7 @@ class HybridThresholdBatches(ThresholdBatches):
     supported_training_modes = frozenset({"auto", "manual", "hybrid"})
 
 
-def hybrid_threshold_pipeline(context: ProcessorContext) -> TrainingPipeline:
+def hybrid_threshold_pipeline(context: PipelineContext) -> TrainingPipeline:
     """The threshold pipeline, one report per batch, taking instructions too."""
     context = context.with_config({"batch_size": 1})
     return threshold_pipeline(context, task2batch=HybridThresholdBatches(context))

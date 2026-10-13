@@ -56,7 +56,7 @@ from reef.record2task.generator.wire import (
     task_from_document,
 )
 from reef.service.deploy.generator import generator_settings
-from reef.train.types import ProcessorContext
+from reef.train.types import PipelineContext
 
 pytestmark = pytest.mark.unit
 
@@ -674,7 +674,7 @@ def test_history_and_materials_reach_the_designer_and_feedback_uses_its_receipt(
         assert task.metadata["designer_record_id"] == "designer-1"
         assert task.name.startswith("harbor-history-")
         assert (await task_generator.validate(task)).is_valid
-        context = ProcessorContext("spade", {"plays_per_task": 2})
+        context = PipelineContext("spade", {"plays_per_task": 2})
         generation = GeneratedTaskTasks(context, task_group_record_stage(context), task_player=generator)
         result = await generation.played(item, 0)
         assert result.is_played and len(result.training_rewards) == 2 and set(result.measurement_rewards) == {"hint"}

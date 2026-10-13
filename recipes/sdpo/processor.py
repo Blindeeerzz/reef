@@ -27,7 +27,7 @@ from reef.train.processors.distill import (
     teacher_tokens_limit,
 )
 from reef.train.processors.reported import SampleAssembly
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
+from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
 #: The reference's reprompt strings (``sdpo.yaml`` at the pin), used verbatim.
 REPROMPT_TEMPLATE = "{prompt}{solution}{feedback}\n\nCorrectly solve the original question."
@@ -54,7 +54,7 @@ def sdpo_grid(config: Mapping[str, Any]) -> tuple[int, int]:
 class SDPOTasks(ReportTasks):
     """One rollout as one task, with its grid coordinates, request, and response for the teacher prompt."""
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         self.groups_per_step, self.rollouts_per_group = sdpo_grid(context.config)
         self.assembly = SampleAssembly.from_config(context)
 
@@ -102,7 +102,7 @@ class SDPOBatches(Task2Batch):
 
     batch_label = "sdpo"
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         config = dict(context.config)
         self.groups_per_step, self.rollouts_per_group = sdpo_grid(config)
         self.max_teacher_tokens = teacher_tokens_limit(config)

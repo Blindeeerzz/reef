@@ -20,7 +20,7 @@ from reef.train.processors.common import (
     make_policy_trajectory,
     sample_assembly_config_fields,
 )
-from reef.train.types import ProcessorContext, TrajectoryItem
+from reef.train.types import PipelineContext, TrajectoryItem
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ class SampleAssembly:
     @classmethod
     def from_config(
         cls,
-        context: ProcessorContext,
+        context: PipelineContext,
         make_sample: Callable[[AgentRecord, float], TrajectoryItem] | None = None,
     ) -> SampleAssembly:
         accept_multi_turn, realign_threshold, scaffold_tolerance = sample_assembly_config_fields(context.config)

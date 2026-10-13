@@ -16,7 +16,7 @@ from reef.artifact import ArtifactRef
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportValidationError
 from reef.core.trajectories import trajectory_reward
-from reef.train import ProcessorContext
+from reef.train import PipelineContext
 from reef.train.algos import StepScheduling
 from reef.train.pipeline import TrainingPipeline
 from reef.train.slime_backend.loss_families import resolve_loss_family
@@ -80,7 +80,7 @@ def _report(step: int, group: int, rollout: int, score: float) -> AgentRecord:
 
 
 def _processor(experiment_logger=None) -> TrainingPipeline:
-    context = ProcessorContext(
+    context = PipelineContext(
         "discovery",
         {
             "groups_per_step": 2,

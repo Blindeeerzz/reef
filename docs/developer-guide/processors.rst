@@ -123,7 +123,7 @@ Training modes
 --------------
 
 ``training_mode`` is an attribute of each pipeline. The recipe passes its
-initial value through ``Trainer.build`` and ``ProcessorContext``; it defaults
+initial value through ``Trainer.build`` and ``PipelineContext``; it defaults
 to ``auto``. A ``Task2Batch`` declares the modes it supports in
 ``supported_training_modes``; the default is ``auto`` only. Ingestion,
 acknowledgement and buffer release use the same methods and buffers in every

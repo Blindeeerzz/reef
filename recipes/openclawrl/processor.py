@@ -23,7 +23,7 @@ from reef.record2record import RecordJudging
 from reef.record2task import JudgedTasks
 from reef.train.processors.base import Task2Batch
 from reef.train.processors.common import make_policy_trajectory
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem, policy_row_violation
+from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem, policy_row_violation
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class OpenClawRLTasks(JudgedTasks):
 class OpenClawRLBatches(Task2Batch):
     """Judged turns into batches, and the PRM record file. ``judging`` is the record stage's judging."""
 
-    def __init__(self, context: ProcessorContext, judging: RecordJudging) -> None:
+    def __init__(self, context: PipelineContext, judging: RecordJudging) -> None:
         # What the judge actually saw goes to the PRM record file, one line
         # per batch. Upstream persists this per turn; without it a batch mean
         # is the only visible number. A file, not a log line: reef configures

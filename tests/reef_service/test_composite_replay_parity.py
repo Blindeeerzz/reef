@@ -32,7 +32,7 @@ from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train import ComponentTrainer, Trainer
 from reef.train.pipeline import TrainingPipeline
 from reef.train.processors.base import Task2Batch
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch
+from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch
 
 from ._threshold_processor import threshold_pipeline
 from ._trajectories import policy_trajectory
@@ -87,7 +87,7 @@ class SessionBatches(Task2Batch):
         return TrainingBatch(f"{self.scenario}:session:{batch_number}", tasks)
 
 
-def session_pipeline(context: ProcessorContext) -> TrainingPipeline:
+def session_pipeline(context: PipelineContext) -> TrainingPipeline:
     """Trains the judged turns of ``_SessionJudging``; a turn marked declined is unusable."""
     return TrainingPipeline(
         context,
@@ -115,7 +115,7 @@ class _StepGrouping(ReportGrouping):
         return GroupDecision.READY
 
 
-def step_pipeline(context: ProcessorContext) -> TrainingPipeline:
+def step_pipeline(context: PipelineContext) -> TrainingPipeline:
     """TTTD's shape: a step is one group of two (step, slot) reports, sources are exclusive, a step with a report
     marked mixed is discarded once complete, and a report that names no step is another role's and released."""
     stage = ReportStage(
@@ -124,7 +124,7 @@ def step_pipeline(context: ProcessorContext) -> TrainingPipeline:
     return threshold_pipeline(context, record_stage=stage)
 
 
-def tttd_pipeline(context: ProcessorContext) -> TrainingPipeline:
+def tttd_pipeline(context: PipelineContext) -> TrainingPipeline:
     """The TTTD recipe's stages, one group of two rollouts per step."""
     configured = context.with_config({"groups_per_step": 1, "rollouts_per_group": 2})
     return TrainingPipeline(

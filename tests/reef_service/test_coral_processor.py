@@ -17,13 +17,13 @@ from recipes.beta.coral.processor import ROOT_GROUP, CoralBatches, CoralTasks
 from recipes.beta.coral.recipe import coral_record_stage
 from reef.core import AgentRecord, RequestType
 from reef.train.pipeline import TrainingPipeline
-from reef.train.types import ProcessorContext, TrainingBatch
+from reef.train.types import PipelineContext, TrainingBatch
 
 SCENARIO = "coral-demo"
 
 
 def _processor(group_size=2):
-    context = ProcessorContext(SCENARIO, {"group_size": group_size})
+    context = PipelineContext(SCENARIO, {"group_size": group_size})
     return TrainingPipeline(
         context,
         record_stage=coral_record_stage(context),

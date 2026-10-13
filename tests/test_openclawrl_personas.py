@@ -140,10 +140,10 @@ def _judged_turns(processor, worker, versions: list[str], score: float = 1.0) ->
 @pytest.mark.unit
 def test_openclawrl_processor_drops_unfillable_stale_version_candidates() -> None:
     from recipes.openclawrl import OpenClawRLBatches
-    from reef.train.types import ProcessorContext
+    from reef.train.types import PipelineContext
 
     worker = _FakeWorker()
-    context = ProcessorContext("s", {"batch_size": 3})
+    context = PipelineContext("s", {"batch_size": 3})
     stage = openclawrl_record_stage(context, worker=worker)
     processor = TrainingPipeline(
         context,
@@ -163,10 +163,10 @@ def test_openclawrl_processor_drops_unfillable_stale_version_candidates() -> Non
 @pytest.mark.unit
 def test_openclawrl_processor_keeps_single_version_queue_intact() -> None:
     from recipes.openclawrl import OpenClawRLBatches
-    from reef.train.types import ProcessorContext
+    from reef.train.types import PipelineContext
 
     worker = _FakeWorker()
-    context = ProcessorContext("s", {"batch_size": 3})
+    context = PipelineContext("s", {"batch_size": 3})
     stage = openclawrl_record_stage(context, worker=worker)
     processor = TrainingPipeline(
         context,

@@ -24,7 +24,7 @@ from reef.record2task import ReportTasks, SkippedReport
 from reef.train.processors.base import Task2Batch
 from reef.train.processors.common import flatten_content, recorded_request, recorded_response
 from reef.train.processors.reported import SampleAssembly
-from reef.train.types import ProcessorContext, TrainDataItem, TrainingBatch, TrajectoryItem
+from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ def normalize_tool_call(call: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def distill_record_stage(context: ProcessorContext) -> ReportStage:
+def distill_record_stage(context: PipelineContext) -> ReportStage:
     """The record stage for distillation: every report trains by itself and owns its inference record."""
     return ReportStage(context.scenario, context.report_type, ReportGrouping(), exclusive_sources=True)
 
@@ -150,7 +150,7 @@ class DistillTasks(ReportTasks):
     :meth:`teacher_request` with its composition.
     """
 
-    def __init__(self, context: ProcessorContext) -> None:
+    def __init__(self, context: PipelineContext) -> None:
         self.assembly = SampleAssembly.from_config(context)
         self.max_teacher_tokens = teacher_tokens_limit(context.config)
         self.renderer = TeacherRenderer(context.config)

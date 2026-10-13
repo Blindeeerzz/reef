@@ -18,7 +18,7 @@ from reef.artifact.artifact import LiveWeightArtifactRef
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import TeacherContextReport
 from reef.core.trajectories import source_record_id
-from reef.train import ProcessorContext
+from reef.train import PipelineContext
 from reef.train.pipeline import TrainingPipeline
 from reef.train.processors import DistillBatches
 from reef.train.processors.common import recorded_response
@@ -122,7 +122,7 @@ def _report(
 
 
 def _processor(**config: Any) -> TrainingPipeline:
-    context = ProcessorContext(
+    context = PipelineContext(
         "science", {"batch_size": 1, "tokenizer_path": "/models/science", **config}, TeacherContextReport
     )
     return TrainingPipeline(
@@ -158,7 +158,7 @@ def test_by_default_the_teacher_reads_the_request_as_recorded(tokenizer: Countin
 
 @pytest.mark.unit
 def test_a_recipe_composes_the_teacher_request_from_the_response_and_the_context(tokenizer: CountingTokenizer) -> None:
-    context = ProcessorContext("science", {"batch_size": 1, "tokenizer_path": "/models/science"}, TeacherContextReport)
+    context = PipelineContext("science", {"batch_size": 1, "tokenizer_path": "/models/science"}, TeacherContextReport)
     processor = TrainingPipeline(
         context,
         record_stage=distill_record_stage(context),

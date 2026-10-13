@@ -21,7 +21,7 @@ from reef.recipe import WeightTrainingRecipe
 from reef.record2record import ReportGrouping, ReportStage
 from reef.runtime.interfaces import ActivatedModel, ModelCandidate, PreparedTrainingStep
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
-from reef.train import ProcessorContext, Trainer, TrainingPipeline
+from reef.train import PipelineContext, Trainer, TrainingPipeline
 from reef.train.algos import StepScheduling
 from reef.train.backend import CandidateBackend, PreparedStep
 from reef.train.evaluation import (
@@ -41,7 +41,7 @@ from ._threshold_processor import ThresholdBatches, ThresholdTasks, threshold_pi
 NUM_GPUS = 0
 
 
-def sao_pipeline(context: ProcessorContext) -> TrainingPipeline:
+def sao_pipeline(context: PipelineContext) -> TrainingPipeline:
     return TrainingPipeline(
         context, record_stage=sao_record_stage(context), record2task=SAOTasks(context), task2batch=SAOBatches(context)
     )
@@ -173,7 +173,7 @@ def positioned_report(sequence: int, reference: str, score: float) -> AgentRecor
 
 @pytest.mark.unit
 def test_recipe_processor_never_becomes_ready() -> None:
-    processor = TrainingPipeline(ProcessorContext("math"))
+    processor = TrainingPipeline(PipelineContext("math"))
     processor.ingest(inference("i1"))
 
     assert not processor.ready()
@@ -184,7 +184,7 @@ def test_recipe_processor_never_becomes_ready() -> None:
 
 @pytest.mark.unit
 def test_pairing_processor_uses_feedback_without_score_filtering() -> None:
-    processor = threshold_pipeline(ProcessorContext("math", {"batch_size": 2}))
+    processor = threshold_pipeline(PipelineContext("math", {"batch_size": 2}))
     processor.ingest(inference("bad"))
     processor.ingest(inference("good"))
     processor.ingest(report("bad-r", "bad", 0.1))
@@ -194,7 +194,7 @@ def test_pairing_processor_uses_feedback_without_score_filtering() -> None:
 
 @pytest.mark.unit
 def test_pairing_processor_emits_policy_samples_for_spo() -> None:
-    processor = threshold_pipeline(ProcessorContext("math", {"batch_size": 1}))
+    processor = threshold_pipeline(PipelineContext("math", {"batch_size": 1}))
     processor.ingest(inference("i1"))
     processor.ingest(report("r1", "i1", 0.8))
 
@@ -214,7 +214,7 @@ def test_pairing_processor_emits_policy_samples_for_spo() -> None:
 @pytest.mark.unit
 @pytest.mark.parametrize("bad_score", [float("nan"), float("inf"), float("-inf")])
 def test_pairing_processor_rejects_a_non_finite_score(bad_score: float) -> None:
-    processor = threshold_pipeline(ProcessorContext("math", {"batch_size": 1}))
+    processor = threshold_pipeline(PipelineContext("math", {"batch_size": 1}))
     processor.ingest(inference("i1"))
     with pytest.raises(ReportValidationError, match="finite"):
         processor.ingest(report("r1", "i1", bad_score))
@@ -224,7 +224,7 @@ def test_pairing_processor_rejects_a_non_finite_score(bad_score: float) -> None:
 @pytest.mark.unit
 def test_pairing_processor_assembles_ordered_multi_reference_report() -> None:
     processor = threshold_pipeline(
-        ProcessorContext("math", {"batch_size": 1, "accept_multi_turn_policy_samples": True})
+        PipelineContext("math", {"batch_size": 1, "accept_multi_turn_policy_samples": True})
     )
     first = training_inference("i1", [10, 20], [1], [-0.1])
     second = training_inference("i2", [10, 20, 11, 21], [1], [-0.2])
@@ -289,7 +289,7 @@ def test_cookbook_processors_assemble_before_rejecting_multi_turn_reports(
         }
 
     report_type = TTTDGroupedRolloutReport if processor_type is TTTDBatches else None
-    context = ProcessorContext("math", config, report_type=report_type)
+    context = PipelineContext("math", config, report_type=report_type)
     tasks = TTTDTasks(context) if processor_type is TTTDBatches else SAOTasks(context)
     processor = TrainingPipeline(
         context,
@@ -315,7 +315,7 @@ def test_cookbook_processors_assemble_before_rejecting_multi_turn_reports(
 
 @pytest.mark.unit
 def test_failed_multi_turn_assembly_preserves_inputs_and_other_live_reports() -> None:
-    processor = threshold_pipeline(ProcessorContext("math", {"batch_size": 1}))
+    processor = threshold_pipeline(PipelineContext("math", {"batch_size": 1}))
     processor.ingest(training_inference("i1", [10, 20], [1], [-0.1]))
     processor.ingest(training_inference("i2", [10, 20, 11, 21], [1], [-0.2]))
     processor.ingest(report("single", "i1", 1.0))
@@ -328,7 +328,7 @@ def test_failed_multi_turn_assembly_preserves_inputs_and_other_live_reports() ->
 
 @pytest.mark.unit
 def test_pairing_processor_raises_for_forked_multi_turn_episode() -> None:
-    processor = threshold_pipeline(ProcessorContext("math", {"accept_multi_turn_policy_samples": True}))
+    processor = threshold_pipeline(PipelineContext("math", {"accept_multi_turn_policy_samples": True}))
     processor.ingest(training_inference("i1", [1, 2, 3], [1], [-0.1]))
     processor.ingest(training_inference("i2", [1, 9, 3, 4], [1], [-0.2]))
     with pytest.raises(ValueError, match="cannot assemble"):
@@ -339,7 +339,7 @@ def test_pairing_processor_raises_for_forked_multi_turn_episode() -> None:
 
 @pytest.mark.unit
 def test_pairing_processor_rejects_report_eligibility_flags() -> None:
-    processor = threshold_pipeline(ProcessorContext("math"))
+    processor = threshold_pipeline(PipelineContext("math"))
     processor.ingest(inference("i1"))
     with pytest.raises(ReportValidationError, match="eligible"):
         processor.ingest(report("r1", "i1", 0.0, training={"eligible": False}))
@@ -349,7 +349,7 @@ def test_pairing_processor_rejects_report_eligibility_flags() -> None:
 
 @pytest.mark.unit
 def test_pairing_retention_consumes_reports_exactly_and_releases_trained_inference() -> None:
-    processor = threshold_pipeline(ProcessorContext("math", {"batch_size": 1}))
+    processor = threshold_pipeline(PipelineContext("math", {"batch_size": 1}))
     processor.ingest(inference("i1"))
     processor.ingest(report("r1", "i1", 1.0))
     processor.ingest(report("r2", "i1", 0.5))
@@ -373,7 +373,7 @@ def test_pairing_retention_consumes_reports_exactly_and_releases_trained_inferen
 
 @pytest.mark.unit
 def test_pairing_retention_protects_low_score_feedback_until_consumed() -> None:
-    processor = threshold_pipeline(ProcessorContext("math"))
+    processor = threshold_pipeline(PipelineContext("math"))
     processor.ingest(inference("i1"))
     processor.ingest(report("low", "i1", 0.1))
     assert processor.releasable_record_ids().isdisjoint({"i1", "low"})
@@ -383,7 +383,7 @@ def test_pairing_retention_protects_low_score_feedback_until_consumed() -> None:
 
 @pytest.mark.unit
 def test_pairing_retention_does_not_protect_consumed_inferences() -> None:
-    first = threshold_pipeline(ProcessorContext("math", {"batch_size": 1}))
+    first = threshold_pipeline(PipelineContext("math", {"batch_size": 1}))
     first.ingest(inference("i1"))
     first.ingest(report("r1", "i1", 1.0))
     batch = first.build_batch()
@@ -397,7 +397,7 @@ def test_pairing_retention_does_not_protect_consumed_inferences() -> None:
 
 @pytest.mark.unit
 def test_grpo_retention_releases_complete_comparison_set_after_acknowledgement() -> None:
-    processor = grouped_policy_pipeline(ProcessorContext("math", {"batch_size": 1}))
+    processor = grouped_policy_pipeline(PipelineContext("math", {"batch_size": 1}))
     for agent_record_id, score in (("i1", 0.2), ("i2", 0.8)):
         processor.ingest(inference(agent_record_id))
         processor.ingest(report("r" + agent_record_id, agent_record_id, score, comparison_set="set-a"))
@@ -410,13 +410,13 @@ def test_grpo_retention_releases_complete_comparison_set_after_acknowledgement()
 
 @pytest.mark.unit
 def test_algorithms_consume_formatted_batches_and_keep_algorithm_state() -> None:
-    sft_processor = threshold_pipeline(ProcessorContext("math", {"batch_size": 1}))
+    sft_processor = threshold_pipeline(PipelineContext("math", {"batch_size": 1}))
     sft_processor.ingest(inference("i1"))
     sft_processor.ingest(report("r1", "i1", 1.0))
     sft_result = prepare_slime_step(sft_processor.build_batch(), "sft", {}, StepScheduling())
     assert sft_result.next_algorithm_state == {"steps": 1}
 
-    grpo_processor = grouped_policy_pipeline(ProcessorContext("math", {"batch_size": 1}))
+    grpo_processor = grouped_policy_pipeline(PipelineContext("math", {"batch_size": 1}))
     for rid, score in (("i3", 0.2), ("i4", 0.8)):
         grpo_processor.ingest(inference(rid))
         grpo_processor.ingest(report("r" + rid, rid, score, comparison_set="x"))
@@ -432,7 +432,7 @@ def test_trainer_reserves_batch_and_commits_backend_preparation() -> None:
     trainer = Trainer.build(
         "math",
         records,
-        pipeline_factory=lambda context: threshold_pipeline(ProcessorContext(context.scenario, {"batch_size": 1})),
+        pipeline_factory=lambda context: threshold_pipeline(PipelineContext(context.scenario, {"batch_size": 1})),
         candidate_backend=_PreparingBackend(),
     )
 
@@ -465,7 +465,7 @@ def test_trainer_tells_the_processor_a_dropped_batch_before_acknowledging_it() -
             events.append(f"acknowledged {batch_id}")
             return super().acknowledge(batch_id)
 
-    def noting_pipeline(context: ProcessorContext) -> NotingPipeline:
+    def noting_pipeline(context: PipelineContext) -> NotingPipeline:
         return NotingPipeline(
             context,
             record_stage=ReportStage(context.scenario, context.report_type, ReportGrouping()),
@@ -712,7 +712,7 @@ def test_trainer_restores_algorithm_state_from_metadata() -> None:
     first = Trainer.build(
         "math",
         records,
-        pipeline_factory=lambda context: threshold_pipeline(ProcessorContext(context.scenario, {"batch_size": 1})),
+        pipeline_factory=lambda context: threshold_pipeline(PipelineContext(context.scenario, {"batch_size": 1})),
         candidate_backend=_PreparingBackend(),
     )
 
@@ -731,7 +731,7 @@ def test_trainer_restores_algorithm_state_from_metadata() -> None:
     second = Trainer.build(
         "math",
         records,
-        pipeline_factory=lambda context: threshold_pipeline(ProcessorContext(context.scenario, {"batch_size": 1})),
+        pipeline_factory=lambda context: threshold_pipeline(PipelineContext(context.scenario, {"batch_size": 1})),
         candidate_backend=_PreparingBackend(),
         algorithm_state=recovered_state,
     )
@@ -909,7 +909,7 @@ def test_sao_processor_defaults_action_mask_for_assembled_episodes() -> None:
     which fills no SAO-only fields; the processor must apply its documented
     single-turn default (action mask = loss mask) instead of rejecting the
     assembled sample on an empty action mask."""
-    processor = sao_pipeline(ProcessorContext("math", {"batch_size": 1, "accept_multi_turn_policy_samples": True}))
+    processor = sao_pipeline(PipelineContext("math", {"batch_size": 1, "accept_multi_turn_policy_samples": True}))
     processor.ingest(training_inference("i1", [10, 20], [1], [-0.1]))
     processor.ingest(training_inference("i2", [10, 20, 11, 21], [1], [-0.2]))
     processor.ingest(report("r1", ("i1", "i2"), 1.0))
@@ -926,7 +926,7 @@ def test_sao_processor_defaults_action_mask_for_assembled_episodes() -> None:
 def test_reported_samples_leave_required_tensor_validation_to_training_backend(missing: str) -> None:
     from reef.train.slime_backend.data_builder import to_slime_rollout_data
 
-    processor = sao_pipeline(ProcessorContext("math"))
+    processor = sao_pipeline(PipelineContext("math"))
     payload = {"tokens": [10, 20], "loss_mask": [1], "rollout_log_probs": [-0.1]}
     payload.pop(missing)
     processor.ingest(

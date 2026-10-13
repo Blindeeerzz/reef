@@ -786,7 +786,7 @@ reconstructible from replay.
 While no batch is out, the stage retires candidates that are more than
 ``max_staleness`` versions behind the newest candidate, by record arrival. The
 recipe's ``max_staleness`` reaches the stages as
-``ProcessorContext.max_staleness``. With the default value 0, only candidates of
+``PipelineContext.max_staleness``. With the default value 0, only candidates of
 the newest version stay. Runtime admission still checks each batch against the
 serving version.
 

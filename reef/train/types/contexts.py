@@ -9,14 +9,16 @@ from reef.observability import ExperimentLogger, NullExperimentLogger
 
 
 @dataclass(frozen=True)
-class ProcessorContext:
+class PipelineContext:
+    """What the training pipeline and its stages read for one scenario: its config, report contract, and mode."""
+
     scenario: str
     config: Mapping[str, Any] = field(default_factory=dict)
     report_type: type[ReportBase] | None = None
     experiment_logger: ExperimentLogger = field(default_factory=NullExperimentLogger)
     training_mode: str = "auto"
     #: The contract the scenario's ingress admits, when it is wider than ``report_type``: a report it
-    #: accepts and ``report_type`` refuses is another component's, and this processor releases it.
+    #: accepts and ``report_type`` refuses is another component's, and this pipeline releases it.
     admitted_report_type: type[ReportBase] | None = None
     #: How many versions a sample may lag behind and still train; the recipe's ``max_staleness``.
     max_staleness: int = 0
@@ -27,5 +29,5 @@ class ProcessorContext:
         if not isinstance(self.max_staleness, int) or isinstance(self.max_staleness, bool) or self.max_staleness < 0:
             raise ValueError("max_staleness must be a non-negative integer")
 
-    def with_config(self, config: Mapping[str, Any]) -> ProcessorContext:
+    def with_config(self, config: Mapping[str, Any]) -> PipelineContext:
         return replace(self, config=config)

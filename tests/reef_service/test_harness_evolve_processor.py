@@ -15,7 +15,7 @@ from reef.core.reports import ReportValidationError
 from reef.core.trajectories import recorded_payload, recorded_payloads, source_record_id
 from reef.train.cordis_backend.processor import TraceBatches, TraceTasks, trace_pipeline
 from reef.train.pipeline import TrainingPipeline
-from reef.train.types import ProcessorContext, TrainingBatch
+from reef.train.types import PipelineContext, TrainingBatch
 
 
 def _inference(agent_record_id: str, payload: dict) -> AgentRecord:
@@ -40,7 +40,7 @@ def _report(agent_record_id: str, score: object, references: list[str], feedback
 
 
 def _processor(config: dict | None = None) -> TrainingPipeline:
-    return trace_pipeline(ProcessorContext("s", config or {}), "reports")
+    return trace_pipeline(PipelineContext("s", config or {}), "reports")
 
 
 def test_trace_processor_batches_a_failed_trace() -> None:
@@ -146,7 +146,7 @@ def test_trace_processor_refuses_a_non_finite_score() -> None:
 
 
 def _record_processor(batch_size: int = 2) -> TrainingPipeline:
-    return trace_pipeline(ProcessorContext("s", {"batch_size": batch_size}), "records")
+    return trace_pipeline(PipelineContext("s", {"batch_size": batch_size}), "records")
 
 
 def test_record_driven_processor_batches_every_n_inferences_unscored() -> None:
