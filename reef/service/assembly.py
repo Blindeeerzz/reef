@@ -174,7 +174,7 @@ def composed_training_recipe(
     if unknown:
         raise ValueError(
             f"reef.{unknown[0]} is not a setting of {recipe_type.__name__}; a component's settings go under "
-            "components.<name>.data"
+            "components.<name>.config"
         )
     resolved_weight_data = resolve_config_field_values(weight_type, weight_config.get("data", {}), env)
     training_runtime, runtime = _connect_training_runtime(
@@ -193,10 +193,11 @@ def composed_training_recipe(
         if value is not None
     }
     if framework_sections:
+        # The component that trains weights keeps these sections under its own config.
         components = dict(config["components"])
-        for name, component_config in components.items():
-            if component_config is weight_config:
-                components[name] = {**component_config, **framework_sections}
+        for name, section in components.items():
+            if recipe_class_for(section["implementation"]) is weight_type:
+                components[name] = {**section, "config": {**section.get("config", {}), **framework_sections}}
         config = {**config, "components": components}
     try:
         return build_recipe(selected, env, config=config, runtime=runtime, training_runtime=training_runtime)

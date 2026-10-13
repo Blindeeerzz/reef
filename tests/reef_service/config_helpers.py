@@ -35,8 +35,8 @@ def deployment_layout(config):
 
 
 def load_harness_deployment(path):
-    from reef.recipe.config import public_recipe_config
+    from reef.recipe.config import recipe_config_from_file_layout
 
     raw = load_config(path)
     config = load_deployment(path)
-    return {**config, **public_recipe_config(raw)}
+    return {**config, **recipe_config_from_file_layout(raw)}
