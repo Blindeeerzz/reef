@@ -12,7 +12,7 @@ from reef.core import AgentRecord
 from reef.record2record import (
     AssemblyStatus,
     GroupDecision,
-    PassThroughStage,
+    PassThroughRecord2Record,
     RecordSet,
     ReportContext,
     ReportGrouping,
@@ -31,7 +31,7 @@ from ._threshold_processor import threshold_pipeline
 from .test_record_stage_batch_parity import CountingBackend, inference, instruction, report
 
 
-class WithholdingStage(PassThroughStage):
+class WithholdingStage(PassThroughRecord2Record):
     """Passes records through, except records whose ID starts with ``drop``: it ends those itself."""
 
     def __init__(self) -> None:
@@ -168,7 +168,7 @@ def slotted(record_id: str, reference: str, slot: str) -> AgentRecord:
 
 @pytest.mark.unit
 def test_the_pass_through_stage_forms_one_set_per_record_in_arrival_order() -> None:
-    stage = PassThroughStage()
+    stage = PassThroughRecord2Record()
     for record_id in ("i1", "r1", "i2"):
         stage.ingest(inference(record_id))
     formed = stage.take_formed()

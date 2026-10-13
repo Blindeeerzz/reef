@@ -1411,7 +1411,7 @@ def test_recipe_selects_the_record_driven_processor(tmp_path: Path, monkeypatch)
     )
     assert records.batch_policy == "records"
     trainer = records.build("demo", SQLiteRecordStore())
-    assert type(trainer.pipeline.record_stage).__name__ == "InferenceStage"
+    assert type(trainer.pipeline.record_stage).__name__ == "InferenceRecord2Record"
     assert type(trainer.pipeline.record2task).__name__ == "InferenceTasks"
     assert type(trainer.pipeline.task2batch).__name__ == "TraceBatches"
 

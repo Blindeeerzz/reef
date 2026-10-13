@@ -19,7 +19,7 @@ from reef.core.trajectories import source_record_id
 from reef.dispatcher import Dispatcher
 from reef.pipeline_context import PipelineContext
 from reef.recipe import Recipe, RecipeConfigError
-from reef.record2record import InferenceStage, PassThroughStage
+from reef.record2record import InferenceRecord2Record, PassThroughRecord2Record
 from reef.runtime.interfaces import TrainingRuntime
 from reef.service.app import create_app
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
@@ -343,7 +343,10 @@ def test_manual_instruction_batch_never_falls_back_to_auto():
 
     context = PipelineContext("s", training_mode="manual")
     pipeline = TrainingPipeline(
-        context, record_stage=InferenceStage(), record2task=InferenceTasks(), task2batch=TraceOnlyBatches(context)
+        context,
+        record_stage=InferenceRecord2Record(),
+        record2task=InferenceTasks(),
+        task2batch=TraceOnlyBatches(context),
     )
     pipeline.ingest(inference("held"))
     assert not pipeline.ready()
@@ -366,7 +369,7 @@ def test_status_shows_how_far_a_partly_filled_batch_still_has_to_go():
     training that is merely slow.
     """
 
-    class CountingStage(PassThroughStage):
+    class CountingStage(PassThroughRecord2Record):
         def __init__(self) -> None:
             super().__init__()
             self.held = 0
@@ -418,7 +421,10 @@ def test_processor_uses_shared_data_and_one_batch_assembly_hook(mode):
 
     def trajectory_pipeline(context):
         return TrainingPipeline(
-            context, record_stage=InferenceStage(), record2task=InferenceTasks(), task2batch=TrajectoryBatches(context)
+            context,
+            record_stage=InferenceRecord2Record(),
+            record2task=InferenceTasks(),
+            task2batch=TrajectoryBatches(context),
         )
 
     records, backend = SQLiteRecordStore(), CaptureBackend()

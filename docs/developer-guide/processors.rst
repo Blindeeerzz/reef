@@ -108,13 +108,13 @@ names it, so the record never trains after a restart.
 
    * - Stage
      - Decides
-   * - ``PassThroughStage``
+   * - ``PassThroughRecord2Record``
      - nothing; the default of a pipeline that trains no weights
    * - ``ReportStage``
      - report validation, groups and slots, the manual-mode limit, source release
    * - ``JudgingStage``
      - correlation, the judging worker, and the ``max_staleness`` check
-   * - ``InferenceStage``
+   * - ``InferenceRecord2Record``
      - one set per inference record; other records are released
    * - ``RoundStage``
      - a ``ReportStage`` that also forms a request when a task-generation round is due

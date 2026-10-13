@@ -33,7 +33,7 @@ from reef.core.reports import ReportBase
 from reef.core.training_request import TrainingRequest
 from reef.observability import ExperimentLogger
 from reef.pipeline_context import PipelineContext
-from reef.record2record import AssemblyStatus, PassThroughStage, Record2Record
+from reef.record2record import AssemblyStatus, PassThroughRecord2Record, Record2Record
 from reef.record2task import NoTasks, Record2Task
 from reef.task2batch import NoBatches, Task2Batch
 from reef.train.types import TrainDataItem, TrainingBatch
@@ -76,7 +76,7 @@ class TrainingPipeline:
         self.context = context
         self.scenario = context.scenario
         #: The record-to-record stage that turns the records into record sets.
-        self.record_stage = PassThroughStage() if record_stage is None else record_stage
+        self.record_stage = PassThroughRecord2Record() if record_stage is None else record_stage
         #: The record-to-task stage that turns each record set into tasks.
         self.record2task = NoTasks() if record2task is None else record2task
         #: The task-to-batch stage that shapes the tasks of the selected sets into a batch.

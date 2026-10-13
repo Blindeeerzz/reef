@@ -5,7 +5,14 @@ from __future__ import annotations
 from reef.core import RequestType
 from reef.core.trajectories import make_trajectory
 from reef.pipeline_context import PipelineContext
-from reef.record2record import InferenceStage, RecordSet, ReportContext, ReportGrouping, ReportStage, SingleRecordSet
+from reef.record2record import (
+    InferenceRecord2Record,
+    RecordSet,
+    ReportContext,
+    ReportGrouping,
+    ReportStage,
+    SingleRecordSet,
+)
 from reef.record2task import Record2Task, ReportTasks, TaskResult
 from reef.record2task.assembly import reported_task
 from reef.task2batch import Task2Batch
@@ -64,7 +71,10 @@ def trace_pipeline(context: PipelineContext, batch_policy: str) -> TrainingPipel
     """
     if batch_policy == "records":
         return TrainingPipeline(
-            context, record_stage=InferenceStage(), record2task=InferenceTasks(), task2batch=TraceBatches(context)
+            context,
+            record_stage=InferenceRecord2Record(),
+            record2task=InferenceTasks(),
+            task2batch=TraceBatches(context),
         )
     return TrainingPipeline(
         context,

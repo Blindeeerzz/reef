@@ -17,7 +17,7 @@ Entry point: ``Record2Record`` in ``base.py``.
 
 Stages:
 
-* ``PassThroughStage`` (``base.py``): the default. It forms one set per
+* ``PassThroughRecord2Record`` (``base.py``): the default. It forms one set per
   record and decides nothing.
 * ``ReportStage`` (``reports.py``): reports and the inference records that
   they reference, alone or in groups. A recipe's ``ReportGrouping`` decides
@@ -25,7 +25,7 @@ Stages:
 * ``JudgingStage`` (``judging.py``): records that a model judges on a
   background worker after later traffic completes them. A recipe's
   ``RecordJudging`` holds the correlation and the judge.
-* ``InferenceStage`` (``base.py``): one set per inference record.
+* ``InferenceRecord2Record`` (``base.py``): one set per inference record.
 * ``RoundStage`` (``rounds.py``): a ``ReportStage`` that also forms a
   ``RoundRequest`` set each time a task-generation round is due. A recipe's
   ``RoundGrouping`` decides which reports are source sessions for the rounds.
@@ -47,7 +47,13 @@ The package depends only on ``reef.core``, ``reef.runtime.interfaces``,
 the trainer can both use it.
 """
 
-from reef.record2record.base import AssemblyStatus, InferenceStage, PassThroughStage, Record2Record, SetAssembly
+from reef.record2record.base import (
+    AssemblyStatus,
+    InferenceRecord2Record,
+    PassThroughRecord2Record,
+    Record2Record,
+    SetAssembly,
+)
 from reef.record2record.eligibility import EligibilityCheck, IneligibleSet, StalenessCheck
 from reef.record2record.judging import JudgedSet, JudgingStage, RecordJudging, judged_sets
 from reef.record2record.pool import RecordSetPool
@@ -74,10 +80,10 @@ __all__ = [
     "GroupDecision",
     "GroupKeyOrder",
     "IneligibleSet",
-    "InferenceStage",
+    "InferenceRecord2Record",
     "JudgedSet",
     "JudgingStage",
-    "PassThroughStage",
+    "PassThroughRecord2Record",
     "Record2Record",
     "RecordJudging",
     "RecordSet",
