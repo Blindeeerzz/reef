@@ -8,6 +8,11 @@ prepare and settle to decide whether a produced candidate is published. The
 shared contracts live in ``reef.core.evaluation`` and are re-exported here.
 Runtimes import those contracts directly; this package owns the built-in
 evaluators, selectors, and configuration machinery.
+
+``harness`` measures harness candidates by running evaluation episodes. It
+holds ``HarnessCandidate``, its evaluator ``HarnessEpisodeEvaluator``, the
+``EpisodeScorer`` contract that a method supplies, and the ``score_comparison``
+and ``floor`` selection policies.
 """
 
 from reef.core.evaluation import (
@@ -18,13 +23,13 @@ from reef.core.evaluation import (
     SelectionDecision,
     UpdateCandidate,
 )
-from reef.train.evaluation.config import (
+from reef.evaluation.config import (
     CandidateEvaluationConfig,
     CandidateEvaluationConfigError,
     ConfiguredEvaluationPlugin,
     build_candidate_evaluation,
 )
-from reef.train.evaluation.evaluators import (
+from reef.evaluation.evaluators import (
     AlwaysSelectMixin,
     BackendAlwaysSelectPlugin,
     BackendEvaluateMixin,

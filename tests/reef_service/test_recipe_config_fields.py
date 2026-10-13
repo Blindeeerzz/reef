@@ -13,11 +13,11 @@ import pytest
 import yaml
 from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
+from reef.evaluation import BackendAlwaysSelectPlugin
 from reef.recipe import RecipeConfigError, config_field
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import recipe_config_fields, resolve_config_field_values
 from reef.storage.sqlite import SQLiteRecordStore
-from reef.train.evaluation import BackendAlwaysSelectPlugin
 from reef.train.pipeline import PipelineConfig, PipelineSpec
 from reef.train.runtime_backend import RuntimeCandidateBackend
 

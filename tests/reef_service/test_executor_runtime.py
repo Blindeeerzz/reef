@@ -11,6 +11,7 @@ from reef_service.runtime_stubs import ExecutorRuntimeFixture, runtime_bindings,
 
 from reef.artifact import InMemoryRepositoryBackend
 from reef.dispatcher import Dispatcher
+from reef.evaluation import EvaluationResult, SelectionDecision
 from reef.inference.runtime import ExecutorInferenceRuntime
 from reef.recipe import Recipe
 from reef.recipe.errors import RecipeConfigError
@@ -34,7 +35,6 @@ from reef.service.deploy.service_config import ServiceConfig
 from reef.service.runtime import connect_ray_runtime
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train.algos import StepScheduling
-from reef.train.evaluation import EvaluationResult, SelectionDecision
 from reef.train.runtime import ExecutorTrainingRuntime
 
 from .test_ray_runtime import DeferredWeightUpdateTrainGroupHandle, policy_batch

@@ -33,7 +33,7 @@ composition and use paths; they are not an exhaustive Python import graph:
        subgraph Domains["Capability domains"]
            direction LR
            Serving("<b>Serving</b><br/><code>runtime</code> · <code>surface</code>")
-           Evolution("<b>Evolution</b><br/><code>train</code> · <code>harness</code>")
+           Evolution("<b>Evolution</b><br/><code>train</code> · <code>evaluation</code> · <code>harness</code>")
            State("<b>State</b><br/><code>artifact</code> · <code>records</code>")
        end
 
@@ -90,6 +90,10 @@ import a concrete integration.
 | ``reef/record2task/``   | turning a record set into tasks (``Record2Task``,        | which records train, batch shape,          |
 |                         | ``ReportTasks``, ``JudgedTasks``), and the generator     | training loops                             |
 |                         | service that writes, checks, and plays Harbor tasks      |                                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/evaluation/``    | candidate evaluation: running and scoring evaluation     | proposing candidates, training loops,      |
+|                         | episodes, built-in selection policies, and the           | artifact publication                       |
+|                         | ``evaluation`` plugin configuration                      |                                            |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
 | ``reef/task2batch/``    | shaping the tasks of the selected record sets into one   | which records train, the training loop,    |
 |                         | batch (``Task2Batch``)                                   | step signals                               |
@@ -150,10 +154,12 @@ package's own submodules and third-party libraries):
      - ``runtime``, ``artifact``, ``core``
    * - ``harness``
      - ``runtime``, ``core``
+   * - ``evaluation``
+     - ``harness``, ``runtime``, ``core``
    * - ``train``
-     - ``harness``, ``inference``, ``runtime``, ``surface``, ``artifact``, ``storage``, ``observability``, ``core``
+     - ``evaluation``, ``harness``, ``inference``, ``runtime``, ``surface``, ``artifact``, ``storage``, ``observability``, ``core``
    * - ``recipe``
-     - ``train``, ``harness``, ``runtime``, ``surface``, ``storage``, ``observability``, ``core``
+     - ``train``, ``evaluation``, ``harness``, ``runtime``, ``surface``, ``storage``, ``observability``, ``core``
    * - ``scenario``
      - ``recipe``, ``train``, ``runtime``, ``surface``, ``artifact``, ``storage``, ``observability``, ``core``
    * - ``dispatcher``
