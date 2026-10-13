@@ -11,14 +11,14 @@ from types import ModuleType, SimpleNamespace
 import pytest
 from reef_service._trajectories import policy_trajectory
 
-from recipes.openclawrl.judging import openclawrl_record2record
+from recipes.openclawrl.judging import OpenClawRLJudgingSettings, OpenClawRLRecord2Record
 from recipes.openclawrl.prm import (
     append_hint_to_messages,
     build_hint_judge_messages,
     collect_hint_candidates,
     parse_hint_judgment,
 )
-from recipes.openclawrl.processor import OpenClawRLBatches, OpenClawRLTasks
+from recipes.openclawrl.processor import OpenClawRLBatches, OpenClawRLBatchSettings, OpenClawRLTasks
 from recipes.openclawrl.turns import TurnJob
 from reef.core.trajectories import source_record_id
 from reef.train.algos import StepScheduling
@@ -469,14 +469,14 @@ class _FakeTeacher:
 def _judge_one_turn(judge, teacher):
     from reef.pipeline_context import PipelineContext
 
-    context = PipelineContext("s", {"batch_size": 1})
+    context = PipelineContext("s")
 
-    stage = openclawrl_record2record(context, clients=(judge, teacher, None))
+    stage = OpenClawRLRecord2Record(context, OpenClawRLJudgingSettings(), clients=(judge, teacher, None))
     processor = TrainingPipeline(
         context,
         record2record=stage,
         record2task=OpenClawRLTasks(),
-        task2batch=OpenClawRLBatches(context, stage.judging),
+        task2batch=OpenClawRLBatches(context, OpenClawRLBatchSettings(batch_size=1), stage),
     )
     job = TurnJob(
         receipt="r1",
@@ -490,7 +490,7 @@ def _judge_one_turn(judge, teacher):
         response_token_count=1,
     )
     try:
-        return asyncio.run(stage.judging.judge(job))
+        return asyncio.run(stage.openclawrl_judging.judge(job))
     finally:
         processor.close()
 
@@ -582,13 +582,13 @@ def test_processor_attaches_topk_and_candidates() -> None:
         )
 
     worker = FakeWorker()
-    context = PipelineContext("s", {"batch_size": 2})
-    stage = openclawrl_record2record(context, worker=worker)
+    context = PipelineContext("s")
+    stage = OpenClawRLRecord2Record(context, OpenClawRLJudgingSettings(), worker=worker)
     processor = TrainingPipeline(
         context,
         record2record=stage,
         record2task=OpenClawRLTasks(),
-        task2batch=OpenClawRLBatches(context, stage.judging),
+        task2batch=OpenClawRLBatches(context, OpenClawRLBatchSettings(batch_size=2), stage),
     )
     # Two sessions with distinct prefixes; each first turn gets a successor.
     for index, opening in enumerate(["q-alpha", "q-beta"]):

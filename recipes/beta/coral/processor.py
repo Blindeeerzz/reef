@@ -3,11 +3,11 @@
 CORAL's attempt tree already has the shape reef's grouped relative-reward
 training wants: every attempt names its ``parent_hash``, so the siblings of
 one parent form one comparison group — attempts that started from the same
-code and diverged. This processor groups reports by parent commit and
-releases a group as one training unit once ``group_size`` scored siblings
-accrued.
+code and diverged. The record stage (``CoralRecord2Record`` in
+:mod:`recipes.beta.coral.recipe`) groups reports by parent commit and releases
+a group as one training unit once ``group_size`` scored siblings accrued.
 
-The reports it consumes are exactly what :mod:`recipes.beta.coral.reporter` emits:
+The stages consume exactly the reports that :mod:`recipes.beta.coral.reporter` emits:
 ``score``, ordered inference ``references``, and ``metadata.coral`` with
 ``agent_id``/``commit_hash``/``parent_hash``. Root attempts (no parent)
 compare against each other under a sentinel group — they all diverged from
@@ -15,21 +15,23 @@ the task seed.
 
 Token/loss-mask/logprob materialization is reef's ``SampleAssembly`` over the
 referenced INFERENCE records; a CORAL attempt is a multi-call trajectory, so
-multi-turn assembly is on by default.
+``CoralTasks`` turns multi-turn assembly on by default.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import replace
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import Any, Self
 
+from reef.core.config import config_option
+from reef.core.plugins import NoSettings
 from reef.core.trajectories import trajectory_reward
 from reef.pipeline_context import PipelineContext
-from reef.record2record import ReportContext
-from reef.record2task import ReportTasks
-from reef.record2task.assembly import SampleAssembly
+from reef.record2record import Record2Record, ReportContext
+from reef.record2task import Record2Task, ReportTasks
+from reef.record2task.assembly import SampleAssembly, SampleAssemblySettings
 from reef.task2batch import Task2Batch
 from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
@@ -69,18 +71,34 @@ def attempt_release_ids(context: ReportContext) -> set[str]:
     }
 
 
-def coral_assembly(context: PipelineContext) -> SampleAssembly:
-    """The sample assembly for CORAL attempts: multi-call trajectories are on by default."""
-    return SampleAssembly.from_config(
-        context.with_config({"accept_multi_turn_policy_samples": True, **context.config})
+@dataclass(frozen=True)
+class CoralAssemblySettings(SampleAssemblySettings):
+    """The config of ``CoralTasks``: the sample-assembly keys, with multi-turn samples on by default."""
+
+    accept_multi_turn_policy_samples: bool = config_option(
+        True, help="Train on an attempt that references several model calls as one multi-turn sample."
     )
 
 
 class CoralTasks(ReportTasks):
-    """One scored attempt as one task, with its CORAL metadata, sibling group, and release."""
+    """One scored attempt as one task, with its CORAL metadata, sibling group, and release.
 
-    def __init__(self, context: PipelineContext) -> None:
-        self.assembly = coral_assembly(context)
+    Config: the sample-assembly keys of ``CoralAssemblySettings``.
+    """
+
+    def __init__(self, settings: CoralAssemblySettings) -> None:
+        self.assembly = SampleAssembly(settings)
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any],
+        *,
+        context: PipelineContext,
+        record2record: Record2Record,
+        environ: Mapping[str, str],
+    ) -> Self:
+        return cls(CoralAssemblySettings.parse(config, plugin_class=cls))
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
         coral = coral_metadata(context)
@@ -98,21 +116,26 @@ class CoralTasks(ReportTasks):
 class CoralBatches(Task2Batch):
     """One CORAL sibling group, one batch: the siblings of one parent are one relative-reward group.
 
-    Config:
-
-    - ``group_size`` (default 4, min 2): scored siblings required before a
-      parent's group trains; the recipe's ``CoralGrouping`` waits for them. CORAL sibling counts are dynamic, so this is a
-      recipe-level barrier, not a CORAL invariant; parents that never accrue
-      enough scored children simply never train.
+    The record stage decides when a group is complete (``group_size`` in
+    ``pipeline.record2record.config``). This stage takes no config.
     """
 
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any],
+        *,
+        context: PipelineContext,
+        record2record: Record2Record,
+        record2task: Record2Task,
+        environ: Mapping[str, str],
+    ) -> Self:
+        NoSettings.parse(config, plugin_class=cls)
+        return cls(context)
+
     def __init__(self, context: PipelineContext) -> None:
-        config = dict(context.config)
-        self.group_size = int(config.get("group_size", 4))
-        if self.group_size < 2:
-            raise ValueError("group_size must be at least two (relative rewards need contrast)")
-        config.setdefault("accept_multi_turn_policy_samples", True)
-        super().__init__(context.with_config({**config, "batch_size": 1}))
+        # One batch is one sibling group.
+        super().__init__(context, 1)
 
     def make_batch(self, items: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         parents = {item.metadata["coral"]["group"] for item in items}

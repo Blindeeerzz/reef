@@ -74,7 +74,7 @@ class _LocalRecipe(Recipe):
         return Trainer.build(
             scenario,
             records,
-            pipeline_factory=lambda context: threshold_pipeline(context.with_config({"batch_size": 1})),
+            pipeline_factory=threshold_pipeline,
             candidate_backend=self.backend,
             algorithm_state=algorithm_state,
             experiment_logger=experiment_logger,

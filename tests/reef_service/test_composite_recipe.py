@@ -86,7 +86,7 @@ class _TreeRecipe(Recipe):
         return Trainer.build(
             scenario,
             records,
-            pipeline_factory=lambda context: threshold_pipeline(context.with_config({"batch_size": 1})),
+            pipeline_factory=threshold_pipeline,
             candidate_backend=_FileBackend(self.label, self.artifact_dir),
             algorithm_state=algorithm_state,
             report_type=self.report_type,
@@ -103,8 +103,7 @@ class HybridThresholdBatches(ThresholdBatches):
 
 def hybrid_threshold_pipeline(context: PipelineContext) -> TrainingPipeline:
     """The threshold pipeline, one report per batch, taking instructions too."""
-    context = context.with_config({"batch_size": 1})
-    return threshold_pipeline(context, task2batch=HybridThresholdBatches(context))
+    return threshold_pipeline(context, task2batch=HybridThresholdBatches(context, 1))
 
 
 @dataclass(frozen=True)
@@ -791,7 +790,7 @@ class _EpisodeTreeRecipe(_TreeRecipe):
         return Trainer.build(
             scenario,
             records,
-            pipeline_factory=lambda context: threshold_pipeline(context.with_config({"batch_size": 1})),
+            pipeline_factory=threshold_pipeline,
             candidate_backend=_ClosingBackend(self.label, self.artifact_dir, self.closing, self.episode_done),
             algorithm_state=algorithm_state,
             report_type=self.report_type,

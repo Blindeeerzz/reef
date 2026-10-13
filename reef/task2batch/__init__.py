@@ -9,7 +9,7 @@ next batch's record sets from ``reef.record2record`` and gives their tasks,
 which ``reef.record2task`` made, to this stage.
 
 Entry point: ``Task2Batch`` in ``base.py``. A recipe writes ``make_batch`` and
-names the class in ``WeightTrainingSpec.task2batch``.
+names the class in its ``pipeline_spec()``.
 
 * ``NoBatches`` (``base.py``): the no-update default; it never makes a batch.
 * ``DistillBatches`` (``distill.py``): the distilling recipes' batches, named by
@@ -21,10 +21,11 @@ on ``reef.core``, ``reef.observability``, ``reef.pipeline_context``, and the
 two earlier stage packages, whose classes ``Task2Batch.from_config`` receives.
 """
 
-from reef.task2batch.base import NoBatches, Task2Batch
+from reef.task2batch.base import BatchSettings, NoBatches, Task2Batch
 from reef.task2batch.distill import DistillBatches
 
 __all__ = [
+    "BatchSettings",
     "DistillBatches",
     "NoBatches",
     "Task2Batch",

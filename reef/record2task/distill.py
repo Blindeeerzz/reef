@@ -16,14 +16,17 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping, Sequence
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Self
 
 from reef.core.batches import TrajectoryItem
+from reef.core.config import config_option
+from reef.core.plugins import NoSettings
 from reef.core.reports import TeacherContextReport
 from reef.pipeline_context import PipelineContext
-from reef.record2record import ReportContext, ReportGrouping, ReportRecord2Record
+from reef.record2record import Record2Record, ReportContext, ReportGrouping, ReportRecord2Record
 from reef.record2task import ReportTasks, SkippedReport
-from reef.record2task.assembly import SampleAssembly
+from reef.record2task.assembly import SampleAssembly, SampleAssemblySettings
 from reef.record2task.samples import flatten_content, recorded_request, recorded_response
 
 logger = logging.getLogger(__name__)
@@ -61,26 +64,39 @@ def normalize_tool_call(call: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def distill_record2record(context: PipelineContext) -> ReportRecord2Record:
+class DistillRecord2Record(ReportRecord2Record):
     """The record stage for distillation: every report trains by itself and owns its inference record."""
-    return ReportRecord2Record(context.scenario, context.report_type, ReportGrouping(), exclusive_sources=True)
+
+    def __init__(self, context: PipelineContext) -> None:
+        super().__init__(context, ReportGrouping(), exclusive_sources=True)
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any], *, context: PipelineContext, environ: Mapping[str, str]) -> Self:
+        NoSettings.parse(config, plugin_class=cls)
+        return cls(context)
 
 
-def teacher_tokens_limit(config: Mapping[str, Any]) -> int:
-    """``max_teacher_tokens`` from the config: the longest teacher sequence the trainer scores (0: no limit)."""
-    max_teacher_tokens = int(config.get("max_teacher_tokens", 0))
-    if max_teacher_tokens < 0:
-        raise ValueError("max_teacher_tokens must be non-negative (0 disables the limit)")
-    return max_teacher_tokens
+@dataclass(frozen=True)
+class DistillSettings(SampleAssemblySettings):
+    """The config of ``DistillTasks``: the teacher's tokenizer and window, and the sample assembly."""
+
+    tokenizer_path: str = config_option("", help="The served model's tokenizer, which renders the teacher prompt.")
+    max_teacher_tokens: int = config_option(
+        0, help="The longest teacher sequence the trainer scores; a longer report is skipped. 0 is no limit."
+    )
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not self.tokenizer_path.strip():
+            raise ValueError("tokenizer_path is required: the served model's tokenizer renders the teacher prompt")
+        if self.max_teacher_tokens < 0:
+            raise ValueError("max_teacher_tokens must be non-negative (0 disables the limit)")
 
 
 class TeacherRenderer:
-    """Render the teacher's request with the served model's chat template (``tokenizer_path``)."""
+    """Render the teacher's request with the served model's chat template."""
 
-    def __init__(self, config: Mapping[str, Any]) -> None:
-        tokenizer_path = str(config.get("tokenizer_path", "")).strip()
-        if not tokenizer_path:
-            raise ValueError("tokenizer_path is required: the served model's tokenizer renders the teacher prompt")
+    def __init__(self, tokenizer_path: str) -> None:
         # transformers belongs to the training environment; the service never renders a prompt.
         from transformers import AutoTokenizer
 
@@ -150,11 +166,22 @@ class DistillTasks(ReportTasks):
     :meth:`teacher_request` with its composition.
     """
 
-    def __init__(self, context: PipelineContext) -> None:
-        self.assembly = SampleAssembly.from_config(context)
-        self.max_teacher_tokens = teacher_tokens_limit(context.config)
-        self.renderer = TeacherRenderer(context.config)
+    def __init__(self, settings: DistillSettings) -> None:
+        self.assembly = SampleAssembly(settings)
+        self.max_teacher_tokens = settings.max_teacher_tokens
+        self.renderer = TeacherRenderer(settings.tokenizer_path)
         self.overflow_count = 0
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any],
+        *,
+        context: PipelineContext,
+        record2record: Record2Record,
+        environ: Mapping[str, str],
+    ) -> Self:
+        return cls(DistillSettings.parse(config, plugin_class=cls))
 
     def teacher_request(
         self, messages: list[Any], tools: list[Any] | None, response: str, teacher_context: str
@@ -197,11 +224,11 @@ class DistillTasks(ReportTasks):
 
 
 __all__ = [
+    "DistillRecord2Record",
+    "DistillSettings",
     "DistillTasks",
     "TeacherRenderer",
-    "distill_record2record",
     "normalize_messages_for_template",
     "normalize_tool_call",
     "recorded_sample",
-    "teacher_tokens_limit",
 ]

@@ -199,7 +199,8 @@ def command_line_config(environ: Mapping[str, str]) -> dict[str, Any]:
 def assemble_provider_services(config: dict[str, Any]) -> None:
     """Validate typed inputs and add the owned HTTP process and readiness probe."""
     unsupported = set(config.get("reef", {})) & _CONFIGURED_FIELDS
-    if unsupported or "training" in config or "evaluation" in config or "pipeline" in config:
+    # The pipeline section belongs to any recipe; the recipe reads it.
+    if unsupported or "training" in config or "evaluation" in config:
         raise DeployConfigError(
             "select a weight-training recipe for training; custom process stacks require unversioned legacy YAML"
         )

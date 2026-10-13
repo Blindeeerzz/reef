@@ -1,8 +1,10 @@
-"""OpenClaw-RL's correlation and judge: every main turn is judged by its next state.
+"""OpenClaw-RL's record-to-record stage: every main turn is judged by its next state.
 
-Runs inside the record-to-record stage (:class:`~reef.record2record.JudgingRecord2Record`).
-``observe`` correlates main turns into sessions and hands each completed turn
-over for judgment; ``judge`` is upstream's combine dispatch.
+:class:`OpenClawRLRecord2Record` is a :class:`~reef.record2record.JudgingRecord2Record`
+that runs :class:`OpenClawRLJudging` on a PRM worker. ``observe`` correlates
+main turns into sessions and hands each completed turn over for judgment;
+``judge`` is upstream's combine dispatch. The deployment configures the stage
+in ``pipeline.record2record.config`` (:class:`OpenClawRLJudgingSettings`).
 
 No proxy and no judgment on the wire: the method derives every verdict
 from the traffic the agent already produces. Correlation prefers a
@@ -16,17 +18,22 @@ import asyncio
 import collections
 import logging
 from collections.abc import Mapping
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Self
 
 from recipes.openclawrl.prm import (
+    DirectiveTeacher,
+    PRMJudge,
+    ResponseRenderer,
     append_hint_to_messages,
-    build_clients,
     collect_hint_candidates,
     render_response_fallback,
 )
 from recipes.openclawrl.sessions import DEFAULT_MAX_SESSIONS, SessionIndex
 from recipes.openclawrl.turns import TurnJob, TurnJudgment, main_turn_message, turn_job, turn_request_messages
 from reef.background_jobs import BackgroundJobWorker
+from reef.core.config import config_option
+from reef.core.plugins import PluginSettings
 from reef.core.records_types import AgentRecord, RequestType
 from reef.pipeline_context import PipelineContext
 from reef.record2record import JudgingRecord2Record, RecordJudging
@@ -49,6 +56,71 @@ def session_tag(payload: Any) -> str | None:
     return str(value).strip() or None if value is not None else None
 
 
+@dataclass(frozen=True)
+class OpenClawRLJudgingSettings(PluginSettings):
+    """The config of ``OpenClawRLRecord2Record``: session correlation and the PRM judge.
+
+    An empty ``prm_url`` is correlate-only mode: sessions resolve, nothing is
+    judged, and nothing trains.
+    """
+
+    session_ttl_s: float = config_option(900.0, help="The idle time in seconds before a session expires.")
+    # The trace-matching fallback opens one session for each request that it
+    # cannot match, so without a ceiling an unmatched client grows the table
+    # with the request rate for a whole TTL.
+    max_open_sessions: int = config_option(
+        DEFAULT_MAX_SESSIONS, help="The live sessions, at most; the least recently active are evicted above it."
+    )
+    prm_url: str = config_option("", help="The PRM's SGLang server; empty is correlate-only mode.")
+    prm_tokenizer_path: str = config_option("", help="The PRM's tokenizer. Required when prm_url is set.")
+    prm_m: int = config_option(3, help="The judge votes for each turn.")
+    prm_temperature: float = config_option(0.6, help="The judge sampling temperature.")
+    prm_max_tokens: int = config_option(8192, help="The judge generation budget in tokens.")
+    prm_timeout_s: float = config_option(120.0, help="The timeout of one judge call in seconds.")
+    prm_concurrency: int = config_option(8, help="The turns judged at the same time.")
+    prm_max_hint_candidates: int = config_option(3, help="The hint candidates collected for each turn, at most.")
+
+    def __post_init__(self) -> None:
+        if self.session_ttl_s <= 0:
+            raise ValueError("session_ttl_s must be positive")
+        if self.max_open_sessions <= 0:
+            raise ValueError("max_open_sessions must be positive")
+        if self.prm_url.strip() and not self.prm_tokenizer_path.strip():
+            raise ValueError("OpenClaw-RL judging requires prm_tokenizer_path next to prm_url")
+        if self.prm_m <= 0:
+            raise ValueError("prm_m must be positive")
+        if self.prm_temperature < 0:
+            raise ValueError("prm_temperature must be non-negative")
+        if self.prm_max_tokens <= 0:
+            raise ValueError("prm_max_tokens must be positive")
+        if self.prm_timeout_s <= 0:
+            raise ValueError("prm_timeout_s must be positive")
+        if self.prm_concurrency <= 0:
+            raise ValueError("prm_concurrency must be positive")
+        if self.prm_max_hint_candidates <= 0:
+            raise ValueError("prm_max_hint_candidates must be positive")
+
+
+def prm_clients(settings: OpenClawRLJudgingSettings) -> tuple[Any, Any, Any]:
+    """The PRM judge, the directive teacher, and the response renderer that ``settings`` describe.
+
+    Without ``prm_url`` all three are ``None``: correlate-only mode.
+    """
+    url = settings.prm_url.strip()
+    if not url:
+        return None, None, None
+    tokenizer_path = settings.prm_tokenizer_path.strip()
+    prm = PRMJudge(
+        generate_url=url.rstrip("/") + "/generate",
+        tokenizer_path=tokenizer_path,
+        m=settings.prm_m,
+        temperature=settings.prm_temperature,
+        max_tokens=settings.prm_max_tokens,
+        timeout_s=settings.prm_timeout_s,
+    )
+    return prm, DirectiveTeacher(tokenizer_path=tokenizer_path), ResponseRenderer(tokenizer_path)
+
+
 class OpenClawRLJudging(RecordJudging):
     """Turns judged by their next state; terminal exclusions mirror upstream.
 
@@ -57,13 +129,10 @@ class OpenClawRLJudging(RecordJudging):
     teacher, renderer) overrides the configured clients for tests.
     """
 
-    def __init__(self, config: Mapping[str, Any], clients: tuple[Any, Any, Any] | None = None) -> None:
-        self.prm, self.teacher, self.renderer = clients if clients is not None else build_clients(config)
-        self.max_hint_candidates = max(1, int(config.get("prm_max_hint_candidates", 3)))
-        self.index = SessionIndex(
-            float(config.get("session_ttl_s", 900.0)),
-            max_sessions=int(config.get("max_open_sessions", DEFAULT_MAX_SESSIONS)),
-        )
+    def __init__(self, settings: OpenClawRLJudgingSettings, clients: tuple[Any, Any, Any] | None = None) -> None:
+        self.prm, self.teacher, self.renderer = clients if clients is not None else prm_clients(settings)
+        self.max_hint_candidates = settings.prm_max_hint_candidates
+        self.index = SessionIndex(settings.session_ttl_s, max_sessions=settings.max_open_sessions)
         # Correlation reports itself through the log, not the record file:
         # the failure worth catching is "nothing ever bound", and a run in
         # that state never produces the batch that would write a line.
@@ -248,20 +317,31 @@ class OpenClawRLJudging(RecordJudging):
             )
 
 
-def openclawrl_record2record(
-    context: PipelineContext,
-    *,
-    worker: BackgroundJobWorker | None = None,
-    clients: tuple[Any, Any, Any] | None = None,
-) -> JudgingRecord2Record:
-    """OpenClaw-RL's record stage: sessions correlated and turns judged on a PRM worker.
+class OpenClawRLRecord2Record(JudgingRecord2Record):
+    """OpenClaw-RL's record stage: sessions correlated, and turns judged on a PRM worker.
 
-    Without a ``worker``, the stage starts one when the config names a PRM
-    judge. ``clients`` overrides the configured clients for tests.
+    Config: :class:`OpenClawRLJudgingSettings`. Without a ``worker``, the
+    stage starts one when the config names a PRM judge. ``worker`` and
+    ``clients`` (PRM judge, directive teacher, renderer) replace the
+    configured ones in tests.
     """
-    judging = OpenClawRLJudging(context.config, clients)
-    if worker is None and judging.prm is not None:
-        worker = BackgroundJobWorker(
-            judging, thread_name="openclawrl-judging", concurrency=int(context.config.get("prm_concurrency", 8))
-        )
-    return JudgingRecord2Record(judging, worker, max_staleness=context.max_staleness)
+
+    def __init__(
+        self,
+        context: PipelineContext,
+        settings: OpenClawRLJudgingSettings,
+        *,
+        worker: BackgroundJobWorker | None = None,
+        clients: tuple[Any, Any, Any] | None = None,
+    ) -> None:
+        #: The judging that the batches read for the PRM record file.
+        self.openclawrl_judging = OpenClawRLJudging(settings, clients)
+        if worker is None and self.openclawrl_judging.prm is not None:
+            worker = BackgroundJobWorker(
+                self.openclawrl_judging, thread_name="openclawrl-judging", concurrency=settings.prm_concurrency
+            )
+        super().__init__(context, self.openclawrl_judging, worker)
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any], *, context: PipelineContext, environ: Mapping[str, str]) -> Self:
+        return cls(context, OpenClawRLJudgingSettings.parse(config, plugin_class=cls))

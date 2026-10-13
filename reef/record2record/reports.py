@@ -2,8 +2,8 @@
 
 ``ReportRecord2Record`` reads inference and report records. It validates each report,
 filters the reports that are not training data, and forms one
-``ReportCandidate`` per report for the pipeline to assemble. It then places
-each assembled report in its group (``ReportGrouping``) and holds singleton
+``ReportCandidate`` per report for the pipeline to make tasks from. It then places
+each report that has tasks in its group (``ReportGrouping``) and holds singleton
 reports and ready groups in its pool. It owns deduplication, group slots,
 consumption, and record release.
 """
@@ -14,13 +14,15 @@ import logging
 import math
 import time
 from collections.abc import Hashable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Self
 
+from reef.core.plugins import NoSettings
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase, ReportValidationError, validate_report_payload
-from reef.record2record.base import Record2Record, SetAssembly
+from reef.pipeline_context import PipelineContext
+from reef.record2record.base import Record2Record
 from reef.record2record.selection import ArrivalOrder, GroupKeyOrder
 from reef.record2record.sets import RecordSet
 
@@ -96,7 +98,7 @@ class ReportGrouping:
         return True
 
     def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
-        """Return the batching group and retry slot of an assembled report. The default is an independent report.
+        """Return the batching group and retry slot of a report that has tasks. The default is an independent report.
 
         These coordinates belong to ingestion, separately from an item's
         comparison group. For example, TTTD batches a whole step containing
@@ -115,7 +117,7 @@ class ReportGrouping:
 
 @dataclass(frozen=True, kw_only=True)
 class ReportCandidate(RecordSet):
-    """One valid report and its inference records, before the pipeline assembles it. ``set_id`` is the report ID."""
+    """One valid report and its inference records, before the task stage makes its tasks. ``set_id`` is the report ID."""
 
     context: ReportContext
 
@@ -125,7 +127,7 @@ class ReportCandidate(RecordSet):
 
 @dataclass(frozen=True)
 class ReportEntry:
-    """One assembled report in a group slot, or by itself."""
+    """One report that has tasks, in a group slot or by itself."""
 
     order: int
     context: ReportContext
@@ -158,6 +160,40 @@ def report_sets(pool_sets: tuple[RecordSet, ...]) -> tuple[ReportSet, ...]:
     return selected
 
 
+class ReportStatus(Enum):
+    """Where a report is in the stage, from its first read to its release."""
+
+    #: A candidate whose tasks the task stage has not made yet. A failed assembly leaves it here for a retry.
+    FORMED = "formed"
+    #: The report has tasks and waits in the pool, by itself or in a group.
+    HELD = "held"
+    #: A committed batch trained on the report. Its record is releasable.
+    TRAINED = "trained"
+    #: The report ended without training. Its record is releasable.
+    ENDED = "ended"
+
+
+@dataclass
+class ReportState:
+    """One report the stage read, and where it is."""
+
+    record: AgentRecord
+    status: ReportStatus
+
+    @property
+    def live(self) -> bool:
+        """Whether the report still claims its inference records."""
+        return self.status in (ReportStatus.FORMED, ReportStatus.HELD)
+
+
+@dataclass
+class ReportGroup:
+    """The reports placed under one group key, by slot. A discarded group ends every later report for its key."""
+
+    entries: dict[Hashable, ReportEntry] = field(default_factory=dict)
+    discarded: bool = False
+
+
 class ReportRecord2Record(Record2Record):
     """Form report sets, and hold singleton reports and ready groups until a batch uses them.
 
@@ -165,46 +201,43 @@ class ReportRecord2Record(Record2Record):
     tracking, and group slots preserve retry behavior. Release keeps every
     live report and the inference records that it references.
 
-    * ``exclusive_sources``: a terminal report owns its referenced inference records outright.
+    * ``exclusive_sources``: a report that ends owns its referenced inference records outright.
     * ``ordered_groups``: batch ready groups in group-key order instead of arrival order.
     """
 
     def __init__(
         self,
-        scenario: str,
-        report_type: type[ReportBase] | None,
+        context: PipelineContext,
         grouping: ReportGrouping,
         *,
         exclusive_sources: bool = False,
         ordered_groups: bool = False,
     ) -> None:
         super().__init__(GroupKeyOrder() if ordered_groups else ArrivalOrder())
-        self.scenario = scenario
-        self.report_type = report_type
-        self.admitted_report_type: type[ReportBase] | None = None
+        self.scenario = context.scenario
+        self.report_type = context.report_type
+        self.admitted_report_type = context.admitted_report_type
         self.grouping = grouping
         self.exclusive_sources = exclusive_sources
         self.formed: list[ReportCandidate] = []
         self.candidate_count = 0
-
-        # --- inference store ---
+        #: The inference records, by ID, until their release.
         self.inferences: dict[str, AgentRecord] = {}
-
-        # --- report lifecycle ---
-        self.reports: dict[str, AgentRecord] = {}  # live: assembled or failed, not consumed
-        self.seen_reports: set[str] = set()  # dedup
-        self.consumed: set[str] = set()  # acknowledged batch members
-        self.terminal: set[str] = set()  # terminal reports
-
-        # --- source ownership ---
-        self.trained_sources: set[str] = set()  # consumed by an acknowledged batch
-        self.terminal_owned_sources: set[str] = set()  # owned by terminal reports
-
-        # --- groups ---
-        self.groups: dict[Hashable, dict[Hashable, ReportEntry]] = {}  # group key → slot → report
-        self.discarded_groups: set[Hashable] = set()
+        #: Every report the stage read, by ID, until its release.
+        self.reports: dict[str, ReportState] = {}
+        #: Inference records that a committed batch consumed. A later report that references one ends at once.
+        self.trained_sources: set[str] = set()
+        #: Inference records that ended reports own. They are released once no live report references them.
+        self.owned_sources: set[str] = set()
+        self.groups: dict[Hashable, ReportGroup] = {}
         self.available_limit: int | None = None
         self.limit_warned = False
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any], *, context: PipelineContext, environ: Mapping[str, str]) -> Self:
+        """Every valid report trains by itself. A subclass with a grouping or settings overrides it."""
+        NoSettings.parse(config, plugin_class=cls)
+        return cls(context, ReportGrouping())
 
     def admit_reports_of(self, report_type: type[ReportBase] | None) -> None:
         self.admitted_report_type = report_type
@@ -217,17 +250,19 @@ class ReportRecord2Record(Record2Record):
         if record.request_type is RequestType.INFERENCE:
             self.inferences[record.agent_record_id] = record
             return
-        if record.request_type is not RequestType.REPORT or record.agent_record_id in self.seen_reports:
+        if record.request_type is not RequestType.REPORT:
+            return
+        state = self.reports.get(record.agent_record_id)
+        if state is not None and state.status is not ReportStatus.FORMED:
+            # A retry of a report the stage already placed or ended. A formed report whose assembly failed is read again.
             return
         validate_report_payload(record.payload)
         if not record.references or len(set(record.references)) != len(record.references):
             raise ReportValidationError("report references must be non-empty and unique")
-        if any(ref in self.trained_sources for ref in record.references):
-            self.seen_reports.add(record.agent_record_id)
-            self.terminate(record)
+        if any(reference in self.trained_sources for reference in record.references):
+            self.end_report(record)
             return
         if not self.grouping.is_training_report(record):
-            self.seen_reports.add(record.agent_record_id)
             self.handle_other_report(record)
             return
         parsed_report: ReportBase | None = None
@@ -249,13 +284,12 @@ class ReportRecord2Record(Record2Record):
                     self.report_type.__name__,
                     refusal,
                 )
-                self.seen_reports.add(record.agent_record_id)
-                self.terminate(record)
+                self.end_report(record)
                 return
         context = self.report_context(record, parsed_report)
-        # Retain the report before assembly: a contract failure must not let
+        # The report is live before its tasks are made: a contract failure must not let
         # buffer release drop its inputs or turn a retry into a successful no-op.
-        self.reports[record.agent_record_id] = record
+        self.reports[record.agent_record_id] = ReportState(record, ReportStatus.FORMED)
         self.candidate_count += 1
         self.formed.append(
             ReportCandidate(set_id=record.agent_record_id, arrival_index=self.candidate_count, context=context)
@@ -263,7 +297,7 @@ class ReportRecord2Record(Record2Record):
 
     def handle_other_report(self, report: AgentRecord) -> None:
         """End a valid report that this method does not train on. A subclass can keep it for another use."""
-        self.terminate(report)
+        self.end_report(report)
 
     def take_formed(self) -> tuple[RecordSet, ...]:
         formed: tuple[RecordSet, ...] = tuple(self.formed)
@@ -277,53 +311,48 @@ class ReportRecord2Record(Record2Record):
         inferences = tuple(self.inferences[ref] for ref in report.references)
         return ReportContext(report, report_score(report), inferences, parsed_report)
 
-    def accept(self, record_set: RecordSet, assembly: SetAssembly) -> None:
+    def accept(self, record_set: RecordSet, runtime_load_id: str | None) -> None:
         context = candidate_context(record_set)
         report = context.report
         key, slot = self.grouping.placement(context)
         slot = report.agent_record_id if slot is None else slot
         hash(key)
         hash(slot)
-        self.seen_reports.add(report.agent_record_id)
-        if key is not None and (key in self.discarded_groups or slot in self.groups.get(key, {})):
-            self.terminate(report)
+        group = None if key is None else self.groups.setdefault(key, ReportGroup())
+        if group is not None and (group.discarded or slot in group.entries):
+            self.end_report(report)
             self.ended_set_ids.add(report.agent_record_id)
             return
+        self.reports[report.agent_record_id].status = ReportStatus.HELD
         entry = ReportEntry(order=self.pool.next_arrival_index(), context=context, group_key=key, slot=slot)
-        if key is None:
+        if group is None:
             self.pool.put(
                 ReportSet(set_id=("report", report.agent_record_id), arrival_index=entry.order, entries=(entry,))
             )
         else:
-            self.groups.setdefault(key, {})[slot] = entry
+            group.entries[slot] = entry
             self.refresh_group(key)
         self.apply_limit()
 
     def reject(self, record_set: RecordSet) -> None:
         report = candidate_context(record_set).report
-        self.seen_reports.add(report.agent_record_id)
-        self.terminate(report)
+        self.end_report(report)
         self.ended_set_ids.add(report.agent_record_id)
 
-    def terminate(self, report: AgentRecord) -> None:
-        """Drop a report from the live set and mark it terminal.
+    def end_report(self, report: AgentRecord) -> None:
+        """End a report without training. Its record is releasable, with the sources that it owns outright.
 
-        Terminal reports release their own record, and the sources they own
-        outright: a report that claims more than one inference, or any report
-        under ``exclusive_sources``.
+        A report owns its sources when it claims more than one inference, or
+        any number under ``exclusive_sources``.
         """
-        report_id = report.agent_record_id
-        self.reports.pop(report_id, None)
-        self.terminal.add(report_id)
-        if not report.references:
-            return
+        self.reports[report.agent_record_id] = ReportState(report, ReportStatus.ENDED)
         if self.exclusive_sources or len(report.references) > 1:
-            self.terminal_owned_sources.update(report.references)
+            self.owned_sources.update(report.references)
 
     # ---------------------------------------------------------------- groups
 
     def group_entries(self, key: Hashable) -> tuple[ReportEntry, ...]:
-        return tuple(sorted(self.groups[key].values(), key=lambda entry: entry.order))
+        return tuple(sorted(self.groups[key].entries.values(), key=lambda entry: entry.order))
 
     def refresh_group(self, key: Hashable) -> None:
         entries = self.group_entries(key)
@@ -340,17 +369,14 @@ class ReportRecord2Record(Record2Record):
             raise TypeError("decide must return GroupDecision")
 
     def discard_group(self, key: Hashable) -> None:
+        """End every report of the group, and refuse later reports for its key."""
         self.pool.remove(("group", key))
-        self.discarded_groups.add(key)
-        group = self.groups.pop(key)
-        # Remove every member from the live set first, so the wholesale
-        # release is not blocked by siblings of the same discarded group.
-        members = [
-            report for entry in group.values() if (report := self.reports.pop(entry.report_id, None)) is not None
-        ]
-        for report in members:
-            self.terminate(report)
-        self.ended_set_ids.update(entry.report_id for entry in group.values())
+        group = self.groups[key]
+        group.discarded = True
+        for entry in group.entries.values():
+            self.end_report(entry.context.report)
+            self.ended_set_ids.add(entry.report_id)
+        group.entries = {}
 
     # ------------------------------------------------------- available limit
 
@@ -364,7 +390,7 @@ class ReportRecord2Record(Record2Record):
         if limit is None or len(self.pool) <= limit:
             return
         reserved = self.reserved_report_ids()
-        for report_set in report_sets(self.ordered_sets()):
+        for report_set in report_sets(self.pool.ordered_sets()):
             if len(self.pool) <= limit:
                 return
             if report_set.entries[0].report_id in reserved:
@@ -379,20 +405,15 @@ class ReportRecord2Record(Record2Record):
                 )
                 self.limit_warned = True
 
-    def ordered_sets(self) -> tuple[RecordSet, ...]:
-        return self.pool.ordered_sets()
-
     def release_set(self, report_set: ReportSet) -> None:
-        """Release a whole held group or singleton and its sources."""
+        """Release a whole held group or singleton. Its reports own every source that they reference."""
         if report_set.group_key is not None:
             self.discard_group(report_set.group_key)
         else:
             self.pool.remove(report_set.set_id)
         for entry in report_set.entries:
-            report = self.reports.pop(entry.report_id, None)
-            if report is not None:
-                self.terminate(report)
-            self.terminal_owned_sources.update(entry.context.references)
+            self.end_report(entry.context.report)
+            self.owned_sources.update(entry.context.references)
             self.ended_set_ids.add(entry.report_id)
 
     # ------------------------------------------------------------ consumption
@@ -402,55 +423,57 @@ class ReportRecord2Record(Record2Record):
         return {entry.report_id for report_set in report_sets(self.reserved_sets()) for entry in report_set.entries}
 
     def mark_trained(self, trained_sets: tuple[RecordSet, ...]) -> frozenset[str]:
-        consumed_reports: set[str] = set()
+        trained_reports: set[str] = set()
         trained_sources: set[str] = set()
         changed_groups: set[Hashable] = set()
         for entry in (entry for report_set in report_sets(trained_sets) for entry in report_set.entries):
-            report_id = entry.report_id
-            self.consumed.add(report_id)
-            consumed_reports.add(report_id)
-            self.reports.pop(report_id, None)
+            self.reports[entry.report_id] = ReportState(entry.context.report, ReportStatus.TRAINED)
+            trained_reports.add(entry.report_id)
             trained_sources.update(entry.context.references)
-            self.ended_set_ids.add(report_id)
-            if entry.group_key is not None:
-                group = self.groups.get(entry.group_key)
-                if group is not None:
-                    group.pop(entry.slot, None)
-                    changed_groups.add(entry.group_key)
+            self.ended_set_ids.add(entry.report_id)
+            if entry.group_key is None:
+                continue
+            # A reserved group that was discarded after its reservation has no slots left to free.
+            group = self.groups.get(entry.group_key)
+            if group is not None and not group.discarded:
+                group.entries.pop(entry.slot, None)
+                changed_groups.add(entry.group_key)
         for key in changed_groups:
-            if self.groups[key]:
+            if self.groups[key].entries:
                 self.refresh_group(key)
             else:
+                # A consumed group reopens for later reports.
                 self.groups.pop(key)
                 self.pool.remove(("group", key))
-        self.trained_sources.update(trained_sources)
-        return frozenset(consumed_reports | trained_sources)
+        self.trained_sources |= trained_sources
+        return frozenset(trained_reports | trained_sources)
 
     # ---------------------------------------------------------------- release
 
     def live_references(self) -> set[str]:
-        return {ref for report in self.reports.values() for ref in report.references}
+        return {ref for state in self.reports.values() if state.live for ref in state.record.references}
 
     def releasable_record_ids(self) -> frozenset[str]:
         """Find completed records with no remaining live dependents.
 
         The releasable-source set is recomputed here every time: a source is
-        releasable while a terminal report owns it (or a batch consumed it)
-        and no live report references it. Live claims and terminal ownership
-        both move between reads, so the answer is never latched at event time.
+        releasable while an ended report owns it (or a batch consumed it)
+        and no live report references it. Live claims and ownership both
+        move between reads, so the answer is never latched at event time.
         """
-        releasable_sources = (self.terminal_owned_sources | self.trained_sources) - self.live_references()
-        return frozenset(self.consumed | self.terminal | releasable_sources)
+        ended_reports = {report_id for report_id, state in self.reports.items() if not state.live}
+        releasable_sources = (self.owned_sources | self.trained_sources) - self.live_references()
+        return frozenset(ended_reports | releasable_sources)
 
     def release_records(self, agent_record_ids: frozenset[str]) -> None:
-        self.consumed -= agent_record_ids
-        self.terminal -= agent_record_ids
-        self.trained_sources -= agent_record_ids
-        self.terminal_owned_sources -= agent_record_ids
-        self.seen_reports -= agent_record_ids
-        # Only completed inferences without live report references are released.
         for agent_record_id in agent_record_ids:
+            state = self.reports.get(agent_record_id)
+            if state is not None and not state.live:
+                self.reports.pop(agent_record_id)
+            # Only completed inferences without live report references are released.
             self.inferences.pop(agent_record_id, None)
+        self.trained_sources -= agent_record_ids
+        self.owned_sources -= agent_record_ids
 
     def status(self) -> Mapping[str, Any]:
         return self.grouping.status()
@@ -458,7 +481,9 @@ class ReportRecord2Record(Record2Record):
     def operational_metrics(self) -> Mapping[str, float | int]:
         """Unconsumed reports, excluding the reserved batch."""
         reserved = self.reserved_report_ids()
-        waiting = [report for record_id, report in self.reports.items() if record_id not in reserved]
+        waiting = [
+            state.record for record_id, state in self.reports.items() if state.live and record_id not in reserved
+        ]
         return {
             "unreserved_reports": len(waiting),
             "reserved_reports": len(reserved),

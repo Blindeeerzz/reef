@@ -13,7 +13,7 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from reef.core.artifact_ref import RuntimeLoadSpan, parse_runtime_load_spans
+from reef.core.artifact_ref import LiveWeightArtifactRef, RuntimeLoadSpan, parse_runtime_load_spans
 from reef.core.batches import TrajectoryItem
 from reef.core.records_types import AgentRecord
 from reef.core.trajectories import make_trajectory
@@ -22,22 +22,15 @@ from reef.core.trajectories import make_trajectory
 TopkRow = tuple[list[int], list[float]]
 
 
-def sample_assembly_config_fields(config: Mapping[str, Any]) -> tuple[bool, int, int]:
-    """Parse and validate the sample-assembly settings in one place.
+def recorded_training(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    """The ``response.training`` section of a recorded inference: what the backend attached for training.
 
-    ``SampleAssembly.from_config`` runs this, so a recipe whose record-to-task
-    stage assembles policy samples fails at construction on a bad deployment.
+    Empty for a record without one, such as a harness that ships its policy
+    tensors at the top level of the payload.
     """
-    accept_multi_turn = config.get("accept_multi_turn_policy_samples", False)
-    if not isinstance(accept_multi_turn, bool):
-        raise ValueError("accept_multi_turn_policy_samples must be a boolean")
-    realign_threshold = int(config.get("realign_threshold", 1024))
-    if realign_threshold < 0:
-        raise ValueError("realign_threshold must be non-negative")
-    scaffold_tolerance = int(config.get("scaffold_tolerance", 0))
-    if scaffold_tolerance < 0:
-        raise ValueError("scaffold_tolerance must be non-negative")
-    return accept_multi_turn, realign_threshold, scaffold_tolerance
+    response = payload.get("response")
+    training = response.get("training") if isinstance(response, Mapping) else None
+    return training if isinstance(training, Mapping) else {}
 
 
 def recorded_request(payload: Mapping[str, Any]) -> tuple[list[Any], list[Any] | None]:
@@ -46,9 +39,8 @@ def recorded_request(payload: Mapping[str, Any]) -> tuple[list[Any], list[Any] |
     The rollout backend retains its provider-neutral copy under
     ``response.training``; a record without it carries the request body.
     """
-    response = payload.get("response")
-    training = response.get("training") if isinstance(response, Mapping) else None
-    if isinstance(training, Mapping) and isinstance(training.get("request_messages"), list):
+    training = recorded_training(payload)
+    if isinstance(training.get("request_messages"), list):
         messages = list(training["request_messages"])
         tools = training.get("request_tools", payload.get("tools"))
     else:
@@ -59,13 +51,12 @@ def recorded_request(payload: Mapping[str, Any]) -> tuple[list[Any], list[Any] |
 
 def recorded_response(payload: Mapping[str, Any]) -> str:
     """The text of a recorded inference's response: the final assistant message, or empty when it has none."""
+    message = recorded_training(payload).get("response_message")
+    if isinstance(message, Mapping):
+        return flatten_content(message.get("content"))
     response = payload.get("response")
     if not isinstance(response, Mapping):
         return ""
-    training = response.get("training")
-    message = training.get("response_message") if isinstance(training, Mapping) else None
-    if isinstance(message, Mapping):
-        return flatten_content(message.get("content"))
     choices = response.get("choices")
     if isinstance(choices, list) and choices and isinstance(choices[0], Mapping):
         message = choices[0].get("message")
@@ -85,14 +76,14 @@ def flatten_content(content: Any) -> str:
     return str(content) if content is not None else ""
 
 
-def _common_prefix_length(left: list[int], right: list[int]) -> int:
+def common_prefix_length(left: list[int], right: list[int]) -> int:
     for index, (left_token, right_token) in enumerate(zip(left, right, strict=False)):
         if left_token != right_token:
             return index
     return min(len(left), len(right))
 
 
-def _extend_with_prompt_delta(
+def extend_with_prompt_delta(
     tokens: list[int],
     token_mask: list[int],
     token_log_probs: list[float],
@@ -111,7 +102,7 @@ def _extend_with_prompt_delta(
         token_topk.extend(([], []) for _ in prompt_delta)
 
 
-def _drift_is_realignable(
+def drift_is_realignable(
     common_prefix: int,
     latest_response_start: int | None,
     transcript_length: int,
@@ -126,7 +117,7 @@ def _drift_is_realignable(
     return transcript_length - common_prefix <= realign_threshold
 
 
-def _realign_latest_response(
+def realign_latest_response(
     tokens: list[int],
     token_mask: list[int],
     token_log_probs: list[float],
@@ -162,32 +153,31 @@ def make_policy_trajectory(
     decoded text.
     """
     payload = item.payload
-    response = payload.get("response", {})
-    training = response.get("training", {}) if isinstance(response, dict) else {}
+    training = recorded_training(payload)
 
-    def field(name: str):
-        return training.get(name, payload.get(name, ())) if isinstance(training, dict) else payload.get(name, ())
+    def field(name: str) -> Any:
+        return training.get(name, payload.get(name, ()))
 
     tokens = field("tokens")
     loss_mask = field("loss_mask")
     rollout_log_probs = field("rollout_log_probs")
-    training_runtime_load_id = training.get("runtime_load_id") if isinstance(training, dict) else None
+    training_runtime_load_id = training.get("runtime_load_id")
     recorded_runtime_load_id = payload.get("runtime_load_id")
     if recorded_runtime_load_id and training_runtime_load_id and recorded_runtime_load_id != training_runtime_load_id:
         raise ValueError(
             "response training runtime_load_id disagrees with the validated record: "
             f"{training_runtime_load_id!r} != {recorded_runtime_load_id!r}"
         )
-    training_spans = training.get("runtime_load_spans") if isinstance(training, dict) else None
+    training_spans = training.get("runtime_load_spans")
     recorded_spans = payload.get("runtime_load_spans")
-    runtime_load_spans = _policy_version_spans(
+    runtime_load_spans = policy_version_spans(
         training_spans if training_spans is not None else recorded_spans,
         len(loss_mask),
     )
     if (
         training_spans is not None
         and recorded_spans is not None
-        and runtime_load_spans != _policy_version_spans(recorded_spans, len(loss_mask))
+        and runtime_load_spans != policy_version_spans(recorded_spans, len(loss_mask))
     ):
         raise ValueError("response token runtime-load-ID spans disagree with the validated record")
     span_versions = {span.runtime_load_id for span in runtime_load_spans}
@@ -198,9 +188,11 @@ def make_policy_trajectory(
             raise ValueError("response training runtime_load_id disagrees with its token runtime-load-ID spans")
         runtime_load_id = next(iter(span_versions)) if len(span_versions) == 1 else None
     else:
-        runtime_load_id = (
-            recorded_runtime_load_id or training_runtime_load_id or getattr(item.artifact_ref, "runtime_load_id", None)
+        artifact_ref = item.artifact_ref
+        served_runtime_load_id = (
+            artifact_ref.runtime_load_id if isinstance(artifact_ref, LiveWeightArtifactRef) else None
         )
+        runtime_load_id = recorded_runtime_load_id or training_runtime_load_id or served_runtime_load_id
     topk_indices = field("topk_indices") or ()
     topk_log_probs = field("topk_log_probs") or ()
     return make_trajectory((item,), reward).with_training(
@@ -217,7 +209,7 @@ def make_policy_trajectory(
     )
 
 
-def _policy_version_spans(value: Any, response_length: int) -> tuple[RuntimeLoadSpan, ...]:
+def policy_version_spans(value: Any, response_length: int) -> tuple[RuntimeLoadSpan, ...]:
     if value is None:
         return ()
     return parse_runtime_load_spans(value, response_length=response_length)
@@ -303,15 +295,15 @@ def make_multi_turn_policy_trajectory(
                 token_topk.extend(([], []) for _ in prompt)
             leading_prompt_length = len(prompt)
         else:
-            common_prefix = _common_prefix_length(tokens, prompt)
+            common_prefix = common_prefix_length(tokens, prompt)
             if common_prefix == len(tokens):
-                _extend_with_prompt_delta(tokens, token_mask, token_log_probs, prompt, retain_log_probs, token_topk)
-            elif _drift_is_realignable(
+                extend_with_prompt_delta(tokens, token_mask, token_log_probs, prompt, retain_log_probs, token_topk)
+            elif drift_is_realignable(
                 common_prefix, latest_response_start, len(tokens), realign_threshold, scaffold_tolerance
             ):
                 if latest_response_start is None:
                     raise RuntimeError("realignable response drift has no response boundary")
-                _realign_latest_response(
+                realign_latest_response(
                     tokens,
                     token_mask,
                     token_log_probs,

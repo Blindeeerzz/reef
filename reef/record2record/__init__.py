@@ -7,8 +7,9 @@ decisions about each record. This package owns those decisions.
 Entry point: ``Record2Record`` in ``base.py``.
 
 * Each training pipeline (``reef.train.pipeline.TrainingPipeline``) has one
-  stage, from the recipe's ``build_record2record(context)``. The pipeline gives
-  the stage every record except training instructions.
+  stage: the class the recipe's ``pipeline_spec()`` names, or the one the
+  deployment's ``pipeline.record2record`` names, built with ``from_config``.
+  The pipeline gives the stage every record except training instructions.
 * The stage forms ``RecordSet`` values: records that are used together. The
   record-to-task stage makes tasks from each set, and the pipeline gives the
   result back (``settle``). The stage holds the sets that train in its pool,
@@ -26,8 +27,8 @@ Stages:
   background worker after later traffic completes them. A recipe's
   ``RecordJudging`` holds the correlation and the judge.
 * ``InferenceRecord2Record`` (``base.py``): one set per inference record.
-* ``RoundRecord2Record`` (``rounds.py``): a ``ReportRecord2Record`` that also forms a
-  ``RoundRequest`` set each time a task-generation round is due. A recipe's
+* ``RoundRecord2Record`` (``rounds.py``): a ``ReportRecord2Record`` that also
+  paces task-generation rounds and holds their source sessions. A recipe's
   ``RoundGrouping`` decides which reports are source sessions for the rounds.
 
 Components of the pool:
@@ -47,13 +48,7 @@ The package depends only on ``reef.core``, ``reef.runtime.interfaces``,
 the trainer can both use it.
 """
 
-from reef.record2record.base import (
-    AssemblyStatus,
-    InferenceRecord2Record,
-    PassThroughRecord2Record,
-    Record2Record,
-    SetAssembly,
-)
+from reef.record2record.base import InferenceRecord2Record, PassThroughRecord2Record, Record2Record, TaskStatus
 from reef.record2record.eligibility import EligibilityCheck, IneligibleSet, StalenessCheck
 from reef.record2record.judging import JudgedSet, JudgingRecord2Record, RecordJudging, judged_sets
 from reef.record2record.pool import RecordSetPool
@@ -69,13 +64,12 @@ from reef.record2record.reports import (
     report_score,
     report_sets,
 )
-from reef.record2record.rounds import RoundGrouping, RoundRecord2Record, RoundRequest
+from reef.record2record.rounds import RoundGrouping, RoundRecord2Record
 from reef.record2record.selection import ArrivalOrder, GroupKeyOrder, SelectionPolicy
 from reef.record2record.sets import RecordSet, SingleRecordSet
 
 __all__ = [
     "ArrivalOrder",
-    "AssemblyStatus",
     "EligibilityCheck",
     "GroupDecision",
     "GroupKeyOrder",
@@ -96,11 +90,10 @@ __all__ = [
     "ReportSet",
     "RoundGrouping",
     "RoundRecord2Record",
-    "RoundRequest",
     "SelectionPolicy",
-    "SetAssembly",
     "SingleRecordSet",
     "StalenessCheck",
+    "TaskStatus",
     "accepted_by",
     "judged_sets",
     "report_score",

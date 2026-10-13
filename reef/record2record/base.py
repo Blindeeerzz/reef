@@ -7,11 +7,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Hashable, Mapping, Sequence
-from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Self
 
-from reef.core.plugins import Plugin, PluginConfigError
+from reef.core.plugins import NoSettings, Plugin, PluginConfigError
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase
 from reef.pipeline_context import PipelineContext
@@ -21,27 +20,15 @@ from reef.record2record.selection import SelectionPolicy
 from reef.record2record.sets import RecordSet, SingleRecordSet
 
 
-class AssemblyStatus(Enum):
+class TaskStatus(Enum):
     """What the record-to-task stage made of a formed record set."""
 
     #: The set has tasks. The stage holds the set until a batch uses it.
     READY = "ready"
     #: The set cannot train. The stage ends its records.
-    REJECTED = "rejected"
+    SKIPPED = "skipped"
     #: The set makes no task, as in a pipeline that trains no weights. The stage forgets the set and keeps its records.
     INGESTED = "ingested"
-
-
-@dataclass(frozen=True)
-class SetAssembly:
-    """The result of one assembly.
-
-    ``runtime_load_id`` is the runtime load ID of the training data, if the
-    pipeline knows it. The stage's eligibility checks read it.
-    """
-
-    status: AssemblyStatus
-    runtime_load_id: str | None = None
 
 
 class Record2Record(ABC, Plugin):
@@ -49,10 +36,10 @@ class Record2Record(ABC, Plugin):
 
     The pipeline gives the stage every record that it reads, except training
     instructions, in append order. The stage forms record sets
-    (``take_formed``). The pipeline assembles each formed set and gives the
-    result back (``settle``). The stage holds each assembled set in its pool
-    until the pipeline reserves it for a batch. The pool applies the stage's
-    selection policy and eligibility checks. The stage never calls the pipeline.
+    (``take_formed``). The pipeline makes tasks from each formed set and gives
+    the result back (``settle``). The stage holds each set that has tasks in
+    its pool until the pipeline reserves it for a batch. The pool applies the
+    stage's selection policy and eligibility checks. The stage never calls the pipeline.
 
     A record that the stage ends, for example a record that can no longer
     train, appears in ``releasable_record_ids``. The trainer adds those IDs to
@@ -61,13 +48,14 @@ class Record2Record(ABC, Plugin):
     The stage keeps only memory that a replay of the retained records
     rebuilds, as pipeline memory does.
 
-    A deployment can name a stage class in ``pipeline.record2record``; the
-    class then implements ``from_config``.
+    A deployment names a stage class in ``pipeline.record2record`` and gives
+    its config. The class parses the config into its settings dataclass and
+    builds the stage in ``from_config``.
     """
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any], *, context: PipelineContext, environ: Mapping[str, str]) -> Self:
-        """Build the stage of one scenario from its ``pipeline.record2record.config``.
+        """Build the stage of one scenario from its config.
 
         ``environ`` holds the environment the deployment was read with.
         """
@@ -75,7 +63,7 @@ class Record2Record(ABC, Plugin):
 
     def __init__(self, selection: SelectionPolicy | None = None, checks: Sequence[EligibilityCheck] = ()) -> None:
         self.pool = RecordSetPool(selection, checks)
-        #: Formed sets that ended after assembly. The assembler forgets their training data.
+        #: Formed sets that ended after the task stage saw them. The pipeline forgets their tasks.
         self.ended_set_ids: set[Hashable] = set()
         #: Whether the pipeline handed out a batch that the trainer has not acknowledged or released yet.
         self.batch_out = False
@@ -92,25 +80,29 @@ class Record2Record(ABC, Plugin):
         """Absorb background work, such as finished judgments. ``now`` is a monotonic time."""
         return
 
-    def settle(self, record_set: RecordSet, assembly: SetAssembly) -> None:
-        """Keep or end a formed set from the pipeline's assembly result."""
-        if assembly.status is AssemblyStatus.READY:
-            self.accept(record_set, assembly)
-        elif assembly.status is AssemblyStatus.REJECTED:
+    def settle(self, record_set: RecordSet, status: TaskStatus, runtime_load_id: str | None = None) -> None:
+        """Keep or end a formed set from what the task stage made of it.
+
+        ``runtime_load_id`` is the version of the set's training data, when the
+        task stage knows it. The eligibility checks read it.
+        """
+        if status is TaskStatus.READY:
+            self.accept(record_set, runtime_load_id)
+        elif status is TaskStatus.SKIPPED:
             self.reject(record_set)
-        elif assembly.status is not AssemblyStatus.INGESTED:
-            raise TypeError("an assembly result must have an AssemblyStatus")
+        elif status is not TaskStatus.INGESTED:
+            raise TypeError("a task result must have a TaskStatus")
 
-    def accept(self, record_set: RecordSet, assembly: SetAssembly) -> None:
-        """Hold an assembled set in the pool. The default stage never forms a set that it must hold."""
-        raise NotImplementedError(f"{type(self).__name__} does not hold assembled sets")
+    @abstractmethod
+    def accept(self, record_set: RecordSet, runtime_load_id: str | None) -> None:
+        """Hold a set that has tasks in the pool."""
 
+    @abstractmethod
     def reject(self, record_set: RecordSet) -> None:
-        """End a set that cannot train. The default stage never forms a set that it must end."""
-        raise NotImplementedError(f"{type(self).__name__} does not end rejected sets")
+        """End a set that cannot train."""
 
     def take_ended(self) -> frozenset[Hashable]:
-        """Return the IDs of the formed sets that ended since the last call. The pipeline forgets their data."""
+        """Return the IDs of the formed sets that ended since the last call. The pipeline forgets their tasks."""
         ended, self.ended_set_ids = frozenset(self.ended_set_ids), set()
         return ended
 
@@ -138,9 +130,9 @@ class Record2Record(ABC, Plugin):
             raise RuntimeError("cannot consume a batch before sets are reserved")
         return self.mark_trained(self.pool.consume_reserved())
 
+    @abstractmethod
     def mark_trained(self, trained_sets: tuple[RecordSet, ...]) -> frozenset[str]:
         """End sets that a committed batch trained on, and return the IDs of their consumed records."""
-        raise NotImplementedError(f"{type(self).__name__} does not hold assembled sets")
 
     def mark_batch_dropped(self) -> None:
         """The backend dropped the batch that is out as stale. Its acknowledgement follows."""
@@ -184,13 +176,13 @@ class Record2Record(ABC, Plugin):
 class PassThroughRecord2Record(Record2Record):
     """Hand each record to the pipeline by itself, in arrival order, and decide nothing.
 
-    With ``NoTasks`` each set is ``AssemblyStatus.INGESTED``: the stage forgets it.
+    With ``NoTasks`` each set is ``TaskStatus.INGESTED``: the stage forgets it.
+    The stage holds no set, so it refuses a task stage that makes tasks.
     """
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any], *, context: PipelineContext, environ: Mapping[str, str]) -> Self:
-        if config:
-            raise PluginConfigError(f"{cls.__name__} takes no config, got {', '.join(sorted(map(str, config)))}")
+        NoSettings.parse(config, plugin_class=cls)
         return cls()
 
     def __init__(self) -> None:
@@ -208,14 +200,22 @@ class PassThroughRecord2Record(Record2Record):
         formed, self.formed = tuple(self.formed), []
         return formed
 
+    def accept(self, record_set: RecordSet, runtime_load_id: str | None) -> None:
+        raise TypeError(f"{type(self).__name__} holds no set: pair it with NoTasks, or hold sets in another stage")
+
+    def reject(self, record_set: RecordSet) -> None:
+        raise TypeError(f"{type(self).__name__} ends no set: pair it with NoTasks, or hold sets in another stage")
+
+    def mark_trained(self, trained_sets: tuple[RecordSet, ...]) -> frozenset[str]:
+        raise TypeError(f"{type(self).__name__} holds no set, so no batch can train on one")
+
 
 class InferenceRecord2Record(Record2Record):
     """Hold each inference record as one set, in arrival order, and end every other record untouched."""
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any], *, context: PipelineContext, environ: Mapping[str, str]) -> Self:
-        if config:
-            raise PluginConfigError(f"{cls.__name__} takes no config, got {', '.join(sorted(map(str, config)))}")
+        NoSettings.parse(config, plugin_class=cls)
         return cls()
 
     def __init__(self) -> None:
@@ -236,8 +236,12 @@ class InferenceRecord2Record(Record2Record):
         formed, self.formed = tuple(self.formed), []
         return formed
 
-    def accept(self, record_set: RecordSet, assembly: SetAssembly) -> None:
+    def accept(self, record_set: RecordSet, runtime_load_id: str | None) -> None:
         self.pool.put(record_set)
+
+    def reject(self, record_set: RecordSet) -> None:
+        self.terminal.update(record_set.record_ids())
+        self.ended_set_ids.add(record_set.set_id)
 
     def mark_trained(self, trained_sets: tuple[RecordSet, ...]) -> frozenset[str]:
         consumed = frozenset(record_id for record_set in trained_sets for record_id in record_set.record_ids())

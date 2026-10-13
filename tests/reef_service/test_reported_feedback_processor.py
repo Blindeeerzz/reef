@@ -38,8 +38,7 @@ def exclusive_stage(
 ) -> ReportRecord2Record:
     """A report stage in which a terminal report owns its sources."""
     return ReportRecord2Record(
-        context.scenario,
-        context.report_type,
+        context,
         ReportGrouping() if grouping is None else grouping,
         exclusive_sources=True,
         ordered_groups=ordered_groups,
@@ -78,13 +77,13 @@ class SamplePipeline(TrainingPipeline):
         tasks: SampleTasks | None = None,
         batches: type[SampleBatches] = SampleBatches,
     ) -> None:
-        context = PipelineContext("math", {"batch_size": batch_size}, report_type=report_type)
+        context = PipelineContext("math", report_type)
         self.sample_tasks = SampleTasks() if tasks is None else tasks
         super().__init__(
             context,
             record2record=exclusive_stage(context, grouping, ordered_groups=ordered_groups),
             record2task=self.sample_tasks,
-            task2batch=batches(context),
+            task2batch=batches(context, batch_size),
         )
 
     @property

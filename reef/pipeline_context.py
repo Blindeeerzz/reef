@@ -1,14 +1,13 @@
 """The context that the training pipeline and its three stages read for one scenario.
 
-The trainer builds it; the recipe adds its config with ``with_config``. It sits
-below the stage packages so that each of them can read it.
+The trainer builds it. It sits below the stage packages so that each of them
+can read it. A stage's own config is not here: each stage parses its config
+into its settings dataclass in ``from_config``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
-from typing import Any
+from dataclasses import dataclass, field
 
 from reef.core.reports import ReportBase
 from reef.observability import ExperimentLogger, NullExperimentLogger
@@ -16,10 +15,9 @@ from reef.observability import ExperimentLogger, NullExperimentLogger
 
 @dataclass(frozen=True)
 class PipelineContext:
-    """What the training pipeline and its stages read for one scenario: its config, report contract, and mode."""
+    """What the training pipeline and its stages read for one scenario: its report contract, logger, and mode."""
 
     scenario: str
-    config: Mapping[str, Any] = field(default_factory=dict)
     report_type: type[ReportBase] | None = None
     experiment_logger: ExperimentLogger = field(default_factory=NullExperimentLogger)
     training_mode: str = "auto"
@@ -28,12 +26,11 @@ class PipelineContext:
     admitted_report_type: type[ReportBase] | None = None
     #: How many versions a sample may lag behind and still train; the recipe's ``max_staleness``.
     max_staleness: int = 0
+    #: Whether the pipeline takes training instructions; a recipe whose proposer reads none turns it off.
+    manual_enabled: bool = True
 
     def __post_init__(self) -> None:
         if self.training_mode not in ("auto", "manual", "hybrid"):
             raise ValueError("training_mode must be 'auto', 'manual' or 'hybrid'")
         if not isinstance(self.max_staleness, int) or isinstance(self.max_staleness, bool) or self.max_staleness < 0:
             raise ValueError("max_staleness must be a non-negative integer")
-
-    def with_config(self, config: Mapping[str, Any]) -> PipelineContext:
-        return replace(self, config=config)

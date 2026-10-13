@@ -22,7 +22,8 @@ from dataclasses import dataclass, replace
 
 from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Failed, SupportsReceipt
 from reef.core.records_types import AgentRecord
-from reef.record2record.base import Record2Record, SetAssembly
+from reef.pipeline_context import PipelineContext
+from reef.record2record.base import Record2Record
 from reef.record2record.eligibility import StalenessCheck
 from reef.record2record.selection import ArrivalOrder
 from reef.record2record.sets import RecordSet
@@ -87,15 +88,15 @@ class JudgingRecord2Record(Record2Record):
     pool, or terminal. Terminal records are released from memory and never
     batch. Judged sets wait in the order that their judgments arrived. A
     ``StalenessCheck`` drops sets that are more than ``max_staleness``
-    versions behind the newest one, by record arrival, while no batch is out:
+    versions behind the newest one (the context's ``max_staleness``), by record arrival, while no batch is out:
     continual serving advances the version every step, and stale sets would
     otherwise block the queue.
 
     Without a worker, records track and expire, and nothing is ever judged.
     """
 
-    def __init__(self, judging: RecordJudging, worker: BackgroundJobWorker | None, *, max_staleness: int) -> None:
-        super().__init__(ArrivalOrder(), (StalenessCheck(max_staleness),))
+    def __init__(self, context: PipelineContext, judging: RecordJudging, worker: BackgroundJobWorker | None) -> None:
+        super().__init__(ArrivalOrder(), (StalenessCheck(context.max_staleness),))
         self.judging = judging
         self.worker = worker
         self.tracked: dict[str, AgentRecord] = {}
@@ -144,8 +145,8 @@ class JudgingRecord2Record(Record2Record):
         formed, self.formed = tuple(self.formed), []
         return formed
 
-    def accept(self, record_set: RecordSet, assembly: SetAssembly) -> None:
-        self.pool.put(replace(record_set, runtime_load_id=assembly.runtime_load_id))
+    def accept(self, record_set: RecordSet, runtime_load_id: str | None) -> None:
+        self.pool.put(replace(record_set, runtime_load_id=runtime_load_id))
         # The eligibility checks never run under a batch that is out: its samples reference held sets.
         if not self.batch_out:
             dropped_sets = judged_sets(tuple(dropped.record_set for dropped in self.pool.drop_ineligible()))

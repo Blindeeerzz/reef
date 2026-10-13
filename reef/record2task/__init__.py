@@ -11,8 +11,8 @@ rolls out. A recipe's ``Task2Batch`` (``reef.task2batch``) shapes the
 tasks into batches, and ``reef.train.pipeline.TrainingPipeline`` drives the
 three stages.
 
-Entry point: ``Record2Task`` in ``base.py``. The recipe builds one in
-``build_record2task(context)``.
+Entry point: ``Record2Task`` in ``base.py``. The recipe's ``pipeline_spec()``
+names the class, and ``from_config`` builds it for each scenario.
 
 Implementations:
 

@@ -1,12 +1,15 @@
-"""SDFT's processor: the shared distillation processor with the demonstration appended to the request."""
+"""SDFT's stages: the shared distillation stages with the demonstration appended to the request."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Self
 
+from reef.core.config import config_option
 from reef.pipeline_context import PipelineContext
-from reef.record2task.distill import DistillTasks, normalize_messages_for_template
+from reef.record2record import Record2Record
+from reef.record2task.distill import DistillSettings, DistillTasks, normalize_messages_for_template
 from reef.task2batch import DistillBatches
 
 #: The reference implementation's demonstration block (idanshen/Self-Distillation, ``main.py``).
@@ -17,12 +20,18 @@ DEFAULT_CONTEXT_TEMPLATE = (
 CONTEXT_PLACEHOLDER = "{context}"
 
 
-def context_block_template(config: Mapping[str, Any]) -> str:
-    """The demonstration block's template from the processor config, checked for its placeholder."""
-    template = str(config.get("context_template", DEFAULT_CONTEXT_TEMPLATE))
-    if CONTEXT_PLACEHOLDER not in template:
-        raise ValueError(f"context_template must contain {CONTEXT_PLACEHOLDER}")
-    return template
+@dataclass(frozen=True)
+class SDFTSettings(DistillSettings):
+    """The config of ``SDFTTasks``: the shared distillation settings and the demonstration block's template."""
+
+    context_template: str = config_option(
+        DEFAULT_CONTEXT_TEMPLATE, help="The text added to the final user message; {context} marks the demonstration."
+    )
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if CONTEXT_PLACEHOLDER not in self.context_template:
+            raise ValueError(f"context_template must contain {CONTEXT_PLACEHOLDER}")
 
 
 class SDFTTasks(DistillTasks):
@@ -36,10 +45,21 @@ class SDFTTasks(DistillTasks):
     block is ``context_template`` with ``{context}`` replaced.
     """
 
-    def __init__(self, context: PipelineContext) -> None:
-        # A bad template fails before the tokenizer loads.
-        self.template = context_block_template(context.config)
-        super().__init__(context)
+    def __init__(self, settings: SDFTSettings) -> None:
+        # The template is read before the tokenizer loads.
+        self.template = settings.context_template
+        super().__init__(settings)
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any],
+        *,
+        context: PipelineContext,
+        record2record: Record2Record,
+        environ: Mapping[str, str],
+    ) -> Self:
+        return cls(SDFTSettings.parse(config, plugin_class=cls))
 
     def teacher_request(
         self, messages: list[Any], tools: list[Any] | None, response: str, teacher_context: str
@@ -55,9 +75,9 @@ class SDFTTasks(DistillTasks):
 
 
 class SDFTBatches(DistillBatches):
-    """SDFT's batches: distillation tasks as they come."""
+    """SDFT's batches: distillation tasks as they come, ``batch_size`` reports to a batch."""
 
     batch_label = "sdft"
 
 
-__all__ = ["CONTEXT_PLACEHOLDER", "DEFAULT_CONTEXT_TEMPLATE", "SDFTBatches", "SDFTTasks", "context_block_template"]
+__all__ = ["CONTEXT_PLACEHOLDER", "DEFAULT_CONTEXT_TEMPLATE", "SDFTBatches", "SDFTSettings", "SDFTTasks"]

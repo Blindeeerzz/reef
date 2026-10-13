@@ -19,9 +19,7 @@ from typing import Any
 
 import pytest
 
-from recipes.tttd import TTTDBatches, TTTDGroupedRolloutReport
-from recipes.tttd.processor import TTTDTasks
-from recipes.tttd.recipe import tttd_record2record
+from recipes.tttd import TTTDBatches, TTTDGridSettings, TTTDGroupedRolloutReport, TTTDRecord2Record, TTTDTasks
 from reef.artifact import ArtifactRef, InMemoryRepositoryBackend
 from reef.background_jobs import SupportsReceipt
 from reef.core import AgentRecord, RequestType
@@ -36,6 +34,7 @@ from reef.record2record import (
     ReportRecord2Record,
 )
 from reef.record2task import JudgedTasks
+from reef.record2task.assembly import SampleAssemblySettings
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.task2batch import Task2Batch
 from reef.train import ComponentTrainer, Trainer
@@ -95,13 +94,13 @@ class SessionBatches(Task2Batch):
         return TrainingBatch(f"{self.scenario}:session:{batch_number}", tasks)
 
 
-def session_pipeline(context: PipelineContext) -> TrainingPipeline:
+def session_pipeline(context: PipelineContext, batch_size: int = 1) -> TrainingPipeline:
     """Trains the judged turns of ``_SessionJudging``; a turn marked declined is unusable."""
     return TrainingPipeline(
         context,
-        record2record=JudgingRecord2Record(_SessionJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness),
+        record2record=JudgingRecord2Record(context, _SessionJudging(), _JudgedAtOnce()),
         record2task=_SessionTasks(),
-        task2batch=SessionBatches(context),
+        task2batch=SessionBatches(context, batch_size),
     )
 
 
@@ -123,23 +122,21 @@ class _StepGrouping(ReportGrouping):
         return GroupDecision.READY
 
 
-def step_pipeline(context: PipelineContext) -> TrainingPipeline:
+def step_pipeline(context: PipelineContext, batch_size: int = 1) -> TrainingPipeline:
     """TTTD's shape: a step is one group of two (step, slot) reports, sources are exclusive, a step with a report
     marked mixed is discarded once complete, and a report that names no step is another role's and released."""
-    stage = ReportRecord2Record(
-        context.scenario, context.report_type, _StepGrouping(), exclusive_sources=True, ordered_groups=True
-    )
-    return threshold_pipeline(context, record2record=stage)
+    stage = ReportRecord2Record(context, _StepGrouping(), exclusive_sources=True, ordered_groups=True)
+    return threshold_pipeline(context, batch_size=batch_size, record2record=stage)
 
 
 def tttd_pipeline(context: PipelineContext) -> TrainingPipeline:
     """The TTTD recipe's stages, one group of two rollouts per step."""
-    configured = context.with_config({"groups_per_step": 1, "rollouts_per_group": 2})
+    record2record = TTTDRecord2Record(context, TTTDGridSettings(groups_per_step=1, rollouts_per_group=2))
     return TrainingPipeline(
-        configured,
-        record2record=tttd_record2record(configured),
-        record2task=TTTDTasks(configured),
-        task2batch=TTTDBatches(configured),
+        context,
+        record2record=record2record,
+        record2task=TTTDTasks(SampleAssemblySettings(), record2record),
+        task2batch=TTTDBatches(context, record2record),
     )
 
 
@@ -154,7 +151,7 @@ class _Recipe(_TwoTrainerRecipe):
             build_pipeline = pipelines[component]
             if build_pipeline is tttd_pipeline:
                 return tttd_pipeline
-            return lambda context: build_pipeline(context.with_config({"batch_size": 1}))
+            return lambda context: build_pipeline(context, batch_size=1)
 
         return tuple(
             ComponentTrainer(

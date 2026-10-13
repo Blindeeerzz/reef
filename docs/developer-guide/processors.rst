@@ -32,21 +32,30 @@ The three stages
   shapes the tasks of the selected sets into one ``TrainingBatch``. Grouped
   recipes set ``group_id`` on each member.
 
-The recipe builds the stages with ``build_record2record(context)``,
-``build_record2task(context, record2record)``, and
-``build_task2batch(context, record2record, record2task)``, in that order; a
-later stage receives the stages built before it, as OpenClaw-RL's batches read
-the record stage's judging. The default of the last builds the ``task2batch``
-class that ``training_spec()`` names. ``build_pipeline(context)`` composes them
-into a ``TrainingPipeline``. Without a record stage, the pipeline passes each
-record through and makes no tasks.
+The recipe names a default class for each stage in its ``pipeline_spec()``.
+The deployment's ``pipeline`` section gives each stage its config and can name
+another class (see `the pipeline section
+<../reference/configuration.rst#the-pipeline-section>`__). For each scenario,
+Reef builds the stages in pipeline order with the class method ``from_config``
+and composes them into a ``TrainingPipeline``:
 
-A deployment can replace any stage in its ``pipeline`` section: it names a
-stage class and its config, and Reef builds the stage with the class method
-``from_config`` instead of the recipe's hook (see `the pipeline section
-<../reference/configuration.rst#the-pipeline-section>`__). A stage class that a
-deployment can name implements ``from_config``; it receives the same earlier
-stages as the hook.
+- ``Record2Record.from_config(config, *, context, environ)``
+- ``Record2Task.from_config(config, *, context, record2record, environ)``
+- ``Task2Batch.from_config(config, *, context, record2record, record2task, environ)``
+
+A later stage receives the stages built before it. It reads a value that an
+earlier stage owns from that stage, so the value is configured once: TTTD's
+batches read the step grid from its record stage, and OpenClaw-RL's batches
+read the record stage's judging. ``config`` is the stage's own config. A stage
+declares its keys as a frozen settings dataclass that inherits
+``reef.core.plugins.PluginSettings`` (fields made with
+``reef.core.config.config_option``). Its ``from_config`` parses the config
+with ``Settings.parse(config, plugin_class=cls)`` and gives the settings
+object to the constructor; the stage never reads a raw mapping. A stage
+without config parses with ``NoSettings``, which refuses any key. Reading the
+deployment checks the stage classes; a bad config fails when the first
+scenario builds its pipeline. Without a record stage, the pipeline passes
+each record through and makes no tasks.
 
 Nothing numeric lives in the stages. Advantages and the loss family are the
 step objective's. See `batch values <../reference/python-api.rst#batch>`__ for
@@ -195,10 +204,10 @@ not a reason to discard the report.
 
 A reported-feedback recipe writes:
 
-- a ``ReportRecord2Record`` from ``build_record2record``, with its ``ReportGrouping``
-  (below);
+- a ``ReportRecord2Record`` subclass as its record stage, with its
+  ``ReportGrouping`` (below);
 - ``make_sample(context) -> TrainDataItem`` on a ``ReportTasks`` subclass,
-  from ``build_record2task``: assemble an ATIF trajectory or Harbor task
+  its record-to-task stage: assemble an ATIF trajectory or Harbor task
   directly. Use ``context.require_score()`` when the method needs a reward.
   The stage attaches the source and report ids to the returned item.
 - ``make_batch(tasks, batch_number)`` on a ``Task2Batch`` subclass: assemble
@@ -244,9 +253,9 @@ Computed feedback
 A computed-feedback recipe writes a ``RecordJudging``: correlation in
 ``observe(record, now, stage)`` with the stage's ``dispatch``, ``track``,
 ``tracked_record``, and ``retire`` operations, ``async judge``, and ``expire``
-for tracked records that time out. The recipe's ``build_record2record``
-returns a ``JudgingRecord2Record`` with the judging and the worker that runs
-``judge``. Its ``build_record2task`` returns a ``JudgedTasks`` with
+for tracked records that time out. The recipe's record stage is a
+``JudgingRecord2Record`` with the judging and the worker that runs
+``judge``. Its record-to-task stage is a ``JudgedTasks`` with
 ``make_sample(record, judgment)``, and its ``Task2Batch`` supplies
 ``make_batch``. The stage holds judged records and drops those more than
 ``max_staleness`` versions behind the newest one.
@@ -292,9 +301,9 @@ could not start on it.
 
 The recipe splits the rounds across its stages. The record stage
 (``GeneratedTaskRecord2Record``, a ``RoundRecord2Record``) decides when a round is due
-and forms a ``RoundRequest`` record set. The record-to-task stage (``GeneratedTaskTasks``) runs one round
-at a time from each request, on its own ``BackgroundJobWorker``, outside the
-trainer lock. In each round it:
+and holds the source sessions. The record-to-task stage (``GeneratedTaskTasks``) runs one round
+at a time, on its own ``BackgroundJobWorker``, outside the trainer lock: each
+time the pipeline looks for a batch, it starts a round when one is due. In each round it:
 
 1. Asks the generator for tasks with the configured ``description`` and the
    request's source sessions.
@@ -317,8 +326,8 @@ A round can also generate tasks from recorded sessions. Set the record
 stage's ``source_records_per_round`` above 0 and its ``source_tag`` to a
 ``name=value`` tag. A report without a training arm, whose inference records all carry the
 header ``x-reef-tag-<name>: <value>``, is a source session. The record stage
-holds source sessions in arrival order. Each request takes at most
-``source_records_per_round`` of them, and a request without a waiting session
+holds source sessions in arrival order. Each round takes at most
+``source_records_per_round`` of them, and a round without a waiting session
 has none. The generator receives each session's inference records and then
 its report as ``source_records``. The record stage keeps a session's records
 until its round finishes, then releases them. A session that arrives after the
@@ -375,7 +384,7 @@ Compatibility
 -------------
 
 A recipe's processor class becomes a ``Task2Batch`` with its ``make_batch``,
-named by ``WeightTrainingSpec.task2batch``; the trainer drives a
+named in the recipe's ``pipeline_spec()``; the trainer drives a
 ``TrainingPipeline`` instead of a ``DataProcessor``. Reported-feedback recipes
 must replace ``judge`` and ``ReportDecision`` with ``make_sample`` returning
 ``TrainDataItem`` on a ``ReportTasks`` subclass. Remove ``WAIT``/``NEVER`` branches: invalid

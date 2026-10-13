@@ -28,16 +28,17 @@ from collections.abc import Hashable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from reef.core.plugins import PluginConfigError, PluginReference
+from reef.core.plugins import Plugin, PluginConfigError, PluginReference
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase
 from reef.core.training_request import TrainingRequest
 from reef.observability import ExperimentLogger
 from reef.pipeline_context import PipelineContext
-from reef.record2record import AssemblyStatus, PassThroughRecord2Record, Record2Record
+from reef.record2record import PassThroughRecord2Record, Record2Record, TaskStatus
 from reef.record2task import NoTasks, Record2Task
 from reef.task2batch import NoBatches, Task2Batch
 from reef.train.types import TrainDataItem, TrainingBatch
+
 
 #: In manual mode the pipeline holds at most this many batches of sets; it releases older ones.
 MANUAL_HELD_BATCHES = 4
@@ -48,41 +49,86 @@ PIPELINE_STAGES = ("record2record", "record2task", "task2batch")
 
 
 @dataclass(frozen=True)
-class PipelineConfig:
-    """The deployment's ``pipeline`` section: stage classes that replace the recipe's, with their config.
+class PipelineSpec:
+    """A recipe's default stage classes. A deployment's ``pipeline`` section can name others."""
 
-    Each key names one stage as ``{module, config}``. A stage without a key is
-    the recipe's own. The classes are imported and checked when the recipe is
-    built; the stages are built for each scenario, in pipeline order.
+    record2record: type[Record2Record] = PassThroughRecord2Record
+    record2task: type[Record2Task] = NoTasks
+    task2batch: type[Task2Batch] = NoBatches
+
+
+@dataclass(frozen=True)
+class PipelineConfig:
+    """The three stages of a recipe's pipeline: each stage's class and its config.
+
+    It comes from the deployment's ``pipeline`` section over the recipe's
+    ``PipelineSpec``. Each key of the section is ``{module, config}``; a key
+    without ``module`` configures the recipe's own class, and a missing key
+    builds it with no config. Reading the section imports and checks each
+    class; a stage parses its config when a scenario builds it, in pipeline
+    order.
     """
 
-    record2record: PluginReference[Record2Record] | None = None
-    record2task: PluginReference[Record2Task] | None = None
-    task2batch: PluginReference[Task2Batch] | None = None
+    record2record: PluginReference
+    record2task: PluginReference
+    task2batch: PluginReference
     environ: Mapping[str, str] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_setting(cls, value: object, *, environ: Mapping[str, str]) -> PipelineConfig:
-        if not isinstance(value, Mapping):
+    def from_setting(cls, value: object, *, spec: PipelineSpec, environ: Mapping[str, str]) -> PipelineConfig:
+        """Read the ``pipeline`` section over ``spec``; ``None`` is the recipe's stages with no config."""
+        if value is not None and not isinstance(value, Mapping):
             raise PluginConfigError(f"pipeline must be a mapping with {', '.join(PIPELINE_STAGES)}")
-        unknown = sorted(str(key) for key in value if key not in PIPELINE_STAGES)
+        section: Mapping[str, Any] = {} if value is None else value
+        unknown = sorted(str(key) for key in section if key not in PIPELINE_STAGES)
         if unknown:
             raise PluginConfigError(
                 f"pipeline has unknown key(s) {', '.join(unknown)}; expected {', '.join(PIPELINE_STAGES)}"
             )
-        record2record, record2task, task2batch = (value.get(stage) for stage in PIPELINE_STAGES)
+        record2record, record2task, task2batch = (section.get(stage) for stage in PIPELINE_STAGES)
         return cls(
-            record2record=(
-                None
-                if record2record is None
-                else Record2Record.reference(record2record, setting="pipeline.record2record")
-            ),
-            record2task=(
-                None if record2task is None else Record2Task.reference(record2task, setting="pipeline.record2task")
-            ),
-            task2batch=None if task2batch is None else Task2Batch.reference(task2batch, setting="pipeline.task2batch"),
+            record2record=stage_reference(spec.record2record, record2record, "record2record")
+            or Record2Record.reference(record2record, setting="pipeline.record2record"),
+            record2task=stage_reference(spec.record2task, record2task, "record2task")
+            or Record2Task.reference(record2task, setting="pipeline.record2task"),
+            task2batch=stage_reference(spec.task2batch, task2batch, "task2batch")
+            or Task2Batch.reference(task2batch, setting="pipeline.task2batch"),
             environ=dict(environ),
         )
+
+    def build(self, context: PipelineContext) -> TrainingPipeline:
+        """Build the pipeline of one scenario: each stage from its config, later stages with the earlier ones."""
+        record2record = Record2Record.referenced_class(self.record2record).from_config(
+            self.record2record.config, context=context, environ=self.environ
+        )
+        record2task = Record2Task.referenced_class(self.record2task).from_config(
+            self.record2task.config, context=context, record2record=record2record, environ=self.environ
+        )
+        task2batch = Task2Batch.referenced_class(self.task2batch).from_config(
+            self.task2batch.config,
+            context=context,
+            record2record=record2record,
+            record2task=record2task,
+            environ=self.environ,
+        )
+        return TrainingPipeline(context, record2record=record2record, record2task=record2task, task2batch=task2batch)
+
+
+def stage_reference(default: type[Plugin], value: object, stage: str) -> PluginReference | None:
+    """The recipe's class for one stage of the ``pipeline`` section, absent or ``{config}``; None when it names a module."""
+    if value is None:
+        return PluginReference(default, {})
+    if not isinstance(value, Mapping) or "module" in value:
+        return None
+    unknown = sorted(str(key) for key in value if key != "config")
+    if unknown:
+        raise PluginConfigError(
+            f"pipeline.{stage} has unknown key(s) {', '.join(unknown)}; expected module and config"
+        )
+    config = value.get("config", {})
+    if not isinstance(config, Mapping):
+        raise PluginConfigError(f"pipeline.{stage}.config must be a mapping")
+    return PluginReference(default, dict(config))
 
 
 @dataclass(frozen=True)
@@ -126,7 +172,7 @@ class TrainingPipeline:
         self.task2batch = NoBatches(context) if task2batch is None else task2batch
         self.supported_training_modes = self.task2batch.supported_training_modes
         # The two modes that take an instruction go together: a recipe that cannot run one cannot run it in either.
-        if not context.config.get("manual_enabled", True):
+        if not context.manual_enabled:
             self.supported_training_modes = self.supported_training_modes - {"manual", "hybrid"}
         self.training_requests: dict[str, TrainingRequest] = {}
         self.consumed_requests: set[str] = set()
@@ -236,9 +282,9 @@ class TrainingPipeline:
         """Make tasks from each set that the stage formed, give each result back, and forget the sets that ended."""
         for record_set in self.record2record.take_formed():
             result = self.record2task.make_tasks(record_set)
-            if result.assembly.status is AssemblyStatus.READY:
+            if result.status is TaskStatus.READY:
                 self.tasks[record_set.set_id] = result.tasks
-            self.record2record.settle(record_set, result.assembly)
+            self.record2record.settle(record_set, result.status, result.runtime_load_id)
         self.forget_sets(self.record2record.take_ended())
 
     def ingest(self, item: AgentRecord) -> None:

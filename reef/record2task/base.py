@@ -15,35 +15,41 @@ from pathlib import Path
 from typing import Any, Self
 
 from reef.core.batches import TrainDataItem
-from reef.core.plugins import Plugin, PluginConfigError
+from reef.core.plugins import NoSettings, Plugin, PluginConfigError
 from reef.pipeline_context import PipelineContext
-from reef.record2record import AssemblyStatus, Record2Record, RecordSet, SetAssembly
+from reef.record2record import Record2Record, RecordSet, TaskStatus
 
 
 @dataclass(frozen=True)
 class TaskResult:
-    """The tasks made from one record set, and what the record stage does with the set."""
+    """The tasks made from one record set, and what the record stage does with the set.
 
-    assembly: SetAssembly
+    ``runtime_load_id`` is the version of the tasks' training data, when the
+    stage knows it. The record stage's eligibility checks read it.
+    """
+
+    status: TaskStatus
     tasks: tuple[TrainDataItem, ...] = ()
+    runtime_load_id: str | None = None
 
     @classmethod
     def ready(cls, tasks: tuple[TrainDataItem, ...], runtime_load_id: str | None = None) -> TaskResult:
-        """The set trains as ``tasks``. ``runtime_load_id`` is the version of their data, when known."""
-        return cls(SetAssembly(AssemblyStatus.READY, runtime_load_id), tasks)
+        """The set trains as ``tasks``."""
+        return cls(TaskStatus.READY, tasks, runtime_load_id)
 
     @classmethod
     def skipped(cls) -> TaskResult:
         """The set cannot train. The record stage ends its records."""
-        return cls(SetAssembly(AssemblyStatus.REJECTED))
+        return cls(TaskStatus.SKIPPED)
 
 
 class Record2Task(ABC, Plugin):
     """The record-to-task stage: turn one record set into tasks.
 
     Runs on the trainer thread without network or model calls. Raise on a
-    broken training contract. A deployment can name a stage class in
-    ``pipeline.record2task``; the class then implements ``from_config``.
+    broken training contract. A deployment names a stage class in
+    ``pipeline.record2task`` and gives its config. The class parses the
+    config into its settings dataclass and builds the stage in ``from_config``.
     """
 
     @classmethod
@@ -55,9 +61,10 @@ class Record2Task(ABC, Plugin):
         record2record: Record2Record,
         environ: Mapping[str, str],
     ) -> Self:
-        """Build the stage of one scenario from its ``pipeline.record2task.config``.
+        """Build the stage of one scenario from its config.
 
         ``record2record`` is the scenario's record-to-record stage, built first.
+        ``environ`` holds the environment the deployment was read with.
         """
         raise PluginConfigError(f"{cls.__name__} cannot be built from a deployment file: it has no from_config")
 
@@ -106,9 +113,8 @@ class NoTasks(Record2Task):
         record2record: Record2Record,
         environ: Mapping[str, str],
     ) -> Self:
-        if config:
-            raise PluginConfigError(f"{cls.__name__} takes no config, got {', '.join(sorted(map(str, config)))}")
+        NoSettings.parse(config, plugin_class=cls)
         return cls()
 
     def make_tasks(self, record_set: RecordSet) -> TaskResult:
-        return TaskResult(SetAssembly(AssemblyStatus.INGESTED))
+        return TaskResult(TaskStatus.INGESTED)

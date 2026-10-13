@@ -19,41 +19,40 @@ from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 
 import pytest
 from reef_service._trajectories import policy_trajectory
 
-from recipes.beta.coral.processor import CoralBatches, CoralTasks
-from recipes.beta.coral.recipe import coral_record2record
-from recipes.sdpo import SDPOBatches, SDPOReport
-from recipes.sdpo.processor import SDPOTasks
-from recipes.sdpo.recipe import sdpo_record2record
-from recipes.tttd import TTTDBatches, TTTDGroupedRolloutReport
-from recipes.tttd.processor import TTTDTasks
-from recipes.tttd.recipe import tttd_record2record
+from recipes.beta.coral.recipe import CoralRecipe
+from recipes.sdpo import SDPOReport
+from recipes.sdpo.recipe import SDPORecipe
+from recipes.tttd import TTTDGroupedRolloutReport
+from recipes.tttd.recipe import TTTDRecipe
 from reef.artifact import ArtifactRef
 from reef.background_jobs import SupportsReceipt
 from reef.core import AgentRecord, RequestType
+from reef.core.plugins import NoSettings
 from reef.core.reports import ReportBase, TeacherContextReport
-from reef.recipe.generated_tasks.processor import GeneratedTaskBatches, GeneratedTaskRecord2Record, GeneratedTaskTasks
+from reef.recipe.generated_tasks.recipe import GeneratedTaskRecipe
 from reef.record2record import (
     GroupDecision,
     JudgingRecord2Record,
+    Record2Record,
     RecordJudging,
     ReportContext,
     ReportGrouping,
     ReportRecord2Record,
 )
-from reef.record2task import JudgedTasks, ReportTasks
-from reef.record2task.assembly import SampleAssembly
-from reef.record2task.distill import DistillTasks, distill_record2record
+from reef.record2task import JudgedTasks, Record2Task, ReportTasks
+from reef.record2task.assembly import SampleAssembly, SampleAssemblySettings
+from reef.record2task.distill import DistillRecord2Record, DistillTasks
 from reef.storage.sqlite import SQLiteRecordStore
-from reef.task2batch import DistillBatches, Task2Batch
+from reef.task2batch import BatchSettings, DistillBatches, Task2Batch
 from reef.train import PipelineContext, Trainer
 from reef.train.backend import CandidateBackend, PreparedStep
-from reef.train.cordis_backend.processor import TraceBatches, TraceTasks
-from reef.train.pipeline import TrainingPipeline
+from reef.train.cordis_backend.processor import TraceBatches, TraceRecord2Record, TraceTasks
+from reef.train.pipeline import PipelineConfig, PipelineSpec
 from reef.train.types import TaskItem, TrainDataItem, TrainingBatch, TrajectoryItem
 
 from ._threshold_processor import ThresholdBatches, ThresholdTasks
@@ -120,12 +119,21 @@ def describe_item(item: TrainDataItem) -> dict[str, object]:
     }
 
 
+def stage_configs(**configs: Mapping[str, object]) -> dict[str, dict[str, Mapping[str, object]]]:
+    """A deployment's ``pipeline`` section: each named stage's config, for the stage class of the spec."""
+    return {stage: {"config": config} for stage, config in configs.items()}
+
+
 @dataclass
 class StreamRun:
-    """One stream's trainer, its record store, and what its commits recorded."""
+    """One stream's trainer, its record store, and what its commits recorded.
 
-    pipeline_class: type[TrainingPipeline]
-    config: Mapping[str, object]
+    ``spec`` names the three stage classes, as a recipe does; ``pipeline`` is
+    the deployment's ``pipeline`` section over it.
+    """
+
+    spec: PipelineSpec
+    pipeline: Mapping[str, object] = field(default_factory=dict)
     report_type: type[ReportBase] | None = None
     training_mode: str = "auto"
     max_staleness: int = 0
@@ -138,7 +146,7 @@ class StreamRun:
         return Trainer.build(
             "s",
             self.records,
-            pipeline_factory=lambda context: self.pipeline_class(context.with_config(self.config)),
+            pipeline_factory=PipelineConfig.from_setting(self.pipeline, spec=self.spec, environ={}).build,
             candidate_backend=CountingBackend(),
             report_type=self.report_type,
             training_mode=self.training_mode,
@@ -267,122 +275,78 @@ class AnyGroupReady(SlotGrouping):
 class AssembledTasks(ReportTasks):
     """One report as one assembled policy sample."""
 
-    def __init__(self, context: PipelineContext) -> None:
-        self.assembly = SampleAssembly.from_config(context)
+    def __init__(self) -> None:
+        self.assembly = SampleAssembly(SampleAssemblySettings())
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any],
+        *,
+        context: PipelineContext,
+        record2record: Record2Record,
+        environ: Mapping[str, str],
+    ) -> AssembledTasks:
+        NoSettings.parse(config, plugin_class=cls)
+        return cls()
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
         return self.assembly.build(context, context.require_score())
 
 
 class SlotBatches(Task2Batch):
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any],
+        *,
+        context: PipelineContext,
+        record2record: Record2Record,
+        record2task: Record2Task,
+        environ: Mapping[str, str],
+    ) -> Self:
+        return cls(context, BatchSettings.parse(config, plugin_class=cls).batch_size)
+
     def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"{self.scenario}:slots:{batch_number}", tasks)
 
 
-# Each recipe builds its three stages. These pipelines build the same stages, as the recipe would.
+class SlotGroupRecord2Record(ReportRecord2Record):
+    """Holds the groups of ``SlotGrouping``; a terminal report owns its sources."""
+
+    @classmethod
+    def from_config(
+        cls, config: Mapping[str, Any], *, context: PipelineContext, environ: Mapping[str, str]
+    ) -> SlotGroupRecord2Record:
+        NoSettings.parse(config, plugin_class=cls)
+        return cls(context, SlotGrouping(), exclusive_sources=True)
 
 
-class ThresholdPipeline(TrainingPipeline):
-    """Every report by itself."""
-
-    def __init__(self, context: PipelineContext) -> None:
-        super().__init__(
-            context,
-            record2record=ReportRecord2Record(context.scenario, context.report_type, ReportGrouping()),
-            record2task=ThresholdTasks(context),
-            task2batch=ThresholdBatches(context),
-        )
-
-
-class SlotGroupPipeline(TrainingPipeline):
-    """Trains the groups of ``SlotGrouping``."""
-
-    def __init__(self, context: PipelineContext) -> None:
-        super().__init__(
-            context,
-            record2record=ReportRecord2Record(
-                context.scenario, context.report_type, SlotGrouping(), exclusive_sources=True
-            ),
-            record2task=AssembledTasks(context),
-            task2batch=SlotBatches(context),
-        )
-
-
-class OrderedMixPipeline(TrainingPipeline):
+class OrderedMixRecord2Record(ReportRecord2Record):
     """Reports with a ``metadata.group`` form groups that batch in key order after singletons."""
 
-    def __init__(self, context: PipelineContext) -> None:
-        super().__init__(
-            context,
-            record2record=ReportRecord2Record(
-                context.scenario, context.report_type, AnyGroupReady(), exclusive_sources=True, ordered_groups=True
-            ),
-            record2task=AssembledTasks(context),
-            task2batch=SlotBatches(context),
-        )
+    @classmethod
+    def from_config(
+        cls, config: Mapping[str, Any], *, context: PipelineContext, environ: Mapping[str, str]
+    ) -> OrderedMixRecord2Record:
+        NoSettings.parse(config, plugin_class=cls)
+        return cls(context, AnyGroupReady(), exclusive_sources=True, ordered_groups=True)
 
 
-class TTTDPipeline(TrainingPipeline):
-    def __init__(self, context: PipelineContext) -> None:
-        super().__init__(
-            context,
-            record2record=tttd_record2record(context),
-            record2task=TTTDTasks(context),
-            task2batch=TTTDBatches(context),
-        )
+# Each recipe builds its three stages. These specs name the same stages, as the recipe would.
 
-
-class SDPOPipeline(TrainingPipeline):
-    def __init__(self, context: PipelineContext) -> None:
-        super().__init__(
-            context,
-            record2record=sdpo_record2record(context),
-            record2task=SDPOTasks(context),
-            task2batch=SDPOBatches(context),
-        )
-
-
-class CoralPipeline(TrainingPipeline):
-    def __init__(self, context: PipelineContext) -> None:
-        super().__init__(
-            context,
-            record2record=coral_record2record(context),
-            record2task=CoralTasks(context),
-            task2batch=CoralBatches(context),
-        )
-
-
-class GeneratedTaskPipeline(TrainingPipeline):
-    def __init__(self, context: PipelineContext) -> None:
-        round_stage = GeneratedTaskRecord2Record(context)
-        super().__init__(
-            context,
-            record2record=round_stage,
-            record2task=GeneratedTaskTasks(context, round_stage),
-            task2batch=GeneratedTaskBatches(context),
-        )
-
-
-class DistillPipeline(TrainingPipeline):
-    def __init__(self, context: PipelineContext) -> None:
-        super().__init__(
-            context,
-            record2record=distill_record2record(context),
-            record2task=DistillTasks(context),
-            task2batch=DistillBatches(context),
-        )
-
-
-class TracePipeline(TrainingPipeline):
-    """The harness-evolution pipeline of reported traces."""
-
-    def __init__(self, context: PipelineContext) -> None:
-        super().__init__(
-            context,
-            record2record=ReportRecord2Record(context.scenario, context.report_type, ReportGrouping()),
-            record2task=TraceTasks(),
-            task2batch=TraceBatches(context),
-        )
+THRESHOLD_STAGES = PipelineSpec(
+    record2record=ReportRecord2Record, record2task=ThresholdTasks, task2batch=ThresholdBatches
+)
+SLOT_GROUP_STAGES = PipelineSpec(
+    record2record=SlotGroupRecord2Record, record2task=AssembledTasks, task2batch=SlotBatches
+)
+ORDERED_MIX_STAGES = PipelineSpec(
+    record2record=OrderedMixRecord2Record, record2task=AssembledTasks, task2batch=SlotBatches
+)
+DISTILL_STAGES = PipelineSpec(record2record=DistillRecord2Record, record2task=DistillTasks, task2batch=DistillBatches)
+#: The harness-evolution pipeline of reported traces.
+TRACE_STAGES = PipelineSpec(record2record=TraceRecord2Record, record2task=TraceTasks, task2batch=TraceBatches)
 
 
 @dataclass(frozen=True)
@@ -432,6 +396,18 @@ class ToyJudging(RecordJudging):
 class ToyTasks(JudgedTasks):
     """One-token stub samples; a judgment that is not good cannot train."""
 
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any],
+        *,
+        context: PipelineContext,
+        record2record: Record2Record,
+        environ: Mapping[str, str],
+    ) -> ToyTasks:
+        NoSettings.parse(config, plugin_class=cls)
+        return cls()
+
     def make_sample(self, record: AgentRecord, judgment: SupportsReceipt) -> TrajectoryItem | None:
         if not isinstance(judgment, ToyJudgment) or not judgment.good:
             return None
@@ -446,16 +422,35 @@ class ToyTasks(JudgedTasks):
 
 
 class ToyBatches(Task2Batch):
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any],
+        *,
+        context: PipelineContext,
+        record2record: Record2Record,
+        record2task: Record2Task,
+        environ: Mapping[str, str],
+    ) -> Self:
+        return cls(context, BatchSettings.parse(config, plugin_class=cls).batch_size)
+
     def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"{self.scenario}:toy:{batch_number}", tasks)
 
 
-class ToyComputedPipeline(TrainingPipeline):
-    """Trains the judged records of ``ToyJudging``."""
+class ToyJudgingRecord2Record(JudgingRecord2Record):
+    """Judges the records of ``ToyJudging`` at the next poll."""
 
-    def __init__(self, context: PipelineContext) -> None:
-        stage = JudgingRecord2Record(ToyJudging(), ImmediateWorker(), max_staleness=context.max_staleness)
-        super().__init__(context, record2record=stage, record2task=ToyTasks(), task2batch=ToyBatches(context))
+    @classmethod
+    def from_config(
+        cls, config: Mapping[str, Any], *, context: PipelineContext, environ: Mapping[str, str]
+    ) -> ToyJudgingRecord2Record:
+        NoSettings.parse(config, plugin_class=cls)
+        return cls(context, ToyJudging(), ImmediateWorker())
+
+
+#: Trains the judged records of ``ToyJudging``.
+TOY_COMPUTED_STAGES = PipelineSpec(record2record=ToyJudgingRecord2Record, record2task=ToyTasks, task2batch=ToyBatches)
 
 
 def turn(record_id: str, *, version: str, completes: str | None = None, track: bool = True) -> AgentRecord:
@@ -471,7 +466,7 @@ def turn(record_id: str, *, version: str, completes: str | None = None, track: b
 
 
 def ungrouped_stream() -> StreamRun:
-    return StreamRun(ThresholdPipeline, {"batch_size": 2})
+    return StreamRun(THRESHOLD_STAGES, stage_configs(task2batch={"batch_size": 2}))
 
 
 def ungrouped_steps() -> list[Step]:
@@ -707,29 +702,48 @@ def cordis_steps(mode_requests: bool) -> list[Step]:
 
 def streams() -> dict[str, tuple[StreamRun, list[Step]]]:
     """Every stream, built fresh: a run keeps its own record store and commits."""
-    tttd = {"groups_per_step": 2, "rollouts_per_group": 2}
-    sdpo = {"groups_per_step": 1, "rollouts_per_group": 2, "tokenizer_path": "/models/s", "max_teacher_tokens": 18432}
-    distill = {"batch_size": 1, "tokenizer_path": "/models/s", "max_teacher_tokens": 30}
+    grid = {"groups_per_step": 2, "rollouts_per_group": 2}
+    sdpo = stage_configs(
+        record2record={"groups_per_step": 1, "rollouts_per_group": 2},
+        record2task={"tokenizer_path": "/models/s", "max_teacher_tokens": 18432},
+    )
+    distill = stage_configs(
+        record2task={"tokenizer_path": "/models/s", "max_teacher_tokens": 30}, task2batch={"batch_size": 1}
+    )
+    generated = stage_configs(record2record={"plays_per_task": 2}, task2batch={"tasks_per_step": 2})
+    computed = stage_configs(task2batch={"batch_size": 2})
     return {
         "ungrouped": (ungrouped_stream(), ungrouped_steps()),
         "ungrouped_reload": (ungrouped_stream(), [*ungrouped_steps()[:5], RELOAD, *ungrouped_steps()[5:]]),
-        "slots_and_discards": (StreamRun(SlotGroupPipeline, {"batch_size": 1}), slot_steps()),
-        "ordered_groups": (StreamRun(OrderedMixPipeline, {"batch_size": 3}), ordered_steps()),
-        "tttd": (StreamRun(TTTDPipeline, tttd, TTTDGroupedRolloutReport), tttd_steps()),
-        "coral": (StreamRun(CoralPipeline, {"group_size": 2}), coral_steps()),
-        "generated_tasks": (
-            StreamRun(GeneratedTaskPipeline, {"tasks_per_step": 2, "plays_per_task": 2}),
-            task_steps(),
+        "slots_and_discards": (
+            StreamRun(SLOT_GROUP_STAGES, stage_configs(task2batch={"batch_size": 1})),
+            slot_steps(),
         ),
-        "distill_overflow": (StreamRun(DistillPipeline, distill, TeacherContextReport), distill_steps()),
-        "sdpo": (StreamRun(SDPOPipeline, sdpo, SDPOReport), sdpo_steps()),
-        "computed_exact_version": (StreamRun(ToyComputedPipeline, {"batch_size": 2}), computed_steps()),
-        "computed_window": (StreamRun(ToyComputedPipeline, {"batch_size": 2}, max_staleness=1), computed_steps()),
+        "ordered_groups": (
+            StreamRun(ORDERED_MIX_STAGES, stage_configs(task2batch={"batch_size": 3})),
+            ordered_steps(),
+        ),
+        "tttd": (
+            StreamRun(TTTDRecipe.pipeline_spec(), stage_configs(record2record=grid), TTTDGroupedRolloutReport),
+            tttd_steps(),
+        ),
+        "coral": (
+            StreamRun(CoralRecipe.pipeline_spec(), stage_configs(record2record={"group_size": 2})),
+            coral_steps(),
+        ),
+        "generated_tasks": (StreamRun(GeneratedTaskRecipe.pipeline_spec(), generated), task_steps()),
+        "distill_overflow": (StreamRun(DISTILL_STAGES, distill, TeacherContextReport), distill_steps()),
+        "sdpo": (StreamRun(SDPORecipe.pipeline_spec(), sdpo, SDPOReport), sdpo_steps()),
+        "computed_exact_version": (StreamRun(TOY_COMPUTED_STAGES, computed), computed_steps()),
+        "computed_window": (StreamRun(TOY_COMPUTED_STAGES, computed, max_staleness=1), computed_steps()),
         "cordis_manual_cap": (
-            StreamRun(TracePipeline, {"batch_size": 1}, training_mode="manual"),
+            StreamRun(TRACE_STAGES, stage_configs(task2batch={"batch_size": 1}), training_mode="manual"),
             cordis_steps(True),
         ),
-        "cordis_hybrid": (StreamRun(TracePipeline, {"batch_size": 2}, training_mode="hybrid"), cordis_steps(True)),
+        "cordis_hybrid": (
+            StreamRun(TRACE_STAGES, stage_configs(task2batch={"batch_size": 2}), training_mode="hybrid"),
+            cordis_steps(True),
+        ),
     }
 
 

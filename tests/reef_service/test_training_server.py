@@ -75,7 +75,6 @@ def stub_runtimes(**kwargs):
 
 def _settings(**overrides) -> ServiceConfig:
     recipe_settings = {
-        "batch_size": 2,
         "checkpoint_every_n_versions": 3,
         **overrides.pop("recipe_settings", {}),
     }
@@ -386,14 +385,15 @@ def test_build_dispatcher_applies_common_recipe_controls(monkeypatch, tmp_path) 
     dispatcher = deploy.build_dispatcher(
         _settings(
             recipe=OPENCLAWRL_RECIPE,
-            recipe_settings={"batch_size": 4, "checkpoint_every_n_versions": 5},
+            recipe_settings={"checkpoint_every_n_versions": 5},
+            pipeline_settings={"task2batch": {"config": {"batch_size": 4}}},
             agent_record_dir=str(tmp_path / "agent-record"),
         ),
         environ={},
         connector=lambda **kwargs: stub_runtimes(),
     )
     recipe = dispatcher._recipe
-    captured["batch_size"] = recipe.batch_size
+    captured["batch_size"] = recipe.stages().task2batch.config["batch_size"]
     captured["checkpoint_strategy"] = recipe.checkpoint_strategy
 
     assert captured == {"batch_size": 4, "checkpoint_strategy": EveryNVersions(5)}
@@ -468,7 +468,9 @@ def test_build_dispatcher_hands_the_pipeline_section_to_the_recipe(monkeypatch, 
     )
 
     stages = dispatcher._recipe.pipeline_stages
-    assert stages is not None and stages.task2batch is None
+    # A stage the section leaves out is the recipe's own, with no config.
+    assert stages is not None and stages.task2batch.plugin_class.__name__ == "GeneratedTaskBatches"
+    assert stages.task2batch.config == {}
     assert (
         stages.record2record is not None and stages.record2record.plugin_class.__name__ == "GeneratedTaskRecord2Record"
     )
@@ -481,7 +483,10 @@ def test_build_dispatcher_hands_the_pipeline_section_to_the_recipe(monkeypatch, 
     ("recipe", "error", "message"),
     [
         (OPENCLAWRL_RECIPE, RecipeConfigError, "must name a class that inherits Record2Task"),
-        ("recipe", ValueError, "pipeline section requires a weight-training recipe"),
+        # A recipe that trains no weights reads the section too, and refuses the same mistake.
+        ("reef.recipe.base:Recipe", RecipeConfigError, "must name a class that inherits Record2Task"),
+        # A preset sets its pipeline section in its own file.
+        ("recipe", ValueError, "set its pipeline section in the preset file"),
     ],
 )
 def test_build_dispatcher_rejects_a_pipeline_section_it_cannot_use(
@@ -527,8 +532,28 @@ def test_build_dispatcher_rejects_recipe_settings_nothing_consumes(monkeypatch, 
             connector=lambda **kwargs: stub_runtimes(),
         )
     # The error lists what the recipe would consume.
-    assert "reef.batch_size" in str(excinfo.value)
+    assert "reef.max_staleness" in str(excinfo.value)
     assert "reef.checkpoint_every_n_versions" in str(excinfo.value)
+
+
+@pytest.mark.unit
+def test_build_dispatcher_refuses_a_stage_setting_with_its_pipeline_key(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        deploy.GitLFSRepositoryBackend,
+        "factory",
+        lambda *args, **kwargs: lambda scenario: object(),
+    )
+
+    with pytest.raises(RecipeConfigError, match="does not consume"):
+        deploy.build_dispatcher(
+            _settings(
+                recipe=OPENCLAWRL_RECIPE,
+                recipe_settings={"batch_size": 4},
+                agent_record_dir=str(tmp_path / "agent-record"),
+            ),
+            environ={},
+            connector=lambda **kwargs: stub_runtimes(),
+        )
 
 
 @pytest.mark.unit

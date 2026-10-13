@@ -32,17 +32,15 @@ recipe:
   implementation: reef.recipe.generated_tasks:GeneratedTaskRecipe
   config:
     checkpoint-every-n-versions: 1
-# The generated-task recipe's three stages. Each config is the stage's own, keyed as the stage reads it.
+# The config of the generated-task recipe's three stages. Each config is the stage's own, keyed as the stage reads it.
 pipeline:
   # The training plays of each task form one group; the next round is due after batches_per_round batches trained.
   record2record:
-    module: reef.recipe.generated_tasks:GeneratedTaskRecord2Record
     config:
       plays_per_task: 4
       batches_per_round: 2
   # The rounds: one generation of tasks each, played through the generator service.
   record2task:
-    module: reef.recipe.generated_tasks:GeneratedTaskTasks
     config:
       generator_url: ${endpoints.generator}
       rounds: 20
@@ -61,7 +59,6 @@ pipeline:
           state_dir: ${REEF_SPADE_STATE_DIR}/generations
   # A batch is tasks_per_step complete task groups.
   task2batch:
-    module: reef.recipe.generated_tasks:GeneratedTaskBatches
     config:
       tasks_per_step: 2
 training:

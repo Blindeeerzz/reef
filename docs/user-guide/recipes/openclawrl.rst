@@ -84,35 +84,59 @@ policy's. The weights of the two terms are ``--openclawrl-w-rl`` and
 Configuration
 -------------
 
+The deployment's ``pipeline`` section configures the recipe's three stages.
+The recipe's own classes are the defaults, so the section needs no
+``module``. The record-to-record stage correlates sessions and runs the PRM
+judge. The task-to-batch stage sets the batch size and writes the PRM record
+file. The record-to-task stage takes no config.
+
+.. code:: yaml
+
+   recipe:
+     implementation: recipes.openclawrl.recipe:OpenClawRLRecipe
+   pipeline:
+     record2record:
+       config:
+         prm_url: http://127.0.0.1:23001
+         prm_tokenizer_path: /models/prm
+     task2batch:
+       config:
+         batch_size: 16
+
 .. config::
 
-   batch_size | 16 | judged turns per training step. Must equal the driver's ``--global-batch-size``.
-   session_ttl_s | 900.0 | idle window before a session expires
-   max_open_sessions | 4096 | ceiling on live sessions; the least recently active are evicted above it
-   prm_url | "" | the PRM's sglang server
-   prm_tokenizer_path | "" | required whenever ``prm_url`` is set
-   prm_m | 3 | judge votes per turn
-   prm_temperature | 0.6 | judge sampling temperature
-   prm_max_tokens | 8192 | judge generation budget
-   prm_timeout_s | 120.0 | per-judge timeout
-   prm_concurrency | 8 | turns judged at once
-   prm_max_hint_candidates | 3 | hint candidates collected per turn
-   prm_record_file | "" | judged population, one JSON line per batch; empty disables it
-   max_staleness | 0 | accepted lag between the producing and serving version. Env ``REEF_MAX_STALENESS``.
+   pipeline.record2record.config.session_ttl_s | 900.0 | idle time in seconds before a session expires
+   pipeline.record2record.config.max_open_sessions | 4096 | ceiling on live sessions; the least recently active are evicted above it
+   pipeline.record2record.config.prm_url | "" | the PRM's SGLang server. Empty is correlate-only mode: nothing is judged and nothing trains.
+   pipeline.record2record.config.prm_tokenizer_path | "" | the PRM's tokenizer. Required when ``prm_url`` is set.
+   pipeline.record2record.config.prm_m | 3 | judge votes per turn
+   pipeline.record2record.config.prm_temperature | 0.6 | judge sampling temperature
+   pipeline.record2record.config.prm_max_tokens | 8192 | judge generation budget
+   pipeline.record2record.config.prm_timeout_s | 120.0 | per-judge timeout in seconds
+   pipeline.record2record.config.prm_concurrency | 8 | turns judged at once
+   pipeline.record2record.config.prm_max_hint_candidates | 3 | hint candidates collected per turn
+   pipeline.task2batch.config.batch_size | 16 | judged turns per training step. Must equal the driver's ``--global-batch-size``.
+   pipeline.task2batch.config.prm_record_file | "" | judged population, one JSON line per batch; empty disables it
+   recipe.config.max_staleness | 0 | accepted lag between the producing and serving version. Env ``REEF_MAX_STALENESS``.
 
-The values above are the recipe's defaults. The example's ``serve.yaml``
-overrides several of them. It points ``prm_url`` and ``prm_tokenizer_path`` at
-the example's independently deployed PRM engine, raises ``prm_timeout_s`` to 3600 because a
-thinking model can spend minutes on a single vote, and sets
+Reef checks the stage config when it loads the recipe. An unknown key or an
+invalid value stops the deployment at startup. A stage key in
+``recipe.config``, such as ``prm_url``, also stops it, and the error names the
+key's ``pipeline`` path.
+
+The values above are the defaults. The example's ``serve.yaml`` overrides
+several of them. It points ``prm_url`` and ``prm_tokenizer_path`` at the
+example's independently deployed PRM engine. It raises ``prm_timeout_s`` to
+3600 because a thinking model can spend minutes on a single vote. It sets
 ``prm_record_file`` so every batch leaves one line with the reward split and
 the judge counters.
 
 Reef coordinates inference and training only. OpenClawRL's example Compose
 file owns PRM and student-model startup, health checks and GPU allocation.
-The recipe consumes ``recipe.config.prm-url`` and requires the matching
-``recipe.config.prm-tokenizer-path``; it owns judge request handling. Reef does
-not register, schedule or stop the PRM process. The student-model endpoint is
-used by the simulation harness, outside Reef.
+The judging stage consumes ``pipeline.record2record.config.prm_url`` and
+requires the matching ``prm_tokenizer_path``; it owns judge request handling.
+Reef does not register, schedule or stop the PRM process. The student-model
+endpoint is used by the simulation harness, outside Reef.
 
 Run the example
 ---------------

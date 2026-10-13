@@ -10,15 +10,14 @@ import pytest
 
 from reef.core import AgentRecord
 from reef.record2record import (
-    AssemblyStatus,
     GroupDecision,
     PassThroughRecord2Record,
     RecordSet,
     ReportContext,
     ReportGrouping,
     ReportRecord2Record,
-    SetAssembly,
     SingleRecordSet,
+    TaskStatus,
 )
 from reef.record2task import Record2Task, ReportTasks, SkippedReport, TaskResult
 from reef.storage.sqlite import SQLiteRecordStore
@@ -72,7 +71,7 @@ class RecordingTasks(Record2Task):
 
     def make_tasks(self, record_set: RecordSet) -> TaskResult:
         self.assembled.extend(record_set.record_ids())
-        return TaskResult(SetAssembly(AssemblyStatus.INGESTED))
+        return TaskResult(TaskStatus.INGESTED)
 
 
 class RecordingBatches(Task2Batch):
@@ -81,7 +80,7 @@ class RecordingBatches(Task2Batch):
     supported_training_modes = frozenset({"auto", "manual", "hybrid"})
 
     def __init__(self, context: PipelineContext) -> None:
-        super().__init__(context)
+        super().__init__(context, 1)
         self.closed = False
 
     def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
@@ -105,19 +104,17 @@ class RecordingPipeline(TrainingPipeline):
 
 
 class DroppingReportRecord2Record(ReportRecord2Record):
-    """A report stage that ends every record whose ID starts with ``drop``."""
+    """A report stage that ends every record whose ID starts with ``drop``, so the record is releasable."""
 
     def ingest(self, record: AgentRecord) -> None:
         if record.agent_record_id.startswith("drop"):
-            self.terminal.add(record.agent_record_id)
+            self.end_report(record)
             return
         super().ingest(record)
 
 
 def dropping_pipeline(context: PipelineContext) -> TrainingPipeline:
-    return threshold_pipeline(
-        context, record2record=DroppingReportRecord2Record(context.scenario, None, ReportGrouping())
-    )
+    return threshold_pipeline(context, record2record=DroppingReportRecord2Record(context, ReportGrouping()))
 
 
 class PairGrouping(ReportGrouping):
@@ -154,13 +151,13 @@ class PairPipeline(TrainingPipeline):
     """Trains pairs of reports."""
 
     def __init__(self) -> None:
-        context = PipelineContext("s", {"batch_size": 1})
+        context = PipelineContext("s")
         self.pair_tasks = PairTasks()
         super().__init__(
             context,
-            record2record=ReportRecord2Record("s", None, PairGrouping(), exclusive_sources=True),
+            record2record=ReportRecord2Record(context, PairGrouping(), exclusive_sources=True),
             record2task=self.pair_tasks,
-            task2batch=PairBatches(context),
+            task2batch=PairBatches(context, 1),
         )
 
 
@@ -216,7 +213,7 @@ def test_a_record_the_stage_ends_is_consumed_by_the_next_commit_and_then_release
     trainer = Trainer.build(
         "s",
         records,
-        pipeline_factory=lambda context: dropping_pipeline(context.with_config({"batch_size": 1})),
+        pipeline_factory=dropping_pipeline,
         candidate_backend=CountingBackend(),
     )
     batch = trainer.reserve_training_batch()
@@ -295,6 +292,6 @@ def test_a_batch_holds_the_tasks_of_every_report_in_a_group_in_arrival_order() -
 def test_the_default_pipeline_makes_no_tasks_and_no_batch() -> None:
     processor = TrainingPipeline(PipelineContext("s"))
     record_set = SingleRecordSet(set_id="i1", arrival_index=1, record=inference("i1"))
-    assert processor.record2task.make_tasks(record_set) == TaskResult(SetAssembly(AssemblyStatus.INGESTED))
+    assert processor.record2task.make_tasks(record_set) == TaskResult(TaskStatus.INGESTED)
     processor.ingest(inference("i1"))
     assert not processor.ready() and not processor.releasable_record_ids()

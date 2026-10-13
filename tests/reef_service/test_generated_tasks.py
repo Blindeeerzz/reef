@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import time
 from collections.abc import Mapping
@@ -35,6 +36,9 @@ from reef.recipe.generated_tasks.processor import (
     GeneratedTaskRecord2Record,
     GeneratedTaskTasks,
     RoundJob,
+    RoundSettings,
+    TaskBatchSettings,
+    TaskGroupSettings,
     episode_assembly,
     reported_task_name,
     rewards_of,
@@ -82,12 +86,32 @@ def report(
     )
 
 
+def stage_settings(config: Mapping[str, object]) -> tuple[TaskGroupSettings, RoundSettings, TaskBatchSettings]:
+    """Split one flat config, as a test writes it, into the settings of the three stages."""
+    group_names = {field.name for field in dataclasses.fields(TaskGroupSettings)}
+    round_names = {field.name for field in dataclasses.fields(RoundSettings)}
+    batch_names = {field.name for field in dataclasses.fields(TaskBatchSettings)}
+    unknown = sorted(set(config) - group_names - round_names - batch_names)
+    if unknown:
+        raise ValueError(f"unknown stage settings: {', '.join(unknown)}")
+    return (
+        TaskGroupSettings(**{key: value for key, value in config.items() if key in group_names}),
+        RoundSettings(**{key: value for key, value in config.items() if key in round_names}),
+        TaskBatchSettings(**{key: value for key, value in config.items() if key in batch_names}),
+    )
+
+
 def processor(**config: object) -> TrainingPipeline:
-    context = PipelineContext("tasks", {"tasks_per_step": 2, "plays_per_task": 2, **config})
-    batches = GeneratedTaskBatches(context)
-    stage = GeneratedTaskRecord2Record(context)
+    context = PipelineContext("tasks")
+    group_settings, round_settings, batch_settings = stage_settings(
+        {"tasks_per_step": 2, "plays_per_task": 2, **config}
+    )
+    stage = GeneratedTaskRecord2Record(context, group_settings)
     return TrainingPipeline(
-        context, record2record=stage, record2task=GeneratedTaskTasks(context, stage), task2batch=batches
+        context,
+        record2record=stage,
+        record2task=GeneratedTaskTasks(context, round_settings, stage),
+        task2batch=GeneratedTaskBatches(context, batch_settings),
     )
 
 
@@ -161,9 +185,9 @@ def test_a_task_group_waits_for_plays_per_task_episodes() -> None:
 
 
 def test_the_assembly_spans_an_episodes_turns_and_realigns_the_think_scaffold() -> None:
-    assembly = episode_assembly(PipelineContext("tasks", {}))
-    assert assembly.accept_multi_turn and assembly.scaffold_tolerance == 8
-    assert episode_assembly(PipelineContext("tasks", {"scaffold_tolerance": 2})).scaffold_tolerance == 2
+    assembly = episode_assembly()
+    assert assembly.settings.accept_multi_turn_policy_samples and assembly.settings.scaffold_tolerance == 8
+    assert episode_assembly(2).settings.scaffold_tolerance == 2
 
 
 def test_the_objective_centers_and_scales_rewards_within_each_task_group() -> None:
@@ -349,8 +373,8 @@ def rounds(
 ) -> tuple[TrainingPipeline, StandInGenerator]:
     player = player if player is not None else StandInGenerator(tmp_path / "tasks")
     worker = worker if worker is not None else InlineWorker()
-    context = PipelineContext(
-        "tasks",
+    context = PipelineContext("tasks")
+    group_settings, round_settings, batch_settings = stage_settings(
         {
             "tasks_per_step": 2,
             "plays_per_task": 2,
@@ -359,12 +383,17 @@ def rounds(
             "state_dir": str(tmp_path / "state"),
             "served_model": "Qwen/Qwen3-8B",
             **config,
-        },
+        }
     )
-    stage = GeneratedTaskRecord2Record(context)
-    generation = GeneratedTaskTasks(context, stage, task_generator=task_generator, task_player=player, worker=worker)
+    stage = GeneratedTaskRecord2Record(context, group_settings)
+    generation = GeneratedTaskTasks(
+        context, round_settings, stage, task_generator=task_generator, task_player=player, worker=worker
+    )
     built = TrainingPipeline(
-        context, record2record=stage, record2task=generation, task2batch=GeneratedTaskBatches(context)
+        context,
+        record2record=stage,
+        record2task=generation,
+        task2batch=GeneratedTaskBatches(context, batch_settings),
     )
     worker.generation = generation
     return built, player
@@ -568,18 +597,20 @@ def test_a_round_that_never_finishes_is_named_in_the_status(tmp_path: Path) -> N
 
 
 def test_the_real_worker_runs_a_round_off_the_trainers_thread(tmp_path: Path) -> None:
-    context = PipelineContext(
-        "tasks", {"rounds": 1, "description": "shell tasks", "state_dir": str(tmp_path / "state")}
-    )
-    stage = GeneratedTaskRecord2Record(context)
+    context = PipelineContext("tasks")
+    stage = GeneratedTaskRecord2Record(context, TaskGroupSettings())
     generation = GeneratedTaskTasks(
         context,
+        RoundSettings(rounds=1, description="shell tasks", state_dir=str(tmp_path / "state")),
         stage,
         task_generator=ScriptedGenerator([generated(0, 0)]),
         task_player=StandInGenerator(tmp_path / "tasks"),
     )
     p = TrainingPipeline(
-        context, record2record=stage, record2task=generation, task2batch=GeneratedTaskBatches(context)
+        context,
+        record2record=stage,
+        record2task=generation,
+        task2batch=GeneratedTaskBatches(context, TaskBatchSettings()),
     )
     try:
         assert not p.ready()
@@ -678,7 +709,7 @@ def test_no_session_waits_once_the_rounds_are_over(tmp_path: Path) -> None:
     [
         ({"tasks_per_step": 0}, "tasks_per_step must be positive"),
         ({"plays_per_task": 1}, "at least two"),
-        ({"rounds": 1}, "pipeline.record2task.config.generator"),
+        ({"rounds": 1, "description": "x", "state_dir": "s"}, "pipeline.record2task.config.generator"),
         ({"source_records_per_round": 1}, "needs a source_tag"),
         ({"source_tag": "session"}, "name=value"),
     ],
@@ -690,8 +721,10 @@ def test_a_processor_configuration_that_cannot_train_is_refused(config: dict[str
 
 def test_rounds_need_a_description_a_state_dir_and_the_generator_service() -> None:
     def built(**config: object) -> GeneratedTaskTasks:
-        context = PipelineContext("tasks", {"rounds": 1, **config})
-        return GeneratedTaskTasks(context, GeneratedTaskRecord2Record(context), task_generator=ScriptedGenerator())
+        context = PipelineContext("tasks")
+        group_settings, round_settings, _ = stage_settings({"rounds": 1, **config})
+        stage = GeneratedTaskRecord2Record(context, group_settings)
+        return GeneratedTaskTasks(context, round_settings, stage, task_generator=ScriptedGenerator())
 
     with pytest.raises(ValueError, match="description"):
         built()
@@ -711,7 +744,7 @@ def training_recipe(**fields: Any) -> GeneratedTaskRecipe:
 
 def test_the_recipe_binds_the_objective_its_schedule_and_its_stages() -> None:
     spec = GeneratedTaskRecipe.training_spec()
-    assert spec.task2batch is GeneratedTaskBatches and spec.objective == "task_group"
+    assert GeneratedTaskRecipe.pipeline_spec().task2batch is GeneratedTaskBatches and spec.objective == "task_group"
     assert spec.loss_family == "importance_sampling"
     assert spec.scheduling.unit == "sample" and spec.scheduling.batch_size == "actual"
     assert GeneratedTaskRecipe.report_type.fget(GeneratedTaskRecipe) is ScoredRolloutReport  # type: ignore[union-attr]
@@ -792,12 +825,13 @@ def test_a_pipeline_section_that_names_no_usable_stage_is_refused(pipeline: Mapp
     ],
 )
 def test_a_generator_setting_that_names_no_usable_generator_is_refused(generator: str, message: str) -> None:
+    # The round settings check the generator setting when the scenario's pipeline builds.
     recipe = generated_pipeline_recipe(
         {},
         {
             "record2task": {
                 "module": "reef.recipe.generated_tasks:GeneratedTaskTasks",
-                "config": {"generator": generator},
+                "config": {"generator": {"module": generator}},
             }
         },
     )

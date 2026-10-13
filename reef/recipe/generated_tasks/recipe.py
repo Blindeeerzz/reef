@@ -5,12 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from reef.core.reports import ReportBase, ScoredRolloutReport
-from reef.pipeline_context import PipelineContext
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.generated_tasks.objective import TaskGroupObjective
 from reef.recipe.generated_tasks.processor import GeneratedTaskBatches, GeneratedTaskRecord2Record, GeneratedTaskTasks
-from reef.record2record import Record2Record
 from reef.train.algos import StepScheduling
+from reef.train.pipeline import PipelineSpec
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -20,7 +19,7 @@ class GeneratedTaskRecipe(WeightTrainingRecipe):
     The recipe binds the objective, the step schedule, and the report
     contract. Its stages are ``GeneratedTaskRecord2Record``,
     ``GeneratedTaskTasks``, and ``GeneratedTaskBatches``; the deployment's
-    ``pipeline`` section names them with their config: the rounds, the task
+    ``pipeline`` section gives their config: the rounds, the task
     generator, and the generator service in ``record2task``, the task groups
     and the source sessions in ``record2record``, and the batch size in
     ``task2batch``. Without that section, no round runs and the recipe trains
@@ -37,13 +36,11 @@ class GeneratedTaskRecipe(WeightTrainingRecipe):
     @classmethod
     def training_spec(cls) -> WeightTrainingSpec:
         return WeightTrainingSpec(
-            objective=TaskGroupObjective.name,
-            task2batch=GeneratedTaskBatches,
-            scheduling=StepScheduling(unit="sample", batch_size="actual"),
+            objective=TaskGroupObjective.name, scheduling=StepScheduling(unit="sample", batch_size="actual")
         )
 
-    def build_record2record(self, context: PipelineContext) -> GeneratedTaskRecord2Record:
-        return GeneratedTaskRecord2Record(context)
-
-    def build_record2task(self, context: PipelineContext, record2record: Record2Record) -> GeneratedTaskTasks:
-        return GeneratedTaskTasks.from_config({}, context=context, record2record=record2record, environ={})
+    @classmethod
+    def pipeline_spec(cls) -> PipelineSpec:
+        return PipelineSpec(
+            record2record=GeneratedTaskRecord2Record, record2task=GeneratedTaskTasks, task2batch=GeneratedTaskBatches
+        )

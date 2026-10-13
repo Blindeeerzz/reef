@@ -38,6 +38,7 @@ from reef.surface.harnesses import create_harness_surface
 from reef.train import CandidateBackend, PreparedStep, Trainer, TrainStepResult
 from reef.train.algos import StepScheduling
 from reef.train.cordis_backend import CordisBackend, ScoreComparisonPlugin
+from reef.train.cordis_backend.processor import TraceBatches, TraceRecord2Record, TraceTasks
 from reef.train.evaluation import EvaluationResult, SelectionDecision, UpdateCandidate
 from reef.train.pipeline import TrainingPipeline
 
@@ -485,7 +486,7 @@ class _SavedArtifactRecipe(Recipe):
         return Trainer.build(
             scenario,
             records,
-            pipeline_factory=lambda context: threshold_pipeline(context.with_config({"batch_size": 1})),
+            pipeline_factory=threshold_pipeline,
             candidate_backend=self.backend,
             algorithm_state=algorithm_state,
         )
@@ -600,12 +601,12 @@ def test_recovery_restores_the_live_head_step_and_state_from_the_log(tmp_path) -
 class ProtectAllPipeline(TrainingPipeline):
     """Pairs like SFT but never releases a row: every ingested id is protected."""
 
-    def __init__(self, context) -> None:
+    def __init__(self, context, batch_size: int) -> None:
         super().__init__(
             context,
-            record2record=ReportRecord2Record(context.scenario, context.report_type, ReportGrouping()),
-            record2task=ThresholdTasks(context),
-            task2batch=ThresholdBatches(context),
+            record2record=ReportRecord2Record(context, ReportGrouping()),
+            record2task=ThresholdTasks(),
+            task2batch=ThresholdBatches(context, batch_size),
         )
         self._seen: set[str] = set()
 
@@ -623,9 +624,7 @@ class ProtectAllPolicyRecipe(TestPolicyRecipe):
         return Trainer.build(
             scenario,
             records,
-            pipeline_factory=lambda context: ProtectAllPipeline(
-                context.with_config({"batch_size": self.batch_size, "min_score": self.min_score})
-            ),
+            pipeline_factory=lambda context: ProtectAllPipeline(context, self.batch_size),
             candidate_backend=candidate_backend(self.training_runtime, "sft", StepScheduling()),
             algorithm_state=algorithm_state,
             experiment_logger=experiment_logger,
@@ -985,8 +984,6 @@ class _HarnessEvolveTestRecipe(Recipe):
         return create_harness_surface()
 
     def build(self, scenario, records, *, algorithm_state=None, experiment_logger=None) -> Trainer:
-        from reef.train.cordis_backend.processor import trace_pipeline
-
         candidate_backend = CordisBackend(
             descriptor=get_adapter("pi"),
             propose=resolve_proposer(self.propose),
@@ -998,8 +995,11 @@ class _HarnessEvolveTestRecipe(Recipe):
         return Trainer.build(
             scenario,
             records,
-            pipeline_factory=lambda context: trace_pipeline(
-                context.with_config({"batch_size": self.batch_size}), "reports"
+            pipeline_factory=lambda context: TrainingPipeline(
+                context,
+                record2record=TraceRecord2Record(context),
+                record2task=TraceTasks(),
+                task2batch=TraceBatches(context, self.batch_size),
             ),
             candidate_backend=candidate_backend,
             candidate_evaluator=ScoreComparisonPlugin(candidate_backend),

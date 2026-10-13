@@ -25,17 +25,16 @@ from reef.recipe.checkpoint_strategy import CheckpointStrategy, EveryNVersions
 from reef.recipe.config import config_positive_int
 from reef.recipe.config_fields import config_field, parse_int, recipe_config_fields, resolve_config_field_values
 from reef.recipe.errors import RecipeConfigError
-from reef.record2record import PassThroughRecord2Record, Record2Record
-from reef.record2task import NoTasks, Record2Task
+from reef.record2task import Record2Task
 from reef.runtime.interfaces import InferenceHandler, InferenceRuntime, MultimodalRelay, TrainingRuntime
 from reef.storage.records import RecordStore
 from reef.surface.base import AcceptAnyArtifact, Surface
 from reef.surface.weights import create_weight_surface
-from reef.task2batch import Task2Batch
+from reef.task2batch import NoBatches
 from reef.train.algos import StepScheduling
 from reef.train.algos.registry import resolve_objective
 from reef.train.evaluation import CandidateEvaluationConfig, CandidateEvaluationConfigError, build_candidate_evaluation
-from reef.train.pipeline import PipelineConfig, TrainingPipeline
+from reef.train.pipeline import PipelineConfig, PipelineSpec, TrainingPipeline
 from reef.train.trainer import ComponentTrainer, Trainer
 
 
@@ -95,16 +94,45 @@ class Recipe:
     runtime: InferenceRuntime | None = None
     training_runtime: TrainingRuntime | None = None
 
-    def scenario_state_dirs(self, scenario: str) -> tuple[Path, ...]:
-        """Directories that belong to one scenario alone, archived when the scenario is deleted; none by default."""
-        return ()
-
     checkpoint_strategy: CheckpointStrategy = field(default_factory=lambda: EveryNVersions(1))
     training_mode: str = config_field("auto")
+    #: The deployment's ``pipeline`` section over :meth:`pipeline_spec`; None is the recipe's stages with no config.
+    pipeline_stages: PipelineConfig | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.training_mode not in ("auto", "manual", "hybrid"):
             raise ValueError("training_mode must be 'auto', 'manual' or 'hybrid'")
+        # The stages' classes fail the deployment here, not the first scenario.
+        self.stages()
+
+    @classmethod
+    def pipeline_spec(cls) -> PipelineSpec:
+        """The recipe's default stage classes. The default passes records through and makes no batch."""
+        return PipelineSpec()
+
+    def stages(self) -> PipelineConfig:
+        """The pipeline's stage classes and their configs."""
+        if self.pipeline_stages is not None:
+            return self.pipeline_stages
+        try:
+            return PipelineConfig.from_setting(None, spec=type(self).pipeline_spec(), environ={})
+        except PluginConfigError as exc:
+            raise RecipeConfigError(str(exc)) from exc
+
+    def build_pipeline(self, context: PipelineContext) -> TrainingPipeline:
+        """Build the training pipeline of one scenario from :meth:`stages`, in pipeline order."""
+        try:
+            return self.stages().build(context)
+        except PluginConfigError as exc:
+            raise RecipeConfigError(str(exc)) from exc
+
+    def scenario_state_dirs(self, scenario: str) -> tuple[Path, ...]:
+        """Directories that belong to one scenario alone, archived when the scenario is deleted.
+
+        The record-to-task stage names them, for example generated tasks' round summaries.
+        """
+        stage = self.stages().record2task
+        return Record2Task.referenced_class(stage).scenario_state_dirs(stage.config, scenario)
 
     def with_model_config(self, config: ModelConfig) -> Recipe:
         """Bind model settings supplied for this scenario."""
@@ -123,7 +151,8 @@ class Recipe:
     ) -> Recipe:
         values = os.environ if environ is None else environ
         settings = config or {}
-        resolved = resolve_config_field_values(cls, settings.get("data", {}), values)
+        data = settings.get("data", {})
+        resolved = resolve_config_field_values(cls, data, values)
         return cls.from_resolved_config(
             settings, resolved, environ=values, runtime=runtime, training_runtime=training_runtime
         )
@@ -161,8 +190,14 @@ class Recipe:
 
     @classmethod
     def _recipe_kwargs(cls, settings: Mapping[str, Any], values: Mapping[str, str]) -> dict[str, Any]:
-        """Recipe-specific keyword arguments resolved from config sections."""
-        return {}
+        """Recipe-specific keyword arguments resolved from config sections: the ``pipeline`` section's stages."""
+        pipeline = settings.get("pipeline")
+        if pipeline is None:
+            return {}
+        try:
+            return {"pipeline_stages": PipelineConfig.from_setting(pipeline, spec=cls.pipeline_spec(), environ=values)}
+        except PluginConfigError as exc:
+            raise RecipeConfigError(str(exc)) from exc
 
     @classmethod
     def select_weight_training(
@@ -202,7 +237,7 @@ class Recipe:
         return Trainer.build(
             scenario,
             records,
-            pipeline_factory=TrainingPipeline,
+            pipeline_factory=self.build_pipeline,
             algorithm_state=algorithm_state,
             report_type=self.report_type,
             experiment_logger=experiment_logger,
@@ -344,7 +379,6 @@ class WeightTrainingSpec:
     """
 
     objective: str
-    task2batch: type[Task2Batch] | None = None
     scheduling: StepScheduling = field(default_factory=StepScheduling)
 
     @property
@@ -380,11 +414,11 @@ class WeightTrainingRecipe(Recipe):
     method-specific config fields.
 
     ``pipeline_stages`` is framework-owned configuration derived from an
-    optional top-level ``pipeline`` section. Each stage class it names
-    replaces the recipe's own stage (see :meth:`build_pipeline`).
+    optional top-level ``pipeline`` section: each stage's class, the recipe's
+    :meth:`pipeline_spec` unless the section names another, and its config.
 
     Configuration is declared as fields: a config field
-    (``batch_size: int = config_field(128, env="REEF_SAO_BATCH_SIZE")``, see
+    (``max_staleness: int = config_field(0, env="REEF_MAX_STALENESS")``, see
     :mod:`reef.recipe.config_fields`) is simultaneously the YAML key, the
     environment fallback, and the type-aware parser. :meth:`service_config`
     and :meth:`from_environment` derive everything from those fields, so a
@@ -395,7 +429,6 @@ class WeightTrainingRecipe(Recipe):
     runtime: InferenceRuntime = field(kw_only=True)
     max_staleness: int = config_field(0, env="REEF_MAX_STALENESS")
     candidate_evaluation: CandidateEvaluationConfig | None = field(default=None, repr=False, compare=False)
-    pipeline_stages: PipelineConfig | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def training_spec(cls) -> WeightTrainingSpec:
@@ -492,7 +525,7 @@ class WeightTrainingRecipe(Recipe):
     @classmethod
     def _recipe_kwargs(cls, settings: Mapping[str, Any], values: Mapping[str, str]) -> dict[str, Any]:
         cls._validate_config(settings)
-        kwargs: dict[str, Any] = {}
+        kwargs = super()._recipe_kwargs(settings, values)
         evaluation = settings.get("evaluation")
         if evaluation is not None:
             if not isinstance(evaluation, Mapping):
@@ -500,12 +533,6 @@ class WeightTrainingRecipe(Recipe):
             try:
                 kwargs["candidate_evaluation"] = CandidateEvaluationConfig.from_dict(evaluation, environ=values)
             except CandidateEvaluationConfigError as exc:
-                raise RecipeConfigError(str(exc)) from exc
-        pipeline = settings.get("pipeline")
-        if pipeline is not None:
-            try:
-                kwargs["pipeline_stages"] = PipelineConfig.from_setting(pipeline, environ=values)
-            except PluginConfigError as exc:
                 raise RecipeConfigError(str(exc)) from exc
         return kwargs
 
@@ -517,94 +544,6 @@ class WeightTrainingRecipe(Recipe):
         their field declarations. This exists only for structural rules such
         as SAO refusing an ``optimization`` section.
         """
-
-    def pipeline_config(self) -> dict[str, Any]:
-        """The config mapping the default :meth:`build_pipeline` hands the three stages.
-
-        Defaults to this recipe's data config field values. The shared
-        ``max_staleness`` field is not included: the default :meth:`build`
-        passes it as the typed ``PipelineContext.max_staleness`` instead.
-        Override this method to rename keys or add stage-only entries.
-        """
-        return {
-            name: getattr(self, name)
-            for name in recipe_config_fields(type(self))
-            if name not in ("max_staleness", "training_mode")
-        }
-
-    def build_record2record(self, context: PipelineContext) -> Record2Record:
-        """Build the record-to-record stage of one scenario: this method's grouping, judging, and eligibility.
-
-        ``context`` carries :meth:`pipeline_config`. The default passes each
-        record through, with no method policy.
-        """
-        return PassThroughRecord2Record()
-
-    def build_record2task(self, context: PipelineContext, record2record: Record2Record) -> Record2Task:
-        """Build the record-to-task stage of one scenario: how this method turns a record set into tasks.
-
-        ``record2record`` is the stage built before it. The default makes no tasks.
-        """
-        return NoTasks()
-
-    def build_task2batch(
-        self, context: PipelineContext, record2record: Record2Record, record2task: Record2Task
-    ) -> Task2Batch:
-        """Build the task-to-batch stage of one scenario: the ``task2batch`` class of :meth:`training_spec`.
-
-        ``record2record`` and ``record2task`` are the stages built before it.
-        """
-        task2batch_class = type(self).training_spec().task2batch
-        if task2batch_class is None:
-            raise TypeError(f"{type(self).__name__} declares no task2batch")
-        return task2batch_class(context)
-
-    def build_pipeline(self, context: PipelineContext) -> TrainingPipeline:
-        """Build the training pipeline of one scenario: the three stages, in pipeline order.
-
-        A stage that the deployment's ``pipeline`` section names is built from
-        its config; every other stage comes from the recipe's hook. A later
-        stage receives the stages built before it.
-        """
-        configured = context.with_config(self.pipeline_config())
-        stages = PipelineConfig() if self.pipeline_stages is None else self.pipeline_stages
-        environ = stages.environ
-        try:
-            record2record = (
-                self.build_record2record(configured)
-                if stages.record2record is None
-                else stages.record2record.plugin_class.from_config(
-                    stages.record2record.config, context=configured, environ=environ
-                )
-            )
-            record2task = (
-                self.build_record2task(configured, record2record)
-                if stages.record2task is None
-                else stages.record2task.plugin_class.from_config(
-                    stages.record2task.config, context=configured, record2record=record2record, environ=environ
-                )
-            )
-            task2batch = (
-                self.build_task2batch(configured, record2record, record2task)
-                if stages.task2batch is None
-                else stages.task2batch.plugin_class.from_config(
-                    stages.task2batch.config,
-                    context=configured,
-                    record2record=record2record,
-                    record2task=record2task,
-                    environ=environ,
-                )
-            )
-        except PluginConfigError as exc:
-            raise RecipeConfigError(str(exc)) from exc
-        return TrainingPipeline(
-            configured, record2record=record2record, record2task=record2task, task2batch=task2batch
-        )
-
-    def scenario_state_dirs(self, scenario: str) -> tuple[Path, ...]:
-        """The scenario's directories that the configured record-to-task stage keeps, archived on delete."""
-        stage = None if self.pipeline_stages is None else self.pipeline_stages.record2task
-        return () if stage is None else stage.plugin_class.scenario_state_dirs(stage.config, scenario)
 
     def build(
         self,
@@ -638,10 +577,10 @@ class WeightTrainingRecipe(Recipe):
         from reef.train.runtime_backend import RuntimeCandidateBackend
 
         spec = type(self).training_spec()
-        if spec.task2batch is None:
+        if type(self).pipeline_spec().task2batch is NoBatches:
             raise TypeError(
-                f"{type(self).__name__} declares no task2batch: return a Task2Batch subclass "
-                f"as `task2batch` from training_spec() or override build() for bespoke trainer wiring"
+                f"{type(self).__name__} declares no task2batch: return a PipelineSpec with a Task2Batch subclass "
+                f"from pipeline_spec() or override build() for bespoke trainer wiring"
             )
         if not spec.objective:
             raise TypeError(

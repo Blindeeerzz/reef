@@ -16,8 +16,8 @@ from recipes.openclawrl.examples.openclawrl.user_sim.personas import (
     student_style_violations,
     student_violations,
 )
-from recipes.openclawrl.judging import openclawrl_record2record
-from recipes.openclawrl.processor import OpenClawRLTasks
+from recipes.openclawrl.judging import OpenClawRLJudgingSettings, OpenClawRLRecord2Record
+from recipes.openclawrl.processor import OpenClawRLBatchSettings, OpenClawRLTasks
 from reef.train.pipeline import TrainingPipeline
 
 CLEAN_REPLY = """Sure, here is the working.
@@ -143,13 +143,13 @@ def test_openclawrl_processor_drops_unfillable_stale_version_candidates() -> Non
     from reef.pipeline_context import PipelineContext
 
     worker = _FakeWorker()
-    context = PipelineContext("s", {"batch_size": 3})
-    stage = openclawrl_record2record(context, worker=worker)
+    context = PipelineContext("s")
+    stage = OpenClawRLRecord2Record(context, OpenClawRLJudgingSettings(), worker=worker)
     processor = TrainingPipeline(
         context,
         record2record=stage,
         record2task=OpenClawRLTasks(),
-        task2batch=OpenClawRLBatches(context, stage.judging),
+        task2batch=OpenClawRLBatches(context, OpenClawRLBatchSettings(batch_size=3), stage),
     )
     # Two stale leftovers from before a weight swap, then a fresh generation.
     _judged_turns(processor, worker, ["v1", "v1", "v2", "v2", "v2"])
@@ -166,13 +166,13 @@ def test_openclawrl_processor_keeps_single_version_queue_intact() -> None:
     from reef.pipeline_context import PipelineContext
 
     worker = _FakeWorker()
-    context = PipelineContext("s", {"batch_size": 3})
-    stage = openclawrl_record2record(context, worker=worker)
+    context = PipelineContext("s")
+    stage = OpenClawRLRecord2Record(context, OpenClawRLJudgingSettings(), worker=worker)
     processor = TrainingPipeline(
         context,
         record2record=stage,
         record2task=OpenClawRLTasks(),
-        task2batch=OpenClawRLBatches(context, stage.judging),
+        task2batch=OpenClawRLBatches(context, OpenClawRLBatchSettings(batch_size=3), stage),
     )
     _judged_turns(processor, worker, ["v1", "v1"])
     # All-one-version queue below batch size: nothing is dropped, not ready yet.

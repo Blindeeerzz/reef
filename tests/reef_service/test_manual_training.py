@@ -25,12 +25,13 @@ from reef.service.app import create_app
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
 from reef.task2batch import Task2Batch
 from reef.train.backend import PreparedStep
-from reef.train.cordis_backend.processor import InferenceTasks, trace_pipeline
+from reef.train.cordis_backend.processor import InferenceTasks
 from reef.train.pipeline import TrainingPipeline
 from reef.train.trainer import Trainer
 from reef.train.types import TrainDataItem, TrainingBatch
 
 from .runtime_stubs import StubTrainingRuntime
+from .test_harness_evolve_processor import harness_stages, records_pipeline, reports_pipeline
 from .test_harness_proposals import _dispatcher, _recipe
 from .test_reef_trainer_contracts import ExampleBackend, ExampleBatch
 
@@ -83,21 +84,11 @@ def failure(records, receipt):
     records.append(report(receipt))
 
 
-def reports_pipeline(context):
-    """Harness traces from reported scores."""
-    return trace_pipeline(context, "reports")
-
-
-def records_pipeline(context):
-    """Harness traces from recorded inference traffic, unscored."""
-    return trace_pipeline(context, "records")
-
-
 def build(records, backend, processor=records_pipeline, mode="manual", batch_size=1):
     return Trainer.build(
         "s",
         records,
-        pipeline_factory=lambda ctx: processor(ctx.with_config({"batch_size": batch_size})),
+        pipeline_factory=lambda ctx: processor(ctx, batch_size),
         candidate_backend=backend,
         training_mode=mode,
     )
@@ -206,11 +197,14 @@ def test_manual_recovery_replays_pending_requests_but_not_committed_ones(tmp_pat
 
 
 def test_manual_requires_an_explicit_recipe_assembler():
+    def default_pipeline(context, batch_size):
+        return TrainingPipeline(context)
+
     records = SQLiteRecordStore()
     with pytest.raises(NotImplementedError, match="does not implement training_mode='manual'"):
-        build(records, CaptureBackend(), TrainingPipeline)
+        build(records, CaptureBackend(), default_pipeline)
     with pytest.raises(NotImplementedError, match="does not implement training_mode='hybrid'"):
-        build(records, CaptureBackend(), TrainingPipeline, mode="hybrid")
+        build(records, CaptureBackend(), default_pipeline, mode="hybrid")
     with pytest.raises(ValueError, match="training_mode"):
         build(records, CaptureBackend(), mode="typo")
     records.close()
@@ -224,7 +218,7 @@ def test_train_route_needs_no_inference_and_retries_do_not_train_twice(tmp_path)
         seen.append((requests[0], samples))
         called.set()
 
-    recipe = replace(_recipe(tmp_path, propose), training_mode="manual", batch_size=100)
+    recipe = replace(_recipe(tmp_path, propose), training_mode="manual", pipeline_stages=harness_stages(100))
     dispatcher = _dispatcher(tmp_path, recipe)
     dispatcher.get_or_create_scenario("s")
 
@@ -292,8 +286,8 @@ def test_manual_is_a_native_contract_for_arbitrary_batch_schemas():
                 f"{self.scenario}:{batch_number}", values=tuple(source_record_id(task) for task in tasks)
             )
 
-    def instruction_pipeline(context):
-        return TrainingPipeline(context, task2batch=InstructionBatches(context))
+    def instruction_pipeline(context, batch_size=1):
+        return TrainingPipeline(context, task2batch=InstructionBatches(context, batch_size))
 
     with pytest.raises(NotImplementedError, match="training_mode='auto'"):
         instruction_pipeline(PipelineContext("s"))
@@ -310,12 +304,11 @@ def test_manual_is_a_native_contract_for_arbitrary_batch_schemas():
     records.close()
 
 
-def test_pipeline_context_keeps_mode_when_recipe_applies_config():
+def test_pipeline_context_keeps_mode_when_recipe_takes_instructions():
     context = PipelineContext("s", training_mode="manual")
-    configured = context.with_config({"batch_size": 100})
+    configured = replace(context, manual_enabled=True)
     assert configured.training_mode == "manual"
-    assert configured.config == {"batch_size": 100}
-    processor = reports_pipeline(configured)
+    processor = reports_pipeline(configured, 100)
     assert processor.training_mode == "manual"
     assert RequestType.TRAIN in processor.required_request_types
     processor.close()
@@ -329,7 +322,7 @@ def test_missing_mode_implementation_fails_at_processor_initialization():
     for mode in ("manual", "hybrid"):
         context = PipelineContext("s", training_mode=mode)
         with pytest.raises(NotImplementedError, match=rf"AutoOnlyBatches.*{mode}"):
-            TrainingPipeline(context, task2batch=AutoOnlyBatches(context))
+            TrainingPipeline(context, task2batch=AutoOnlyBatches(context, 1))
     with pytest.raises(ValueError, match="training_mode"):
         PipelineContext("s", training_mode="invalid")
 
@@ -346,7 +339,7 @@ def test_manual_instruction_batch_never_falls_back_to_auto():
         context,
         record2record=InferenceRecord2Record(),
         record2task=InferenceTasks(),
-        task2batch=TraceOnlyBatches(context),
+        task2batch=TraceOnlyBatches(context, 1),
     )
     pipeline.ingest(inference("held"))
     assert not pipeline.ready()
@@ -377,10 +370,13 @@ def test_status_shows_how_far_a_partly_filled_batch_still_has_to_go():
         def available_count(self) -> int:
             return self.held
 
+    class CountedBatches(Task2Batch):
+        def make_batch(self, tasks, batch_number):
+            return TrainingBatch(f"{self.scenario}:{batch_number}", tasks)
+
     stage = CountingStage()
-    pipeline = TrainingPipeline(
-        PipelineContext("s", config={"batch_size": 4}, training_mode="auto"), record2record=stage
-    )
+    context = PipelineContext("s", training_mode="auto")
+    pipeline = TrainingPipeline(context, record2record=stage, task2batch=CountedBatches(context, 4))
     assert pipeline.status() == {"ready_units": 0, "batch_size": 4}
     stage.held = 3
     assert pipeline.status() == {"ready_units": 3, "batch_size": 4}
@@ -399,7 +395,7 @@ def test_status_reports_buffered_requests_when_a_processor_takes_instructions_in
             return TrainingBatch(f"{self.scenario}:{batch_number}", tasks)
 
     context = PipelineContext("s", training_mode="hybrid")
-    pipeline = TrainingPipeline(context, task2batch=HybridOnlyBatches(context))
+    pipeline = TrainingPipeline(context, task2batch=HybridOnlyBatches(context, 1))
     pipeline.ingest(instruction("one"))
     assert pipeline.status()["buffered_requests"] == 1
     pipeline.close()
@@ -419,12 +415,12 @@ def test_processor_uses_shared_data_and_one_batch_assembly_hook(mode):
         def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> ExampleBatch:
             return ExampleBatch("custom-batch", values=tuple(source_record_id(task) for task in tasks))
 
-    def trajectory_pipeline(context):
+    def trajectory_pipeline(context, batch_size):
         return TrainingPipeline(
             context,
             record2record=InferenceRecord2Record(),
             record2task=InferenceTasks(),
-            task2batch=TrajectoryBatches(context),
+            task2batch=TrajectoryBatches(context, batch_size),
         )
 
     records, backend = SQLiteRecordStore(), CaptureBackend()
@@ -1025,7 +1021,7 @@ def test_the_dispatched_training_thread_skips_a_failed_instruction(tmp_path):
             return Trainer.build(
                 scenario,
                 records,
-                pipeline_factory=lambda ctx: records_pipeline(ctx.with_config({"batch_size": 1})),
+                pipeline_factory=records_pipeline,
                 candidate_backend=RaisingBackend(dispatched=True),
                 algorithm_state=algorithm_state,
                 experiment_logger=experiment_logger,
@@ -1204,7 +1200,7 @@ def test_hybrid_runs_a_queued_instruction_with_the_held_units_as_samples(process
 
 
 def test_hybrid_runs_two_queued_instructions_oldest_first_one_per_step():
-    processor = reports_pipeline(PipelineContext("s", {"batch_size": 1}, training_mode="hybrid"))
+    processor = reports_pipeline(PipelineContext("s", training_mode="hybrid"))
     processor.ingest(instruction("first"))
     processor.ingest(instruction("second"))
     assert processor.status()["buffered_requests"] == 2
@@ -1221,7 +1217,7 @@ def test_hybrid_runs_two_queued_instructions_oldest_first_one_per_step():
 
 
 def test_hybrid_batches_as_auto_does_without_an_instruction():
-    processor = reports_pipeline(PipelineContext("s", {"batch_size": 1}, training_mode="hybrid"))
+    processor = reports_pipeline(PipelineContext("s", training_mode="hybrid"))
     processor.ingest(inference("a"))
     processor.ingest(report("a"))
     batch = processor.build_batch()
@@ -1387,7 +1383,7 @@ def test_the_proposal_route_refuses_in_manual_mode_and_admits_again_in_a_batchin
 
 def test_manual_mode_caps_held_units_at_four_batches_and_the_batching_modes_hold_them_all(caplog):
     def fill(mode):
-        processor = reports_pipeline(PipelineContext("s", {"batch_size": 1}, training_mode=mode))
+        processor = reports_pipeline(PipelineContext("s", training_mode=mode))
         for i in range(20):
             processor.ingest(inference(f"inf-{i}"))
             processor.ingest(
@@ -1442,7 +1438,9 @@ def test_hybrid_promotes_the_failures_an_instruction_step_carries(tmp_path):
             )
         )
 
-    recipe = replace(_recipe(tmp_path, propose), training_mode="hybrid", promote_failures=True, batch_size=2)
+    recipe = replace(
+        _recipe(tmp_path, propose), training_mode="hybrid", promote_failures=True, pipeline_stages=harness_stages(2)
+    )
     dispatcher = _dispatcher(tmp_path, recipe)
 
     def gate_rows():

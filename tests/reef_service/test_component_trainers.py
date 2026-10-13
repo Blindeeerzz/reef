@@ -219,12 +219,12 @@ class _TwoTrainerRecipe(Recipe):
 
     def pipeline_for(self, component: str, context: PipelineContext) -> TrainingPipeline:
         if component in self.hybrid_components:
-            return threshold_pipeline(context, task2batch=HybridThresholdBatches(context))
+            return threshold_pipeline(context, task2batch=HybridThresholdBatches(context, 1))
         return threshold_pipeline(context)
 
     def build_trainers(self, scenario, records, *, surface, algorithm_states, experiment_logger=None):
         def factory_for(component: str):
-            return lambda context: self.pipeline_for(component, context.with_config({"batch_size": 1}))
+            return lambda context: self.pipeline_for(component, context)
 
         return tuple(
             ComponentTrainer(
@@ -1110,7 +1110,7 @@ class _NamedComponentsRecipe(Recipe):
                 Trainer.build(
                     scenario,
                     records,
-                    pipeline_factory=lambda context: threshold_pipeline(context.with_config({"batch_size": 1})),
+                    pipeline_factory=threshold_pipeline,
                     candidate_backend=_ComponentBackend(name, self.artifact_dir),
                     algorithm_state=algorithm_states.get(name),
                     experiment_logger=experiment_logger,
@@ -1244,9 +1244,7 @@ class _SlottedRecipe(_TwoTrainerRecipe):
     def pipeline_for(self, component: str, context: PipelineContext) -> TrainingPipeline:
         if component == HARNESS:
             # The threshold pipeline with ``_SlotGrouping``.
-            return threshold_pipeline(
-                context, record2record=ReportRecord2Record(context.scenario, context.report_type, _SlotGrouping())
-            )
+            return threshold_pipeline(context, record2record=ReportRecord2Record(context, _SlotGrouping()))
         return threshold_pipeline(context)
 
 
@@ -1545,11 +1543,9 @@ class _ComputedWeightsRecipe(_TwoTrainerRecipe):
             # Trains the judged turns of ``_RetiringRetriesJudging``.
             return TrainingPipeline(
                 context,
-                record2record=JudgingRecord2Record(
-                    _RetiringRetriesJudging(), _JudgedAtOnce(), max_staleness=context.max_staleness
-                ),
+                record2record=JudgingRecord2Record(context, _RetiringRetriesJudging(), _JudgedAtOnce()),
                 record2task=_RetiringRetriesTasks(),
-                task2batch=RetiringRetriesBatches(context),
+                task2batch=RetiringRetriesBatches(context, 1),
             )
         return threshold_pipeline(context)
 

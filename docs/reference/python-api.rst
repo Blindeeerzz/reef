@@ -219,10 +219,11 @@ Every recipe may declare ``report_type``, the ``ReportBase`` subclass its
 reports parse as (``None`` keeps ingress open), and ``harness_adapter``, the
 adapter a client installs its harness tree with (``None``, the default, for a
 recipe with no harness tree; ``CordisRecipe`` names ``evolution.adapter``).
-The scenario list names it for every scenario. Weight-training recipes add
-``training_spec()``, which binds the processor, the registered or dotted training
-objective, which declares the backend loss family, and the ``StepScheduling`` the
-runtime cuts each batch with; ``max_staleness``, the accepted
+The scenario list names it for every scenario. Every recipe declares
+``pipeline_spec()``, the default class of each pipeline stage (see `Pipeline
+stages <#pipeline-stages>`__). Weight-training recipes add ``training_spec()``,
+which binds the registered or dotted training objective, which declares the
+backend loss family, and the ``StepScheduling`` the runtime cuts each batch with; ``max_staleness``, the accepted
 producing-to-serving version lag, which must match the runtime; and
 ``candidate_evaluation``, the optional plugin configured by the deployment's
 ``evaluation`` section.
@@ -240,9 +241,16 @@ producing-to-serving version lag, which must match the runtime; and
        @classmethod
        def training_spec(cls) -> WeightTrainingSpec:
            return WeightTrainingSpec(
-               task2batch=MyMethodBatches,
                objective="my_method.objective:MyObjective",
                scheduling=StepScheduling(unit="sample"),
+           )
+
+       @classmethod
+       def pipeline_spec(cls) -> PipelineSpec:
+           return PipelineSpec(
+               record2record=MyMethodRecord2Record,
+               record2task=MyMethodTasks,
+               task2batch=MyMethodBatches,
            )
 
 ``frozen=True`` is required by the base. ``kw_only=True`` keeps later fields
@@ -262,9 +270,9 @@ parser, and an optional environment fallback:
 Precedence is explicit configuration, then environment, then the default.
 ``from_environment()`` builds the recipe. On weight-training recipes,
 ``service_config()`` forwards declared fields and shared artifact settings
-from the service configuration; override ``pipeline_config()`` when a
-stage needs renamed or derived keys. Never read deployment YAML from
-inside a stage.
+from the service configuration. A setting that a pipeline stage reads belongs
+in the stage's settings, under the deployment's ``pipeline`` section, not in a
+recipe field. Never read deployment YAML from inside a stage.
 
 Report
 ------
@@ -650,33 +658,42 @@ Pipeline stages
    from reef.task2batch import DistillBatches, Task2Batch
 
 A training pipeline (``reef.train.pipeline.TrainingPipeline``) turns durable
-records into typed batches through three stages that the recipe builds:
+records into typed batches through three stages. A recipe names a default class
+for each in ``pipeline_spec()`` (``PipelineSpec(record2record=...,
+record2task=..., task2batch=...)``):
 
-- ``build_record2record(context)``: the record-to-record stage
+- ``record2record``: the record-to-record stage
   (``reef.record2record``). It decides which records train and in what order:
   it groups reports, judges records, and drops records that can no longer
   train. Without one, each record passes through and nothing trains.
-- ``build_record2task(context, record2record)``: the record-to-task stage
+- ``record2task``: the record-to-task stage
   (``reef.record2task.Record2Task``). It turns each record set into tasks
   (``TrainDataItem`` values). Reported feedback supplies a ``make_sample`` hook
   on ``ReportTasks`` that assembles valid reports; computed feedback supplies
   a ``JudgedTasks`` after an asynchronous ``judge`` derives new feedback.
-- ``build_task2batch(context, record2record, record2task)``: the task-to-batch stage
-  (``reef.task2batch.Task2Batch``). Its ``make_batch(tasks,
-  batch_number)`` shapes the tasks of the selected sets into a batch. The
-  default builds the ``task2batch`` class of ``training_spec()``.
+- ``task2batch``: the task-to-batch stage (``reef.task2batch.Task2Batch``).
+  Its ``make_batch(tasks, batch_number)`` shapes the tasks of the selected
+  sets into a batch.
 
-``build_pipeline(context)`` builds them in this order; a later hook receives
-the stages built before it. A deployment's ``pipeline`` section can replace
-any stage with a class that implements ``from_config``:
+Reef builds the stages for each scenario, in this order, with the class
+methods below; a later stage receives the stages built before it:
 
 - ``Record2Record.from_config(config, *, context, environ)``
 - ``Record2Task.from_config(config, *, context, record2record, environ)``
-- ``Task2Batch.from_config(config, *, context, record2record, record2task, environ)``.
-  The default builds the class with ``config`` over the recipe's config.
+- ``Task2Batch.from_config(config, *, context, record2record, record2task, environ)``
 
-``config`` is the section's ``config`` for that stage; ``environ`` holds the
-environment the deployment was read with. A ``Record2Task`` that keeps
+``config`` is the stage's config from the deployment's ``pipeline`` section;
+``environ`` holds the environment the deployment was read with. A stage
+declares its keys in a frozen ``reef.core.plugins.PluginSettings`` subclass
+with ``reef.core.config.config_option`` fields and validation in
+``__post_init__``. In ``from_config``, parse the config with
+``Settings.parse(config, plugin_class=cls)`` (``NoSettings`` for a stage
+without config) and give the settings object to the constructor. A bad config
+fails when the first scenario builds its pipeline. A later stage that needs an
+earlier stage as a specific class checks it with ``isinstance`` and raises
+``PluginConfigError`` otherwise. A value that several stages need
+belongs to the first of them; later stages read it from the stage object
+they receive. A ``Record2Task`` that keeps
 per-scenario state also implements ``scenario_state_dirs(config, scenario)``,
 so a scenario delete archives it. Reef owns replay, retention, deduplication, pending batches,
 and exactly-once consumption; the method implements only the hooks below.
@@ -712,9 +729,9 @@ A reported-feedback recipe implements these hooks:
    * - ``Task2Batch.make_batch(tasks, batch_number) -> TrainingBatch``
      - Shape the flat tuple of selected tasks into a batch.
 
-The recipe owns the report policy. Its ``build_record2record(context)`` returns
-``ReportRecord2Record(scenario, report_type, grouping, *, exclusive_sources=False,
-ordered_groups=False)``; ``ReportRecord2Record(scenario, report_type, ReportGrouping())``
+The recipe owns the report policy. Its record stage is a subclass of
+``ReportRecord2Record(context, grouping, *, exclusive_sources=False,
+ordered_groups=False)``; ``ReportRecord2Record(context, ReportGrouping())``
 trains every report by itself. A ``ReportGrouping`` runs in the
 record-to-record stage and reads only records:
 
@@ -762,9 +779,9 @@ Computed feedback
 
 Use this engine when later traffic completes an earlier record and judging it
 calls a model or another slow service. The recipe writes a ``RecordJudging``.
-Its ``build_record2record`` returns ``JudgingRecord2Record(judging, worker, *,
-max_staleness)``, its ``build_record2task`` returns a ``JudgedTasks``, and its
-``Task2Batch`` shapes the judged samples into batches.
+Its record stage is a ``JudgingRecord2Record(context, judging, worker)``,
+its record-to-task stage is a ``JudgedTasks``, and its ``Task2Batch`` shapes
+the judged samples into batches.
 
 +------------------------------------------+-----------------------------------+
 | Hook                                     | Contract                          |
@@ -964,7 +981,7 @@ Training objective
 Each method defines a ``TrainingObjective`` in its own ``objective.py``. It
 owns full-batch signal preparation and declares the backend loss family.
 Recipes bind it with ``WeightTrainingSpec(objective="my_method.objective:MyObjective",
-task2batch=MyBatches, scheduling=StepScheduling(...))``. The dotted reference names a class with a zero-argument
+scheduling=StepScheduling(...))``. The dotted reference names a class with a zero-argument
 constructor or an existing instance; its module must be importable in both the
 service and training processes.
 

@@ -7,15 +7,25 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 from reef_service._trajectories import policy_trajectory
+from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
-from recipes.tttd import TTTDBatches, TTTDGroupedRolloutReport
+from recipes.tttd import (
+    TTTDBatches,
+    TTTDGridSettings,
+    TTTDGroupedRolloutReport,
+    TTTDRecipe,
+    TTTDRecord2Record,
+    TTTDTasks,
+)
 from recipes.tttd.objective import TttdObjective
-from recipes.tttd.processor import TTTDTasks
-from recipes.tttd.recipe import tttd_record2record
 from reef.artifact import ArtifactRef
 from reef.core import AgentRecord, RequestType
+from reef.core.plugins import PluginConfigError
 from reef.core.reports import ReportValidationError
 from reef.core.trajectories import trajectory_reward
+from reef.recipe.config import RecipeConfigError
+from reef.record2record import PassThroughRecord2Record
+from reef.record2task.assembly import SampleAssemblySettings
 from reef.train import PipelineContext
 from reef.train.algos import StepScheduling
 from reef.train.pipeline import TrainingPipeline
@@ -82,19 +92,89 @@ def _report(step: int, group: int, rollout: int, score: float) -> AgentRecord:
 def _processor(experiment_logger=None) -> TrainingPipeline:
     context = PipelineContext(
         "discovery",
-        {
-            "groups_per_step": 2,
-            "rollouts_per_group": 3,
-        },
         report_type=TTTDGroupedRolloutReport,
         experiment_logger=experiment_logger or _ExperimentLogger(),
     )
+    record2record = TTTDRecord2Record(context, TTTDGridSettings(groups_per_step=2, rollouts_per_group=3))
     return TrainingPipeline(
         context,
-        record2record=tttd_record2record(context),
-        record2task=TTTDTasks(context),
-        task2batch=TTTDBatches(context),
+        record2record=record2record,
+        record2task=TTTDTasks(SampleAssemblySettings(), record2record),
+        task2batch=TTTDBatches(context, record2record),
     )
+
+
+def _recipe(config: dict) -> TTTDRecipe:
+    recipe = TTTDRecipe.from_environment(
+        {}, config={"model": {"path": "Qwen/Qwen3-8B"}, **config}, **runtime_bindings(StubTrainingRuntime())
+    )
+    assert isinstance(recipe, TTTDRecipe)
+    return recipe
+
+
+@pytest.mark.unit
+def test_tttd_pipeline_section_sets_the_grid_once_for_every_stage() -> None:
+    recipe = _recipe(
+        {
+            "data": {},
+            "pipeline": {
+                "record2record": {"config": {"groups_per_step": 2, "rollouts_per_group": 3}},
+                "record2task": {"config": {"accept_multi_turn_policy_samples": True}},
+            },
+        }
+    )
+
+    pipeline = recipe.build_pipeline(PipelineContext("discovery", report_type=recipe.report_type))
+
+    assert isinstance(pipeline.record2record, TTTDRecord2Record)
+    assert isinstance(pipeline.record2task, TTTDTasks)
+    assert isinstance(pipeline.task2batch, TTTDBatches)
+    assert (pipeline.record2task.groups_per_step, pipeline.record2task.rollouts_per_group) == (2, 3)
+    assert (pipeline.task2batch.groups_per_step, pipeline.task2batch.rollouts_per_group) == (2, 3)
+    assert pipeline.record2task.assembly.settings.accept_multi_turn_policy_samples
+    assert pipeline.batch_size == 1
+
+
+@pytest.mark.unit
+def test_tttd_default_grid_is_the_paper_grid() -> None:
+    pipeline = _recipe({"data": {}}).build_pipeline(PipelineContext("discovery"))
+
+    assert isinstance(pipeline.task2batch, TTTDBatches)
+    assert (pipeline.task2batch.groups_per_step, pipeline.task2batch.rollouts_per_group) == (8, 64)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("key", ["groups_per_step", "rollouts-per-group"])
+def test_tttd_refuses_the_grid_in_the_recipe_config(key: str) -> None:
+    with pytest.raises(RecipeConfigError, match="does not consume"):
+        _recipe({"data": {key: 2}})
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("pipeline", "message"),
+    [
+        ({"record2record": {"config": {"groups_per_step": 0}}}, "groups_per_step must be positive"),
+        ({"record2record": {"config": {"rollouts_per_group": 1}}}, "rollouts_per_group must be at least two"),
+        ({"record2task": {"config": {"groups_per_step": 2}}}, "groups_per_step"),
+        ({"task2batch": {"config": {"batch_size": 2}}}, "TTTDBatches takes no config"),
+    ],
+)
+def test_tttd_refuses_a_bad_stage_config_when_the_pipeline_builds(pipeline: dict, message: str) -> None:
+    recipe = _recipe({"data": {}, "pipeline": pipeline})
+    with pytest.raises(RecipeConfigError, match=message):
+        recipe.build_pipeline(PipelineContext("discovery", report_type=recipe.report_type))
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("stage", [TTTDTasks, TTTDBatches])
+def test_tttd_later_stages_need_the_tttd_record_stage(stage: type) -> None:
+    context = PipelineContext("discovery")
+    stages = {"record2record": PassThroughRecord2Record()}
+    if stage is TTTDBatches:
+        stages["record2task"] = TTTDTasks(SampleAssemblySettings(), TTTDRecord2Record(context, TTTDGridSettings()))
+    with pytest.raises(PluginConfigError, match=f"{stage.__name__} needs TTTDRecord2Record"):
+        stage.from_config({}, context=context, environ={}, **stages)
 
 
 @pytest.mark.unit

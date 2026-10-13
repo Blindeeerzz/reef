@@ -18,7 +18,7 @@ from reef.artifact.artifact import LiveWeightArtifactRef
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import TeacherContextReport
 from reef.core.trajectories import source_record_id
-from reef.record2task.distill import DistillTasks, TeacherRenderer, distill_record2record
+from reef.record2task.distill import DistillRecord2Record, DistillSettings, DistillTasks, TeacherRenderer
 from reef.record2task.samples import recorded_response
 from reef.task2batch import DistillBatches
 from reef.train import PipelineContext
@@ -122,14 +122,13 @@ def _report(
 
 
 def _processor(**config: Any) -> TrainingPipeline:
-    context = PipelineContext(
-        "science", {"batch_size": 1, "tokenizer_path": "/models/science", **config}, TeacherContextReport
-    )
+    context = PipelineContext("science", TeacherContextReport)
+    settings = DistillSettings(**{"tokenizer_path": "/models/science", **config})
     return TrainingPipeline(
         context,
-        record2record=distill_record2record(context),
-        record2task=DistillTasks(context),
-        task2batch=DistillBatches(context),
+        record2record=DistillRecord2Record(context),
+        record2task=DistillTasks(settings),
+        task2batch=DistillBatches(context, 1),
     )
 
 
@@ -158,12 +157,12 @@ def test_by_default_the_teacher_reads_the_request_as_recorded(tokenizer: Countin
 
 @pytest.mark.unit
 def test_a_recipe_composes_the_teacher_request_from_the_response_and_the_context(tokenizer: CountingTokenizer) -> None:
-    context = PipelineContext("science", {"batch_size": 1, "tokenizer_path": "/models/science"}, TeacherContextReport)
+    context = PipelineContext("science", TeacherContextReport)
     processor = TrainingPipeline(
         context,
-        record2record=distill_record2record(context),
-        record2task=FeedbackTasks(context),
-        task2batch=FeedbackBatches(context),
+        record2record=DistillRecord2Record(context),
+        record2task=FeedbackTasks(DistillSettings(tokenizer_path="/models/science")),
+        task2batch=FeedbackBatches(context, 1),
     )
     processor.ingest(_inference("i1"))
     processor.ingest(_report("r1", ("i1",), teacher_context="Too low."))
@@ -207,7 +206,7 @@ def test_teacher_tokens_render_the_request_cut_the_prompt_and_append_the_respons
     messages = [{"role": "user", "content": QUESTION}]
     prompt_ids = tokenizer.count_ids(messages)
 
-    renderer = TeacherRenderer({"tokenizer_path": "/models/science"})
+    renderer = TeacherRenderer("/models/science")
     assert renderer.teacher_tokens(messages, None, (1, 2, 3)) == [*prompt_ids, 1, 2, 3]
     # A prompt window cuts the rendered prompt on the right and leaves the response whole.
     assert renderer.teacher_tokens(messages, None, (1, 2, 3), max_prompt_tokens=2) == [*prompt_ids[:2], 1, 2, 3]

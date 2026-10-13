@@ -58,12 +58,7 @@ class TestPolicyRecipe(WeightTrainingRecipe):
             scenario,
             records,
             pipeline_factory=lambda context: threshold_pipeline(
-                context.with_config(
-                    {
-                        "batch_size": self.batch_size,
-                        "accept_multi_turn_policy_samples": True,
-                    }
-                )
+                context, batch_size=self.batch_size, accept_multi_turn=True
             ),
             candidate_backend=RuntimeCandidateBackend(
                 self.training_runtime, "sft", StepScheduling(), inference_runtime=self.runtime, scenario=scenario

@@ -245,12 +245,12 @@ def test_report_processor_reserves_and_acknowledges_mixed_data():
 
     from reef.record2record import ReportGrouping, ReportRecord2Record
 
-    context = PipelineContext("mixed", {"batch_size": 2})
+    context = PipelineContext("mixed")
     processor = TrainingPipeline(
         context,
-        record2record=ReportRecord2Record("mixed", None, ReportGrouping(), exclusive_sources=True),
+        record2record=ReportRecord2Record(context, ReportGrouping(), exclusive_sources=True),
         record2task=MixedTasks(),
-        task2batch=MixedBatches(context),
+        task2batch=MixedBatches(context, 2),
     )
     for index, payload in enumerate(
         ({"messages": [{"role": "user", "content": "hi"}]}, {"task_path": "tasks/example"})

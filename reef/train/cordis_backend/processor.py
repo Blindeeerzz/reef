@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any, Self
+
 from reef.core import RequestType
+from reef.core.plugins import NoSettings
 from reef.core.trajectories import make_trajectory
 from reef.pipeline_context import PipelineContext
 from reef.record2record import (
-    InferenceRecord2Record,
+    Record2Record,
     RecordSet,
     ReportContext,
     ReportGrouping,
@@ -15,13 +19,47 @@ from reef.record2record import (
 )
 from reef.record2task import Record2Task, ReportTasks, TaskResult
 from reef.record2task.assembly import reported_task
-from reef.task2batch import Task2Batch
-from reef.train.pipeline import TrainingPipeline
+from reef.task2batch import BatchSettings, Task2Batch
 from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem
 
 
+class TraceRecord2Record(ReportRecord2Record):
+    """Traces from reports: every valid report trains by itself, as one set with the requests it references.
+
+    Requests are recorded post-transform, so a trace shows exactly what the
+    backend served. The default record stage of harness evolution. A
+    deployment without outcome reports names ``InferenceRecord2Record`` and
+    ``InferenceTasks`` instead, to evolve on recorded traffic alone; a
+    measured result beats model self judgment, so a deployment with reports
+    keeps this stage.
+    """
+
+    def __init__(self, context: PipelineContext) -> None:
+        super().__init__(context, ReportGrouping())
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any], *, context: PipelineContext, environ: Mapping[str, str]) -> Self:
+        NoSettings.parse(config, plugin_class=cls)
+        return cls(context)
+
+
 class TraceTasks(ReportTasks):
-    """One report's referenced requests, as served, as one trace task with the reported score."""
+    """One report's referenced requests, as served, as one trace task with the reported score.
+
+    Several references become one trajectory sample.
+    """
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any],
+        *,
+        context: PipelineContext,
+        record2record: Record2Record,
+        environ: Mapping[str, str],
+    ) -> Self:
+        NoSettings.parse(config, plugin_class=cls)
+        return cls()
 
     def make_sample(self, context: ReportContext) -> TrajectoryItem:
         sample = make_trajectory(context.inferences, context.require_score(), context.report.payload.get("feedback"))
@@ -30,7 +68,22 @@ class TraceTasks(ReportTasks):
 
 
 class InferenceTasks(Record2Task):
-    """One recorded inference as one unscored trace task."""
+    """One recorded inference as one unscored trace task, with ``InferenceRecord2Record``.
+
+    The proposer contract requires handling unscored samples.
+    """
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any],
+        *,
+        context: PipelineContext,
+        record2record: Record2Record,
+        environ: Mapping[str, str],
+    ) -> Self:
+        NoSettings.parse(config, plugin_class=cls)
+        return cls()
 
     def make_tasks(self, record_set: RecordSet) -> TaskResult:
         if not isinstance(record_set, SingleRecordSet):
@@ -51,34 +104,17 @@ class TraceBatches(Task2Batch):
     supported_training_modes = frozenset({"auto", "manual", "hybrid"})
     required_request_types = frozenset(RequestType)
 
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any],
+        *,
+        context: PipelineContext,
+        record2record: Record2Record,
+        record2task: Record2Task,
+        environ: Mapping[str, str],
+    ) -> Self:
+        return cls(context, BatchSettings.parse(config, plugin_class=cls).batch_size)
+
     def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"{self.scenario}:harness_evolve:{batch_number}", tasks)
-
-
-def trace_pipeline(context: PipelineContext, batch_policy: str) -> TrainingPipeline:
-    """The harness-evolution pipeline of one scenario: traces from reports, or from recorded inference traffic.
-
-    * ``reports``: pair recorded requests with reported scores. Requests are
-      recorded post-transform, so a trace shows exactly what the backend
-      served. Every valid report contributes one trace; several references
-      become one trajectory sample.
-    * ``records``: batch recorded inference traffic every ``batch_size``
-      requests, unscored, so a deployment that only serves still evolves.
-      Each recorded inference is one set, in arrival order, and reports are
-      released untouched. The proposer contract requires handling unscored
-      samples; a deployment with real outcome signal selects ``reports``,
-      because a measured result beats model self judgment.
-    """
-    if batch_policy == "records":
-        return TrainingPipeline(
-            context,
-            record2record=InferenceRecord2Record(),
-            record2task=InferenceTasks(),
-            task2batch=TraceBatches(context),
-        )
-    return TrainingPipeline(
-        context,
-        record2record=ReportRecord2Record(context.scenario, context.report_type, ReportGrouping()),
-        record2task=TraceTasks(),
-        task2batch=TraceBatches(context),
-    )
