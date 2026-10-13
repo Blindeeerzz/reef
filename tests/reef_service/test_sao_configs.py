@@ -524,7 +524,7 @@ def test_cookbook_training_config_parses_and_validates(config_path: Path) -> Non
 
     # Paths are representative placeholders; tokenizer compatibility has its
     # own contract tests and is checked against real models during GPU startup.
-    with patch("reef.train.slime_backend.distill.engine.validate_teacher_tokenizer") as validate_tokenizers:
+    with patch("reef.train.slime_backend.distill.teacher_engine.validate_teacher_tokenizer") as validate_tokenizers:
         spec.validate_backend_args(args, recipe=recipe)
     if getattr(args, "distill_teacher_url", ""):
         validate_tokenizers.assert_called_once_with(args.hf_checkpoint, args.distill_teacher_model_path)

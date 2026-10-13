@@ -49,7 +49,7 @@ import torch.distributed as dist
 from torch.utils.checkpoint import checkpoint
 
 from reef.train.slime_backend.distill.algorithm import DIVERGENCES, DistillSettings, settings_from_args
-from reef.train.slime_backend.distill.engine import ENGINE_TEACHER_BATCH_KEYS
+from reef.train.slime_backend.distill.teacher_engine import ENGINE_TEACHER_BATCH_KEYS
 from reef.train.slime_backend.score_centering import settings_from_args as centering_settings_from_args
 from reef.train.slime_backend.score_centering.term import score_centering_term
 from reef.train.slime_backend.vocab_parallel import (

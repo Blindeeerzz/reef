@@ -12,7 +12,7 @@ import pytest
 from reef.core.errors import DeployConfigError
 from reef.service.deploy.service_config import ServiceConfig
 from reef.train.slime_backend.distill.algorithm import DistillAlgorithm, DistillSettings, settings_from_args
-from reef.train.slime_backend.distill.engine import EngineTeacher, parse_teacher_scores, teacher_vocab_size
+from reef.train.slime_backend.distill.teacher_engine import TeacherEngine, parse_teacher_scores, teacher_vocab_size
 from reef.train.slime_backend.launch import driver_arguments, teacher_service
 
 
@@ -35,7 +35,7 @@ def teacher_path(tmp_path):
 
 
 def engine_teacher(model_path):
-    return EngineTeacher(url="http://teacher:30001", model_path=model_path, timeout_seconds=300.0, top_k=2)
+    return TeacherEngine(url="http://teacher:30001", model_path=model_path, timeout_seconds=300.0, top_k=2)
 
 
 def scores():
@@ -108,8 +108,8 @@ def test_partial_teacher_failure_leaves_batch_unchanged(teacher_path):
     original = copy.deepcopy(batch)
     good = parse_teacher_scores(scores(), [1, 2, 3, 4], 2, 2, 8)
     with (
-        patch.object(EngineTeacher, "validate_model"),
-        patch.object(EngineTeacher, "score", side_effect=[good, TimeoutError("deadline")]),
+        patch.object(TeacherEngine, "validate_model"),
+        patch.object(TeacherEngine, "score", side_effect=[good, TimeoutError("deadline")]),
         pytest.raises(TimeoutError),
     ):
         engine_teacher(teacher_path).prepare(batch)
@@ -160,8 +160,8 @@ def test_family_flags_binding_and_worker_settings_preserve_engine(teacher_path):
     assert bound is not family
     batch = {"teacher_tokens": [[1, 2, 3, 4]], "response_lengths": [2]}
     with (
-        patch.object(EngineTeacher, "validate_model"),
-        patch.object(EngineTeacher, "score", return_value=parse_teacher_scores(scores(), [1, 2, 3, 4], 2, 2, 8)),
+        patch.object(TeacherEngine, "validate_model"),
+        patch.object(TeacherEngine, "score", return_value=parse_teacher_scores(scores(), [1, 2, 3, 4], 2, 2, 8)),
     ):
         assert bound.prepare_rollout(batch)["perf/distill_teacher_time"] >= 0
     assert batch["distill_teacher_sampled_log_probs"] == [[-0.3, -0.5]]
@@ -287,7 +287,7 @@ def test_engine_columns_match_native_actor_columns_on_identical_logits(monkeypat
 def test_tokenizer_validation_rejects_equal_size_but_different_mapping(monkeypatch):
     import sys
 
-    from reef.train.slime_backend.distill.engine import validate_teacher_tokenizer
+    from reef.train.slime_backend.distill.teacher_engine import validate_teacher_tokenizer
 
     tokenizers = [
         SimpleNamespace(get_vocab=lambda: {"a": 0, "b": 1}),

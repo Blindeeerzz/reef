@@ -1,8 +1,11 @@
-"""Score recorded response tokens with a frozen SGLang teacher engine.
+"""The teacher engine: a frozen SGLang server that scores the recorded response tokens.
 
-The bridge fills the existing distillation columns before partitioning or
-starting a training step. No generation, retokenization or actor weight swap
-is involved. This module deliberately has no torch or serving-runtime imports.
+This is the second of a distillation family's two teacher paths. ``teacher``
+runs the teacher on the actor's weights inside the training step;
+this module asks a separate engine and runs on the bridge, which fills the
+distillation columns before partitioning or starting the step. No
+generation, retokenization or actor weight swap is involved, and the module
+deliberately has no torch or serving-runtime imports.
 """
 
 from __future__ import annotations
@@ -131,8 +134,8 @@ def parse_teacher_scores(
     return dict(zip(ENGINE_TEACHER_BATCH_KEYS, (selected_ids, selected_log_probs, sampled_log_probs), strict=True))
 
 
-class EngineTeacher:
-    """A synchronous, bounded scoring client; the bound distillation family holds one for the run."""
+class TeacherEngine:
+    """A synchronous, bounded client of the teacher engine; the bound distillation family holds one for the run."""
 
     def __init__(self, *, url: str, model_path: str, timeout_seconds: float, top_k: int) -> None:
         self.url = url.rstrip("/")

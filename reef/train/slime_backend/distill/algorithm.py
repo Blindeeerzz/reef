@@ -33,9 +33,9 @@ from urllib.parse import urlsplit
 from reef.core.trajectories import source_record_id, trajectory_reward
 from reef.train.slime_backend.algorithm import PolicyGradientWeight, SlimeAlgorithm
 from reef.train.slime_backend.data_builder import build_policy_rollout_data
-from reef.train.slime_backend.distill.engine import (
+from reef.train.slime_backend.distill.teacher_engine import (
     ENGINE_TEACHER_BATCH_KEYS,
-    EngineTeacher,
+    TeacherEngine,
     validate_teacher_tokenizer,
 )
 from reef.train.types import TrajectoryItem
@@ -266,7 +266,7 @@ class DistillAlgorithm(SlimeAlgorithm):
     #: The recipe's settings type, with its defaults.
     settings_type: type[DistillSettings] = DistillSettings
 
-    def __init__(self, teacher: EngineTeacher | None = None) -> None:
+    def __init__(self, teacher: TeacherEngine | None = None) -> None:
         #: The teacher engine a bound instance scores with; None leaves scoring to the actor.
         self.teacher = teacher
 
@@ -438,7 +438,7 @@ class DistillAlgorithm(SlimeAlgorithm):
         if config is not None and not isinstance(config, DistillSettings):
             raise TypeError(f"{self.loss_family} bridge algorithm config must be {self.settings_type.__name__}")
         if isinstance(config, DistillSettings) and config.teacher_url:
-            teacher = EngineTeacher(
+            teacher = TeacherEngine(
                 url=config.teacher_url,
                 model_path=config.teacher_model_path,
                 timeout_seconds=config.teacher_timeout,
