@@ -24,7 +24,7 @@ from reef.harness.episodes.model_binding import ModelBinding, ModelBindings
 from reef.inference.http import InferenceProxyRuntime
 from reef.pipeline_context import PipelineContext
 from reef.recipe import RecipeConfigError
-from reef.recipe.config import recipe_config_from_mapping
+from reef.recipe.config import public_recipe_config
 from reef.recipe.registry import build_recipe
 from reef.train.cordis_backend import Mutation
 from reef.train.evaluation.evaluators import BackendAlwaysSelectPlugin
@@ -359,7 +359,7 @@ def test_example_yaml_boots_the_recipe_with_the_paper_wiring(example, tmp_path, 
     monkeypatch.setenv("REEF_UPSTREAM_API_KEY", "dummy")
     monkeypatch.setenv("REEF_SC_SKILLS", str(skills))
     config = load_config(EXAMPLE_DIR / "skillclaw.yaml")
-    sections = recipe_config_from_mapping(config)
+    sections = public_recipe_config(config)
     assert sections["implementation"] == "recipes.skillclaw.recipe:SkillClawRecipe"
 
     built = build_recipe(str(sections["implementation"]), {}, config=sections, runtime=runtime())

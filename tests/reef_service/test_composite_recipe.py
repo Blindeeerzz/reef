@@ -24,7 +24,7 @@ from reef.pipeline_context import PipelineContext
 from reef.recipe import CompositeRecipe, Recipe, RecipeConfigError, build_recipe
 from reef.recipe.base import ServedEndpoint
 from reef.recipe.checkpoint_strategy import EveryNVersions
-from reef.recipe.config import recipe_config_from_mapping
+from reef.recipe.config import public_recipe_config
 from reef.runtime.interfaces import InferenceHandler
 from reef.service.app import create_app
 from reef.service.request_service import RequestService
@@ -327,7 +327,6 @@ def test_deployment_treats_a_composite_with_a_weight_component_as_training(tmp_p
     from reef.service.training_driver import _resolve_training_recipe
 
     raw = {
-        "schema-version": 2,
         "recipe": {
             "implementation": "reef.recipe.composite:CompositeRecipe",
             "config": {"components": _WEIGHTS_AND_HARNESS},
@@ -368,10 +367,9 @@ def test_deployment_treats_a_composite_with_a_weight_component_as_training(tmp_p
 
 
 @pytest.mark.unit
-def test_composite_recipe_reads_components_from_the_versioned_layout() -> None:
-    settings = recipe_config_from_mapping(
+def test_composite_recipe_reads_components_from_the_file_layout() -> None:
+    settings = public_recipe_config(
         {
-            "schema-version": 2,
             "recipe": {
                 "implementation": "reef.recipe.composite:CompositeRecipe",
                 "config": {

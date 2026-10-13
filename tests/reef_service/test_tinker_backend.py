@@ -382,7 +382,6 @@ def test_malformed_training_rows_are_rejected(field, value):
 
 def test_deployment_preserves_remote_model_and_discovers_without_sdk(tmp_path):
     raw = {
-        "schema-version": 2,
         "recipe": {"implementation": "recipes.tttd.recipe:TTTDRecipe"},
         "inference": {"model-path": "Qwen/Qwen3-8B"},
         "training": {"backend": "tinker", "options": {"state-dir": str(tmp_path / "state")}},
@@ -413,7 +412,6 @@ def test_serve_skips_the_model_download_for_a_hosted_backend(tmp_path, monkeypat
     path.write_text(
         yaml.safe_dump(
             {
-                "schema-version": 2,
                 "reef": {"run-dir": str(tmp_path / "stack")},
                 "recipe": {"implementation": "recipes.tttd.recipe:TTTDRecipe"},
                 "inference": {"model-path": "Qwen/Qwen3-8B"},

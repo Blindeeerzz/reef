@@ -160,7 +160,6 @@ def test_tinker_trains_behind_the_model_driver_with_a_local_engine(tmp_path, mon
     api_key = os.environ["TINKER_API_KEY"] if REAL else "fake-key"
     monkeypatch.setenv("TINKER_API_KEY", api_key)
     raw = {
-        "schema-version": 2,
         "reef": {"run-dir": str(tmp_path / "stack")},
         "recipe": {
             "implementation": "recipes.tttd.recipe:TTTDRecipe",

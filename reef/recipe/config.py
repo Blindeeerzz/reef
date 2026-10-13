@@ -12,21 +12,20 @@ from reef.recipe.errors import RecipeConfigError
 
 
 def load_recipe_config(path: str | Path) -> dict[str, Any]:
+    """Load a recipe file in the public layout and return its flat recipe config."""
     config_path = Path(path)
     try:
         loaded = yaml.safe_load(config_path.read_text())
     except (OSError, yaml.YAMLError) as exc:
         raise RecipeConfigError(f"cannot load recipe config {config_path}: {exc}") from exc
-    return recipe_config_from_mapping(loaded)
+    return public_recipe_config(loaded)
 
 
 def recipe_config_from_mapping(loaded: Any) -> dict[str, Any]:
-    """Validate the preset structure supplied by either YAML or deployment."""
+    """Validate a flat recipe config: a composite component or a deployment's resolved recipe settings."""
     if not isinstance(loaded, Mapping):
         raise RecipeConfigError("recipe config must be a YAML object")
     config = dict(loaded)
-    if "schema-version" in config:
-        config = _public_recipe_config(config)
     if not isinstance(config.get("implementation"), str) or not config["implementation"]:
         raise RecipeConfigError("recipe config must contain a non-empty 'implementation'")
     for section in ("data", "artifact", "runtime", "model", "rollout", "optimization"):
@@ -44,21 +43,29 @@ def config_positive_int(config: Mapping[str, Any], name: str, default: int) -> i
     return value
 
 
-def _public_recipe_config(config: Mapping[str, Any]) -> dict[str, Any]:
-    """Read the shared public envelope without depending on the service launcher."""
+def public_recipe_config(loaded: Any) -> dict[str, Any]:
+    """Read a recipe file's public sections into a flat recipe config.
+
+    The file selects its class under ``recipe.implementation``, its fields under
+    ``recipe.config`` and its runtime under ``recipe.runtime``. A standalone
+    file names its model in the ``inference`` section; a deployment supplies
+    its already resolved runtime instead.
+    """
     from reef.recipe.registry import recipe_class_for
 
-    if type(config["schema-version"]) is not int or config["schema-version"] != 2:
-        raise RecipeConfigError("unsupported recipe schema-version; expected 2")
+    if not isinstance(loaded, Mapping):
+        raise RecipeConfigError("recipe config must be a YAML object")
+    config = dict(loaded)
     if "service" in config or "services" in config:
-        raise RecipeConfigError(
-            "schema-version 2 does not accept service/services; use reef settings and automatic assembly"
-        )
+        raise RecipeConfigError("service/services are not accepted; use reef settings and automatic assembly")
     if isinstance(config.get("execution"), Mapping) and "services" in config["execution"]:
-        raise RecipeConfigError("execution.services belongs to legacy process stacks")
+        raise RecipeConfigError("execution.services is not accepted; configure component resources instead")
     recipe = config.get("recipe")
     if not isinstance(recipe, Mapping) or not isinstance(recipe.get("implementation"), str):
-        raise RecipeConfigError("recipe.implementation must name a recipe class")
+        raise RecipeConfigError(
+            "recipe.implementation must name a recipe class; "
+            "see the configuration layout in docs/reference/configuration.rst"
+        )
     recipe_type = recipe_class_for(recipe["implementation"])
     if recipe_type is None:
         raise RecipeConfigError("recipe.implementation must name a recipe class")
@@ -89,9 +96,10 @@ def _public_recipe_config(config: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(inference, Mapping):
         raise RecipeConfigError("inference must be an object")
     if "reef" not in config:
-        model = inference.get(
-            "upstream-model", inference.get("upstream_model", inference.get("model-path", inference.get("model_path")))
-        )
-        if model is not None:
-            resolved["model"] = {"path": model}
-    return resolved
+        # An explicit model, even null, is kept so that it is not replaced by the deployment's model.
+        supplied_names = [
+            name for name in ("upstream-model", "upstream_model", "model-path", "model_path") if name in inference
+        ]
+        if supplied_names:
+            resolved["model"] = {"path": inference[supplied_names[0]]}
+    return recipe_config_from_mapping(resolved)
