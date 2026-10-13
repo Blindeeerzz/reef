@@ -70,7 +70,42 @@ them changes the method.
 
 The separate checkpoint is swapped into the actor's architecture for the
 teacher pass, so teacher and student must share the architecture, parallel
-layout and token ids; a larger model with only the same tokenizer is not
-supported by this loader. The teacher copy takes additional host memory and
+layout and token ids; a larger model with only the same tokenizer runs on a
+teacher engine instead. The teacher copy takes additional host memory and
 reuses the actor's GPUs without an optimizer update. In LoRA mode the
 student's adapter is cleared while the teacher's weights are loaded.
+
+Teacher engine
+--------------
+
+A teacher that shares only the student's token ids, such as Qwen3-32B for a
+Qwen3-8B student, is served as a frozen SGLang engine on its own GPUs. The
+deployment's ``teacher`` section declares it and replaces
+``opd-teacher-checkpoint``:
+
+.. code-block:: yaml
+
+   teacher:
+     model-path: Qwen/Qwen3-32B
+     num-gpus: 2
+     port: 30001
+     options:
+       context-length: 32768
+   training:
+     options:
+       opd-teacher: separate
+       opd-top-k: 1
+       rollout-temperature: 1.0
+
+``num-gpus`` reserves the teacher's GPUs beyond the student's and sets its
+tensor parallel size, ``port`` is its internal endpoint, ``timeout`` bounds one
+scoring request, and ``options`` are native SGLang options. Before each
+optimizer step the bridge sends every recorded prompt and response to the
+engine and stores the teacher's log-probability of each sampled token, so the
+loss stays the sampled-token reverse KL. The engine path requires rollout
+temperature 1, because SGLang's input log-probs are not tempered, and the
+teacher-selected top-K representation; the teacher's tokenizer must map tokens
+to the student's ids, and its context limit must cover the longest recorded
+sequence. A scoring failure fails the step before it starts, so no partially
+scored batch trains. ``perf/distill_teacher_time`` reports the scoring time of
+each step in seconds.
