@@ -5,7 +5,7 @@ On-policy distillation from a separate frozen teacher as a Reef weight-training 
 - Method: [Thinking Machines Lab, On-Policy Distillation](https://thinkingmachines.ai/blog/on-policy-distillation/).
 - Reference implementation: the [tinker-cookbook distillation recipe](https://github.com/thinking-machines-lab/tinker-cookbook/tree/dfe4d77e8e8c/tinker_cookbook/recipes/distillation) at `dfe4d77e8e8c`. The Reef implementation configures the Slime backend's distillation base (`reef/train/slime_backend/distill/`) and makes no Tinker API calls.
 - Pins: `slime` pinned to `THUDM/slime@41014d1f29e201137fdffce737bb8bac65bc5219` (via `pyproject.toml` `dependency-groups.runtime`).
-- Claim scope: none yet. The [math example](examples/math/README.md) distils a frozen teacher into an OpenThoughts3-SFT student and evaluates on AIME 2024; its runs are tracked in [#682](https://github.com/Human-Agent-Society/reef/issues/682) under roadmap [#502](https://github.com/Human-Agent-Society/reef/issues/502).
+- Claim scope: none yet. Experiments are tracked in [#682](https://github.com/Human-Agent-Society/reef/issues/682) under roadmap [#502](https://github.com/Human-Agent-Society/reef/issues/502).
 
 ## Layout
 
@@ -15,13 +15,11 @@ opd/
   processor.py       the shared DistillProcessor reading the recorded prompt and response ids as the teacher sequence
   objective.py       selects the opd loss; one optimizer step per batch
   slime/             the loss family: OPD's defaults on the Slime backend's distillation base
-  examples/
-    math/            DeepMath prompts and AIME'24 evaluation through a direct reef_client campaign driver
 ```
 
 ## The teacher
 
-`--opd-teacher=separate` names a checkpoint (`--opd-teacher-checkpoint`) that the teacher pass swaps into the actor's model layout, so teacher and student must share the architecture, parallel layout and token ids; the Qwen3.5-9B base/post-trained pair does. `--opd-top-k=1` selects the base's sampled-token reverse-KL estimator: the loss uses the teacher's log-probability of the student's sampled token, normalized over the full vocabulary, with the score-function gradient. The other divergences and representations of the base are reachable through the inherited `--opd-*` flags; changing them changes the method.
+`--opd-teacher=separate` names a checkpoint (`--opd-teacher-checkpoint`) that the teacher pass swaps into the actor's model layout, so teacher and student must share the architecture, parallel layout and token ids. `--opd-top-k=1` selects the base's sampled-token reverse-KL estimator: the loss uses the teacher's log-probability of the student's sampled token, normalized over the full vocabulary, with the score-function gradient. The other divergences and representations of the base are reachable through the inherited `--opd-*` flags; changing them changes the method.
 
 ## Where the rest is documented
 
