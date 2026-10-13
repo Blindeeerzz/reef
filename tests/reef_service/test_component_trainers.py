@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Hashable, Iterator, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -544,7 +545,7 @@ def test_a_colocated_weights_job_waits_for_the_local_cycle_that_needs_the_engine
     executions: list[Any] = []
 
     def job() -> None:
-        with dispatcher.dispatched_turn(scenario, WEIGHTS):
+        with dispatcher.workers.dispatched_turn(scenario, WEIGHTS):
             executions.append(scenario.execute_reserved_training_step(WEIGHTS))
 
     trainer = threading.Thread(target=job)
@@ -579,7 +580,7 @@ def test_a_colocated_weights_job_waits_for_every_scenario_that_shares_the_engine
     executions: list[Any] = []
 
     def job() -> None:
-        with dispatcher.dispatched_turn(agent, WEIGHTS):
+        with dispatcher.workers.dispatched_turn(agent, WEIGHTS):
             executions.append(agent.execute_reserved_training_step(WEIGHTS))
 
     trainer = threading.Thread(target=job)
@@ -603,13 +604,13 @@ def test_a_dispatched_turn_wakes_every_local_worker_and_yields_before_the_next_c
     for name in ("agent", "other"):
         _scenario(dispatcher, 1, name=name)
     # A job is waiting for its turn: a worker woken now runs no cycle.
-    dispatcher._training.turn_waiting.set()
+    dispatcher.workers.turn_waiting.set()
     dispatcher._start_local_backend_worker("other", HARNESS)
     time.sleep(0.5)
     assert backends[HARNESS].prepared == 0
     # The turn ends: every worker is woken and the cycle runs.
-    dispatcher._training.turn_waiting.clear()
-    dispatcher.wake_local_workers()
+    dispatcher.workers.turn_waiting.clear()
+    dispatcher.workers.wake_all()
     _wait_for(lambda: backends[HARNESS].prepared > 0)
     assert backends[HARNESS].prepared == 1
 
@@ -619,10 +620,10 @@ def test_a_reload_after_a_training_failure_wakes_the_local_workers(tmp_path: Pat
     """The rebuilt instance holds the local components' rows unread; their workers look again."""
     dispatcher, backends = dispatchers.open(backends=_dispatched_pair(tmp_path))
     scenario = _scenario(dispatcher)
-    dispatcher._training.turn_waiting.set()
+    dispatcher.workers.turn_waiting.set()
     dispatcher._start_local_backend_worker("agent", HARNESS)
     time.sleep(0.2)
-    dispatcher._training.turn_waiting.clear()
+    dispatcher.workers.turn_waiting.clear()
     _append_records(scenario, 1)
     dispatcher._reload_after_training_failure("agent", RuntimeError("job away"))
     _wait_for(lambda: backends[HARNESS].prepared > 0)
@@ -744,8 +745,9 @@ def test_the_app_opens_held_local_cycles_once_it_listens(tmp_path: Path, dispatc
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("turn_fails", [False, True])
 def test_an_instance_parked_while_its_cycle_lock_is_held_closes_when_the_holder_lets_go(
-    tmp_path: Path, dispatchers: _Dispatchers
+    tmp_path: Path, dispatchers: _Dispatchers, turn_fails: bool
 ) -> None:
     """A reload lands while a colocated job holds every cycle lock: the instance it replaced closes when the job's
     turn ends, not at shutdown."""
@@ -763,12 +765,17 @@ def test_an_instance_parked_while_its_cycle_lock_is_held_closes_when_the_holder_
         close()
 
     scenario.close = observed_close  # type: ignore[method-assign]
-    with dispatcher.dispatched_turn(scenario, WEIGHTS):
+    with (
+        pytest.raises(RuntimeError, match="job failed") if turn_fails else nullcontext(),
+        dispatcher.workers.dispatched_turn(scenario, WEIGHTS),
+    ):
         dispatcher._registry.reload("agent")
         assert closed == []
+        if turn_fails:
+            raise RuntimeError("job failed")
     assert closed == [True]
     with dispatcher._training.lock:
-        assert dispatcher._training.replaced.get("agent") in (None, [])
+        assert dispatcher.workers.scenarios["agent"].replaced == []
 
 
 @pytest.mark.unit
@@ -822,7 +829,7 @@ def test_a_failed_instruction_of_a_scenario_that_is_gone_starts_no_worker(
     monkeypatch.setattr(old.trainer_for(HARNESS), "fail_pending_instruction", lambda error: True)
     dispatcher._fail_instruction(old, RuntimeError("episode failed"), HARNESS)
     with dispatcher._training.lock:
-        assert dispatcher._training.local_workers == {}
+        assert dispatcher.workers.workers == {}
 
 
 @pytest.mark.unit
@@ -840,7 +847,7 @@ def test_a_failing_local_cycle_runs_once_per_wake_and_keeps_its_error_in_the_sta
     assert away.attempts == 1
     assert dispatcher.build_training_status()["error"] == "agent: RuntimeError: proposer away"
     # A job's turn ended: the worker looks again, once.
-    dispatcher.wake_local_workers()
+    dispatcher.workers.wake_all()
     _wait_for(lambda: away.attempts > 1)
     time.sleep(0.5)
     assert away.attempts == 2
@@ -935,7 +942,7 @@ def test_a_sibling_waiting_at_the_cycle_lock_looks_again_after_a_reload_under_it
     assert away.entered.wait(10)
     # The sibling reads the instance, then reaches the cycle lock the failing cycle holds.
     reached = threading.Event()
-    cycle_lock = dispatcher.local_cycle_lock
+    cycle_lock = dispatcher.workers.cycle_lock
     outcome: list[bool] = []
     sibling = threading.Thread(target=lambda: outcome.append(dispatcher._process_local_backend_step("agent", HARNESS)))
 
@@ -945,7 +952,7 @@ def test_a_sibling_waiting_at_the_cycle_lock_looks_again_after_a_reload_under_it
             reached.set()
         return lock
 
-    monkeypatch.setattr(dispatcher, "local_cycle_lock", observed)
+    monkeypatch.setattr(dispatcher.workers, "cycle_lock", observed)
     sibling.start()
     assert reached.wait(10)
     away.go.set()
@@ -2509,3 +2516,17 @@ def test_recorded_release_survives_backend_completion_failure(
     assert trainer.pending_batch is None
     assert backend.prepared == backend.evaluated == 1
     assert scenario.repository.resolve(record.artifact_ref).local_path.is_dir()
+
+
+@pytest.mark.unit
+def test_service_start_notification_cannot_reopen_stopping_workers(dispatchers: _Dispatchers) -> None:
+    dispatcher, backends = dispatchers.open(hold_local_cycles=True)
+    scenario = _scenario(dispatcher, 1)
+    dispatcher.stop_local_cycles()
+    dispatcher.open_local_cycles()
+    assert dispatcher._process_local_backend_step("agent", HARNESS) is False
+    assert backends[HARNESS].prepared == 0
+    assert scenario.scenario_step == 0
+    dispatcher.close()
+    dispatcher._start_local_backend_worker("late", HARNESS)
+    assert ("late", HARNESS) not in dispatcher.workers.workers

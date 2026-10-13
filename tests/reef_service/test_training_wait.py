@@ -75,6 +75,7 @@ def _bind(
         get_optional=lambda name: scenario if name == "s" else None,
         preload_errors=(),
     )
+    dispatcher.workers.registry = dispatcher._registry
 
 
 def test_no_training_scenario_sleeps_until_the_next_accept() -> None:
