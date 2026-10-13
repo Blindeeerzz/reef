@@ -14,7 +14,7 @@ from reef.train.types import trajectory_groups
 reef_types = pytest.importorskip("reef.train.types", reason="requires a reef checkout")
 
 from recipes.beta.coral.processor import ROOT_GROUP, CoralBatches, CoralTasks
-from recipes.beta.coral.recipe import coral_record_stage
+from recipes.beta.coral.recipe import coral_record2record
 from reef.core import AgentRecord, RequestType
 from reef.pipeline_context import PipelineContext
 from reef.train.pipeline import TrainingPipeline
@@ -27,7 +27,7 @@ def _processor(group_size=2):
     context = PipelineContext(SCENARIO, {"group_size": group_size})
     return TrainingPipeline(
         context,
-        record2record=coral_record_stage(context),
+        record2record=coral_record2record(context),
         record2task=CoralTasks(context),
         task2batch=CoralBatches(context),
     )

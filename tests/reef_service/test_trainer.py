@@ -9,7 +9,7 @@ from reef_service.runtime_stubs import StubInferenceRuntime, StubTrainingRuntime
 import reef.record2task.assembly as reported_module
 from recipes.sao import SAOBatches
 from recipes.sao.processor import SAOTasks
-from recipes.sao.recipe import sao_record_stage
+from recipes.sao.recipe import sao_record2record
 from recipes.tttd import TTTDBatches, TTTDGroupedRolloutReport
 from recipes.tttd.processor import TTTDTasks
 from reef.artifact import InMemoryRepositoryBackend
@@ -43,7 +43,10 @@ NUM_GPUS = 0
 
 def sao_pipeline(context: PipelineContext) -> TrainingPipeline:
     return TrainingPipeline(
-        context, record2record=sao_record_stage(context), record2task=SAOTasks(context), task2batch=SAOBatches(context)
+        context,
+        record2record=sao_record2record(context),
+        record2task=SAOTasks(context),
+        task2batch=SAOBatches(context),
     )
 
 

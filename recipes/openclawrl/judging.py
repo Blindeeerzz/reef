@@ -248,7 +248,7 @@ class OpenClawRLJudging(RecordJudging):
             )
 
 
-def openclawrl_record_stage(
+def openclawrl_record2record(
     context: PipelineContext,
     *,
     worker: BackgroundJobWorker | None = None,

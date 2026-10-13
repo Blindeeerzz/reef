@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from recipes.openclawrl.judging import openclawrl_record_stage
+from recipes.openclawrl.judging import openclawrl_record2record
 from recipes.openclawrl.processor import OpenClawRLBatches, OpenClawRLTasks
 from recipes.openclawrl.sessions import DEFAULT_MAX_SESSIONS
 from reef.pipeline_context import PipelineContext
@@ -75,7 +75,7 @@ class OpenClawRLRecipe(WeightTrainingRecipe):
         )
 
     def build_record2record(self, context: PipelineContext) -> JudgingRecord2Record:
-        return openclawrl_record_stage(context)
+        return openclawrl_record2record(context)
 
     def build_record2task(self, context: PipelineContext, record2record: Record2Record) -> OpenClawRLTasks:
         return OpenClawRLTasks()

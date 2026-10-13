@@ -27,7 +27,7 @@ from reef.core.trajectories import source_record_id
 from reef.recipe.checkpoint_strategy import EveryNVersions
 from reef.recipe.errors import RecipeConfigError
 from reef.recipe.registry import build_recipe, recipe_class_for
-from reef.record2task.distill import distill_record_stage
+from reef.record2task.distill import distill_record2record
 from reef.train import PipelineContext
 from reef.train.algos import StepScheduling
 from reef.train.pipeline import TrainingPipeline
@@ -119,7 +119,7 @@ def _processor(**config: Any) -> TrainingPipeline:
     )
     return TrainingPipeline(
         context,
-        record2record=distill_record_stage(context),
+        record2record=distill_record2record(context),
         record2task=SDFTTasks(context),
         task2batch=SDFTBatches(context),
     )

@@ -72,7 +72,7 @@ class CoralGrouping(ReportGrouping):
         }
 
 
-def coral_record_stage(context: PipelineContext) -> ReportRecord2Record:
+def coral_record2record(context: PipelineContext) -> ReportRecord2Record:
     """CORAL's record stage: sibling groups in the order that they close; a terminal report owns its sources."""
     return ReportRecord2Record(
         context.scenario,
@@ -98,7 +98,7 @@ class CoralRecipe(WeightTrainingRecipe):
         )
 
     def build_record2record(self, context: PipelineContext) -> ReportRecord2Record:
-        return coral_record_stage(context)
+        return coral_record2record(context)
 
     def build_record2task(self, context: PipelineContext, record2record: Record2Record) -> CoralTasks:
         return CoralTasks(context)

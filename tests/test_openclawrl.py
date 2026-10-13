@@ -11,7 +11,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 from reef_service._trajectories import policy_trajectory
 
-from recipes.openclawrl.judging import openclawrl_record_stage
+from recipes.openclawrl.judging import openclawrl_record2record
 from recipes.openclawrl.prm import (
     append_hint_to_messages,
     build_hint_judge_messages,
@@ -471,7 +471,7 @@ def _judge_one_turn(judge, teacher):
 
     context = PipelineContext("s", {"batch_size": 1})
 
-    stage = openclawrl_record_stage(context, clients=(judge, teacher, None))
+    stage = openclawrl_record2record(context, clients=(judge, teacher, None))
     processor = TrainingPipeline(
         context,
         record2record=stage,
@@ -583,7 +583,7 @@ def test_processor_attaches_topk_and_candidates() -> None:
 
     worker = FakeWorker()
     context = PipelineContext("s", {"batch_size": 2})
-    stage = openclawrl_record_stage(context, worker=worker)
+    stage = openclawrl_record2record(context, worker=worker)
     processor = TrainingPipeline(
         context,
         record2record=stage,

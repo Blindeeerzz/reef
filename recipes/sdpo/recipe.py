@@ -65,7 +65,7 @@ class SDPOGrouping(ReportGrouping):
         }
 
 
-def sdpo_record_stage(context: PipelineContext) -> ReportRecord2Record:
+def sdpo_record2record(context: PipelineContext) -> ReportRecord2Record:
     """SDPO's record stage: one group per sampling step, in step order; a terminal report owns its source."""
     groups_per_step, rollouts_per_group = sdpo_grid(context.config)
     return ReportRecord2Record(
@@ -134,7 +134,7 @@ class SDPORecipe(WeightTrainingRecipe):
         )
 
     def build_record2record(self, context: PipelineContext) -> ReportRecord2Record:
-        return sdpo_record_stage(context)
+        return sdpo_record2record(context)
 
     def build_record2task(self, context: PipelineContext, record2record: Record2Record) -> SDPOTasks:
         return SDPOTasks(context)

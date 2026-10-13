@@ -61,7 +61,7 @@ def normalize_tool_call(call: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def distill_record_stage(context: PipelineContext) -> ReportRecord2Record:
+def distill_record2record(context: PipelineContext) -> ReportRecord2Record:
     """The record stage for distillation: every report trains by itself and owns its inference record."""
     return ReportRecord2Record(context.scenario, context.report_type, ReportGrouping(), exclusive_sources=True)
 
@@ -199,7 +199,7 @@ class DistillTasks(ReportTasks):
 __all__ = [
     "DistillTasks",
     "TeacherRenderer",
-    "distill_record_stage",
+    "distill_record2record",
     "normalize_messages_for_template",
     "normalize_tool_call",
     "recorded_sample",

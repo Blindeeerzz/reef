@@ -12,7 +12,7 @@ import pytest
 
 from recipes.tttd import TTTDBatches, TTTDGroupedRolloutReport
 from recipes.tttd.processor import TTTDTasks
-from recipes.tttd.recipe import tttd_record_stage
+from recipes.tttd.recipe import tttd_record2record
 from reef.artifact.memory import InMemoryRepositoryBackend
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportBase, ReportValidationError, ScoredRolloutReport, TeacherContextReport
@@ -256,7 +256,7 @@ def test_tttd_raises_for_grid_mismatch_and_schema_violations() -> None:
     )
     processor = TrainingPipeline(
         context,
-        record2record=tttd_record_stage(context),
+        record2record=tttd_record2record(context),
         record2task=TTTDTasks(context),
         task2batch=TTTDBatches(context),
     )

@@ -75,7 +75,7 @@ class TTTDGrouping(ReportGrouping):
         }
 
 
-def tttd_record_stage(context: PipelineContext) -> ReportRecord2Record:
+def tttd_record2record(context: PipelineContext) -> ReportRecord2Record:
     """TTTD's record stage: one group per step, in step order; a terminal report owns its sources."""
     groups_per_step, rollouts_per_group = tttd_grid(context.config)
     return ReportRecord2Record(
@@ -109,7 +109,7 @@ class TTTDRecipe(WeightTrainingRecipe):
         )
 
     def build_record2record(self, context: PipelineContext) -> ReportRecord2Record:
-        return tttd_record_stage(context)
+        return tttd_record2record(context)
 
     def build_record2task(self, context: PipelineContext, record2record: Record2Record) -> TTTDTasks:
         return TTTDTasks(context)

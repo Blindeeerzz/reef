@@ -18,7 +18,7 @@ from reef.artifact.artifact import LiveWeightArtifactRef
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import TeacherContextReport
 from reef.core.trajectories import source_record_id
-from reef.record2task.distill import DistillTasks, TeacherRenderer, distill_record_stage
+from reef.record2task.distill import DistillTasks, TeacherRenderer, distill_record2record
 from reef.record2task.samples import recorded_response
 from reef.task2batch import DistillBatches
 from reef.train import PipelineContext
@@ -127,7 +127,7 @@ def _processor(**config: Any) -> TrainingPipeline:
     )
     return TrainingPipeline(
         context,
-        record2record=distill_record_stage(context),
+        record2record=distill_record2record(context),
         record2task=DistillTasks(context),
         task2batch=DistillBatches(context),
     )
@@ -161,7 +161,7 @@ def test_a_recipe_composes_the_teacher_request_from_the_response_and_the_context
     context = PipelineContext("science", {"batch_size": 1, "tokenizer_path": "/models/science"}, TeacherContextReport)
     processor = TrainingPipeline(
         context,
-        record2record=distill_record_stage(context),
+        record2record=distill_record2record(context),
         record2task=FeedbackTasks(context),
         task2batch=FeedbackBatches(context),
     )

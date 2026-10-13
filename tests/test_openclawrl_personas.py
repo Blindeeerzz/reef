@@ -16,7 +16,7 @@ from recipes.openclawrl.examples.openclawrl.user_sim.personas import (
     student_style_violations,
     student_violations,
 )
-from recipes.openclawrl.judging import openclawrl_record_stage
+from recipes.openclawrl.judging import openclawrl_record2record
 from recipes.openclawrl.processor import OpenClawRLTasks
 from reef.train.pipeline import TrainingPipeline
 
@@ -144,7 +144,7 @@ def test_openclawrl_processor_drops_unfillable_stale_version_candidates() -> Non
 
     worker = _FakeWorker()
     context = PipelineContext("s", {"batch_size": 3})
-    stage = openclawrl_record_stage(context, worker=worker)
+    stage = openclawrl_record2record(context, worker=worker)
     processor = TrainingPipeline(
         context,
         record2record=stage,
@@ -167,7 +167,7 @@ def test_openclawrl_processor_keeps_single_version_queue_intact() -> None:
 
     worker = _FakeWorker()
     context = PipelineContext("s", {"batch_size": 3})
-    stage = openclawrl_record_stage(context, worker=worker)
+    stage = openclawrl_record2record(context, worker=worker)
     processor = TrainingPipeline(
         context,
         record2record=stage,

@@ -25,13 +25,13 @@ import pytest
 from reef_service._trajectories import policy_trajectory
 
 from recipes.beta.coral.processor import CoralBatches, CoralTasks
-from recipes.beta.coral.recipe import coral_record_stage
+from recipes.beta.coral.recipe import coral_record2record
 from recipes.sdpo import SDPOBatches, SDPOReport
 from recipes.sdpo.processor import SDPOTasks
-from recipes.sdpo.recipe import sdpo_record_stage
+from recipes.sdpo.recipe import sdpo_record2record
 from recipes.tttd import TTTDBatches, TTTDGroupedRolloutReport
 from recipes.tttd.processor import TTTDTasks
-from recipes.tttd.recipe import tttd_record_stage
+from recipes.tttd.recipe import tttd_record2record
 from reef.artifact import ArtifactRef
 from reef.background_jobs import SupportsReceipt
 from reef.core import AgentRecord, RequestType
@@ -47,7 +47,7 @@ from reef.record2record import (
 )
 from reef.record2task import JudgedTasks, ReportTasks
 from reef.record2task.assembly import SampleAssembly
-from reef.record2task.distill import DistillTasks, distill_record_stage
+from reef.record2task.distill import DistillTasks, distill_record2record
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.task2batch import DistillBatches, Task2Batch
 from reef.train import PipelineContext, Trainer
@@ -326,7 +326,7 @@ class TTTDPipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
-            record2record=tttd_record_stage(context),
+            record2record=tttd_record2record(context),
             record2task=TTTDTasks(context),
             task2batch=TTTDBatches(context),
         )
@@ -336,7 +336,7 @@ class SDPOPipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
-            record2record=sdpo_record_stage(context),
+            record2record=sdpo_record2record(context),
             record2task=SDPOTasks(context),
             task2batch=SDPOBatches(context),
         )
@@ -346,7 +346,7 @@ class CoralPipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
-            record2record=coral_record_stage(context),
+            record2record=coral_record2record(context),
             record2task=CoralTasks(context),
             task2batch=CoralBatches(context),
         )
@@ -367,7 +367,7 @@ class DistillPipeline(TrainingPipeline):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(
             context,
-            record2record=distill_record_stage(context),
+            record2record=distill_record2record(context),
             record2task=DistillTasks(context),
             task2batch=DistillBatches(context),
         )

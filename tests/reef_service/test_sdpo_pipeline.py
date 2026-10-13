@@ -19,7 +19,7 @@ from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
 from recipes.sdpo import SDPOBatches, SDPORecipe, SDPOReport
 from recipes.sdpo.processor import SDPOTasks
-from recipes.sdpo.recipe import sdpo_record_stage
+from recipes.sdpo.recipe import sdpo_record2record
 from recipes.sdpo.slime import SdpoAlgorithm, SdpoSettings
 from reef.core import AgentRecord, RequestType
 from reef.recipe.errors import RecipeConfigError
@@ -68,7 +68,7 @@ def processor(**config: Any) -> TrainingPipeline:
     )
     return TrainingPipeline(
         context,
-        record2record=sdpo_record_stage(context),
+        record2record=sdpo_record2record(context),
         record2task=SDPOTasks(context),
         task2batch=SDPOBatches(context),
     )

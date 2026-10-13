@@ -10,7 +10,7 @@ from reef_service._trajectories import policy_trajectory
 from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
 from recipes.openclawrl import OpenClawRLBatches, OpenClawRLRecipe
-from recipes.openclawrl.judging import openclawrl_record_stage
+from recipes.openclawrl.judging import openclawrl_record2record
 from recipes.openclawrl.processor import OpenClawRLTasks
 from recipes.openclawrl.sessions import SessionIndex
 from recipes.openclawrl.turns import TurnJudgment
@@ -96,7 +96,7 @@ def _successor(prior_messages, next_state: str):
 
 def _processor(batch_size: int = 1, *, worker=None, ttl_s: float = 900.0, clients=None, **config):
     context = PipelineContext("s", {"batch_size": batch_size, "session_ttl_s": ttl_s, **config})
-    stage = openclawrl_record_stage(context, worker=worker, clients=clients)
+    stage = openclawrl_record2record(context, worker=worker, clients=clients)
     return TrainingPipeline(
         context,
         record2record=stage,
@@ -487,7 +487,7 @@ def test_the_prm_record_file_reports_the_judged_population(tmp_path) -> None:
     record = tmp_path / "prm-records.jsonl"
     worker = FakeWorker()
     context = PipelineContext("s", {"batch_size": 1, "prm_record_file": str(record)})
-    stage = openclawrl_record_stage(context, worker=worker)
+    stage = openclawrl_record2record(context, worker=worker)
     processor = TrainingPipeline(
         context,
         record2record=stage,

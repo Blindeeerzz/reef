@@ -21,7 +21,7 @@ import pytest
 
 from recipes.tttd import TTTDBatches, TTTDGroupedRolloutReport
 from recipes.tttd.processor import TTTDTasks
-from recipes.tttd.recipe import tttd_record_stage
+from recipes.tttd.recipe import tttd_record2record
 from reef.artifact import ArtifactRef, InMemoryRepositoryBackend
 from reef.background_jobs import SupportsReceipt
 from reef.core import AgentRecord, RequestType
@@ -137,7 +137,7 @@ def tttd_pipeline(context: PipelineContext) -> TrainingPipeline:
     configured = context.with_config({"groups_per_step": 1, "rollouts_per_group": 2})
     return TrainingPipeline(
         configured,
-        record2record=tttd_record_stage(configured),
+        record2record=tttd_record2record(configured),
         record2task=TTTDTasks(configured),
         task2batch=TTTDBatches(configured),
     )

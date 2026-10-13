@@ -17,7 +17,7 @@ from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
 from recipes.sao import SAORecipe
 from recipes.sao.processor import SAOBatches, SAOTasks
-from recipes.sao.recipe import sao_record_stage
+from recipes.sao.recipe import sao_record2record
 from reef.artifact import InMemoryRepositoryBackend
 from reef.artifact.artifact import LiveWeightArtifactRef
 from reef.core import AgentRecord, RequestType
@@ -39,7 +39,10 @@ from reef.train.types import TrainingBatch
 
 def sao_processor(context: PipelineContext) -> TrainingPipeline:
     return TrainingPipeline(
-        context, record2record=sao_record_stage(context), record2task=SAOTasks(context), task2batch=SAOBatches(context)
+        context,
+        record2record=sao_record2record(context),
+        record2task=SAOTasks(context),
+        task2batch=SAOBatches(context),
     )
 
 

@@ -561,7 +561,7 @@ def test_record_to_record_stage_depends_only_on_contracts_below_training() -> No
                 ), f"{path.relative_to(REPO_ROOT)} imports {target}"
 
 
-def test_record_to_task_contract_depends_only_on_the_record_stage() -> None:
+def test_record_to_task_contract_depends_only_on_record2record() -> None:
     # The trainer and the recipes import the contract, so it never imports them or the generator service.
     allowed = ("reef.core", "reef.record2record", "reef.record2task", "reef.pipeline_context")
     for path in sorted((REPO_ROOT / "reef" / "record2task").glob("*.py")):
