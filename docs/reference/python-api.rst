@@ -647,7 +647,7 @@ Pipeline stages
 
    from reef.record2record import GroupDecision, RecordJudging, ReportContext, ReportGrouping, ReportStage
    from reef.record2task import JudgedTasks, ReportTasks, SkippedReport
-   from reef.train.processors import DistillBatches, Task2Batch
+   from reef.task2batch import DistillBatches, Task2Batch
 
 A training pipeline (``reef.train.pipeline.TrainingPipeline``) turns durable
 records into typed batches through three stages that the recipe builds:
@@ -662,7 +662,7 @@ records into typed batches through three stages that the recipe builds:
   on ``ReportTasks`` that assembles valid reports; computed feedback supplies
   a ``JudgedTasks`` after an asynchronous ``judge`` derives new feedback.
 - ``build_task2batch(context)``: the task-to-batch stage
-  (``reef.train.processors.Task2Batch``). Its ``make_batch(tasks,
+  (``reef.task2batch.Task2Batch``). Its ``make_batch(tasks,
   batch_number)`` shapes the tasks of the selected sets into a batch. The
   default builds the ``task2batch`` class of ``training_spec()``.
 
@@ -929,7 +929,7 @@ The ``reef.core.trajectories`` helpers construct and consume ATIF:
 methods, including external ATIF without captured records; and
 ``trajectory_reward`` reads a finite policy reward. Policy assembly uses
 ``make_policy_trajectory`` or ``make_multi_turn_policy_trajectory`` from
-``reef.train.processors.common`` to add exact captured tensors. Missing required
+``reef.record2task.samples`` to add exact captured tensors. Missing required
 tensors fail at the training boundary; these helpers do not invent tokens or
 log probabilities from text. Both batch readers reject unsupported item kinds
 instead of silently filtering mixed batches.

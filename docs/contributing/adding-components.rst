@@ -34,7 +34,7 @@ Implementation
 - Put the method's record-to-task and task-to-batch stages in
   ``<method-package>/processor.py``, subclassing ``ReportTasks`` or
   ``JudgedTasks`` (``reef/record2task/``) and ``Task2Batch``
-  (``reef/train/processors/``), and its record stage in the recipe module.
+  (``reef/task2batch/``), and its record stage in the recipe module.
   Extend those contracts only when they do not already express it.
 - Put the method's backend-neutral training objective in
   ``<method-package>/objective.py`` (``reef/train/algos/`` holds the

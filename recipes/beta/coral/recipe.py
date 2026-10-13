@@ -24,11 +24,11 @@ from typing import Any
 # cookbook; importing them is what registers both names this recipe binds.
 import recipes.tttd  # noqa: F401  (registration side effect)
 from recipes.beta.coral.processor import CoralBatches, CoralTasks, attempt_release_ids, sibling_group
+from reef.pipeline_context import PipelineContext
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
 from reef.train.algos import StepScheduling
-from reef.train.types import PipelineContext
 
 logger = logging.getLogger(__name__)
 

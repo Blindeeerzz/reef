@@ -18,13 +18,13 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from reef.core.batches import TrajectoryItem
 from reef.core.reports import TeacherContextReport
+from reef.pipeline_context import PipelineContext
 from reef.record2record import ReportContext, ReportGrouping, ReportStage
 from reef.record2task import ReportTasks, SkippedReport
-from reef.train.processors.base import Task2Batch
-from reef.train.processors.common import flatten_content, recorded_request, recorded_response
-from reef.train.processors.reported import SampleAssembly
-from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem
+from reef.record2task.assembly import SampleAssembly
+from reef.record2task.samples import flatten_content, recorded_request, recorded_response
 
 logger = logging.getLogger(__name__)
 
@@ -196,17 +196,7 @@ class DistillTasks(ReportTasks):
         return sample.with_training(teacher_tokens=teacher_tokens)
 
 
-class DistillBatches(Task2Batch):
-    """Batch distillation tasks as they come. A recipe's subclass sets ``batch_label``, its batches' name."""
-
-    batch_label = "teacher"
-
-    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
-        return TrainingBatch(f"{self.scenario}:{self.batch_label}:{batch_number}", tasks)
-
-
 __all__ = [
-    "DistillBatches",
     "DistillTasks",
     "TeacherRenderer",
     "distill_record_stage",

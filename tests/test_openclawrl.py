@@ -467,7 +467,7 @@ class _FakeTeacher:
 
 
 def _judge_one_turn(judge, teacher):
-    from reef.train.types import PipelineContext
+    from reef.pipeline_context import PipelineContext
 
     context = PipelineContext("s", {"batch_size": 1})
 
@@ -538,7 +538,7 @@ def test_processor_attaches_topk_and_candidates() -> None:
     from recipes.openclawrl import OpenClawRLBatches
     from recipes.openclawrl.turns import TurnJudgment
     from reef.core.records_types import AgentRecord, RequestType
-    from reef.train.types import PipelineContext
+    from reef.pipeline_context import PipelineContext
 
     class FakeWorker:
         def __init__(self) -> None:

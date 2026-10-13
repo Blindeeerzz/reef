@@ -31,11 +31,12 @@ for service-facing contracts, with runnable examples owned by their method
 packages.
 """
 
+from reef.pipeline_context import PipelineContext
+from reef.task2batch import Task2Batch
 from reef.train.backend import CandidateBackend, PreparedStep, StepExecution
 from reef.train.pipeline import TrainingPipeline
-from reef.train.processors.base import Task2Batch
 from reef.train.trainer import ComponentTrainer, Trainer
-from reef.train.types import PipelineContext, TaskItem, TrainDataItem, TrainingBatch, TrainStepResult, TrajectoryItem
+from reef.train.types import TaskItem, TrainDataItem, TrainingBatch, TrainStepResult, TrajectoryItem
 
 __all__ = [
     "CandidateBackend",

@@ -13,9 +13,10 @@ import pytest
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportValidationError
 from reef.core.trajectories import recorded_payload, recorded_payloads, source_record_id
+from reef.pipeline_context import PipelineContext
 from reef.train.cordis_backend.processor import TraceBatches, TraceTasks, trace_pipeline
 from reef.train.pipeline import TrainingPipeline
-from reef.train.types import PipelineContext, TrainingBatch
+from reef.train.types import TrainingBatch
 
 
 def _inference(agent_record_id: str, payload: dict) -> AgentRecord:

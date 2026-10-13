@@ -22,13 +22,13 @@ from reef.core.plugins import PluginReference
 from reef.core.trajectories import recorded_payload
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindings
 from reef.inference.http import InferenceProxyRuntime
+from reef.pipeline_context import PipelineContext
 from reef.recipe import RecipeConfigError
 from reef.recipe.config import recipe_config_from_mapping
 from reef.recipe.registry import build_recipe
 from reef.train.cordis_backend import Mutation
 from reef.train.cordis_backend.processor import trace_pipeline
 from reef.train.evaluation.evaluators import BackendAlwaysSelectPlugin
-from reef.train.types import PipelineContext
 
 from ._strategies import resolve_episode_scorer, resolve_proposer
 

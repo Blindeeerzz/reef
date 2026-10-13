@@ -21,14 +21,15 @@ from typing import Any
 
 from reef.core.records_types import AgentRecord
 from reef.core.trajectories import trajectory_reward
+from reef.pipeline_context import PipelineContext
 from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
 from reef.record2task import ReportTasks
+from reef.record2task.assembly import SampleAssembly
+from reef.task2batch import Task2Batch
 from reef.train.algos import StepSignal, TrainingObjective
 from reef.train.algos.helpers import next_steps
 from reef.train.pipeline import TrainingPipeline
-from reef.train.processors.base import Task2Batch
-from reef.train.processors.reported import SampleAssembly
-from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectory_groups
+from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem, trajectory_groups
 
 GROUPED_PG_OBJECTIVE = "reef_service._grouped_pg:GroupedPolicyObjective"
 

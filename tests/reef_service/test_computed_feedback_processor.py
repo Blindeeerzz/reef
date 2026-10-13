@@ -17,11 +17,12 @@ from reef_service._trajectories import policy_trajectory
 from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Failed, SupportsReceipt
 from reef.core import AgentRecord, RequestType
 from reef.core.trajectories import source_record_id
+from reef.pipeline_context import PipelineContext
 from reef.record2record import JudgingStage, RecordJudging
 from reef.record2task import JudgedTasks
+from reef.task2batch import Task2Batch
 from reef.train.pipeline import TrainingPipeline
-from reef.train.processors.base import Task2Batch
-from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem
+from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem
 
 pytestmark = pytest.mark.unit
 

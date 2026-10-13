@@ -237,7 +237,7 @@ def test_tttd_rejects_and_releases_a_step_spanning_release_ids(caplog) -> None:
 
 @pytest.mark.unit
 def test_tttd_caches_policy_samples_at_ingest(monkeypatch) -> None:
-    from reef.train.processors import reported as reported_module
+    from reef.record2task import assembly as reported_module
 
     calls = 0
     make_sample = reported_module.make_policy_trajectory

@@ -10,12 +10,12 @@ from typing import Any
 from recipes.sdpo.processor import SDPOBatches, SDPOTasks, sdpo_grid, sibling_request
 from recipes.sdpo.report import SDPOReport
 from reef.core.reports import ReportBase
+from reef.pipeline_context import PipelineContext
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.recipe.errors import RecipeConfigError
 from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
 from reef.train.algos import StepScheduling
-from reef.train.types import PipelineContext
 
 
 class SDPOGrouping(ReportGrouping):

@@ -19,8 +19,8 @@ from reef.recipe import Recipe, RecipeConfigError, WeightTrainingRecipe, WeightT
 from reef.recipe.checkpoint_strategy import EveryNVersions
 from reef.recipe.registry import build_named_recipe, build_recipe, recipe_class_for
 from reef.storage.sqlite import SQLiteRecordStore
+from reef.task2batch import NoBatches
 from reef.train.pipeline import TrainingPipeline
-from reef.train.processors.base import NoBatches
 from reef.train.runtime_backend import RuntimeCandidateBackend
 
 from ._threshold_processor import ThresholdBatches

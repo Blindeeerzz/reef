@@ -24,6 +24,7 @@ from reef.core.errors import ReefError, ScenarioBusy
 from reef.core.requirements import required_by
 from reef.dispatcher import Dispatcher
 from reef.observability import ExperimentTracker, NullExperimentLogger
+from reef.pipeline_context import PipelineContext
 from reef.recipe import Recipe
 from reef.recipe.checkpoint_strategy import EveryNVersions
 from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
@@ -42,11 +43,11 @@ from reef.storage.commits import (
 )
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
 from reef.surface import ComponentSurface, Surface, TextFileTree
+from reef.task2batch import Task2Batch
 from reef.train import CandidateBackend, ComponentTrainer, PreparedStep, Trainer, TrainStepResult
 from reef.train.evaluation import EvaluationResult, UpdateCandidate
 from reef.train.pipeline import TrainingPipeline
-from reef.train.processors.base import Task2Batch
-from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch
+from reef.train.types import TrainDataItem, TrainingBatch
 
 from ._threshold_processor import ThresholdBatches, threshold_pipeline
 from ._trajectories import policy_trajectory

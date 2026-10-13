@@ -16,18 +16,19 @@ from typing import Any
 
 from recipes.sdpo.report import SDPOReport
 from reef.core.trajectories import trajectory_reward
+from reef.pipeline_context import PipelineContext
 from reef.record2record import ReportContext
 from reef.record2task import ReportTasks
-from reef.train.processors.base import Task2Batch
-from reef.train.processors.common import recorded_request, recorded_response
-from reef.train.processors.distill import (
+from reef.record2task.assembly import SampleAssembly
+from reef.record2task.distill import (
     TeacherRenderer,
     normalize_messages_for_template,
     recorded_sample,
     teacher_tokens_limit,
 )
-from reef.train.processors.reported import SampleAssembly
-from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
+from reef.record2task.samples import recorded_request, recorded_response
+from reef.task2batch import Task2Batch
+from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem, trajectories
 
 #: The reference's reprompt strings (``sdpo.yaml`` at the pin), used verbatim.
 REPROMPT_TEMPLATE = "{prompt}{solution}{feedback}\n\nCorrectly solve the original question."

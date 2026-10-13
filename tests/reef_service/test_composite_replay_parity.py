@@ -26,13 +26,14 @@ from reef.artifact import ArtifactRef, InMemoryRepositoryBackend
 from reef.background_jobs import SupportsReceipt
 from reef.core import AgentRecord, RequestType
 from reef.dispatcher import Dispatcher
+from reef.pipeline_context import PipelineContext
 from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
 from reef.record2task import JudgedTasks
 from reef.storage.sqlite import SQLiteScenarioStorage
+from reef.task2batch import Task2Batch
 from reef.train import ComponentTrainer, Trainer
 from reef.train.pipeline import TrainingPipeline
-from reef.train.processors.base import Task2Batch
-from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch
+from reef.train.types import TrainDataItem, TrainingBatch
 
 from ._threshold_processor import threshold_pipeline
 from ._trajectories import policy_trajectory

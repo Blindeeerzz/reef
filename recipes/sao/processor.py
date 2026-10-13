@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from reef.core.records_types import AgentRecord
+from reef.pipeline_context import PipelineContext
 from reef.record2record import ReportContext
 from reef.record2task import ReportTasks
-from reef.train.processors.base import Task2Batch
-from reef.train.processors.common import make_policy_trajectory
-from reef.train.processors.reported import SampleAssembly
-from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem
+from reef.record2task.assembly import SampleAssembly
+from reef.record2task.samples import make_policy_trajectory
+from reef.task2batch import Task2Batch
+from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem
 
 
 def make_sao_sample(item: AgentRecord, reward: float) -> TrajectoryItem:

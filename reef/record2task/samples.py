@@ -1,4 +1,4 @@
-"""Shared readers and sample builders both engines use.
+"""Readers of recorded inferences, and the sample builders that record-to-task stages use.
 
 The report reader ``report_score`` lives in ``reef.record2record``.
 ``recorded_request`` and ``recorded_response`` read the messages, tools and
@@ -14,9 +14,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from reef.core.artifact_ref import RuntimeLoadSpan, parse_runtime_load_spans
+from reef.core.batches import TrajectoryItem
 from reef.core.records_types import AgentRecord
 from reef.core.trajectories import make_trajectory
-from reef.train.types import TrajectoryItem
 
 #: One response position's sampler top-k: token ids and their log-probs.
 TopkRow = tuple[list[int], list[float]]

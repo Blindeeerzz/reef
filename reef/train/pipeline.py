@@ -12,7 +12,7 @@ stages; it does not subclass the pipeline:
   decides which records train, in which sets, and in what order;
 * the record-to-task stage (:class:`~reef.record2task.Record2Task`) turns each
   record set into tasks;
-* the task-to-batch stage (:class:`~reef.train.processors.Task2Batch`) shapes
+* the task-to-batch stage (:class:`~reef.task2batch.Task2Batch`) shapes
   the tasks of the selected sets into a batch.
 
 The pipeline owns what is the same for every recipe: it routes records, gives
@@ -32,10 +32,11 @@ from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportBase
 from reef.core.training_request import TrainingRequest
 from reef.observability import ExperimentLogger
+from reef.pipeline_context import PipelineContext
 from reef.record2record import AssemblyStatus, PassThroughStage, Record2RecordStage
 from reef.record2task import NoTasks, Record2Task
-from reef.train.processors.base import NoBatches, Task2Batch
-from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch
+from reef.task2batch import NoBatches, Task2Batch
+from reef.train.types import TrainDataItem, TrainingBatch
 
 #: In manual mode the pipeline holds at most this many batches of sets; it releases older ones.
 MANUAL_HELD_BATCHES = 4

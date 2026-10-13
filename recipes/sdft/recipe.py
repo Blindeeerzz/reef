@@ -8,13 +8,13 @@ from typing import Any
 
 from recipes.sdft.processor import DEFAULT_CONTEXT_TEMPLATE, SDFTBatches, SDFTTasks, context_block_template
 from reef.core.reports import ReportBase, TeacherContextReport
+from reef.pipeline_context import PipelineContext
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.recipe.errors import RecipeConfigError
 from reef.record2record import ReportStage
+from reef.record2task.distill import distill_record_stage
 from reef.train.algos import StepScheduling
-from reef.train.processors.distill import distill_record_stage
-from reef.train.types import PipelineContext
 
 
 @dataclass(frozen=True, kw_only=True)

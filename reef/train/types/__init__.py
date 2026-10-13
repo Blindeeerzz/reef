@@ -1,7 +1,6 @@
 from reef.core.artifact_ref import RuntimeLoadSpan
 from reef.core.batches import TaskItem, TrainDataItem, TrainingBatch, TrajectoryItem, trajectories, trajectory_groups
 from reef.train.types.commits import PreparedCommit
-from reef.train.types.contexts import PipelineContext
 from reef.train.types.results import (
     ArtifactPublication,
     DurableWeightsPublication,
@@ -17,7 +16,6 @@ __all__ = [
     "DurableWeightsPublication",
     "LiveWeightPublication",
     "NoArtifactPublication",
-    "PipelineContext",
     "PreparedCommit",
     "RuntimeLoadSpan",
     "SavedArtifactPublication",

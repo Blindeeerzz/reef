@@ -12,9 +12,10 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from typing import Any
 
+from reef.core.batches import TrainDataItem, TrainingBatch
 from reef.core.records_types import RequestType
 from reef.observability import ExperimentLogger
-from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch
+from reef.pipeline_context import PipelineContext
 
 
 class Task2Batch(ABC):

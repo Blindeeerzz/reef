@@ -8,11 +8,11 @@ from dataclasses import dataclass
 from recipes.openclawrl.judging import openclawrl_record_stage
 from recipes.openclawrl.processor import OpenClawRLBatches, OpenClawRLTasks
 from recipes.openclawrl.sessions import DEFAULT_MAX_SESSIONS
+from reef.pipeline_context import PipelineContext
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.train.algos import StepScheduling
 from reef.train.pipeline import TrainingPipeline
-from reef.train.types import PipelineContext
 
 _logger = logging.getLogger(__name__)
 

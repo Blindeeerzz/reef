@@ -19,6 +19,7 @@ from reef.core.reports import ReportBase
 from reef.inference.http import resolve_proxy_runtime
 from reef.inference.model_config import ModelConfig
 from reef.observability import ExperimentLogger
+from reef.pipeline_context import PipelineContext
 from reef.recipe.checkpoint_strategy import CheckpointStrategy, EveryNVersions
 from reef.recipe.config import config_positive_int
 from reef.recipe.config_fields import config_field, parse_int, recipe_config_fields, resolve_config_field_values
@@ -29,13 +30,12 @@ from reef.runtime.interfaces import InferenceHandler, InferenceRuntime, Multimod
 from reef.storage.records import RecordStore
 from reef.surface.base import AcceptAnyArtifact, Surface
 from reef.surface.weights import create_weight_surface
+from reef.task2batch import Task2Batch
 from reef.train.algos import StepScheduling
 from reef.train.algos.registry import resolve_objective
 from reef.train.evaluation import CandidateEvaluationConfig, CandidateEvaluationConfigError, build_candidate_evaluation
 from reef.train.pipeline import TrainingPipeline
-from reef.train.processors.base import Task2Batch
 from reef.train.trainer import ComponentTrainer, Trainer
-from reef.train.types import PipelineContext
 
 
 @dataclass(frozen=True)

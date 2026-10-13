@@ -23,6 +23,7 @@ from reef.core import AgentRecord, RequestType
 from reef.core.artifact_ref import LiveWeightArtifactRef
 from reef.core.tasks import HarborTask, TaskGenerationRequest, read_harbor_task, read_split_manifest
 from reef.harness.client.tasks import TaskPlay
+from reef.pipeline_context import PipelineContext
 from reef.recipe.generated_tasks import GeneratedTaskTasks
 from reef.recipe.generated_tasks.recipe import task_group_record_stage
 from reef.record2task.generator import (
@@ -56,7 +57,6 @@ from reef.record2task.generator.wire import (
     task_from_document,
 )
 from reef.service.deploy.generator import generator_settings
-from reef.train.types import PipelineContext
 
 pytestmark = pytest.mark.unit
 

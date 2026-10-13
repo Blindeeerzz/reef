@@ -11,6 +11,7 @@ from reef.core.plugins import PluginConfigError, PluginReference
 from reef.core.records_types import AgentRecord
 from reef.core.reports import ReportBase, ScoredRolloutReport
 from reef.core.tasks import TaskGenerator
+from reef.pipeline_context import PipelineContext
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.recipe.errors import RecipeConfigError
@@ -29,7 +30,6 @@ from reef.recipe.generated_tasks.processor import (
 from reef.record2record import GroupDecision, ReportContext, RoundGrouping, RoundStage
 from reef.train.algos import StepScheduling
 from reef.train.pipeline import TrainingPipeline
-from reef.train.types import PipelineContext
 
 
 def source_tag_of(setting: str) -> tuple[str, str] | None:

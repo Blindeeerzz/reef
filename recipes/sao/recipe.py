@@ -8,12 +8,12 @@ from typing import Any
 
 from recipes.sao.processor import SAOBatches, SAOTasks
 from reef.core.reports import ReportBase, ScoredRolloutReport
+from reef.pipeline_context import PipelineContext
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.recipe.errors import RecipeConfigError
 from reef.record2record import ReportGrouping, ReportStage
 from reef.train.algos import StepScheduling
-from reef.train.types import PipelineContext
 
 
 def sao_record_stage(context: PipelineContext) -> ReportStage:

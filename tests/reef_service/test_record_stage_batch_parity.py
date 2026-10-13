@@ -40,14 +40,14 @@ from reef.recipe.generated_tasks.processor import GeneratedTaskBatches, Generate
 from reef.recipe.generated_tasks.recipe import task_group_record_stage
 from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
 from reef.record2task import JudgedTasks, ReportTasks
+from reef.record2task.assembly import SampleAssembly
+from reef.record2task.distill import DistillTasks, distill_record_stage
 from reef.storage.sqlite import SQLiteRecordStore
+from reef.task2batch import DistillBatches, Task2Batch
 from reef.train import PipelineContext, Trainer
 from reef.train.backend import CandidateBackend, PreparedStep
 from reef.train.cordis_backend.processor import TraceBatches, TraceTasks
 from reef.train.pipeline import TrainingPipeline
-from reef.train.processors import DistillBatches, Task2Batch
-from reef.train.processors.distill import DistillTasks, distill_record_stage
-from reef.train.processors.reported import SampleAssembly
 from reef.train.types import TaskItem, TrainDataItem, TrainingBatch, TrajectoryItem
 
 from ._threshold_processor import ThresholdBatches, ThresholdTasks

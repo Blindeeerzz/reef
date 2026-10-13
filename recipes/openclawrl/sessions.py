@@ -123,7 +123,7 @@ class SessionIndex:
     must never be judged against its own reply.
 
     Everything here runs on the trainer thread, which must not block
-    (``reef/train/processors/base.py``), once per record: the untagged path
+    (``reef/train/pipeline.py``), once per record: the untagged path
     walks the live sessions and the tagged path is a single lookup, and
     ``max_sessions`` is what bounds the first of those.
     """

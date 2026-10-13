@@ -10,11 +10,12 @@ import pytest
 
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportBase, ReportValidationError
+from reef.pipeline_context import PipelineContext
 from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
 from reef.record2task import ReportTasks
+from reef.task2batch import Task2Batch
 from reef.train.pipeline import TrainingPipeline
-from reef.train.processors.base import Task2Batch
-from reef.train.types import PipelineContext, TaskItem, TrainDataItem, TrainingBatch
+from reef.train.types import TaskItem, TrainDataItem, TrainingBatch
 
 
 def inference(record_id: str) -> AgentRecord:

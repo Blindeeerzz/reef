@@ -6,7 +6,7 @@ from contextlib import closing
 import pytest
 from reef_service.runtime_stubs import StubInferenceRuntime, StubTrainingRuntime, candidate_backend, runtime_bindings
 
-import reef.train.processors.reported as reported_module
+import reef.record2task.assembly as reported_module
 from recipes.sao import SAOBatches
 from recipes.sao.processor import SAOTasks
 from recipes.sao.recipe import sao_record_stage

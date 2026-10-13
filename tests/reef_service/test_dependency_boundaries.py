@@ -562,11 +562,24 @@ def test_record_to_record_stage_depends_only_on_contracts_below_training() -> No
 
 def test_record_to_task_contract_depends_only_on_the_record_stage() -> None:
     # The trainer and the recipes import the contract, so it never imports them or the generator service.
-    allowed = ("reef.core", "reef.record2record", "reef.record2task")
+    allowed = ("reef.core", "reef.record2record", "reef.record2task", "reef.pipeline_context")
     for path in sorted((REPO_ROOT / "reef" / "record2task").glob("*.py")):
         for target in _imported_modules(ast.parse(path.read_text(encoding="utf-8")), package="reef.record2task"):
             if target.startswith("reef.record2task.generator"):
                 raise AssertionError(f"{path.relative_to(REPO_ROOT)} imports the generator service: {target}")
+            if target == "reef" or target.startswith("reef."):
+                assert any(
+                    target == prefix or target.startswith(prefix + ".") for prefix in allowed
+                ), f"{path.relative_to(REPO_ROOT)} imports {target}"
+
+
+def test_task_to_batch_stage_depends_only_on_contracts_below_training() -> None:
+    # The pipeline and the recipes import the stage, so it never imports them.
+    allowed = ("reef.core", "reef.observability", "reef.pipeline_context", "reef.task2batch")
+    paths = [*sorted((REPO_ROOT / "reef" / "task2batch").rglob("*.py")), REPO_ROOT / "reef" / "pipeline_context.py"]
+    for path in paths:
+        package = ".".join(path.parent.relative_to(REPO_ROOT).parts)
+        for target in _imported_modules(ast.parse(path.read_text(encoding="utf-8")), package=package):
             if target == "reef" or target.startswith("reef."):
                 assert any(
                     target == prefix or target.startswith(prefix + ".") for prefix in allowed

@@ -10,11 +10,11 @@ from typing import Any
 from recipes.tttd.processor import TTTDBatches, TTTDTasks, inference_release_id, tttd_grid
 from recipes.tttd.report import TTTDGroupedRolloutReport
 from reef.core.reports import ReportBase
+from reef.pipeline_context import PipelineContext
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.config_fields import config_field
 from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
 from reef.train.algos import StepScheduling
-from reef.train.types import PipelineContext
 
 logger = logging.getLogger(__name__)
 

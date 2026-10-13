@@ -1,3 +1,9 @@
+"""The context that the training pipeline and its three stages read for one scenario.
+
+The trainer builds it; the recipe adds its config with ``with_config``. It sits
+below the stage packages so that each of them can read it.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping

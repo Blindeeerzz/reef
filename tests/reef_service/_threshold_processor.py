@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from reef.pipeline_context import PipelineContext
 from reef.record2record import ReportContext, ReportGrouping, ReportStage
 from reef.record2task import ReportTasks
+from reef.record2task.assembly import SampleAssembly
+from reef.task2batch import Task2Batch
 from reef.train.pipeline import TrainingPipeline
-from reef.train.processors.base import Task2Batch
-from reef.train.processors.reported import SampleAssembly
-from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem
+from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem
 
 
 class ThresholdTasks(ReportTasks):

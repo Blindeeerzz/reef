@@ -6,7 +6,7 @@ import pytest
 from reef_service.runtime_stubs import ExecutorRuntimeFixture
 
 import reef
-from reef.train import processors
+from reef import task2batch
 
 
 @pytest.mark.unit
@@ -239,7 +239,7 @@ def test_online_grpo_objective_and_recipe_are_removed() -> None:
 def test_noop_naming_is_removed_in_favor_of_recipe() -> None:
     assert not hasattr(reef, "NoopRecipe")
     assert not hasattr(reef.Dispatcher, "noop")
-    assert not hasattr(processors, "NoopProcessor")
+    assert not hasattr(task2batch, "NoopProcessor")
     assert importlib.util.find_spec("reef.noop") is None
 
 
@@ -253,14 +253,14 @@ def test_pairing_interlock_surface_is_replaced_by_the_engine_spec() -> None:
     ``_collect_candidates``/``_terminal_report_ids`` dual bookkeeping) must
     stay gone.
     """
+    from reef.record2task import assembly
     from reef.train.pipeline import TrainingPipeline
-    from reef.train.processors import reported
 
     for name in ("DataProcessor", "ReportedFeedbackProcessor", "ComputedFeedbackProcessor"):
-        assert not hasattr(processors, name)
+        assert not hasattr(task2batch, name)
         assert not hasattr(reef, name)
-    assert importlib.util.find_spec("reef.train.processors.computed") is None
-    assert not hasattr(reported, "PairedCandidate")
-    assert not hasattr(reported, "ReportedFeedbackProcessor")
+    assert importlib.util.find_spec("reef.train.processors") is None
+    assert not hasattr(assembly, "PairedCandidate")
+    assert not hasattr(assembly, "ReportedFeedbackProcessor")
     for hook in ("_collect_candidates", "_terminal_report_ids", "_terminal_source_ids", "_create_batch"):
         assert not hasattr(TrainingPipeline, hook)

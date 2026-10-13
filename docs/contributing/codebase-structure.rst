@@ -81,8 +81,8 @@ import a concrete integration.
 |                         | resolution, runtime binding, and the built-in Reefine    |                                            |
 |                         | and generated-task recipes                               |                                            |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/train/``         | the trainer loop, the training pipeline, task-to-batch   | HTTP endpoints, deployment                 |
-|                         | stages, batch types, backend integrations                | configuration parsing                      |
+| ``reef/train/``         | the trainer loop, the training pipeline, batch types,    | HTTP endpoints, deployment                 |
+|                         | backend integrations                                     | configuration parsing                      |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
 | ``reef/record2record/`` | which records Reef uses and in what order: report        | sample and batch assembly, record storage, |
 |                         | grouping, judging, eligibility checks, selection order   | task generation                            |
@@ -90,6 +90,9 @@ import a concrete integration.
 | ``reef/record2task/``   | turning a record set into tasks (``Record2Task``,        | which records train, batch shape,          |
 |                         | ``ReportTasks``, ``JudgedTasks``), and the generator     | training loops                             |
 |                         | service that writes, checks, and plays Harbor tasks      |                                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/task2batch/``    | shaping the tasks of the selected record sets into one   | which records train, the training loop,    |
+|                         | batch (``Task2Batch``)                                   | step signals                               |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
 | ``reef/runtime/``       | backend-neutral runtime contracts, scheduling,           | concrete inference and training            |
 |                         | weight synchronization and publication coordination      | integrations                               |
@@ -281,9 +284,10 @@ The extension points those packages expose are in `Python API
   weights counterpart.
 - Does it decide which records train, or in which groups? Put it in
   ``reef/record2record/``. Does it turn one record set into tasks? Put the
-  shared contract in ``reef/record2task/``. Does it shape tasks into a batch
-  or a step signal? Put it in ``reef/train/processors/`` or
-  ``reef/train/algos/``. ``reef/train/pipeline.py`` drives the three stages. A recipe selects and binds that machinery; it should
+  shared contract in ``reef/record2task/``. Does it shape tasks into a batch?
+  Put it in ``reef/task2batch/``. Does it turn a batch into a step signal? Put
+  it in ``reef/train/algos/``. ``reef/train/pipeline.py`` drives the three
+  stages. A recipe selects and binds that machinery; it should
   not reimplement it.
 - Is it HTTP-specific? Keep the aiohttp adapter in ``reef/service/routes/``
   and put transport-independent behavior in a service or domain object.

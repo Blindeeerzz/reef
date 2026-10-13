@@ -18,9 +18,9 @@ from reef.record2task import ReportTasks
 from reef.runtime.interfaces import InferenceHandler
 from reef.service.app import create_app
 from reef.storage.sqlite import SQLiteScenarioStorage
+from reef.task2batch import Task2Batch
 from reef.train import PreparedStep, Trainer, TrainingBatch
 from reef.train.pipeline import TrainingPipeline
-from reef.train.processors.base import Task2Batch
 from reef.train.types import TaskItem
 
 from .test_reef_trainer_contracts import ExampleBackend

@@ -17,17 +17,18 @@ from reef.core import AgentRecord, RequestType
 from reef.core.training_request import TrainingRequest
 from reef.core.trajectories import source_record_id
 from reef.dispatcher import Dispatcher
+from reef.pipeline_context import PipelineContext
 from reef.recipe import Recipe, RecipeConfigError
 from reef.record2record import InferenceStage, PassThroughStage
 from reef.runtime.interfaces import TrainingRuntime
 from reef.service.app import create_app
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
+from reef.task2batch import Task2Batch
 from reef.train.backend import PreparedStep
 from reef.train.cordis_backend.processor import InferenceTasks, trace_pipeline
 from reef.train.pipeline import TrainingPipeline
-from reef.train.processors.base import Task2Batch
 from reef.train.trainer import Trainer
-from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch
+from reef.train.types import TrainDataItem, TrainingBatch
 
 from .runtime_stubs import StubTrainingRuntime
 from .test_harness_proposals import _dispatcher, _recipe

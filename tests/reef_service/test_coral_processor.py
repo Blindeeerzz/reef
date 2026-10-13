@@ -16,8 +16,9 @@ reef_types = pytest.importorskip("reef.train.types", reason="requires a reef che
 from recipes.beta.coral.processor import ROOT_GROUP, CoralBatches, CoralTasks
 from recipes.beta.coral.recipe import coral_record_stage
 from reef.core import AgentRecord, RequestType
+from reef.pipeline_context import PipelineContext
 from reef.train.pipeline import TrainingPipeline
-from reef.train.types import PipelineContext, TrainingBatch
+from reef.train.types import TrainingBatch
 
 SCENARIO = "coral-demo"
 

@@ -27,10 +27,10 @@ from reef.core.trajectories import source_record_id
 from reef.recipe.checkpoint_strategy import EveryNVersions
 from reef.recipe.errors import RecipeConfigError
 from reef.recipe.registry import build_recipe, recipe_class_for
+from reef.record2task.distill import distill_record_stage
 from reef.train import PipelineContext
 from reef.train.algos import StepScheduling
 from reef.train.pipeline import TrainingPipeline
-from reef.train.processors.distill import distill_record_stage
 from reef.train.slime_backend.data_builder import to_slime_rollout_data
 from reef.train.slime_backend.loss_families import resolve_loss_family
 from reef.train.slime_backend.reef_adapters.preparation import prepare_slime_step

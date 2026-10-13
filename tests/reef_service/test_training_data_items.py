@@ -225,10 +225,10 @@ def test_request_only_batch_preserves_manual_training_contract():
 
 
 def test_report_processor_reserves_and_acknowledges_mixed_data():
+    from reef.pipeline_context import PipelineContext
     from reef.record2task import ReportTasks
+    from reef.task2batch import Task2Batch
     from reef.train.pipeline import TrainingPipeline
-    from reef.train.processors.base import Task2Batch
-    from reef.train.types import PipelineContext
 
     class MixedTasks(ReportTasks):
         def make_sample(self, context):

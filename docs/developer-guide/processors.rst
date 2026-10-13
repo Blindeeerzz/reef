@@ -28,7 +28,7 @@ The three stages
   one record set into tasks. A task is a ``TrainDataItem``: a ``TrajectoryItem``
   that trains directly, or a ``TaskItem`` (a Harbor task) that an algorithm
   rolls out. A batch may mix both.
-- The **task-to-batch stage** (``Task2Batch``, ``reef.train.processors``)
+- The **task-to-batch stage** (``Task2Batch``, ``reef.task2batch``)
   shapes the tasks of the selected sets into one ``TrainingBatch``. Grouped
   recipes set ``group_id`` on each member.
 
@@ -345,13 +345,16 @@ A record's path to a batch
 Where the stages live
 ---------------------
 
-The stage contracts live in ``reef/record2record/``, ``reef/record2task/``, and
-``reef/train/processors/base.py``; the pipeline lives in
-``reef/train/pipeline.py``. ``reef/train/processors/`` also holds shared
-implementations, including ``DistillTasks``, the record-to-task stage of the
-distilling recipes: it emits the student's rollout plus the teacher sequence,
-the request the recipe composes from the recorded request and the report's
-``teacher_context`` (its ``teacher_request`` override) rendered with the
+Each stage has its own package: ``reef/record2record/``, ``reef/record2task/``,
+and ``reef/task2batch/``. The pipeline lives in ``reef/train/pipeline.py``, and
+the context that the stages read in ``reef/pipeline_context.py``. The stage
+packages also hold shared implementations: ``SampleAssembly``
+(``reef/record2task/assembly.py``), and ``DistillTasks``
+(``reef/record2task/distill.py``) with ``DistillBatches``
+(``reef/task2batch/distill.py``) for the distilling recipes. ``DistillTasks``
+emits the student's rollout plus the teacher sequence: the request that the
+recipe composes from the recorded request and the report's
+``teacher_context`` (its ``teacher_request`` override), rendered with the
 served model's chat template. A method's own stages live in
 ``recipes/<name>/processor.py`` (the record-to-task and task-to-batch classes)
 and ``recipes/<name>/recipe.py`` (the record stage); harness evolution's live

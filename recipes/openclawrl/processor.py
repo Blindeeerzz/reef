@@ -19,11 +19,12 @@ from recipes.openclawrl.judging import OpenClawRLJudging
 from recipes.openclawrl.turns import TurnJudgment, validate_teacher_cands
 from reef.core.records_types import AgentRecord
 from reef.core.trajectories import source_record_id, trajectory_reward
+from reef.pipeline_context import PipelineContext
 from reef.record2record import RecordJudging
 from reef.record2task import JudgedTasks
-from reef.train.processors.base import Task2Batch
-from reef.train.processors.common import make_policy_trajectory
-from reef.train.types import PipelineContext, TrainDataItem, TrainingBatch, TrajectoryItem, policy_row_violation
+from reef.record2task.samples import make_policy_trajectory
+from reef.task2batch import Task2Batch
+from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem, policy_row_violation
 
 logger = logging.getLogger(__name__)
 

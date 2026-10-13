@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from reef.train.processors import DistillBatches
-from reef.train.processors.distill import DistillTasks, normalize_messages_for_template
-from reef.train.types import PipelineContext
+from reef.pipeline_context import PipelineContext
+from reef.record2task.distill import DistillTasks, normalize_messages_for_template
+from reef.task2batch import DistillBatches
 
 #: The reference implementation's demonstration block (idanshen/Self-Distillation, ``main.py``).
 DEFAULT_CONTEXT_TEMPLATE = (

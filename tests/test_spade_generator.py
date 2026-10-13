@@ -21,11 +21,11 @@ from reef.core.tasks import (
     read_split_manifest,
     write_harbor_task,
 )
+from reef.pipeline_context import PipelineContext
 from reef.recipe.generated_tasks import GeneratedTaskTasks
 from reef.recipe.generated_tasks.processor import RoundJob
 from reef.recipe.generated_tasks.recipe import task_group_record_stage
 from reef.record2task.generator import TaskNameConflict
-from reef.train.types import PipelineContext
 
 DESCRIPTION = "shell tasks with hidden state under /var and /etc"
 REQUEST = TaskGenerationRequest((), DESCRIPTION)

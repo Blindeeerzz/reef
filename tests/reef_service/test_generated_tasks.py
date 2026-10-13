@@ -28,6 +28,7 @@ from reef.core.tasks import (
 )
 from reef.harness.client.tasks import TaskPlay
 from reef.inference.http import InferenceProxyRuntime
+from reef.pipeline_context import PipelineContext
 from reef.recipe.errors import RecipeConfigError
 from reef.recipe.generated_tasks import (
     GeneratedTaskBatches,
@@ -46,7 +47,7 @@ from reef.recipe.generated_tasks.recipe import task_group_record_stage
 from reef.record2record import GroupDecision, ReportContext
 from reef.train.algos.registry import resolve_objective
 from reef.train.pipeline import TrainingPipeline
-from reef.train.types import PipelineContext, TrainingBatch, trajectory_groups
+from reef.train.types import TrainingBatch, trajectory_groups
 
 MODULE = "reef_service.test_generated_tasks"
 DESCRIPTION = "shell tasks with hidden state under /var and /etc"

@@ -20,6 +20,7 @@ from reef.core import AgentRecord, RequestType
 from reef.core.errors import ReefError, UnknownScenario
 from reef.core.reports import ReportValidationError, ScoredRolloutReport
 from reef.dispatcher import Dispatcher
+from reef.pipeline_context import PipelineContext
 from reef.recipe import CompositeRecipe, Recipe, RecipeConfigError, build_recipe
 from reef.recipe.base import ServedEndpoint
 from reef.recipe.checkpoint_strategy import EveryNVersions
@@ -33,7 +34,6 @@ from reef.surface.config import CONFIG_FILE, ConfigInferenceHooks, ConfigValidat
 from reef.train import CandidateBackend, PreparedStep, Trainer, TrainStepResult
 from reef.train.evaluation import EvaluationResult, UpdateCandidate
 from reef.train.pipeline import TrainingPipeline
-from reef.train.types import PipelineContext
 
 from ._threshold_processor import ThresholdBatches, threshold_pipeline
 

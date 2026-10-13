@@ -18,11 +18,11 @@ from reef.artifact.artifact import LiveWeightArtifactRef
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import TeacherContextReport
 from reef.core.trajectories import source_record_id
+from reef.record2task.distill import DistillTasks, TeacherRenderer, distill_record_stage
+from reef.record2task.samples import recorded_response
+from reef.task2batch import DistillBatches
 from reef.train import PipelineContext
 from reef.train.pipeline import TrainingPipeline
-from reef.train.processors import DistillBatches
-from reef.train.processors.common import recorded_response
-from reef.train.processors.distill import DistillTasks, TeacherRenderer, distill_record_stage
 from reef.train.types import TrainingBatch
 
 STUDENT_TOKENS = (5, 6, 7, 1, 2, 3)  # three prompt ids, three response ids

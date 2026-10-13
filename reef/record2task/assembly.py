@@ -13,14 +13,15 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from reef.core.batches import TrajectoryItem
 from reef.core.records_types import AgentRecord
+from reef.pipeline_context import PipelineContext
 from reef.record2record import ReportContext
-from reef.train.processors.common import (
+from reef.record2task.samples import (
     make_multi_turn_policy_trajectory,
     make_policy_trajectory,
     sample_assembly_config_fields,
 )
-from reef.train.types import PipelineContext, TrajectoryItem
 
 logger = logging.getLogger(__name__)
 

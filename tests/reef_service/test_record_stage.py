@@ -22,9 +22,9 @@ from reef.record2record import (
 )
 from reef.record2task import Record2Task, ReportTasks, SkippedReport, TaskResult
 from reef.storage.sqlite import SQLiteRecordStore
+from reef.task2batch import Task2Batch
 from reef.train import PipelineContext, Trainer
 from reef.train.pipeline import TrainingPipeline
-from reef.train.processors import Task2Batch
 from reef.train.types import TaskItem, TrainDataItem, TrainingBatch
 
 from ._threshold_processor import threshold_pipeline
