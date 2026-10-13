@@ -41,12 +41,12 @@ def test_config_rejects_process_sections_even_when_empty(tmp_path, section, payl
 
 
 def test_standalone_recipe_cannot_reintroduce_process_execution():
-    from reef.recipe.config import public_recipe_config
+    from reef.recipe.config import recipe_config_from_file_layout
     from reef.recipe.errors import RecipeConfigError
 
     raw = {**method_config(), "execution": {"services": "ray"}}
     with pytest.raises(RecipeConfigError, match=r"execution\.services is not accepted"):
-        public_recipe_config(raw)
+        recipe_config_from_file_layout(raw)
 
 
 @pytest.mark.parametrize("flag", ["service.port", "services", "execution.services.backend"])

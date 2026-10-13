@@ -24,7 +24,7 @@ from reef.core.requirements import REQUIRE_KINDS
 from reef.harness.episodes.model_binding import ModelBindingError
 from reef.harness.episodes.run import EpisodeResult
 from reef.recipe import load_recipe_config
-from reef.recipe.config import public_recipe_config
+from reef.recipe.config import recipe_config_from_file_layout
 from reef.recipe.cordis import CordisRecipe
 from reef.service.deploy.service_config import service_config_from_mapping
 from reef.storage.sqlite import SQLiteRecordStore
@@ -870,7 +870,7 @@ def test_materializer_preserves_executor_profiles_and_recipe_selection(monkeypat
 
     recipe = CordisRecipe.from_environment(
         {},
-        config=public_recipe_config(settings),
+        config=recipe_config_from_file_layout(settings),
         runtime=InferenceProxyRuntime(model_path="test", base_url="http://unused", api_key="dummy"),
     )
     assert recipe.worker_executor.backend == "mp"

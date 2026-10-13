@@ -516,7 +516,7 @@ Component configuration
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 Standalone recipe files loaded by embedding scripts use the same layout.
-``load_recipe_config`` and ``public_recipe_config`` translate it into the
+``load_recipe_config`` and ``recipe_config_from_file_layout`` translate it into the
 existing recipe construction contract.
 Recipes may declare opaque sections in ``config_sections``; for example, Cordis
 owns ``recipe.config.evolution``. Those sections use object/leaf CLI overrides,
@@ -831,13 +831,16 @@ upstream proxy. There, ``recipe.config`` holds the training mode and the
 recipe's own sections, and ``pipeline`` holds the stage config.
 
 A composite recipe serves and evolves several release components in one
-scenario, one recipe per component. Its ``components`` object carries one
-recipe config per component name; each inherits the deployment's ``model``
-unless it names its own, and every component shares the deployment's
-runtime and training runtime. A composite whose component trains weights is
-deployed the way that recipe is: ``training.backend`` selects the training
-backend, the component's own ``pipeline`` section configures its stages, and the
-runtime pair reaches every component. The repository base keeps one
+scenario, one recipe per component. Its ``components`` object maps each
+component name to a section with the shape of the top-level ``recipe``
+section: ``implementation`` names the recipe class, and ``config`` holds the
+recipe's fields and sections. A component also keeps its own ``pipeline``
+stage config under ``config``. A component has no ``runtime``: every
+component uses the deployment's model, runtime and training runtime. A
+composite whose component trains weights is deployed the way that recipe is:
+``training.backend`` selects the training backend, and the runtime pair
+reaches every component. A top-level ``pipeline`` or ``evaluation`` section
+goes to the component that trains weights. The repository base keeps one
 directory per component: the recipes' seeds are written there, a bootstrap
 model snapshot goes under the weight-training component's directory, and a
 component whose recipe seeds nothing starts empty. Each component's trainer
@@ -854,11 +857,12 @@ keeps the reports its own contract parses:
        components:
          harness:
            implementation: reef.recipe.cordis:CordisRecipe
-           evolution:
-             adapter: pi
-             propose: methods.mine:MyProposer
-             evaluate: methods.mine:MyScorer
-             tasks: ["..."]
+           config:
+             evolution:
+               adapter: pi
+               propose: methods.mine:MyProposer
+               evaluate: methods.mine:MyScorer
+               tasks: ["..."]
          config:
            implementation: my_pkg.config:ConfigRecipe
    inference:
@@ -866,7 +870,7 @@ keeps the reports its own contract parses:
 
 The same composite with a weight-training component is a deployment file:
 the composite is selected by its dotted class, ``training.backend`` picks the
-backend, and the weight component's stage config lives under its ``pipeline``:
+backend, and the weight component's stage config lives under its ``config.pipeline``:
 
 .. code:: yaml
 
@@ -876,10 +880,12 @@ backend, and the weight component's stage config lives under its ``pipeline``:
        components:
          weights:
            implementation: recipes.sao.recipe:SAORecipe
-           pipeline: {task2batch: {config: {batch_size: 8}}}
+           config:
+             pipeline: {task2batch: {config: {batch_size: 8}}}
          harness:
            implementation: reef.recipe.cordis:CordisRecipe
-           evolution: {adapter: pi, propose: methods.mine:MyProposer, evaluate: methods.mine:MyScorer, tasks: ["..."]}
+           config:
+             evolution: {adapter: pi, propose: methods.mine:MyProposer, evaluate: methods.mine:MyScorer, tasks: ["..."]}
    inference:
      model-path: Qwen/Qwen3-8B
    training:

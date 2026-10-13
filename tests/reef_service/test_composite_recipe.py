@@ -24,7 +24,7 @@ from reef.pipeline_context import PipelineContext
 from reef.recipe import CompositeRecipe, Recipe, RecipeConfigError, build_recipe
 from reef.recipe.base import ServedEndpoint
 from reef.recipe.checkpoint_strategy import EveryNVersions
-from reef.recipe.config import public_recipe_config
+from reef.recipe.config import recipe_config_from_file_layout
 from reef.runtime.interfaces import InferenceHandler
 from reef.service.app import create_app
 from reef.service.request_service import RequestService
@@ -233,7 +233,7 @@ def test_composite_recipe_builds_from_config() -> None:
                 "components": {
                     "harness": {
                         "implementation": "reef_service.test_composite_recipe:_TreeRecipe",
-                        "data": {"training_mode": "manual"},
+                        "config": {"training_mode": "manual"},
                     },
                     "config": {"implementation": "reef_service.test_composite_recipe:_ConfigRecipe"},
                 },
@@ -254,7 +254,8 @@ def test_composite_recipe_names_its_weight_training_component() -> None:
 
     selected = CompositeRecipe.select_weight_training({"components": _WEIGHTS_AND_HARNESS})
     assert selected is not None
-    assert selected[0] is SAORecipe and selected[1] is _WEIGHTS_AND_HARNESS["weights"]
+    # The selected component's config comes back flat, as its recipe reads it.
+    assert selected == (SAORecipe, {"implementation": "recipes.sao.recipe:SAORecipe", "data": {}})
     assert CompositeRecipe.select_weight_training({"components": {"harness": _WEIGHTS_AND_HARNESS["harness"]}}) is None
     assert _TreeRecipe.select_weight_training({}) is None
     assert SAORecipe.select_weight_training({"data": {}}) == (SAORecipe, {"data": {}})
@@ -368,23 +369,40 @@ def test_deployment_treats_a_composite_with_a_weight_component_as_training(tmp_p
 
 @pytest.mark.unit
 def test_composite_recipe_reads_components_from_the_file_layout() -> None:
-    settings = public_recipe_config(
-        {
+    harness = {"implementation": "reef_service.test_composite_recipe:_TreeRecipe", "config": {"training-mode": "auto"}}
+
+    def file_layout(harness_section: Any) -> dict[str, Any]:
+        return {
             "recipe": {
                 "implementation": "reef.recipe.composite:CompositeRecipe",
                 "config": {
                     "components": {
-                        "harness": {"implementation": "reef_service.test_composite_recipe:_TreeRecipe"},
+                        "harness": harness_section,
                         "config": {"implementation": "reef_service.test_composite_recipe:_ConfigRecipe"},
                     }
                 },
             },
             "inference": {"upstream-model": "served-model"},
         }
-    )
+
+    settings = recipe_config_from_file_layout(file_layout(harness))
     assert sorted(settings["components"]) == ["config", "harness"]
     recipe = build_recipe(settings["implementation"], {}, config=settings)
     assert isinstance(recipe, CompositeRecipe)
+    assert recipe.components["harness"].training_mode == "auto"
+
+    # The flat recipe config a component used to take is refused with the place its fields now go.
+    flat = recipe_config_from_file_layout(
+        file_layout({"implementation": harness["implementation"], "data": {"training_mode": "auto"}})
+    )
+    with pytest.raises(
+        RecipeConfigError, match=r"components\.harness\.data is not accepted: .*components\.harness\.config"
+    ):
+        build_recipe(flat["implementation"], {}, config=flat)
+    # Every component shares the deployment's runtime.
+    own_runtime = recipe_config_from_file_layout(file_layout({**harness, "runtime": {"type": "upstream"}}))
+    with pytest.raises(RecipeConfigError, match=r"components\.harness\.runtime is not accepted"):
+        build_recipe(own_runtime["implementation"], {}, config=own_runtime)
 
 
 @pytest.mark.unit
@@ -400,7 +418,7 @@ def test_composite_recipe_refuses_a_checkpoint_cadence() -> None:
             {},
             config={**base, "artifact": {"checkpoint_every_n_versions": 5}, "components": components},
         )
-    with pytest.raises(RecipeConfigError, match=r"components\.harness\.artifact\.checkpoint_every_n_versions"):
+    with pytest.raises(RecipeConfigError, match=r"components\.harness\.config\.checkpoint_every_n_versions"):
         build_recipe(
             base["implementation"],
             {},
@@ -408,16 +426,16 @@ def test_composite_recipe_refuses_a_checkpoint_cadence() -> None:
                 **base,
                 "components": {
                     **components,
-                    "harness": {**components["harness"], "artifact": {"checkpoint_every_n_versions": 5}},
+                    "harness": {**components["harness"], "config": {"checkpoint-every-n-versions": 5}},
                 },
             },
         )
-    # The flat deployment spelling and the hyphenated one are refused too.
+    # The flat deployment spelling is refused too.
     with pytest.raises(RecipeConfigError, match=r"recipe\.checkpoint_every_n_versions has no effect"):
         build_recipe(
             base["implementation"], {}, config={**base, "checkpoint_every_n_versions": 5, "components": components}
         )
-    with pytest.raises(RecipeConfigError, match=r"components\.harness\.artifact\.checkpoint-every-n-versions"):
+    with pytest.raises(RecipeConfigError, match=r"components\.harness\.config\.artifact\.checkpoint_every_n_versions"):
         build_recipe(
             base["implementation"],
             {},
@@ -425,7 +443,7 @@ def test_composite_recipe_refuses_a_checkpoint_cadence() -> None:
                 **base,
                 "components": {
                     **components,
-                    "harness": {**components["harness"], "artifact": {"checkpoint-every-n-versions": 5}},
+                    "harness": {**components["harness"], "config": {"artifact": {"checkpoint_every_n_versions": 5}}},
                 },
             },
         )
@@ -1190,9 +1208,9 @@ def test_a_rollback_or_promote_runs_the_checks_its_commit_ran_and_never_judges_a
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("data", [[["training_mode", "hybrid"]], "hybrid", [], "", None])
-def test_a_component_data_section_that_is_not_an_object_is_refused_under_a_composite_mode(data: Any) -> None:
-    with pytest.raises(RecipeConfigError, match="recipe config 'data' must be an object"):
+@pytest.mark.parametrize("component_config", [[["training_mode", "hybrid"]], "hybrid", [], "", None])
+def test_a_component_config_that_is_not_an_object_is_refused_under_a_composite_mode(component_config: Any) -> None:
+    with pytest.raises(RecipeConfigError, match=r"components\.harness\.config must be an object"):
         build_recipe(
             "reef.recipe.composite:CompositeRecipe",
             {},
@@ -1203,7 +1221,7 @@ def test_a_component_data_section_that_is_not_an_object_is_refused_under_a_compo
                 "components": {
                     "harness": {
                         "implementation": "reef_service.test_composite_recipe:_HybridTreeRecipe",
-                        "data": data,
+                        "config": component_config,
                     },
                     "config": {"implementation": "reef_service.test_composite_recipe:_ConfigRecipe"},
                 },
@@ -1348,7 +1366,7 @@ def test_a_composite_reads_the_hyphenated_mode_and_a_component_agreeing_in_it() 
             "components": {
                 "harness": {
                     "implementation": "reef_service.test_composite_recipe:_HybridTreeRecipe",
-                    "data": {"training-mode": "hybrid"},
+                    "config": {"training-mode": "hybrid"},
                 },
                 "config": {"implementation": "reef_service.test_composite_recipe:_ConfigRecipe"},
             },
