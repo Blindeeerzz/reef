@@ -35,7 +35,7 @@ from recipes.tttd.recipe import tttd_record_stage
 from reef.artifact import ArtifactRef
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ReportBase, TeacherContextReport
-from reef.record2dataset.generated_tasks.processor import GeneratedTaskProcessor, PlayedTaskTasks
+from reef.record2dataset.generated_tasks.processor import GeneratedTaskProcessor, GeneratedTaskTasks
 from reef.record2dataset.generated_tasks.recipe import task_group_record_stage
 from reef.record2record import GroupDecision, JudgingStage, RecordJudging, ReportContext, ReportGrouping, ReportStage
 from reef.storage.sqlite import SQLiteRecordStore
@@ -309,7 +309,9 @@ class RecipeCoralProcessor(CoralProcessor):
 
 class RecipeGeneratedTaskProcessor(GeneratedTaskProcessor):
     def __init__(self, context: ProcessorContext) -> None:
-        super().__init__(context, record_stage=task_group_record_stage(context), record2task=PlayedTaskTasks(context))
+        super().__init__(
+            context, record_stage=task_group_record_stage(context), record2task=GeneratedTaskTasks(context)
+        )
 
 
 class RecipeDistillProcessor(DistillProcessor):

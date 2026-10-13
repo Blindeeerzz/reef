@@ -68,6 +68,14 @@ class Record2Task(ABC):
         """Return numeric state that the processor adds to its metrics."""
         return {}
 
+    def derivation_pending(self) -> bool:
+        """Return True while background work, such as a running round, can change what trains."""
+        return False
+
+    def close(self) -> None:
+        """Release resources that the stage owns. Calling it more than one time is safe."""
+        return
+
 
 class NoTasks(Record2Task):
     """Make no tasks. The record stage forgets each set; the no-update default."""
@@ -323,6 +331,7 @@ class DataProcessor:
 
     def dropped(self, batch_id: str) -> None:
         """The trainer says the batch is acknowledged without training: the backend dropped it as stale."""
+        self.record_stage.mark_batch_dropped()
 
     def release_batch(self, batch_id: str) -> None:
         """Forget the handed out batch without consuming anything; the next ``build_batch`` selects again."""
@@ -382,7 +391,7 @@ class DataProcessor:
         bounded interval instead. Read on the training thread between
         drains — implementations must not block.
         """
-        return self.record_stage.derivation_pending()
+        return self.record_stage.derivation_pending() or self.record2task.derivation_pending()
 
     def operational_metrics(self) -> Mapping[str, float | int]:
         """Numeric queue state, sampled under the trainer lock without advancing work."""
@@ -414,9 +423,12 @@ class DataProcessor:
     def close(self) -> None:
         """Release resources the processor owns; safe to call more than once.
 
-        The default closes the record stage. Processors with background
-        derivation work override this to signal their workers and join them;
-        after ``close`` returns, no thread of the processor may touch shared
-        state or deliver further results.
+        The default closes the record stage and the record-to-task stage.
+        Processors with other background work override this to signal their
+        workers and join them; after ``close`` returns, no thread of the
+        processor may touch shared state or deliver further results.
         """
-        self.record_stage.close()
+        try:
+            self.record_stage.close()
+        finally:
+            self.record2task.close()

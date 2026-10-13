@@ -288,8 +288,11 @@ without a reward counts as 0. A non-empty ``error`` means that the task was not
 played: it failed validation, the generator service refused it, or the agent
 could not start on it.
 
-The recipe's processor, ``GeneratedTaskProcessor``, runs one round at a time
-on a private ``BackgroundJobWorker``, outside the trainer lock. In each round it:
+The recipe splits the rounds across its stages. The record stage
+(``RoundStage``) decides when a round is due and forms an empty
+``RoundRequest`` record set. The record-to-task stage
+(``GeneratedTaskTasks``) runs one round at a time from each request, on its
+own ``BackgroundJobWorker``, outside the trainer lock. In each round it:
 
 1. Asks the generator for tasks with the configured ``description``. The
    request has no source records.
@@ -298,23 +301,24 @@ on a private ``BackgroundJobWorker``, outside the trainer lock. In each round it
    ``plays-per-task`` times on the training arm, then plays each measurement arm.
 4. Sends the results to ``record_results``.
 
-The processor labels its training plays with the arm ``plain`` and trains
-only on reports with that label. A generated task whose measurement arm is
-named ``plain`` comes back unplayed with an error. The processor groups the
-training reports by ``metadata.task.name``. A group is complete at
+The training plays carry the arm ``plain``, and only reports with that label
+train. A generated task whose measurement arm is
+named ``plain`` comes back unplayed with an error. The record stage groups
+the training reports by ``metadata.task.name``. A group is complete at
 ``plays-per-task`` episodes, and a batch holds ``tasks-per-step`` complete
 groups. The ``task_group`` objective centers and scales each reward within its
-task group, on Tinker's ``importance_sampling`` loss. The processor releases
-the reports of measurement arms and reports without an arm, such as a
+task group, on Tinker's ``importance_sampling`` loss. The record stage
+releases the reports of measurement arms and reports without an arm, such as a
 generator's own reports, without assembling them.
 
 The first round starts when the processor first looks for a batch. The next
-round starts after ``batches-per-round`` batches were acknowledged since the
-previous round started. A round that played no task is followed at once. An
-exception from the generator stops the round. The processor still sends the
-results it has to ``record_results``. A summary of each round goes to
-``state-dir/<scenario>/round-<round>.json``. After a restart, the processor
-continues with the next round. ``GET /reef/status`` shows the generator, the
+round starts after ``batches-per-round`` batches trained since the previous
+round started; a batch that the backend dropped as stale does not count. A
+round that played no task is followed at once. An exception from the
+generator stops the round. The record-to-task stage still sends the results
+it has to ``record_results``. A summary of each round goes to
+``state-dir/<scenario>/round-<round>.json``. After a restart, the
+record-to-task stage continues with the next round. ``GET /reef/status`` shows the generator, the
 round, the task counts, and the last error under ``task_generation``.
 
 Container operations run in the generator service, ``reef.record2dataset``.

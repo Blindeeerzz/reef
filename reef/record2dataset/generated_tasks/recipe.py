@@ -22,13 +22,12 @@ from reef.record2dataset.generated_tasks.processor import (
     DEFAULT_TASKS_PER_STEP,
     TRAINING_ARM,
     GeneratedTaskProcessor,
-    PlayedTaskTasks,
+    GeneratedTaskTasks,
     reported_arm,
     reported_task_name,
 )
-from reef.record2record import GroupDecision, ReportContext, ReportGrouping, ReportStage
+from reef.record2record import GroupDecision, ReportContext, ReportGrouping, RoundStage
 from reef.train.algos import StepScheduling
-from reef.train.processors.base import DataProcessor
 from reef.train.types import ProcessorContext
 
 
@@ -51,12 +50,16 @@ class TaskGroupGrouping(ReportGrouping):
         return GroupDecision.READY if len(members) >= self.plays_per_task else GroupDecision.INCOMPLETE
 
 
-def task_group_record_stage(context: ProcessorContext) -> ReportStage:
-    """The generated-task record stage: one group per task; a terminal report owns its sources."""
-    return ReportStage(
+def task_group_record_stage(context: ProcessorContext) -> RoundStage:
+    """The generated-task record stage: one group per task, and a round request every ``batches_per_round`` batches.
+
+    A terminal report owns its sources.
+    """
+    return RoundStage(
         context.scenario,
         context.report_type,
         TaskGroupGrouping(int(context.config.get("plays_per_task", DEFAULT_PLAYS_PER_TASK))),
+        batches_per_round=int(context.config.get("batches_per_round", DEFAULT_BATCHES_PER_ROUND)),
         exclusive_sources=True,
     )
 
@@ -151,18 +154,9 @@ class GeneratedTaskRecipe(WeightTrainingRecipe):
         """The scenario's round summaries: what a delete archives beside the record store."""
         return (Path(self.state_dir).expanduser() / scenario,) if self.state_dir else ()
 
-    def build_record_stage(self, context: ProcessorContext) -> ReportStage:
+    def build_record_stage(self, context: ProcessorContext) -> RoundStage:
         return task_group_record_stage(context)
 
-    def build_record2task(self, context: ProcessorContext) -> PlayedTaskTasks:
-        return PlayedTaskTasks(context)
-
-    def build_processor(self, context: ProcessorContext) -> DataProcessor:
+    def build_record2task(self, context: ProcessorContext) -> GeneratedTaskTasks:
         task_generator = None if self.task_generation is None else self.task_generation.build(context.scenario)
-        configured = context.with_config(self.processor_config())
-        return GeneratedTaskProcessor(
-            configured,
-            task_generator=task_generator,
-            record_stage=self.build_record_stage(configured),
-            record2task=self.build_record2task(configured),
-        )
+        return GeneratedTaskTasks(context, task_generator=task_generator)

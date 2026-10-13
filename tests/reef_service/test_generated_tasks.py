@@ -35,7 +35,13 @@ from reef.record2dataset.generated_tasks import (
     TaskGenerationConfig,
     TaskGroupObjective,
 )
-from reef.record2dataset.generated_tasks.processor import RoundJob, episode_assembly, reported_task_name, rewards_of
+from reef.record2dataset.generated_tasks.processor import (
+    GeneratedTaskTasks,
+    RoundJob,
+    episode_assembly,
+    reported_task_name,
+    rewards_of,
+)
 from reef.record2dataset.generated_tasks.recipe import task_group_record_stage
 from reef.record2record import GroupDecision, ReportContext
 from reef.train.algos.registry import resolve_objective
@@ -275,18 +281,18 @@ class InlineWorker(BackgroundJobWorker):
 
     def __init__(self) -> None:
         super().__init__(Unbound(), thread_name="test-rounds", concurrency=1)
-        self.processor: GeneratedTaskProcessor | None = None
+        self.generation: GeneratedTaskTasks | None = None
         self.submitted: list[SupportsReceipt] = []
         self.outcomes: list[SupportsReceipt] = []
 
     def submit(self, job: SupportsReceipt) -> bool:
         self.submitted.append(job)
-        if self.processor is None:
+        if self.generation is None:
             return False
         if not isinstance(job, RoundJob):
             raise TypeError("the round worker takes RoundJob")
         try:
-            self.outcomes.append(asyncio.run(self.processor.run_round(job)))
+            self.outcomes.append(asyncio.run(self.generation.run_round(job)))
         except Exception:
             self.outcomes.append(Failed(job.receipt))
         return True
@@ -296,7 +302,7 @@ class InlineWorker(BackgroundJobWorker):
         return outcomes
 
     def close(self) -> None:
-        self.processor = None
+        self.generation = None
 
 
 class DeferredWorker(BackgroundJobWorker):
@@ -304,7 +310,7 @@ class DeferredWorker(BackgroundJobWorker):
 
     def __init__(self) -> None:
         super().__init__(Unbound(), thread_name="test-rounds", concurrency=1)
-        self.processor: GeneratedTaskProcessor | None = None
+        self.generation: GeneratedTaskTasks | None = None
         self.submitted: list[RoundJob] = []
         self.waiting: list[RoundJob] = []
         self.finished: list[SupportsReceipt] = []
@@ -318,18 +324,18 @@ class DeferredWorker(BackgroundJobWorker):
 
     def finish(self) -> None:
         """Run every round taken so far, on this thread; the next poll hands their outcomes back."""
-        if self.processor is None:
-            raise RuntimeError("no processor bound")
+        if self.generation is None:
+            raise RuntimeError("no generation bound")
         jobs, self.waiting = self.waiting, []
         for job in jobs:
-            self.finished.append(asyncio.run(self.processor.run_round(job)))
+            self.finished.append(asyncio.run(self.generation.run_round(job)))
 
     def poll(self) -> list[SupportsReceipt]:
         outcomes, self.finished = self.finished, []
         return outcomes
 
     def close(self) -> None:
-        self.processor = None
+        self.generation = None
 
 
 def rounds(
@@ -354,14 +360,9 @@ def rounds(
             **config,
         },
     )
-    built = GeneratedTaskProcessor(
-        context,
-        task_generator=task_generator,
-        task_player=player,
-        worker=worker,
-        record_stage=task_group_record_stage(context),
-    )
-    worker.processor = built
+    generation = GeneratedTaskTasks(context, task_generator=task_generator, task_player=player, worker=worker)
+    built = GeneratedTaskProcessor(context, record_stage=task_group_record_stage(context), record2task=generation)
+    worker.generation = generation
     return built, player
 
 
@@ -563,11 +564,13 @@ def test_a_round_that_never_finishes_is_named_in_the_status(tmp_path: Path) -> N
 
 
 def test_the_real_worker_runs_a_round_off_the_trainers_thread(tmp_path: Path) -> None:
-    p = GeneratedTaskProcessor(
-        ProcessorContext("tasks", {"rounds": 1, "description": "shell tasks", "state_dir": str(tmp_path / "state")}),
-        task_generator=ScriptedGenerator([generated(0, 0)]),
-        task_player=StandInGenerator(tmp_path / "tasks"),
+    context = ProcessorContext(
+        "tasks", {"rounds": 1, "description": "shell tasks", "state_dir": str(tmp_path / "state")}
     )
+    generation = GeneratedTaskTasks(
+        context, task_generator=ScriptedGenerator([generated(0, 0)]), task_player=StandInGenerator(tmp_path / "tasks")
+    )
+    p = GeneratedTaskProcessor(context, record_stage=task_group_record_stage(context), record2task=generation)
     try:
         assert not p.ready()
         deadline = time.monotonic() + 10.0
@@ -594,8 +597,8 @@ def test_a_processor_configuration_that_cannot_train_is_refused(config: dict[str
 
 
 def test_rounds_need_a_description_a_state_dir_and_the_generator_service() -> None:
-    def built(**config: object) -> GeneratedTaskProcessor:
-        return GeneratedTaskProcessor(
+    def built(**config: object) -> GeneratedTaskTasks:
+        return GeneratedTaskTasks(
             ProcessorContext("tasks", {"rounds": 1, **config}), task_generator=ScriptedGenerator()
         )
 
@@ -652,9 +655,9 @@ def test_the_section_selects_a_generator_class_built_once_for_each_scenario(tmp_
     assert recipe.task_generation == TaskGenerationConfig(PluginReference(ScriptedGenerator, {"count": 3}), environ)
     ScriptedGenerator.built.clear()
     built = recipe.build_processor(ProcessorContext("one"))
-    assert isinstance(built, GeneratedTaskProcessor) and isinstance(built.task_generator, ScriptedGenerator)
+    assert isinstance(built, GeneratedTaskProcessor) and isinstance(built.generation.task_generator, ScriptedGenerator)
     assert ScriptedGenerator.built == [{"config": {"count": 3}, "scenario": "one", "environ": environ}]
-    assert built.state_dir == tmp_path / "state" / "one"
+    assert built.generation.state_dir == tmp_path / "state" / "one"
     assert recipe.scenario_state_dirs("one") == (tmp_path / "state" / "one",)
     built.close()
 

@@ -129,6 +129,10 @@ class Record2RecordStage(ABC):
         """End sets that a committed batch trained on, and return the IDs of their consumed records."""
         raise NotImplementedError(f"{type(self).__name__} does not hold assembled sets")
 
+    def mark_batch_dropped(self) -> None:
+        """The backend dropped the batch that is out as stale. Its acknowledgement follows."""
+        return
+
     def limit_available(self, max_set_count: int | None) -> None:
         """Hold at most ``max_set_count`` unreserved sets. ``None`` removes the limit."""
         return

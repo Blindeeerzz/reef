@@ -256,8 +256,9 @@ class ReportStage(Record2RecordStage):
             ReportCandidate(set_id=record.agent_record_id, arrival_index=self.candidate_count, context=context)
         )
 
-    def take_formed(self) -> tuple[ReportCandidate, ...]:
-        formed, self.formed = tuple(self.formed), []
+    def take_formed(self) -> tuple[RecordSet, ...]:
+        formed: tuple[RecordSet, ...] = tuple(self.formed)
+        self.formed = []
         return formed
 
     def report_context(self, report: AgentRecord, parsed_report: ReportBase | None) -> ReportContext:
