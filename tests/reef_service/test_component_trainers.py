@@ -545,7 +545,7 @@ def test_a_colocated_weights_job_waits_for_the_local_cycle_that_needs_the_engine
     executions: list[Any] = []
 
     def job() -> None:
-        with dispatcher.dispatched_turn(scenario, WEIGHTS):
+        with dispatcher.workers.dispatched_turn(scenario, WEIGHTS):
             executions.append(scenario.execute_reserved_training_step(WEIGHTS))
 
     trainer = threading.Thread(target=job)
@@ -580,7 +580,7 @@ def test_a_colocated_weights_job_waits_for_every_scenario_that_shares_the_engine
     executions: list[Any] = []
 
     def job() -> None:
-        with dispatcher.dispatched_turn(agent, WEIGHTS):
+        with dispatcher.workers.dispatched_turn(agent, WEIGHTS):
             executions.append(agent.execute_reserved_training_step(WEIGHTS))
 
     trainer = threading.Thread(target=job)
@@ -767,7 +767,7 @@ def test_an_instance_parked_while_its_cycle_lock_is_held_closes_when_the_holder_
     scenario.close = observed_close  # type: ignore[method-assign]
     with (
         pytest.raises(RuntimeError, match="job failed") if turn_fails else nullcontext(),
-        dispatcher.dispatched_turn(scenario, WEIGHTS),
+        dispatcher.workers.dispatched_turn(scenario, WEIGHTS),
     ):
         dispatcher._registry.reload("agent")
         assert closed == []

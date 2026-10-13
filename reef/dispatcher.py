@@ -230,9 +230,11 @@ class WorkerCoordination(ReplacedScenarioCloser):
         with self.lock:
             return self.phase == "running"
 
-    def check_admission(self, scenario: str, component: str | None, *, admission_open: bool) -> bool:
+    def check_admission(self, current: Scenario, component: str | None) -> bool:
+        runtime = current.runtime
+        admission_open = runtime is None or runtime.inference_admission_status.get("open", True)
         with self.lock:
-            state = self.scenarios.setdefault(scenario, ScenarioCycles())
+            state = self.scenarios.setdefault(current.name, ScenarioCycles())
             if admission_open:
                 state.waiting_for_admission.discard(component)
             else:
@@ -251,24 +253,27 @@ class WorkerCoordination(ReplacedScenarioCloser):
         finally:
             self.close_replaced_instances(scenario)
 
-    def dispatched_turn(self, names: set[str]) -> ExitStack:
-        """Hold every known cycle lock through execution, commit, and acknowledgement."""
+    def dispatched_turn(self, current: Scenario, component: str | None) -> ExitStack:
+        """Hold colocated cycle locks through execution, commit, and acknowledgement."""
+        backend = current.trainer_for(component).candidate_backend
+        if backend is None or not backend.colocated:
+            return ExitStack()
+        names = {loaded.name for loaded in self.registry.loaded_scenarios()}
+        names.add(current.name)
         with self.lock:
-            names = names.union(self.scenarios)
-        turn = ExitStack()
-        # Callbacks run after every lock is released, including on partial acquisition failure.
-        for name in sorted(names):
-            turn.callback(self.close_replaced_instances, name)
+            names.update(self.scenarios)
+        names_in_order = sorted(names)
         self.turn_waiting.set()
         try:
-            for name in sorted(names):
-                turn.enter_context(self.cycle_lock(name))
-        except BaseException:
-            turn.close()
-            raise
+            with ExitStack() as turn:
+                # Callbacks run after every lock is released, including on partial acquisition failure.
+                for name in names_in_order:
+                    turn.callback(self.close_replaced_instances, name)
+                for name in names_in_order:
+                    turn.enter_context(self.cycle_lock(name))
+                return turn.pop_all()
         finally:
             self.turn_waiting.clear()
-        return turn
 
     def close_replaced(self, instance: Scenario) -> None:
         with self.lock:
@@ -995,13 +1000,6 @@ class Dispatcher:
             logger.exception("local backend failed to commit for scenario %r", scenario)
             self.record_local_cycle_error(scenario, component, self._error_text(exc))
 
-    def _recover_failed_step(
-        self, scenario: str, current: Scenario, cause: Exception, component: str | None = None
-    ) -> None:
-        """Mark the failed instruction, then reload; a logless scenario keeps the batch and skips it on its next wake."""
-        self._fail_instruction(current, cause, component)
-        self.workers.reload_after_local_failure(current)
-
     def _fail_instruction(self, current: Scenario, cause: Exception, component: str | None = None) -> None:
         """A failed instruction step consumes the instruction with a skip row on the next step; wake for it."""
         if not current.trainer_for(component).fail_pending_instruction(self._error_text(cause)):
@@ -1033,10 +1031,7 @@ class Dispatcher:
             return False
         if current.trainer_for(component).candidate_backend is None:
             raise RuntimeContractError(f"scenario {scenario!r} has no local backend")
-        runtime = current.runtime
-        if not self.workers.check_admission(
-            scenario, component, admission_open=runtime is None or runtime.inference_admission_status.get("open", True)
-        ):
+        if not self.workers.check_admission(current, component):
             return False
         self._record_training_error(scenario, None, source=local_error_source(component))
         # Local workers of one scenario take turns for a whole cycle, prepare
@@ -1055,18 +1050,15 @@ class Dispatcher:
                 # Reloaded while this worker waited: look again on the rebuilt instance, whose rows are unread.
                 return True
             # The job whose turn this worker waited for may have left admission closed.
-            if not self.workers.check_admission(
-                scenario,
-                component,
-                admission_open=runtime is None or runtime.inference_admission_status.get("open", True),
-            ):
+            if not self.workers.check_admission(current, component):
                 return False
             if self.workers.reload_deferred(current):
                 return True  # The rebuilt instance holds this worker's rows unread.
             try:
                 result = current.prepare_training_step(component)
             except Exception as exc:
-                self._recover_failed_step(scenario, current, exc, component)
+                self._fail_instruction(current, exc, component)
+                self.workers.reload_after_local_failure(current)
                 raise
             if result is None:
                 return False
@@ -1264,7 +1256,7 @@ class Dispatcher:
     def run_dispatched_turn(
         self, current: Scenario, component: str | None, backend: CandidateBackend, batch: TrainingBatch
     ) -> bool:
-        with self.dispatched_turn(current, component):
+        with self.workers.dispatched_turn(current, component):
             execution = current.execute_reserved_training_step(component)
             if execution.outcome == "retry":
                 if execution.storage is None:
@@ -1303,15 +1295,6 @@ class Dispatcher:
                 if result.training_job_id is not None:
                     backend.acknowledge_commit(current.scenario_step, result.training_job_id)
         return True
-
-    def dispatched_turn(self, current: Scenario, component: str | None) -> ExitStack:
-        """The locks a dispatched job holds from its execution through its commit and acknowledgement."""
-        backend = current.trainer_for(component).candidate_backend
-        if backend is None or not backend.colocated:
-            return ExitStack()
-        names = {loaded.name for loaded in self._registry.loaded_scenarios()}
-        names.add(current.name)
-        return self.workers.dispatched_turn(names)
 
     def _record_training_error(
         self, scenario: str, value: str | None, *, source: str | None = TRAINING_THREAD_SOURCE
