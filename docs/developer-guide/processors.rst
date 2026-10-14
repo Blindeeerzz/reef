@@ -87,7 +87,7 @@ The trainer calls it on its own thread, under its lock; no call may block:
   them again. ``trained=False`` says the backend dropped the batch as stale,
   for a record stage that paces work on what trained.
 
-The pipeline also merges the three stages' ``status()``, metrics, background
+The pipeline also merges the record and task stages' ``status()``, metrics, background
 work (``background_jobs_running()``), and ``close()``. ``releasable_record_ids()``
 returns the completed records that no held set references, and
 ``release_records(ids)`` frees their memory after a successful commit. New

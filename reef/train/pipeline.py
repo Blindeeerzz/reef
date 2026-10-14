@@ -399,7 +399,6 @@ class TrainingPipeline:
             "buffered_requests": self.buffered_requests(),
             **self.record2record.operational_metrics(),
             **self.record2task.operational_metrics(),
-            **self.task2batch.operational_metrics(),
         }
 
     def status(self) -> Mapping[str, Any]:
@@ -415,10 +414,10 @@ class TrainingPipeline:
         state: dict[str, Any] = {"ready_units": len(self.record2record.pool), "batch_size": self.batch_size}
         if self.supported_training_modes & {"manual", "hybrid"}:
             state["buffered_requests"] = self.buffered_requests()
-        return {**state, **self.record2record.status(), **self.record2task.status(), **self.task2batch.status()}
+        return {**state, **self.record2record.status(), **self.record2task.status()}
 
     def close(self) -> None:
-        """Close the three stages; safe to call more than once.
+        """Close the record and task stages; safe to call more than once.
 
         After ``close`` returns, no background worker of a stage may touch
         shared state or deliver further results.
@@ -426,7 +425,4 @@ class TrainingPipeline:
         try:
             self.record2record.close()
         finally:
-            try:
-                self.record2task.close()
-            finally:
-                self.task2batch.close()
+            self.record2task.close()
