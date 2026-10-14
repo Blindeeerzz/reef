@@ -521,7 +521,7 @@ def test_trainer_executes_candidate_policy_between_evaluation_and_settlement() -
     class Policy:
         def decide(self, candidate, evaluation):
             calls.append("decide")
-            return SelectionDecision("select", "test", "1", "selected by test", evaluation)
+            return SelectionDecision(True, "test", "selected by test", evaluation)
 
     records = SQLiteRecordStore()
     records.append(inference("i1"))
@@ -538,7 +538,7 @@ def test_trainer_executes_candidate_policy_between_evaluation_and_settlement() -
     result = trainer.run_once()
 
     assert result is not None
-    assert result.metrics["selection"]["outcome"] == "select"
+    assert result.metrics["selection"]["selected"] is True
     assert calls == ["prepare", "evaluate", "decide", "settle"]
 
 
@@ -588,7 +588,7 @@ def test_trainer_uses_explicit_candidate_evaluator_instead_of_backend_fallback()
         def decide(self, candidate, evaluation):
             del candidate
             calls.append(("decide", evaluation.evaluator))
-            return SelectionDecision("select", "external", "1", "selected by module", evaluation)
+            return SelectionDecision(True, "external", "selected by module", evaluation)
 
     records = SQLiteRecordStore()
     records.append(inference("i1"))
@@ -686,7 +686,7 @@ def test_trainer_rejects_an_evaluator_that_replaces_its_evaluation_result() -> N
         def decide(self, candidate, evaluation):
             del candidate, evaluation
             replacement = EvaluationResult("external", "1", {"score": 0.0})
-            return SelectionDecision("reject", "broken", "1", "replaced result", replacement)
+            return SelectionDecision(False, "broken", "replaced result", replacement)
 
     records = SQLiteRecordStore()
     records.append(inference("i1"))

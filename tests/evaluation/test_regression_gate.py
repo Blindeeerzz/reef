@@ -26,52 +26,52 @@ def _evaluation(**metrics: float) -> EvaluationResult:
     return EvaluationResult(evaluator="probe", evaluator_version="1", metrics=metrics)
 
 
-def _decide(plugin: CheckedPlugin, **metrics: float) -> str:
+def decide(plugin: CheckedPlugin, **metrics: float) -> bool:
     candidate = UpdateCandidate(candidate_id="c")
-    return plugin.decide(candidate, _evaluation(**metrics)).outcome
+    return plugin.decide(candidate, _evaluation(**metrics)).selected
 
 
 def test_the_first_candidate_seeds_the_bar_and_is_selected() -> None:
     plugin = CheckedPlugin(metric="score", margin=0.1)
-    assert _decide(plugin, score=0.2) == "select"
+    assert decide(plugin, score=0.2) is True
 
 
 def test_it_admits_the_climb_and_rejects_a_regression() -> None:
     plugin = CheckedPlugin(metric="score", margin=0.15)
-    assert _decide(plugin, score=0.3) == "select"  # best -> 0.3
-    assert _decide(plugin, score=0.6) == "select"  # best -> 0.6
+    assert decide(plugin, score=0.3) is True  # best -> 0.3
+    assert decide(plugin, score=0.6) is True  # best -> 0.6
     # 0.4 is 0.2 below the 0.6 best, past the 0.15 margin.
-    assert _decide(plugin, score=0.4) == "reject"
+    assert decide(plugin, score=0.4) is False
     # A reject does not move the bar: 0.5 is measured against 0.6, and
     # 0.5 >= 0.6 - 0.15 = 0.45, so it is still admitted.
-    assert _decide(plugin, score=0.5) == "select"
+    assert decide(plugin, score=0.5) is True
     # The best never fell below the peak the rejects protected.
     assert plugin._best == pytest.approx(0.6)
 
 
 def test_a_within_margin_dip_is_admitted() -> None:
     plugin = CheckedPlugin(metric="score", margin=0.15)
-    assert _decide(plugin, score=0.6) == "select"
+    assert decide(plugin, score=0.6) is True
     # 0.5 >= 0.6 - 0.15 = 0.45, so it stays admitted.
-    assert _decide(plugin, score=0.5) == "select"
+    assert decide(plugin, score=0.5) is True
 
 
 def test_a_new_high_raises_the_bar() -> None:
     plugin = CheckedPlugin(metric="score", margin=0.1)
-    assert _decide(plugin, score=0.5) == "select"
-    assert _decide(plugin, score=0.9) == "select"
+    assert decide(plugin, score=0.5) is True
+    assert decide(plugin, score=0.9) is True
     assert plugin._best == pytest.approx(0.9)
-    assert _decide(plugin, score=0.7) == "reject"  # 0.7 < 0.9 - 0.1 = 0.8
+    assert decide(plugin, score=0.7) is False  # 0.7 < 0.9 - 0.1 = 0.8
 
 
 def test_lower_is_better_checks_a_loss() -> None:
     plugin = CheckedPlugin(metric="loss", margin=0.2, higher_is_better=False)
-    assert _decide(plugin, loss=1.0) == "select"  # best loss -> 1.0
-    assert _decide(plugin, loss=0.7) == "select"  # improved -> best 0.7
+    assert decide(plugin, loss=1.0) is True  # best loss -> 1.0
+    assert decide(plugin, loss=0.7) is True  # improved -> best 0.7
     # A loss climbing back to 1.0 is 0.3 worse than the 0.7 best, past 0.2.
-    assert _decide(plugin, loss=1.0) == "reject"
+    assert decide(plugin, loss=1.0) is False
     # Within margin (0.85 <= 0.7 + 0.2) is still admitted.
-    assert _decide(plugin, loss=0.85) == "select"
+    assert decide(plugin, loss=0.85) is True
 
 
 def test_the_reject_reason_reports_the_metric_and_best() -> None:
@@ -79,7 +79,7 @@ def test_the_reject_reason_reports_the_metric_and_best() -> None:
     candidate = UpdateCandidate(candidate_id="c")
     plugin.decide(candidate, _evaluation(clean_rate=0.8))
     decision = plugin.decide(candidate, _evaluation(clean_rate=0.3))
-    assert decision.outcome == "reject"
+    assert decision.selected is False
     assert "clean_rate" in decision.reason
     assert decision.metrics["best"] == pytest.approx(0.8)
     assert decision.metrics["value"] == pytest.approx(0.3)

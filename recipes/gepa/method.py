@@ -404,9 +404,8 @@ class GEPASelectorMixin(CandidateEvaluationPlugin):
 
         fronts = archive.fronts()
         return SelectionDecision(
-            outcome="select" if selected else "reject",
+            selected=selected,
             policy="gepa",
-            policy_version="1",
             reason=(
                 f"candidate scored {candidate_mean:.4f} against {served_mean:.4f} served "
                 f"over {len(candidate_scores)} validation tasks"

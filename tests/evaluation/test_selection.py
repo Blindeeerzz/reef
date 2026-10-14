@@ -48,7 +48,7 @@ def evaluation() -> EvaluationResult:
 def test_evaluation_and_selection_remain_independent_nominal_capabilities() -> None:
     class Selector(CandidateSelector):
         def decide(self, candidate, result):
-            return SelectionDecision("select", "test", "1", "accepted", result)
+            return SelectionDecision(True, "test", "accepted", result)
 
     evaluator = DecideOnlyBackend()
     selector = Selector()
@@ -89,7 +89,6 @@ def test_always_select_returns_an_explainable_structured_decision() -> None:
     decision = BackendAlwaysSelectPlugin(DecideOnlyBackend()).decide(candidate, evaluation())
 
     assert decision.selected is True
-    assert decision.outcome == "select"
     assert decision.policy == "always"
     assert decision.to_dict()["evaluation"]["metrics"] == {
         "candidate_reward": 0.8,
@@ -108,9 +107,8 @@ def test_a_plugin_mixes_its_measurement_and_its_decision() -> None:
         def decide(self, candidate: UpdateCandidate, result: EvaluationResult) -> SelectionDecision:
             calls.append(("decide", result))
             return SelectionDecision(
-                outcome="select",
+                selected=True,
                 policy="demo",
-                policy_version="1",
                 reason=f"selected {candidate.candidate_id}",
                 evaluation=result,
             )
@@ -163,13 +161,33 @@ def test_a_policy_mixin_pairs_with_the_backend_evaluate_mixin() -> None:
 
 def test_rejected_decision_is_not_selected() -> None:
     decision = SelectionDecision(
-        outcome="reject",
+        selected=False,
         policy="minimum-improvement",
-        policy_version="2",
         reason="candidate did not clear the configured delta",
         evaluation=evaluation(),
     )
     assert decision.selected is False
+
+
+@pytest.mark.parametrize("selected", [True, False])
+def test_selection_decision_serializes_selected(selected: bool) -> None:
+    result = evaluation()
+    decision = SelectionDecision(
+        selected=selected,
+        policy="demo",
+        reason="compared candidate scores",
+        evaluation=result,
+        metrics={"wins": 2, "losses": 1},
+    )
+
+    assert decision.selected is selected
+    assert decision.to_dict() == {
+        "selected": selected,
+        "policy": "demo",
+        "reason": "compared candidate scores",
+        "evaluation": result.to_dict(),
+        "metrics": {"wins": 2, "losses": 1},
+    }
 
 
 def test_candidate_identity_is_validated() -> None:
@@ -177,13 +195,13 @@ def test_candidate_identity_is_validated() -> None:
         UpdateCandidate("")
 
 
-def test_decision_rejects_an_unknown_outcome() -> None:
-    with pytest.raises(ValueError, match="selection outcome"):
+@pytest.mark.parametrize("selected", ["select", "reject", 1, None])
+def test_decision_rejects_non_boolean_selected(selected: object) -> None:
+    with pytest.raises(ValueError, match="selected must be a boolean"):
         SelectionDecision(
-            outcome="defer",  # type: ignore[arg-type]
+            selected=selected,  # type: ignore[arg-type]
             policy="demo",
-            policy_version="1",
-            reason="not terminal",
+            reason="invalid selection flag",
             evaluation=evaluation(),
         )
 

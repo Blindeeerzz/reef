@@ -111,14 +111,14 @@ def test_commit_record_round_trips_gate_metrics(tmp_path) -> None:
 
 @pytest.mark.unit
 def test_commit_record_detaches_nested_metrics() -> None:
-    metrics = {"selection": {"outcome": "select"}}
+    metrics = {"selection": {"selected": True}}
     record = sample_record(metrics=metrics)
 
-    metrics["selection"]["outcome"] = "mutated source"
+    metrics["selection"]["selected"] = False
     encoded = record.to_dict()
-    encoded["metrics"]["selection"]["outcome"] = "mutated encoding"
+    encoded["metrics"]["selection"]["selected"] = False
 
-    assert record.metrics == {"selection": {"outcome": "select"}}
+    assert record.metrics == {"selection": {"selected": True}}
 
 
 @pytest.mark.unit
