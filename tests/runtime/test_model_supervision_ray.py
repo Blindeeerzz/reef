@@ -112,9 +112,6 @@ class Publisher(WeightPublisher):
     def publish(self, marker, *, force_full):
         raise AssertionError("startup must not publish a new candidate")
 
-    def republish(self, runtime_load_id, marker):
-        raise AssertionError("startup restores its checkpoint explicitly")
-
     def restore_incumbent(self):
         raise AssertionError("startup must not reject a candidate")
 

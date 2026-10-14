@@ -542,34 +542,6 @@ The service contracts let Reef select and start backends independently; another
 pair still needs compatible tensor formats and sender/receiver implementations.
 A failed managed controller uses deployment reconstruction as described below.
 
-Standalone serving republication
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-``TrainingPublication.republish(runtime_load_id)`` restores unchanged weights to
-replaced inference engines through the same commit gate. The Reef coordinator's
-``republish_serving`` delegates to it. Reef reasserts the pause barrier,
-recovers engines and update connections, and requests a complete transfer under
-the original runtime load ID. A cached bridge pause never substitutes for the
-controller barrier. Known missing engine slots are skipped while pausing the
-surviving engines; recovery reapplies the pause to replacements.
-
-``READY_TO_COMMIT`` stays paused and awaits the scenario's acknowledgement.
-``HEAD_COMMITTED`` completes its durable acknowledgement before resumption;
-``COMPLETE`` and deployments without a training marker resume only after the
-transferred identity is verified. Resumption releases both generation and
-health monitoring. Failed recovery, transfer, identity verification or resume
-aborts serving; retry retains the original runtime load ID.
-
-``RUNNING``, ``CHECKPOINT``, ``UPDATING_WEIGHTS``, ``REJECTING`` and ``REJECTED``
-markers reject standalone republication before model operations. The trainer
-may contain a candidate rather than the incumbent, so those states must use
-their existing training-job recovery path. Republication never runs an optimizer
-step, increments training counters or creates a new publication version.
-Slime implements tensor sending; Reef schedules restoration of other scenarios'
-adapters through the receiver contract.
-This is in-process engine recovery. Controller-process failure uses the managed
-deployment recovery path below; GPU validation remains separate work.
-
 Training-coordinator restart attachment
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

@@ -474,10 +474,6 @@ class WeightPublisher(ABC):
     def publish(self, marker: Mapping[str, Any], *, force_full: bool) -> str: ...
 
     @abstractmethod
-    def republish(self, runtime_load_id: str, marker: Mapping[str, Any] | None) -> str:
-        """Resend unchanged trainer weights with a full transfer and the same identity."""
-
-    @abstractmethod
     def resume(self) -> None: ...
 
     @abstractmethod
@@ -600,37 +596,6 @@ class TrainingPublication:
         """
         with suppress(Exception):
             self._require_store().transition(marker, "UPDATING_WEIGHTS")
-
-    def republish(self, runtime_load_id: str) -> str:
-        """Restore replaced engines without bypassing the durable commit gate.
-
-        A trainer with an unfinished or rejected candidate cannot represent the
-        incumbent. Such jobs must use their normal publication/recovery path.
-        The owner must retain the last verified identity across failed attempts.
-        """
-        if not isinstance(runtime_load_id, str) or not runtime_load_id:
-            raise ValueError("republication requires a non-empty runtime load ID")
-        if self.phase == "stopped":
-            raise RuntimeError("training coordinator is stopped")
-        marker = self._store.read() if self._store is not None else None
-        if marker is not None:
-            if marker["status"] not in PUBLISHED_STATES:
-                raise RuntimeError(f"cannot republish serving from {marker['status']}; use training job recovery")
-            if marker["runtime_load_id"] != runtime_load_id:
-                raise RuntimeError("serving runtime load ID does not match the training marker")
-        with self._aborting_on_failure():
-            # Fence before recovery: replacement engines must inherit pause
-            # intent, and monitoring must not restart before verified transfer.
-            self._publisher.pause()
-            self.phase = "publishing"
-            self._publisher.recover(marker)
-            published = self._publisher.republish(runtime_load_id, marker)
-            if published != runtime_load_id:
-                raise RuntimeError(
-                    f"serving republication changed runtime load ID {runtime_load_id!r} to {published!r}"
-                )
-        self.finish_recovery(marker, published)
-        return published
 
     def reject(self, job_id: str) -> Mapping[str, Any]:
         """Durably reject before restoring the incumbent's released resources."""
@@ -955,15 +920,6 @@ class BackendWeightPublisher(WeightPublisher, AdapterEngine):
             scenario = str(marker["scenario"])
             self.history.record_publication(scenario, published, adapter_name(scenario, published))
         return published
-
-    def republish(self, runtime_load_id: str, marker: Mapping[str, Any] | None) -> str:
-        try:
-            return self.update_serving(
-                force_full=True, scenario=self.marker_scenario(marker), runtime_load_id=runtime_load_id
-            )
-        finally:
-            # A failed/mismatched transfer must not replace the retry identity.
-            self.runtime_load_id = runtime_load_id
 
     # -- Recovery
 

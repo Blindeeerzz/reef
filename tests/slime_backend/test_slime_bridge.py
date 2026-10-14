@@ -1408,30 +1408,6 @@ def test_complete_marker_republishes_checkpoint_with_its_original_runtime_load_i
 
 
 @pytest.mark.unit
-def test_serving_republication_preserves_current_runtime_load_id() -> None:
-    manager = _FakeRolloutManager([])
-    group = _FakeGroup()
-    actor = build_slime_coordinator(group, manager, batch_processor=manager, save_hf_template=None)
-    assert manager.lifecycle_calls == ["pause_generation", "continue_generation"]
-    manager.lifecycle_calls.clear()
-
-    def restore_runtime_load_id(runtime_load_id):
-        group.republication_calls.append(runtime_load_id)
-        group._actor_handlers[0].version = runtime_load_id
-        manager.version = runtime_load_id
-
-    group.restore_runtime_load_id_for_republication = restore_runtime_load_id
-
-    assert actor.republish_serving() == "v1"
-    assert manager.lifecycle_calls == ["pause_generation", "recover_engines", "continue_generation"]
-    assert group.update_generation_management == [False]
-    assert group.update_force_full == [True]
-    assert group.republication_calls == ["v1"]
-    assert group.update_calls == 1
-    assert actor.serving_runtime_load_id() == "v1"
-
-
-@pytest.mark.unit
 @pytest.mark.parametrize("kind", ["empty", "symlink"])
 def test_bridge_marker_rejects_unsafe_checkpoint_path(tmp_path, kind) -> None:
     target = tmp_path / "checkpoint"
@@ -2051,61 +2027,6 @@ def test_prepare_slime_step_reports_schedule_metrics(monkeypatch: pytest.MonkeyP
 
     assert result.metrics == {"steps": 1, "epochs": 2, "optimizer_steps": 4, "dropped_rollouts": 2}
     assert result.payload is not None and len(result.payload["samples"]) == 12
-
-
-@pytest.mark.unit
-def test_republication_reconciles_cached_pause_and_preserves_identity_after_failure():
-    manager = _FakeRolloutManager([])
-    group = _FakeGroup()
-    actor = build_slime_coordinator(group, manager, batch_processor=manager, save_hf_template=None)
-    assert manager.lifecycle_calls == ["pause_generation", "continue_generation"]
-    manager.lifecycle_calls.clear()
-    actor._weight_publisher.generation_paused = True
-    terminated = []
-    manager.terminate_updatable_engines = _RemoteMethod(lambda: terminated.append(True))
-    group._actor_handlers[0].version = manager.version = "unexpected"
-    with pytest.raises(RuntimeError, match="weight sender returned runtime load ID"):
-        actor.republish_serving()
-    assert manager.lifecycle_calls == ["pause_generation", "recover_engines"]
-    assert terminated
-    assert actor.health()["phase"] == "weight_sync_failed"
-    assert actor.serving_runtime_load_id() == "v1"
-    assert actor._weight_publisher.generation_paused
-    group._actor_handlers[0].version = manager.version = "v1"
-    assert actor.republish_serving() == "v1"
-    assert group.republication_calls == ["v1", "v1"]
-    assert group.update_generation_management == [False, False]
-    assert group.update_force_full == [True, True]
-    assert manager.lifecycle_calls[-3:] == ["pause_generation", "recover_engines", "continue_generation"]
-    assert not actor._weight_publisher.generation_paused
-    assert actor.health()["phase"] == "serving"
-
-
-@pytest.mark.unit
-def test_standalone_republication_cannot_publish_checkpointed_candidate(tmp_path):
-    template = str(tmp_path / "checkpoint-{rollout_id}")
-    manager = _FakeRolloutManager([])
-    group = _DurableGroup(template)
-    actor = build_slime_coordinator(group, manager, batch_processor=manager, save_hf_template=template)
-    checkpoint = Path(template.format(rollout_id=0))
-    checkpoint.mkdir()
-    write_marker(
-        tmp_path / ".reef-latest-job.json",
-        {
-            "status": "CHECKPOINT",
-            "job_id": JOB_ID,
-            "rollout_id": 0,
-            "scenario_step": 0,
-            "checkpoint_path": str(checkpoint),
-        },
-    )
-    calls = group.update_calls
-    manager.lifecycle_calls.clear()
-    with pytest.raises(RuntimeError, match="use training job recovery"):
-        actor.republish_serving()
-    assert manager.lifecycle_calls == []
-    assert group.update_calls == calls
-    assert group.republication_calls == ["v1"]
 
 
 @pytest.mark.unit

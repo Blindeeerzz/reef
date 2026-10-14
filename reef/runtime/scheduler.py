@@ -943,16 +943,6 @@ class TrainingCoordinator:
         """
         return self._context.runtime_load_id
 
-    def republish_serving(self) -> str:
-        """Recover serving actors and republish unchanged weights in place.
-
-        This path is for an inference-engine replacement, not a training step.
-        Keep the current token because the checkpoint/model tensors have not
-        changed; the next optimizer-backed publication advances it normally.
-        """
-        with self._operation_lock:
-            return self._publication.republish(self._context.runtime_load_id)
-
     def execute_training_job(self, payload: Mapping[str, Any]) -> TrainingJobResult:
         """Delegate job replay, train ordering and checkpoint recording to Reef."""
         if self._config.save_hf_template is None:
