@@ -24,11 +24,11 @@ from pathlib import Path
 import pytest
 
 from reef.harness.adapters import get_adapter
-from reef.harness.episodes.executor import EpisodeExecutor, EpisodeLaunchError, ProcessOutcome, SandboxExecutor
 from reef.harness.episodes.model_binding import ModelBinding
 from reef.harness.episodes.run import EpisodeError, run_episode
 from reef.harness.runners.terminus.runner import SESSION_DIR_ENV, TREE_DIR_ENV, TRIALS_DIR_ENV
 from reef.harness.tree.render import render_composition
+from reef.sandbox.process import EpisodeExecutor, EpisodeLaunchError, ProcessOutcome, SandboxExecutor
 
 # Stands in for the runner: prove the episode reaches it with what it needs.
 STUB = """#!/usr/bin/env python3

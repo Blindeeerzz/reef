@@ -15,8 +15,8 @@ import pytest
 from recipes.meta_harness.population import content_id
 from recipes.meta_harness.recipe import scenario_population_path
 from reef.harness import EpisodeResult
-from reef.harness.episodes.executor import SandboxExecutor
 from reef.harness.episodes.model_binding import ModelBinding
+from reef.sandbox.process import SandboxExecutor
 
 EXAMPLE = Path(__file__).resolve().parents[3] / "recipes/meta_harness/examples/terminal_bench"
 

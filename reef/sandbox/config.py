@@ -1,4 +1,4 @@
-"""Episode executor configuration and compatibility imports for ``reef.sandbox``."""
+"""Build the executor a deployment selected; the only place that names a sandbox kind."""
 
 from __future__ import annotations
 
@@ -6,32 +6,8 @@ import os
 from collections.abc import Mapping
 
 from reef.core.errors import ReefError
-from reef.sandbox.process import (
-    EPISODE_OWNER_LEASE,
-    ISOLATION_ENV,
-    EpisodeExecutor,
-    EpisodeLaunchError,
-    EpisodeTimeout,
-    LocalExecutor,
-    ProcessOutcome,
-    SandboxExecutor,
-    SandboxLimits,
-    SandboxUnavailable,
-)
-
-__all__ = [
-    "EPISODE_OWNER_LEASE",
-    "ISOLATION_ENV",
-    "EpisodeExecutor",
-    "EpisodeLaunchError",
-    "EpisodeTimeout",
-    "LocalExecutor",
-    "ProcessOutcome",
-    "SandboxExecutor",
-    "SandboxLimits",
-    "SandboxUnavailable",
-    "build_executor",
-]
+from reef.sandbox.e2b import E2BExecutor
+from reef.sandbox.process import EpisodeExecutor, LocalExecutor, SandboxExecutor, SandboxLimits
 
 
 def build_executor(
@@ -43,25 +19,19 @@ def build_executor(
     ``egress_hosts``, ``limits``, and an explicit ``env_from`` list of host
     variable names from the same section. The executor is
     preflighted at build so a hosted deployment that requires the sandbox
-    fails to start, not at the first episode.
+    fails to start, not at the first episode. The caller binds the result to
+    the program it runs with :meth:`EpisodeExecutor.for_program`.
     """
     config = config or {}
     kind = config.get("executor", "local")
+    values = os.environ if environ is None else environ
     if kind == "local":
         return LocalExecutor()
     if kind == "e2b":
-        from reef.harness.adapters import get_adapter
-        from reef.harness.episodes.e2b import E2BExecutor
-
         section = config.get("sandbox") or {}
         if not isinstance(section, Mapping):
             raise ReefError("evolution.sandbox must be a mapping")
-        adapter = config.get("adapter", "pi")
-        binary = config.get("binary")
-        if not isinstance(adapter, str) or (binary is not None and not isinstance(binary, str)):
-            raise ReefError("evolution.adapter and evolution.binary must be strings")
-        remote = E2BExecutor.from_config(section, os.environ if environ is None else environ)
-        remote = remote.for_adapter(get_adapter(adapter), binary=binary)
+        remote = E2BExecutor.from_config(section, values)
         remote.preflight()
         return remote
     if kind != "sandbox":
@@ -84,7 +54,6 @@ def build_executor(
         isinstance(name, str) and name.isidentifier() for name in names
     ):
         raise ReefError("evolution.sandbox.env_from must be a list of environment variable names")
-    values = os.environ if environ is None else environ
     env = {}
     for name in names:
         if name not in values or not values[name]:

@@ -148,7 +148,7 @@ class RecordingExecutor(E2BExecutor):
         return self.session
 
 
-def test_owned_remote_environment_forwards_settings_and_reports_cleanup_failure(tmp_path: Path) -> None:
+def test_owned_remote_environment_opens_a_session_and_reports_cleanup_failure(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     executor = RecordingExecutor(env={"SETTING": "deployment"}, timeout_s=1)
@@ -161,7 +161,8 @@ def test_owned_remote_environment_forwards_settings_and_reports_cleanup_failure(
         await environment.start(force_build=False)
         assert executor.deadlines == [10]
         result = await environment.exec("true")
-        assert result.stdout == "remote" and executor.session.environment["SETTING"] == "deployment"
+        # The session applies the deployment's own settings; the environment passes the caller's.
+        assert result.stdout == "remote" and executor.session.environment["SETTING"] == "caller"
         executor.session.fail_close = True
         with pytest.raises(EpisodeLaunchError, match="cleanup failed"):
             await environment.stop(delete=True)

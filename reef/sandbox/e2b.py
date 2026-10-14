@@ -56,6 +56,7 @@ from reef.sandbox.process import (
     EpisodeLaunchError,
     EpisodeTimeout,
     ProcessOutcome,
+    SandboxProgram,
     SandboxUnavailable,
 )
 
@@ -279,6 +280,34 @@ class E2BExecutor(EpisodeExecutor):
             api_key=api_key.strip(), template=template.strip(), forward_ports=tuple(dict.fromkeys(ports)), env=env
         )
 
+    def for_program(self, program: SandboxProgram, *, binary: str | None = None) -> tuple[EpisodeExecutor, str]:
+        """Resolve the program in its remote template, without installing it on the Reef host."""
+        if program.self_isolating:
+            raise SandboxUnavailable(
+                f"{program.name!r} manages its own containers on the Reef host and cannot run in an E2B sandbox"
+            )
+        remote_binary = binary or self.binary or program.binary
+        if self.template:
+            bound = self if remote_binary == self.binary else replace(self, binary=remote_binary)
+            return bound, remote_binary
+        if not program.npm_package:
+            raise SandboxUnavailable(
+                f"running {program.name!r} in E2B requires an explicit e2b_template containing its binary and "
+                "bubblewrap"
+            )
+        bound = replace(
+            self,
+            template=template_alias(program.name, program.version),
+            npm_package=program.npm_package,
+            binary=remote_binary,
+        )
+        return bound, remote_binary
+
+    def open_session(self, *, forward_ports: tuple[int, ...] = (), timeout_s: float) -> EpisodeExecutor:
+        """One sandbox for the run, each forwarded port reachable inside it through the tunnel."""
+        ports = tuple(dict.fromkeys((*self.forward_ports, *forward_ports)))
+        return replace(self, forward_ports=ports, timeout_s=timeout_s).open()
+
     def labels(self) -> dict[str, str]:
         """The metadata every sandbox this executor starts carries."""
         return {"reef": "episode", **({"reef_owner": self.owner} if self.owner else {})}
@@ -363,7 +392,7 @@ class E2BExecutor(EpisodeExecutor):
                 argv,
                 root=root,
                 workspace=workspace,
-                env={**env, **self.env},
+                env=env,
                 timeout=timeout,
                 writable_paths=writable_paths,
                 readonly_paths=readonly_paths,
@@ -390,7 +419,7 @@ class E2BExecutor(EpisodeExecutor):
             )
         except Exception as exc:
             raise EpisodeLaunchError(f"the E2B sandbox did not start: {exc}") from exc
-        session = E2BSession(sandbox, binary=self.binary)
+        session = E2BSession(sandbox, env=self.env)
         try:
             for index, port in enumerate(self.forward_ports):
                 session.forward(port, TUNNEL_PORT_BASE + index)
@@ -427,11 +456,14 @@ class SandboxKeeper(threading.Thread):
 
 
 class E2BSession(EpisodeExecutor):
-    """One running sandbox: launch processes in it, pull what they wrote, close it when done."""
+    """One running sandbox: launch processes in it, pull what they wrote, close it when done.
 
-    def __init__(self, sandbox: Any, *, binary: str = "") -> None:
+    ``env`` is the deployment's explicit environment; every process gets it over the caller's.
+    """
+
+    def __init__(self, sandbox: Any, *, env: Mapping[str, str] | None = None) -> None:
         self.sandbox = sandbox
-        self.binary = binary
+        self.env = dict(env or {})
         self.closed = False
         self.pumps: list[TunnelPump] = []
         self.keeper = SandboxKeeper(sandbox)
@@ -439,6 +471,10 @@ class E2BSession(EpisodeExecutor):
 
     def preflight(self) -> None:
         return None
+
+    def open_session(self, *, forward_ports: tuple[int, ...] = (), timeout_s: float) -> EpisodeExecutor:
+        """The session itself: it is already open, and its owner closes it."""
+        return self
 
     def forward(self, port: int, tunnel_port: int) -> None:
         """Make the Reef host's ``127.0.0.1:port`` answer at the same address inside the sandbox."""
@@ -477,7 +513,7 @@ class E2BSession(EpisodeExecutor):
         from e2b import CommandExitException, TimeoutException
         from e2b.sandbox_sync.commands.command_handle import CommandHandle
 
-        command, envs = remote_command(argv, env, root)
+        command, envs = remote_command(argv, {**env, **self.env}, root)
         command = protected_command(command, envs, root, workspace, writable_paths, readonly_paths)
         cwd = f"{remote_root(root)}/{workspace.relative_to(root).as_posix()}"
         process: CommandHandle | None = None

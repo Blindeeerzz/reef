@@ -36,10 +36,8 @@ from reef.evaluation.harness import (
 from reef.harness.adapters.descriptor import AdapterDescriptor
 from reef.harness.compose import Context
 from reef.harness.compose.loader import EntryOptions, Loader
-from reef.harness.episodes.e2b import E2BExecutor
-from reef.harness.episodes.executor import EpisodeExecutor, LocalExecutor, SandboxExecutor
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindings, ModelBindingsResolver, usage_of
-from reef.harness.episodes.vendor_install import install_prefix, resolve_binary
+from reef.harness.episodes.vendor_install import AdapterProgram
 from reef.harness.tree.mutations import (
     Mutation,
     MutationError,
@@ -60,6 +58,7 @@ from reef.harness.tree.nodes import (
 from reef.harness.tree.render import render_composition, tree_files
 from reef.runtime.executor import Executor
 from reef.runtime.executor.config import ExecutorSettings
+from reef.sandbox.process import EpisodeExecutor, LocalExecutor
 from reef.train.backend import STALE_RESULT_POLICIES, CandidateBackend, PreparedStep, StaleResultPolicy
 from reef.train.cordis_backend.contracts import ProposalValidator, StepProgress, StepProgressReader, StepRecords
 from reef.train.cordis_backend.manifest import FailureManifest
@@ -493,25 +492,16 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         self._validate_seed()
         # Evolution needs the binary at boot, just like the model binding.
         # Install failures propagate with the missing tool or vendor error.
-        prefix = install_prefix(descriptor)
-        if isinstance(self._executor, E2BExecutor):
-            self._executor = self._executor.for_adapter(descriptor, binary=binary)
-            self._executor.preflight()
-            self._binary = self._executor.binary
-        else:
-            self._binary = binary if binary is not None else resolve_binary(descriptor, prefix=prefix)
-        if binary is None and descriptor.install is not None and isinstance(self._executor, SandboxExecutor):
-            # Bind the whole install: npm launchers are symlinks into packages,
-            # and git installs need both their editable source and their venv.
-            self._executor = replace(self._executor, base_paths=(*self._executor.base_paths, str(prefix)))
+        program = AdapterProgram(descriptor)
+        self._executor, self._binary = self._executor.for_program(program, binary=binary)
+        self._executor.preflight()
         for label, timeout in (("agent_timeout_s", agent_timeout_s), ("agent_trial_timeout_s", agent_trial_timeout_s)):
             if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
                 raise ValueError(f"{label} must be a positive number")
-        # The agent proposer runs the same installed binary as the episodes, under its own isolation.
-        if binary is None and descriptor.install is not None and isinstance(agent_executor, SandboxExecutor):
-            agent_executor = replace(agent_executor, base_paths=(*agent_executor.base_paths, str(prefix)))
-        if isinstance(agent_executor, E2BExecutor):
-            agent_executor = agent_executor.for_adapter(descriptor)
+        # The agent proposer runs the same harness as the episodes, under its own isolation.
+        self._agent_binary = self._binary
+        if agent_executor is not None:
+            agent_executor, self._agent_binary = agent_executor.for_program(program, binary=binary)
             agent_executor.preflight()
         self._agent_executor = agent_executor
         self._agent_timeout_s = float(agent_timeout_s)
@@ -1145,7 +1135,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             return None
         return AgentHost(
             descriptor=self._descriptor,
-            binary=self._binary,
+            binary=self._agent_binary,
             executor=self._agent_executor,
             step_dir=step_dir,
             calls=calls,

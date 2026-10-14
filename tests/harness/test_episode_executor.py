@@ -12,14 +12,14 @@ import pytest
 
 import reef
 from reef.core.errors import ReefError
-from reef.harness.episodes.executor import (
+from reef.sandbox.config import build_executor
+from reef.sandbox.process import (
     EpisodeLaunchError,
     EpisodeTimeout,
     LocalExecutor,
     SandboxExecutor,
     SandboxLimits,
     SandboxUnavailable,
-    build_executor,
 )
 
 
@@ -52,7 +52,7 @@ def test_local_executor_does_not_forward_parent_stdin(tmp_path: Path) -> None:
             [
                 "import sys",
                 "from pathlib import Path",
-                "from reef.harness.episodes.executor import LocalExecutor",
+                "from reef.sandbox.process import LocalExecutor",
                 f"root = Path({str(root)!r})",
                 f"outcome = LocalExecutor().launch([sys.executable, {str(reader)!r}], ",
                 "    root=root, workspace=root / 'workspace', env={}, timeout=10.0)",
@@ -171,7 +171,7 @@ def test_sandbox_preflight_proves_the_host_can_nest_a_jail(monkeypatch) -> None:
 
 def test_sandbox_argv_isolates_the_filesystem_env_and_network(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("reef.sandbox.process.shutil.which", lambda name: "/usr/bin/bwrap")
-    monkeypatch.setattr("reef.harness.episodes.executor.os.environ", {"PATH": "/usr/bin"})
+    monkeypatch.setattr("reef.sandbox.process.os.environ", {"PATH": "/usr/bin"})
     root = tmp_path / "root"
     workspace = root / "workspace"
     workspace.mkdir(parents=True)
@@ -247,7 +247,7 @@ def test_build_executor_reads_sandbox_limits(monkeypatch) -> None:
 
 
 def test_sandbox_explicit_environment_and_isolation_marker(monkeypatch, tmp_path: Path) -> None:
-    from reef.harness.episodes.executor import ISOLATION_ENV
+    from reef.sandbox.process import ISOLATION_ENV
 
     monkeypatch.setattr(SandboxExecutor, "preflight", lambda self: None)
     executor = build_executor(

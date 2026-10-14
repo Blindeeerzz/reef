@@ -33,7 +33,7 @@ import threading
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from reef.core.errors import ReefError
@@ -95,19 +95,91 @@ class EpisodeLaunchError(Exception):
     """The process could not be launched; raised for run_episode to map."""
 
 
+class SandboxProgram(ABC):
+    """The program an executor runs, and what an executor needs to resolve or install it.
+
+    A subclass sets every attribute in ``__init__``. An executor reads only
+    what its kind needs: one on the Reef host resolves :meth:`host_binary`,
+    and a remote one resolves ``binary`` in a template built for ``name`` at
+    ``version``.
+    """
+
+    #: The program's name; it names a remote template built for the program.
+    name: str
+    #: The binary name a remote image resolves on its ``PATH``.
+    binary: str
+    #: The program starts its own containers on the Reef host.
+    self_isolating: bool
+    #: ``<package>@<version>`` when a remote template can install the program with npm, else ``""``.
+    npm_package: str
+    #: The pinned version a remote template is built for, else ``""``.
+    version: str
+
+    @abstractmethod
+    def host_binary(self) -> str:
+        """The binary on the Reef host, installed there when it is missing."""
+
+    @abstractmethod
+    def host_install_dir(self) -> Path | None:
+        """The directory a Reef-installed binary needs bound into a jail, else ``None``."""
+
+
 class EpisodeExecutor(ABC):
-    """Legacy synchronous launch interface adapted by ``ExecutorEnvironment``.
+    """Synchronous launch interface adapted by ``ExecutorEnvironment``.
 
     ``run_episode`` prepares ``root`` (with ``workspace`` inside it) and the
     ``env`` overlay; an executor decides how the process sees them. It must
     kill the whole process tree on timeout and raise :class:`EpisodeTimeout`
     or :class:`EpisodeLaunchError` so ``run_episode`` maps them to the public
     ``EpisodeError`` uniformly.
+
+    Callers do not need to know which executor they hold. :meth:`for_program`
+    binds the executor to the program it runs and resolves that program's
+    binary where the process runs. :meth:`open_session` gives one run of
+    several processes access to ports on the Reef host; :meth:`push`,
+    :meth:`pull` and :meth:`close` serve that run.
     """
+
+    #: The process runs directly on the Reef host: it sees the host's paths, environment and container runtime.
+    runs_on_host: bool = False
 
     @abstractmethod
     def preflight(self) -> None:
         """Raise if this executor cannot establish its isolation on this host."""
+
+    def for_program(self, program: SandboxProgram, *, binary: str | None = None) -> tuple[EpisodeExecutor, str]:
+        """This executor bound to run ``program``, and the binary its processes launch.
+
+        ``binary`` overrides the resolved binary. By default the program's binary is resolved on the Reef host and
+        installed there when it is missing.
+        """
+        return self, binary if binary is not None else program.host_binary()
+
+    def open_session(self, *, forward_ports: tuple[int, ...] = (), timeout_s: float) -> EpisodeExecutor:
+        """An executor for one run of several processes, which lasts at most ``timeout_s``.
+
+        The processes reach the Reef host's loopback ``forward_ports`` in addition to this executor's own. Call
+        :meth:`close` on the result when the run ends; a result that is this executor needs no close.
+        """
+        return self
+
+    def push(self, root: Path) -> None:
+        """Copy the Reef host's ``root`` to where the session's processes read it.
+
+        An executor whose processes read the host's files directly has nothing to copy.
+        """
+        return
+
+    def pull(self, root: Path, relative: str = "") -> None:
+        """Refresh the Reef host's copy of ``root / relative`` while a process still runs.
+
+        An executor whose processes write the host's files directly has nothing to copy.
+        """
+        return
+
+    def close(self) -> None:
+        """Release what :meth:`open_session` started."""
+        return
 
     @abstractmethod
     def launch(
@@ -230,6 +302,8 @@ class LocalExecutor(EpisodeExecutor):
     Filesystem and network access are not restricted.
     """
 
+    runs_on_host = True
+
     def preflight(self) -> None:
         return None
 
@@ -344,6 +418,24 @@ class SandboxExecutor(EpisodeExecutor):
                 "the sandbox executor cannot nest a bubblewrap jail on this host, which every sandboxed native "
                 f"tool call needs: {done.stderr.strip()[-600:]}"
             )
+
+    def for_program(self, program: SandboxProgram, *, binary: str | None = None) -> tuple[EpisodeExecutor, str]:
+        """Bind the whole install of a binary Reef installed: npm launchers are symlinks into packages, and git
+        installs need both their editable source and their venv."""
+        if binary is not None:
+            return self, binary
+        resolved = program.host_binary()
+        install_dir = program.host_install_dir()
+        if install_dir is None:
+            return self, resolved
+        return replace(self, base_paths=(*self.base_paths, str(install_dir))), resolved
+
+    def open_session(self, *, forward_ports: tuple[int, ...] = (), timeout_s: float) -> EpisodeExecutor:
+        """An isolated network forwards the run's ports; the default network already reaches the host."""
+        ports = tuple(dict.fromkeys((*self.forward_ports, *forward_ports)))
+        if self.network != "isolated" or ports == self.forward_ports:
+            return self
+        return replace(self, forward_ports=ports)
 
     def preflight_pasta(self) -> None:
         """An isolated network is one pasta sets up: prove it can on this host, as this user.

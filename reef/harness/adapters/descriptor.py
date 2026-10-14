@@ -67,7 +67,7 @@ from typing import Any
 import yaml
 
 from reef.core.errors import ReefError
-from reef.harness.episodes.executor import EpisodeExecutor
+from reef.sandbox.process import EpisodeExecutor
 
 
 class ExecutionValidator(ABC):

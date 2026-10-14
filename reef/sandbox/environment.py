@@ -8,7 +8,6 @@ import math
 import shlex
 import shutil
 from collections.abc import Coroutine, Mapping, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import TypeVar
 
@@ -16,7 +15,6 @@ from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
 
-from reef.sandbox.e2b import E2BExecutor, E2BSession
 from reef.sandbox.process import (
     PROCESS_OWNER,
     EpisodeExecutor,
@@ -47,9 +45,12 @@ class ExecutorEnvironment(BaseEnvironment):
     Paths refer to the caller's staged root, including for cloud execution.
     File transfers preserve the remote root mapping. The caller owns the staged
     root; stopping this environment never deletes caller-owned local files.
-    An E2B executor creates an owned VM. An existing E2B session is borrowed,
-    so stopping this view leaves that shared VM running. Cancelling execution
-    retires the environment and its processes, including a borrowed VM.
+    Starting opens the executor's session (:meth:`EpisodeExecutor.open_session`).
+    When that opens a new one, such as an E2B VM, the environment owns it and
+    stopping closes it. An executor that is already a session, such as an open
+    E2B session, is borrowed, so stopping this view leaves it running.
+    Cancelling execution retires the environment and its processes, including
+    a borrowed session.
     """
 
     def __init__(
@@ -85,7 +86,7 @@ class ExecutorEnvironment(BaseEnvironment):
             session_id=self.root.name,
             trial_paths=TrialPaths(trial_dir=self.root),
             task_env_config=EnvironmentConfig(),
-            persistent_env={**dict(env or {}), **(executor.env if isinstance(executor, E2BExecutor) else {})},
+            persistent_env=dict(env or {}),
         )
 
     @staticmethod
@@ -105,26 +106,27 @@ class ExecutorEnvironment(BaseEnvironment):
         if force_build:
             raise ValueError("Reef executors do not support forced template rebuilding")
         await asyncio.to_thread(self.executor.preflight)
-        if isinstance(self.executor, E2BExecutor):
-            configured = replace(self.executor, timeout_s=max(self.executor.timeout_s, self.timeout_seconds))
-            opening = asyncio.create_task(asyncio.to_thread(configured.open))
-            try:
-                self.executor = await asyncio.shield(opening)
-            except asyncio.CancelledError:
-                session = await asyncio.shield(opening)
-                await asyncio.to_thread(session.close)
-                self.closed = True
-                raise
-            self.owns_session = True
+        executor = self.executor
+        opening = asyncio.create_task(asyncio.to_thread(executor.open_session, timeout_s=self.timeout_seconds))
+        try:
+            opened = await asyncio.shield(opening)
+        except asyncio.CancelledError:
+            opened = await asyncio.shield(opening)
+            if opened is not executor:
+                await asyncio.to_thread(opened.close)
+            self.closed = True
+            raise
+        self.executor = opened
+        self.owns_session = opened is not executor
         self.started = True
 
     async def stop(self, delete: bool) -> None:
         if self.closed:
             return
         if self.owns_session and not delete:
-            raise ValueError("retaining a stopped E2B environment is not supported")
+            raise ValueError("retaining a stopped sandbox session is not supported")
         self.process_owner.stop()
-        if self.owns_session and isinstance(self.executor, E2BSession):
+        if self.owns_session:
             await asyncio.to_thread(self.executor.close)
         self.closed = True
         self.started = False
@@ -180,8 +182,7 @@ class ExecutorEnvironment(BaseEnvironment):
                 self.closed = True
                 self.started = False
                 try:
-                    if isinstance(self.executor, E2BSession):
-                        await asyncio.to_thread(self.executor.close)
+                    await asyncio.to_thread(self.executor.close)
                 finally:
                     with contextlib.suppress(EpisodeLaunchError, EpisodeTimeout):
                         await asyncio.shield(pending)
@@ -203,28 +204,24 @@ class ExecutorEnvironment(BaseEnvironment):
     async def upload_file(self, source_path: Path | str, target_path: str) -> None:
         target = self.staged_path(target_path)
         await asyncio.to_thread(copy_path, Path(source_path), target, directory=False)
-        if isinstance(self.executor, E2BSession):
-            await asyncio.to_thread(self.executor.push, self.root)
+        await asyncio.to_thread(self.executor.push, self.root)
 
     async def upload_dir(self, source_dir: Path | str, target_dir: str) -> None:
         target = self.staged_path(target_dir)
         await asyncio.to_thread(copy_path, Path(source_dir), target, directory=True)
-        if isinstance(self.executor, E2BSession):
-            await asyncio.to_thread(self.executor.push, self.root)
+        await asyncio.to_thread(self.executor.push, self.root)
 
     async def download_file(self, source_path: str, target_path: Path | str) -> None:
         source = self.staged_path(source_path)
-        if isinstance(self.executor, E2BSession):
-            relative = source.parent.relative_to(self.root).as_posix()
-            await asyncio.to_thread(self.executor.pull, self.root, "" if relative == "." else relative)
+        relative = source.parent.relative_to(self.root).as_posix()
+        await asyncio.to_thread(self.executor.pull, self.root, "" if relative == "." else relative)
         target = Path(target_path)
         await asyncio.to_thread(copy_path, source, target, directory=False)
 
     async def download_dir(self, source_dir: str, target_dir: Path | str) -> None:
         source = self.staged_path(source_dir)
-        if isinstance(self.executor, E2BSession):
-            relative = source.relative_to(self.root).as_posix()
-            await asyncio.to_thread(self.executor.pull, self.root, "" if relative == "." else relative)
+        relative = source.relative_to(self.root).as_posix()
+        await asyncio.to_thread(self.executor.pull, self.root, "" if relative == "." else relative)
         target = Path(target_dir)
         await asyncio.to_thread(copy_path, source, target, directory=True)
 

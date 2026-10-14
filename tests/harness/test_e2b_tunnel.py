@@ -20,7 +20,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from reef.harness.episodes.e2b import (
+from reef.sandbox.e2b import (
     RELAY_SCRIPT,
     E2BExecutor,
     E2BSession,
@@ -31,8 +31,8 @@ from reef.harness.episodes.e2b import (
     template_alias,
     unpack,
 )
-from reef.harness.episodes.e2b_relay import Relay
-from reef.harness.episodes.executor import EpisodeLaunchError, EpisodeTimeout, ProcessOutcome, SandboxUnavailable
+from reef.sandbox.e2b_relay import Relay
+from reef.sandbox.process import EpisodeLaunchError, EpisodeTimeout, ProcessOutcome, SandboxUnavailable
 
 
 @pytest.mark.unit
@@ -410,7 +410,7 @@ def test_the_first_sandbox_stops_only_the_ones_its_own_deployment_left(tmp_path:
     e2b = pytest.importorskip("e2b")  # the e2b extra; the reap is the SDK's list and kill
 
     import reef.sandbox.e2b as e2b_executor
-    from reef.harness.episodes.e2b import deployment_owner
+    from reef.sandbox.e2b import deployment_owner
 
     mine, theirs = deployment_owner(tmp_path / "a"), deployment_owner(tmp_path / "b")
     assert mine != theirs and mine == deployment_owner(tmp_path / "a")
@@ -458,7 +458,7 @@ def test_a_run_longer_than_e2bs_ceiling_opens_within_it_and_keeps_its_sandbox_al
     e2b = pytest.importorskip("e2b")
 
     import reef.sandbox.e2b as e2b_executor
-    from reef.harness.episodes.e2b import SANDBOX_MAX_TIMEOUT_S, E2BExecutor, E2BSession
+    from reef.sandbox.e2b import SANDBOX_MAX_TIMEOUT_S, E2BExecutor, E2BSession
 
     asked: list[int] = []
     extended: list[int] = []
