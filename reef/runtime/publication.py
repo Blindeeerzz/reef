@@ -854,27 +854,17 @@ class BackendWeightPublisher(WeightPublisher, AdapterEngine):
         serves what it served, so it must not terminate them — that took down
         scenarios which were never part of the publication (#65). An eviction
         the engine refused is the opposite: its state is uncertain, so the
-        terminate-and-recover path stays (#61).
+        terminate-and-recover path stays (#61). :class:`TrainingPublication`
+        applies both rules to the errors raised here.
         """
         residency = self.residency if scenario is not None else None
-        try:
-            self.state.phase = "publishing"
-            target = runtime_load_id or self.next_runtime_load_id()
-            if residency is not None and scenario is not None:
-                residency.make_room(scenario, self, supersede=True)
-            version = self._transfer(target, force_full=force_full, scenario=scenario)
-            if residency is not None and scenario is not None:
-                residency.register(scenario, version)
-        except AdapterEvictionFailed:
-            self._fail_transfer()
-            raise
-        except AdapterCapacityExhausted:
-            # Admission was refused before any weight left the trainer.
-            self.state.phase = "serving"
-            raise
-        except BaseException:
-            self._fail_transfer()
-            raise
+        self.state.phase = "publishing"
+        target = runtime_load_id or self.next_runtime_load_id()
+        if residency is not None and scenario is not None:
+            residency.make_room(scenario, self, supersede=True)
+        version = self._transfer(target, force_full=force_full, scenario=scenario)
+        if residency is not None and scenario is not None:
+            residency.register(scenario, version)
         self.runtime_load_id = version
         return version
 
@@ -901,12 +891,6 @@ class BackendWeightPublisher(WeightPublisher, AdapterEngine):
             self.inference.onload_kv()
         self._verify_engines_serve(version, "after update")
         return version
-
-    def _fail_transfer(self) -> None:
-        """Weights may be half-applied: keep inference fenced until recovery."""
-        self.state.phase = "weight_sync_failed"
-        with suppress(Exception):
-            self.inference.abort()
 
     def publish(self, marker: Mapping[str, Any], *, force_full: bool) -> str:
         if self.history is not None:
