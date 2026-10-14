@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 import yaml
-from autoenvscaling_stubs import (
+from tests.recipes.autoenvscaling.autoenvscaling_stubs import (
     DESCRIPTION,
     NAMES,
     REQUEST,
@@ -31,7 +31,7 @@ from autoenvscaling_stubs import (
     stand_in_e2b_package,
     write_workspace_task,
 )
-from reef_service.task_service_stubs import DOCUMENT, StandInGenerator
+from tests.support.task_service_stubs import DOCUMENT, StandInGenerator
 
 from recipes.beta.autoenvscaling import (
     AgentAuthor,
@@ -612,7 +612,7 @@ def test_the_example_selects_the_generated_task_recipe_and_builds_the_generator(
         "E2B_API_KEY": "e2b-test",
     }.items():
         monkeypatch.setenv(name, value)
-    example = Path(__file__).parents[1] / "recipes/beta/autoenvscaling/examples/tinker/serve.yaml"
+    example = Path(__file__).resolve().parents[3] / "recipes/beta/autoenvscaling/examples/tinker/serve.yaml"
     resolved, _ = resolve_deployment_config(yaml.safe_load(example.read_text()), None, example)
     settings = service_config_from_mapping(resolved)
     assert settings.recipe == "reef.recipe.generated_tasks:GeneratedTaskRecipe"

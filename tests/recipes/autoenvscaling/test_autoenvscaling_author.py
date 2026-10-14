@@ -11,7 +11,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
-from autoenvscaling_stubs import (
+from tests.recipes.autoenvscaling.autoenvscaling_stubs import (
     USER_REQUEST,
     NoChecks,
     ScriptedSession,
@@ -22,7 +22,7 @@ from autoenvscaling_stubs import (
     source_of,
     sources,
 )
-from reef_service.task_service_stubs import DOCUMENT
+from tests.support.task_service_stubs import DOCUMENT
 
 from recipes.beta.autoenvscaling import (
     AuthorError,

@@ -1,6 +1,6 @@
 """Stand-ins for AutoEnvScaling's tests: sessions and sources, an author, a sandbox, a Reef and a generator.
 
-The generator service itself is :class:`~reef_service.task_service_stubs.StandInGenerator`.
+The generator service itself is :class:`~tests.support.task_service_stubs.StandInGenerator`.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from reef_service.task_service_stubs import DOCUMENT, StandInGenerator
+from tests.support.task_service_stubs import DOCUMENT, StandInGenerator
 
 from recipes.beta.autoenvscaling import (
     AgentAuthor,

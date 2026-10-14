@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 import yaml
-from autoenvscaling_stubs import (
+from tests.recipes.autoenvscaling.autoenvscaling_stubs import (
     NAMES,
     REQUEST,
     NoChecks,
@@ -23,7 +23,7 @@ from autoenvscaling_stubs import (
     serving_reef,
     stand_in_e2b_package,
 )
-from reef_service.task_service_stubs import StandInGenerator, task_for
+from tests.support.task_service_stubs import StandInGenerator, task_for
 
 from recipes.beta.autoenvscaling import AutoEnvScalingGenerator, checks
 from recipes.beta.autoenvscaling import generator as generator_module
