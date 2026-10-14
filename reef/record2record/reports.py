@@ -317,7 +317,6 @@ class ReportRecord2Record(Record2Record):
         group = None if key is None else self.groups.setdefault(key, ReportGroup())
         if group is not None and (group.discarded or slot in group.entries):
             self.end_report(report)
-            self.ended_set_ids.add(report.agent_record_id)
             return
         self.reports[report.agent_record_id].status = ReportStatus.HELD
         entry = ReportEntry(order=self.pool.next_arrival_index(), context=context, group_key=key, slot=slot)
@@ -331,17 +330,16 @@ class ReportRecord2Record(Record2Record):
         self.apply_limit()
 
     def reject(self, record_set: RecordSet) -> None:
-        report = candidate_context(record_set).report
-        self.end_report(report)
-        self.ended_set_ids.add(report.agent_record_id)
+        self.end_report(candidate_context(record_set).report)
 
     def end_report(self, report: AgentRecord) -> None:
         """End a report without training. Its record is releasable, with the sources that it owns outright.
 
         A report owns its sources when it claims more than one inference, or
-        any number under ``exclusive_sources``.
+        any number under ``exclusive_sources``. The pipeline forgets the tasks of the report's formed set.
         """
         self.reports[report.agent_record_id] = ReportState(report, ReportStatus.ENDED)
+        self.ended_set_ids.add(report.agent_record_id)
         if self.exclusive_sources or len(report.references) > 1:
             self.owned_sources.update(report.references)
 
@@ -371,7 +369,6 @@ class ReportRecord2Record(Record2Record):
         group.discarded = True
         for entry in group.entries.values():
             self.end_report(entry.context.report)
-            self.ended_set_ids.add(entry.report_id)
         group.entries = {}
 
     # ------------------------------------------------------- available limit
@@ -406,7 +403,6 @@ class ReportRecord2Record(Record2Record):
         for entry in report_set.entries:
             self.end_report(entry.context.report)
             self.owned_sources.update(entry.context.references)
-            self.ended_set_ids.add(entry.report_id)
 
     # ------------------------------------------------------------ consumption
 
