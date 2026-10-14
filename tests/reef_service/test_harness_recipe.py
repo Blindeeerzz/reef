@@ -2257,8 +2257,7 @@ def test_recipe_parses_recheck_config(tmp_path: Path, monkeypatch) -> None:
         CordisRecipe.from_environment({}, config=config(recheck_every=-1))
 
 
-@pytest.mark.parametrize("context_key", ["rollback_evaluation_context", "rollback_gated_against"])
-def test_recheck_fires_when_the_served_model_changes(tmp_path: Path, context_key: str) -> None:
+def test_recheck_fires_when_the_served_model_changes(tmp_path: Path) -> None:
     """A publish is gated against one served model. When the deployment
     serves a different one the recheck runs at once instead of waiting for
     the cadence, so the harness is re-gated on the ground it now runs on."""
@@ -2284,8 +2283,6 @@ def test_recheck_fires_when_the_served_model_changes(tmp_path: Path, context_key
     first = run_backend_step(b, batch(), b.initial_state())
     assert first.metrics["selected"] is True
     assert first.state["rollback_evaluation_context"]["model"] == MODEL.model
-    context = first.state.pop("rollback_evaluation_context")
-    first.state[context_key] = context
     # Same model, step 2 of a 100 step cadence: no recheck, and the stamp
     # rides through the skipped step.
     same = run_backend_step(b, batch(), first.state)

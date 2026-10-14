@@ -668,7 +668,6 @@ class RequestService:
             "content_id": artifact.ref.content_id,
             "files": dict(files),
             "evaluation": evaluation_metrics,
-            "gate": evaluation_metrics,  # Legacy clients read this manifest field.
             # The union over the chain, not this evaluation's list: a release whose request named nothing still installs an earlier extension.
             "requires": required_by(list(reversed(scenario.releases())), artifact.ref.release_id),
         }
@@ -1085,9 +1084,9 @@ class RequestService:
         composition as before.
         """
         service_url = install_service_url(headers)
-        evaluation_metrics = manifest.get("evaluation", manifest.get("gate")) or {}
+        evaluation_metrics = manifest.get("evaluation") or {}
         model = (
-            (evaluation_metrics.get("evaluation_context", evaluation_metrics.get("gated_against")) or {}).get("model")
+            (evaluation_metrics.get("evaluation_context") or {}).get("model")
             if isinstance(evaluation_metrics, Mapping)
             else None
         )

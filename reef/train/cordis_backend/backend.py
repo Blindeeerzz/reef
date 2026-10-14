@@ -714,7 +714,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             carried["promoted_clients"] = promoted_clients
         # Carried through skips so a no-commit step keeps the rollback target.
         rollback_entries = state.get("rollback_entries")
-        rollback_evaluation_context = state.get("rollback_evaluation_context", state.get("rollback_gated_against"))
+        rollback_evaluation_context = state.get("rollback_evaluation_context")
         if rollback_entries is not None:
             carried["rollback_entries"] = rollback_entries
             carried["rollback_evaluation_context"] = rollback_evaluation_context
@@ -955,9 +955,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         previous = None if previous_state is None else FailureManifest.from_state(previous_state)
         # A side the evaluation did not run showed nothing, so its manifest carries over untouched, as through a skip.
         manifest = None
-        if committed_side in evaluation_metrics.get(
-            "evaluation_sides", evaluation_metrics.get("gate_sides", EVALUATION_SIDES)
-        ):
+        if committed_side in evaluation_metrics.get("evaluation_sides", EVALUATION_SIDES):
             manifest = advance(
                 previous,
                 int(prepared.state["steps"]),
@@ -976,9 +974,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         metrics["evaluation_context"] = self.evaluation_context()
         # A publish stores the replaced tree and its evaluation stamp as the rollback target; a rollback consumes it.
         rollback_entries = prepared.state.get("rollback_entries")
-        rollback_evaluation_context = prepared.state.get(
-            "rollback_evaluation_context", prepared.state.get("rollback_gated_against")
-        )
+        rollback_evaluation_context = prepared.state.get("rollback_evaluation_context")
         if candidate.recheck and decision.selected:
             metrics["rolled_back"] = True
             rollback_entries = None
@@ -993,7 +989,6 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             state["failure_manifest"] = manifest.to_state()
         state.pop("rollback_entries", None)
         state.pop("rollback_evaluation_context", None)
-        state.pop("rollback_gated_against", None)
         if rollback_entries is not None:
             state["rollback_entries"] = rollback_entries
             state["rollback_evaluation_context"] = rollback_evaluation_context
