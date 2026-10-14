@@ -74,10 +74,10 @@ def proposer_agent_settings(
     ``E2B_API_KEY``; ``e2b_template``, else the harness's pinned binary, built on
     first use) that reaches the gateway through a tunnel and nothing else of the
     host, and carries the deployment that ``proposals_dir`` names, so a later
-    start stops the sandboxes a stopped run left; ``sandbox: none`` runs it unisolated with the service's privileges, and must
-    be chosen. Left empty (and ``REEF_PROPOSER_SANDBOX`` unset), the agent is
-    jailed where the host can, and off (the text proposer answers requests)
-    where it cannot.
+    start stops the sandboxes a stopped run left; ``sandbox: none`` runs it
+    unisolated with the service's privileges, and must be chosen. Left empty
+    (and ``REEF_PROPOSER_SANDBOX`` unset), the agent is jailed where the host
+    can, and off (the text proposer answers requests) where it cannot.
     """
     if section is None:
         return None, 1800.0, 300.0
