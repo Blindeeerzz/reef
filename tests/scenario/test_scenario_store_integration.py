@@ -70,7 +70,7 @@ class OpaqueStorage(ScenarioStorage):
         self._fail_recovery = fail_recovery
         self.sessions: list[OpaqueStore] = []
         self.events: list[tuple[str, str]] = []
-        self.prune_calls: list[tuple[float, int]] = []
+        self.prune_calls: list[int] = []
         self.close_count = 0
 
     @property
@@ -87,9 +87,9 @@ class OpaqueStorage(ScenarioStorage):
         self._inner.archive(scenario)
         return (f"archive://{scenario}",)
 
-    def prune(self, *, days: float, max_bytes: int) -> int:
-        self.prune_calls.append((days, max_bytes))
-        return self._inner.prune(days=days, max_bytes=max_bytes)
+    def prune(self, *, max_bytes: int) -> int:
+        self.prune_calls.append(max_bytes)
+        return self._inner.prune(max_bytes=max_bytes)
 
     def close(self) -> None:
         self.close_count += 1
@@ -206,9 +206,9 @@ def test_injected_storage_owns_retention_archive_and_same_name_recreation(tmp_pa
         model_content = model_path.read_bytes()
         math.records.append(trace("first"))
         code.records.append(trace("other", "code"))
-        retention = RecordRetention(days=7, max_bytes=1)
+        retention = RecordRetention(max_bytes=1)
         assert dispatcher.prune_record_archives(retention) == 2
-        assert factory.prune_calls == [(retention.days, retention.max_bytes)]
+        assert factory.prune_calls == [retention.max_bytes]
         assert dispatcher.read_record("math", "first") is None
         assert dispatcher.read_record("code", "other") is None
 
@@ -242,7 +242,7 @@ def test_failed_construction_closes_injected_store(tmp_path: Path, failure_point
     try:
         with pytest.raises(RuntimeError, match=f"injected {failure_point} failure"):
             dispatcher.get_or_create_scenario("math")
-        assert not dispatcher.has_loaded("math")
+        assert dispatcher._registry.get_optional("math") is None
         assert len(factory.sessions) == 1
         assert factory.sessions[0].close_count == 1
     finally:

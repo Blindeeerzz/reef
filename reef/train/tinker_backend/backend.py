@@ -11,7 +11,6 @@ trainer never holds an engine handle and never sends tensors.
 
 from __future__ import annotations
 
-import json
 import urllib.parse
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -306,9 +305,3 @@ class _TinkerPreparedJob(PreparedTrainingJob):
 
     def save_checkpoint(self) -> None:
         self._backend.save_job_checkpoint(self)
-
-
-def read_incumbent(path: Path) -> dict[str, Any] | None:
-    """The persisted incumbent record, for tests and diagnostics."""
-    value = read_json(path)
-    return None if value is None else json.loads(json.dumps(value))

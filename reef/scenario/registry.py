@@ -80,7 +80,7 @@ class ScenarioRegistry:
         self._scenarios: dict[str, Scenario] = {}
         self._scenario_locks: dict[str, RLock] = {}
         self._lock = Lock()
-        self._training_scenario: str | None = None
+        #: Every training scenario in binding order; the first is the one a single-scenario runtime binds.
         self._training_scenarios: list[str] = []
         # The mode a person selected per scenario; a reload in this process applies it again, a restart does not.
         self._training_modes: dict[str, str] = {}
@@ -93,7 +93,7 @@ class ScenarioRegistry:
     def training_scenario_name(self) -> str | None:
         """The first-bound training scenario (the only one on a single-scenario runtime)."""
         with self._lock:
-            return self._training_scenario
+            return self._training_scenarios[0] if self._training_scenarios else None
 
     @property
     def training_scenario_names(self) -> tuple[str, ...]:
@@ -111,7 +111,7 @@ class ScenarioRegistry:
             scenario.name
             for scenario in scenarios
             if scenario.name not in dispatched
-            and any(bound.trainer.candidate_backend is not None for bound in scenario.component_trainers)
+            and any(bound.trainer.candidate_backend is not None for bound in scenario.trainers)
         )
         return (*dispatched, *local)
 
@@ -136,11 +136,6 @@ class ScenarioRegistry:
         with self._lock:
             loaded = scenario in self._scenarios
         return loaded or self._scenario_factory.has_registration(scenario)
-
-    def has_loaded(self, scenario: str) -> bool:
-        """True when the scenario is in the in-memory table (not just durable)."""
-        with self._lock:
-            return scenario in self._scenarios
 
     def get(self, scenario: str) -> Scenario:
         """Get a loaded scenario by name (must exist in memory)."""
@@ -290,8 +285,6 @@ class ScenarioRegistry:
         with self._lock:
             dropped = self._scenarios.pop(scenario, None)
             self._training_scenarios = [name for name in self._training_scenarios if name != scenario]
-            if self._training_scenario == scenario:
-                self._training_scenario = self._training_scenarios[0] if self._training_scenarios else None
             self._model_configs.pop(scenario, None)
             self._training_modes.pop(scenario, None)
             self._preload_errors.pop(scenario, None)
@@ -339,18 +332,16 @@ class ScenarioRegistry:
         training_runtime = current.training_runtime
         with self._lock:
             shared_runtime = training_runtime is not None and training_runtime.concurrent_training_scenarios
-            if training_runtime is not None and not shared_runtime and self._training_scenario not in (None, scenario):
+            bound_scenario = self._training_scenarios[0] if self._training_scenarios else None
+            if training_runtime is not None and not shared_runtime and bound_scenario not in (None, scenario):
                 current.close()
                 raise ReefError(
-                    f"training is already bound to scenario {self._training_scenario!r}: a reef process "
+                    f"training is already bound to scenario {bound_scenario!r}: a reef process "
                     f"trains one scenario for its lifetime, so {scenario!r} needs its own stack "
                     f"(restart this one, or run a second stack on other ports)"
                 )
-            if training_runtime is not None:
-                if self._training_scenario is None:
-                    self._training_scenario = scenario
-                if scenario not in self._training_scenarios:
-                    self._training_scenarios.append(scenario)
+            if training_runtime is not None and scenario not in self._training_scenarios:
+                self._training_scenarios.append(scenario)
             self._scenarios[scenario] = current
         if training_runtime is not None and self._on_training_scenario_resolved is not None:
             self._on_training_scenario_resolved(current)

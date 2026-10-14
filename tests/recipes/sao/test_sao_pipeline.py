@@ -19,7 +19,6 @@ from tests.support.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
 from recipes.sao import SAORecipe
 from recipes.sao.processor import SAOBatches, SAOTasks
-from recipes.sao.recipe import SAORecord2Record
 from reef.artifact import InMemoryRepositoryBackend
 from reef.artifact.artifact import LiveWeightArtifactRef
 from reef.core import AgentRecord, RequestType
@@ -29,6 +28,7 @@ from reef.dispatcher import Dispatcher
 from reef.recipe.checkpoint_strategy import EveryNVersions
 from reef.recipe.errors import RecipeConfigError
 from reef.recipe.registry import build_recipe, recipe_class_for
+from reef.record2record import ExclusiveReportRecord2Record
 from reef.record2task.assembly import SampleAssemblySettings
 from reef.runtime.interfaces import (
     ActivatedModel,
@@ -53,7 +53,7 @@ EXAMPLES = Path(__file__).resolve().parents[3] / "recipes" / "sao" / "examples"
 def sao_processor(context: PipelineContext, batch_size: int = 1) -> TrainingPipeline:
     return TrainingPipeline(
         context,
-        record2record=SAORecord2Record(context),
+        record2record=ExclusiveReportRecord2Record(context),
         record2task=SAOTasks(SampleAssemblySettings()),
         task2batch=SAOBatches(context, batch_size),
     )
@@ -157,7 +157,7 @@ def test_sao_recipe_defaults_are_reef_side_only() -> None:
     # owns only its stages and checkpoint cadence.
     stages = recipe.stages()
     assert (stages.record2record.plugin_class, stages.record2task.plugin_class, stages.task2batch.plugin_class) == (
-        SAORecord2Record,
+        ExclusiveReportRecord2Record,
         SAOTasks,
         SAOBatches,
     )
@@ -190,7 +190,7 @@ def test_example_pipeline_section_builds_the_sao_stages(example: str) -> None:
 
     pipeline = recipe.build_pipeline(PipelineContext("math"))
 
-    assert isinstance(pipeline.record2record, SAORecord2Record)
+    assert isinstance(pipeline.record2record, ExclusiveReportRecord2Record)
     assert isinstance(pipeline.record2task, SAOTasks)
     assert isinstance(pipeline.task2batch, SAOBatches)
     assert pipeline.batch_size == deployment["training"]["config"]["global_batch_size"]
@@ -209,7 +209,7 @@ def test_sao_recipe_refuses_batch_size_in_the_recipe_config(key: str) -> None:
     [
         ({"task2batch": {"config": {"batch_size": 0}}}, "batch_size must be positive"),
         ({"task2batch": {"config": {"groups_per_step": 2}}}, "groups_per_step"),
-        ({"record2record": {"config": {"batch_size": 2}}}, "SAORecord2Record takes no config"),
+        ({"record2record": {"config": {"batch_size": 2}}}, "ExclusiveReportRecord2Record takes no config"),
     ],
 )
 def test_sao_recipe_refuses_a_bad_stage_config_when_the_pipeline_builds(
@@ -444,7 +444,7 @@ class _StubTrainingRuntime(StubTrainingRuntime):
         self.jobs: list[dict[str, Any]] = []
         self.completed: dict[int, ModelCandidate] = {}
         self.activations: list[ModelCandidate] = []
-        self.rejections: list[tuple[ModelCandidate, Any]] = []
+        self.rejections: list[ModelCandidate] = []
         # The version the serving engine answers from. A train step hot-swaps
         # new weights in, so this moves from v3 -> v4 the first time a job
         # completes; starting below the synced value keeps the serving-swap
@@ -506,8 +506,8 @@ class _StubTrainingRuntime(StubTrainingRuntime):
         self._served_version = "slime-v4"
         return ActivatedModel(candidate.candidate_id, self._served_version)
 
-    def reject_candidate(self, candidate, decision):
-        self.rejections.append((candidate, decision))
+    def reject_candidate(self, candidate):
+        self.rejections.append(candidate)
 
 
 def _wait_for_step(dispatcher: Dispatcher, step: int) -> None:
@@ -586,14 +586,17 @@ def test_external_checkpoint_evaluation_rejects_before_serving_activation(tmp_pa
         assert runtime.serving_runtime_load_id() == "slime-v3"
         assert runtime.activations == []
         assert len(runtime.rejections) == 1
-        candidate, decision = runtime.rejections[0]
-        assert decision.selected is False
-        assert decision.evaluation.evaluator == "external_checkpoint"
-        assert decision.evaluation.metrics == {
+        candidate = runtime.rejections[0]
+        status = dispatcher.get_or_create_scenario("math").commit_status
+        selection = status["last_committed_step"]["metrics"]["selection"]
+        assert selection["candidate_id"] == candidate.candidate_id
+        assert selection["selected"] is False
+        assert selection["evaluation"]["evaluator"] == "external_checkpoint"
+        assert selection["evaluation"]["metrics"] == {
             "score": 0.25,
             "checkpoint_path": candidate.checkpoint_path,
         }
-        assert decision.evaluation.metadata == {"scenario": "math", "token_present": True}
+        assert selection["evaluation"]["metadata"] == {"scenario": "math", "token_present": True}
     finally:
         dispatcher.close()
 

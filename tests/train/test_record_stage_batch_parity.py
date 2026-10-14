@@ -38,6 +38,7 @@ from reef.core.plugins import NoSettings
 from reef.core.reports import ReportBase, TeacherContextReport
 from reef.recipe.generated_tasks.recipe import GeneratedTaskRecipe
 from reef.record2record import (
+    ExclusiveReportRecord2Record,
     GroupDecision,
     JudgingRecord2Record,
     Record2Record,
@@ -48,12 +49,12 @@ from reef.record2record import (
 )
 from reef.record2task import JudgedTasks, Record2Task, ReportTasks
 from reef.record2task.assembly import SampleAssembly, SampleAssemblySettings
-from reef.record2task.distill import DistillRecord2Record, DistillTasks
+from reef.record2task.distill import DistillTasks
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.task2batch import BatchSettings, DistillBatches, Task2Batch
 from reef.train import PipelineContext, Trainer
 from reef.train.backend import CandidateBackend, PreparedStep
-from reef.train.cordis_backend.processor import TraceBatches, TraceRecord2Record, TraceTasks
+from reef.train.cordis_backend.processor import TraceBatches, TraceTasks
 from reef.train.pipeline import PipelineConfig, PipelineSpec
 from reef.train.types import TaskItem, TrainDataItem, TrainingBatch, TrajectoryItem
 
@@ -343,9 +344,11 @@ SLOT_GROUP_STAGES = PipelineSpec(
 ORDERED_MIX_STAGES = PipelineSpec(
     record2record=OrderedMixRecord2Record, record2task=AssembledTasks, task2batch=SlotBatches
 )
-DISTILL_STAGES = PipelineSpec(record2record=DistillRecord2Record, record2task=DistillTasks, task2batch=DistillBatches)
+DISTILL_STAGES = PipelineSpec(
+    record2record=ExclusiveReportRecord2Record, record2task=DistillTasks, task2batch=DistillBatches
+)
 #: The harness-evolution pipeline of reported traces.
-TRACE_STAGES = PipelineSpec(record2record=TraceRecord2Record, record2task=TraceTasks, task2batch=TraceBatches)
+TRACE_STAGES = PipelineSpec(record2record=ReportRecord2Record, record2task=TraceTasks, task2batch=TraceBatches)
 
 
 @dataclass(frozen=True)

@@ -216,7 +216,7 @@ def test_rejected_and_uncertain_candidates_leave_incumbent_optimizer_unchanged(r
     candidate = value.training.train_candidate(payload)
     assert value.training.train_candidate(payload) == candidate
     assert len(client.calls) == 1
-    value.training.reject_candidate(candidate, decision(False))
+    value.training.reject_candidate(candidate)
     client.fail = True
     with pytest.raises(TimeoutError):
         value.training.train_candidate(payload)
@@ -231,10 +231,11 @@ def test_reload_before_and_after_commit_restores_authoritative_artifact(runtime,
     value, client = runtime
     candidate = value.training.train_candidate(prepared(value, objective).payload)
     value.inference.activate_candidate(candidate)
-    assert value.inference.pending_training_job_id == candidate.training_job_id
+    with pytest.raises(TrainingRuntimeError, match="does not match"):
+        value.inference.acknowledge_publication("another-job")
     # Reloading a different head after a failed publication drops the pending candidate.
     value.inference.activate_checkpoint(empty_artifact(tmp_path))
-    assert value.inference.pending_training_job_id is None
+    value.inference.acknowledge_publication("another-job")
     value.shutdown()
     restored = Deployment(value.config, client)
     try:
@@ -712,7 +713,7 @@ def test_a_schedule_counts_optimizer_steps_across_jobs_rejections_and_restarts(r
     assert manifest.learning_rate_schedule_state == LearningRateScheduleState(WARMUP, 3)
 
     # A rejected job leaves the incumbent and its progress: the next job repeats the same rates.
-    value.training.reject_candidate(first, decision(False))
+    value.training.reject_candidate(first)
     kept = value.training.train_candidate(scheduled(value, objective, WARMUP, step=1))
     assert client.learning_rates[-1] == pytest.approx((0.0, 2.5e-5, 5e-5))
     value.training.commit_candidate(kept.training_job_id)

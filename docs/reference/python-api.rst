@@ -469,7 +469,7 @@ pending releases, rollback, and checkpoint reconciliation. See `Commit ordering
 provide distributed leases or authorize multiple active training writers.
 
 The storage service exposes ``durable``, ``open(scenario)``, ``archive(scenario)``,
-``prune(days=..., max_bytes=...)``, and ``close()``. Archive retires that scenario's
+``prune(max_bytes=...)``, and ``close()``. Archive retires that scenario's
 stored state so its name can be reused; prune applies retained-body limits to
 active and archived state. Custom backends implement those operations instead
 of exposing local file paths. Each opened session belongs to its scenario and
@@ -546,8 +546,7 @@ be instantiated. ``SQLiteRecordStore`` is also exported from ``reef``:
        retained = records.audit_page("math")
 
 ``RecordRetention`` in ``reef.storage.records`` holds and validates the
-``max_bytes`` capacity budget. ``days`` remains a validated compatibility
-argument but does not expire data. Store factories apply capacity limits through
+``max_bytes`` capacity budget. Store factories apply capacity limits through
 ``prune`` independently of record consumption.
 
 Training commits persist consumption progress without changing record
@@ -608,7 +607,7 @@ including ``archived/``. The budget measures UTF-8 JSON payloads, references,
 and artifact references. Limits are configurable in `Configuration <configuration.rst>`__.
 
 For embedded Python deployments, use
-``dispatcher.prune_record_archives(RecordRetention(days=7, max_bytes=20 * 1024**3))``
+``dispatcher.prune_record_archives(RecordRetention(max_bytes=20 * 1024**3))``
 with ``RecordRetention`` imported from ``reef.storage.records``. This runs one sweep
 through the configured storage service and serializes it with scenario archival.
 Standalone ``SQLiteRecordStore`` and ``Dispatcher`` construction do not start a
@@ -630,10 +629,10 @@ standalone SQLite maintenance, pass the directory to the storage service:
    from reef.storage.records import RecordRetention
    from reef.storage.sqlite import SQLiteScenarioStorage
 
-   retention = RecordRetention(days=7, max_bytes=20 * 1024**3)
+   retention = RecordRetention(max_bytes=20 * 1024**3)
    storage = SQLiteScenarioStorage(Path(".reef/agent-record"))
    try:
-       purged = storage.prune(days=retention.days, max_bytes=retention.max_bytes)
+       purged = storage.prune(max_bytes=retention.max_bytes)
    finally:
        storage.close()
 
@@ -732,7 +731,9 @@ A reported-feedback recipe implements these hooks:
 The recipe owns the report policy. Its record stage is a subclass of
 ``ReportRecord2Record(context, grouping, *, exclusive_sources=False,
 ordered_groups=False)``; ``ReportRecord2Record(context, ReportGrouping())``
-trains every report by itself. A ``ReportGrouping`` runs in the
+trains every report by itself. ``ExclusiveReportRecord2Record(context)`` also
+trains every report by itself, and a report that ends owns its inference
+records. A ``ReportGrouping`` runs in the
 record-to-record stage and reads only records:
 
 .. list-table::

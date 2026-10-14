@@ -40,7 +40,7 @@ from typing import Any, Literal
 from reef.artifact.artifact import Artifact
 from reef.core.batches import StepScheduling, TrainingBatch
 from reef.core.errors import ReefError
-from reef.core.evaluation import SelectionDecision, UpdateCandidate
+from reef.core.evaluation import UpdateCandidate
 from reef.surface.base import AdapterWeightRuntime, InferenceLease
 
 # -- Identities and errors ----------------------------------------------------
@@ -860,7 +860,7 @@ class TrainingRuntime(ABC):
         """Train through durable checkpoint export without changing serving."""
 
     @abstractmethod
-    def reject_candidate(self, candidate: ModelCandidate, decision: SelectionDecision) -> None:
+    def reject_candidate(self, candidate: ModelCandidate) -> None:
         """Finish a rejected training candidate."""
 
     @property

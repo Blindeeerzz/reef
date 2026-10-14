@@ -61,9 +61,7 @@ from reef.runtime.executor.config import ExecutorSettings
 from reef.sandbox.process import EpisodeExecutor, LocalExecutor
 from reef.train.backend import STALE_RESULT_POLICIES, CandidateBackend, PreparedStep, StaleResultPolicy
 from reef.train.cordis_backend.contracts import ProposalValidator, StepProgress, StepProgressReader, StepRecords
-from reef.train.cordis_backend.manifest import FailureManifest
-from reef.train.cordis_backend.manifest import FailureRecord as FailureRecord  # re-export: manifest entry type
-from reef.train.cordis_backend.manifest import advance
+from reef.train.cordis_backend.manifest import FailureManifest, advance
 from reef.train.cordis_backend.proposals import Proposal, ProposalInbox
 from reef.train.cordis_backend.strategies import AgentHost, Promoter, Proposer, ProposerCalls, StepProposal
 from reef.train.types import TrainingBatch, TrainStepResult, TrajectoryItem, trajectories
@@ -390,12 +388,10 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         publish: str = "auto",
         review_kinds: tuple[str, ...] = (),
         seed: tuple[Mapping[str, Any], ...] = (),
-        episode_workers: int | None = None,
         proposals_dir: str | Path | None = None,
         max_pending_proposals: int = 8,
         step_record_dir: str | Path | None = None,
         worker_executor: ExecutorSettings | None = None,
-        worker_gpus: float | None = None,
         agent_executor: EpisodeExecutor | None = None,
         agent_timeout_s: float = 1800.0,
         agent_trial_timeout_s: float = 300.0,
@@ -436,7 +432,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{label} must be an integer of at least 0 (0 disables the limit)")
         worker_selection, worker_requirements = evaluation_selection(
-            score_episode, episode_workers, worker_executor or ExecutorSettings(), worker_gpus
+            score_episode, worker_executor or ExecutorSettings()
         )
         Executor.get_class(worker_selection.settings.backend)
         if on_stale not in STALE_RESULT_POLICIES:
@@ -704,7 +700,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             carried["promoted_clients"] = promoted_clients
         # Carried through skips so a no-commit step keeps the rollback target.
         rollback_entries = state.get("rollback_entries")
-        rollback_evaluation_context = state.get("rollback_evaluation_context", state.get("rollback_gated_against"))
+        rollback_evaluation_context = state.get("rollback_evaluation_context")
         if rollback_entries is not None:
             carried["rollback_entries"] = rollback_entries
             carried["rollback_evaluation_context"] = rollback_evaluation_context
@@ -785,8 +781,8 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             return PreparedStep.with_candidate(
                 HarnessCandidate(
                     candidate_id=f"{batch.batch_id}:recheck",
-                    candidate_files=render_composition(self._nodes_from(target), self._descriptor),
-                    current_files=render_composition(self._nodes_from(published), self._descriptor),
+                    candidate_files=render_composition(nodes_from_entries(target), self._descriptor),
+                    current_files=render_composition(nodes_from_entries(published), self._descriptor),
                     candidate_entries=tuple(target),
                     current_entries=tuple(published),
                     mutations=(),
@@ -945,9 +941,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         previous = None if previous_state is None else FailureManifest.from_state(previous_state)
         # A side the evaluation did not run showed nothing, so its manifest carries over untouched, as through a skip.
         manifest = None
-        if committed_side in evaluation_metrics.get(
-            "evaluation_sides", evaluation_metrics.get("gate_sides", EVALUATION_SIDES)
-        ):
+        if committed_side in evaluation_metrics.get("evaluation_sides", EVALUATION_SIDES):
             manifest = advance(
                 previous,
                 int(prepared.state["steps"]),
@@ -966,9 +960,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         metrics["evaluation_context"] = self.evaluation_context()
         # A publish stores the replaced tree and its evaluation stamp as the rollback target; a rollback consumes it.
         rollback_entries = prepared.state.get("rollback_entries")
-        rollback_evaluation_context = prepared.state.get(
-            "rollback_evaluation_context", prepared.state.get("rollback_gated_against")
-        )
+        rollback_evaluation_context = prepared.state.get("rollback_evaluation_context")
         if candidate.recheck and decision.selected:
             metrics["rolled_back"] = True
             rollback_entries = None
@@ -983,7 +975,6 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             state["failure_manifest"] = manifest.to_state()
         state.pop("rollback_entries", None)
         state.pop("rollback_evaluation_context", None)
-        state.pop("rollback_gated_against", None)
         if rollback_entries is not None:
             state["rollback_entries"] = rollback_entries
             state["rollback_evaluation_context"] = rollback_evaluation_context
@@ -1192,10 +1183,6 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
     def _nodes(self) -> tuple[tuple[str, Any], ...]:
         """The enabled composition in tree order, as (kind, config) pairs."""
         return nodes_from_entries(self._entries())
-
-    @staticmethod
-    def _nodes_from(entries: Sequence[Mapping[str, Any]]) -> tuple[tuple[str, Any], ...]:
-        return nodes_from_entries(entries)
 
     def _entries(self) -> list[EntryOptions]:
         """Live entry options in tree order."""
