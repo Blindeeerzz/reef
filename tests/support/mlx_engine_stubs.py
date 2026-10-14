@@ -8,7 +8,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from reef.inference.chat import ParsedToolCall, template_messages
+from reef.core.chat_protocol import ParsedToolCall, template_messages
 from reef.train.mlx_backend.config import MLXEngineConfig
 from reef.train.mlx_backend.contracts import AdapterSnapshot, GenerationListener, LossOptions, ModelEngine, Rollout
 

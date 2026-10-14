@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from reef.artifact.artifact import Artifact
-from reef.inference.chat import (
+from reef.core.chat_protocol import (
     ChatStreamRelay,
     OpenAIChunkWriter,
     ParsedToolCall,

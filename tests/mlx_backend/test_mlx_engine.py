@@ -14,7 +14,7 @@ pytest.importorskip("mlx_lm", reason="the MLX engine needs the optional mlx extr
 import recipes.openclawrl
 import recipes.tttd  # noqa: F401  (registers the tttd loss family)
 from reef.artifact.peft import ADAPTER_CONFIG, ADAPTER_METADATA, file_sha256
-from reef.inference.chat import ParsedToolCall
+from reef.core.chat_protocol import ParsedToolCall
 from reef.train.mlx_backend.config import MLXEngineConfig
 from reef.train.mlx_backend.contracts import GenerationListener, LossOptions
 from reef.train.mlx_backend.engine import MLX_ADAPTER_WEIGHTS, MLXAdapterSnapshot, MLXEngine

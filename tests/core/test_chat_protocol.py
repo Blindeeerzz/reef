@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from reef.inference.chat import ParsedToolCall, ReasoningStreamSplitter, assistant_message, template_messages
+from reef.core.chat_protocol import ParsedToolCall, ReasoningStreamSplitter, assistant_message, template_messages
 
 pytestmark = pytest.mark.unit
 

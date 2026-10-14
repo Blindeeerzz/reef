@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from reef.core.batches import TrajectoryItem
-from reef.inference.chat import ParsedToolCall
+from reef.core.chat_protocol import ParsedToolCall
 from reef.train.mlx_backend.config import MLXEngineConfig
 
 

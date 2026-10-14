@@ -27,7 +27,7 @@ from mlx_lm.tuner import linear_to_lora_layers
 
 from reef.artifact.peft import ADAPTER_CONFIG, ADAPTER_METADATA, METADATA_SCHEMA, file_sha256
 from reef.core.batches import TrajectoryItem
-from reef.inference.chat import ParsedToolCall, template_messages
+from reef.core.chat_protocol import ParsedToolCall, template_messages
 from reef.runtime.recovery import fsync_dir, mkdir_durable, write_json
 from reef.train.mlx_backend.config import MLXEngineConfig, check_template_kwargs
 from reef.train.mlx_backend.contracts import AdapterSnapshot, GenerationListener, LossOptions, ModelEngine, Rollout
