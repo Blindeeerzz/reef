@@ -6,7 +6,6 @@ from tests.support._strategies import resolve_episode_scorer, resolve_proposer
 from reef.evaluation.harness import evaluation_executor_config, evaluation_selection
 from reef.inference.http import InferenceProxyRuntime
 from reef.recipe.cordis import CordisRecipe
-from reef.recipe.errors import RecipeConfigError
 from reef.runtime.executor import WorkerSpec
 from reef.runtime.executor.config import executor_settings, select_executor
 from reef.runtime.executor.requirements import ExecutionRequirements
@@ -91,14 +90,6 @@ def test_conflicting_raw_actor_options_are_rejected(resource, option):
     settings = executor_settings({}, {"resources": {resource: 1}, "options": {option: 2}})
     with pytest.raises(ValueError, match="resources"):
         evaluation_selection(resolve_episode_scorer(scorer), settings)
-
-
-@pytest.mark.parametrize(
-    "removed", [{"episode_workers": 2}, {"worker_executor": "mp"}, {"worker_resources": {"num_gpus": 1}}]
-)
-def test_removed_evolution_worker_keys_are_refused(removed):
-    with pytest.raises(RecipeConfigError, match=f"evolution.{next(iter(removed))} is not accepted"):
-        CordisRecipe.from_environment({}, config=recipe_config("auto", **removed))
 
 
 class VisibleDeviceWorker:

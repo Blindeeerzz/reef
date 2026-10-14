@@ -1109,8 +1109,6 @@ def test_recipe_rejects_removed_acceptance_and_raw_selection_callable(tmp_path, 
             }
         }
 
-    with pytest.raises(RecipeConfigError, match=r"evolution\.acceptance was removed"):
-        CordisRecipe.from_environment({}, config=config(acceptance="always"))
     # evolution.selection names a SelectionPlugin class, so a reference to
     # anything else is the misconfiguration.
     with pytest.raises(RecipeConfigError, match=r"inherits SelectionPlugin"):
@@ -1164,12 +1162,6 @@ def test_recipe_resolves_selection_plugin(tmp_path, monkeypatch) -> None:
     dotted = CordisRecipe.from_environment({}, config=config(selection="demo_selection:DemoPlugin"))
     assert dotted.selection.plugin_class.__name__ == "DemoPlugin"
     assert type(dotted.selection_plugin(object())).__name__ == "DemoPlugin"
-
-    with pytest.raises(RecipeConfigError, match="acceptance was removed"):
-        CordisRecipe.from_environment(
-            {},
-            config=config(selection="always", acceptance="pairwise"),
-        )
 
 
 def test_model_binding_reaches_episodes_but_never_the_published_tree(tmp_path: Path, monkeypatch) -> None:

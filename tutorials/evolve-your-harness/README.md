@@ -95,9 +95,8 @@ executors:
 ```
 
 CPU requests do not enforce core limits on local workers. Ray uses CPU/GPU
-requests as per-worker scheduling reservations. The `evolution` section does
-not accept `episode_workers`, `worker_executor` or `worker_resources`; set
-workers and resources under `execution.evolution`.
+requests as per-worker scheduling reservations. Set workers and resources
+under `execution.evolution`.
 
 ## Keep a deployment running
 

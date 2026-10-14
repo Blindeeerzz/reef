@@ -46,15 +46,6 @@ def test_deployment_rejects_a_services_execution_role(tmp_path):
         resolve_deployment_config(raw, None, tmp_path / "serve.yaml")
 
 
-def test_standalone_recipe_cannot_reintroduce_process_execution():
-    from reef.recipe.config import recipe_config_from_file_layout
-    from reef.recipe.errors import RecipeConfigError
-
-    raw = {**method_config(), "execution": {"services": "ray"}}
-    with pytest.raises(RecipeConfigError, match=r"execution\.services is not accepted"):
-        recipe_config_from_file_layout(raw)
-
-
 @pytest.mark.parametrize("flag", ["service.port", "services", "execution.services.backend"])
 @pytest.mark.parametrize("from_file", [False, True])
 def test_cli_cannot_reintroduce_process_configuration(tmp_path, flag, from_file):

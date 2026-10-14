@@ -286,9 +286,7 @@ not an episode count or a separate business-level concurrency limit. For
 enforce a CPU quota. Ray maps them to ``num_cpus``/``num_gpus`` per actor;
 these are scheduling reservations, not hard CPU limits.
 
-The ``evolution`` section does not accept ``episode_workers``,
-``worker_executor`` or ``worker_resources``; set them under
-``execution.evolution``. In Python, pass
+Set workers and resources under ``execution.evolution``. In Python, pass
 ``worker_executor=ExecutorSettings(workers=..., resources=WorkerResources(...))``.
 ``evolution.executor`` still means ``local`` or ``sandbox`` episode isolation;
 it is NOT renamed to ``uni``/``mp``. Sandbox preflight runs on the execution

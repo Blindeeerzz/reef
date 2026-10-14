@@ -455,8 +455,6 @@ class CordisRecipe(Recipe):
             else:
                 raise RecipeConfigError("evolution.seed entries must be entry option mappings or dotted references")
         seed = entries
-        if "acceptance" in evolution:
-            raise RecipeConfigError("evolution.acceptance was removed; configure evolution.selection")
         selection_setting = evolution.get("selection", "score_comparison")
         selection = _selection_reference(selection_setting)
         if budgets["min_win_margin"]:
@@ -531,9 +529,6 @@ class CordisRecipe(Recipe):
                 raise RecipeConfigError(str(exc)) from exc
         if "served" in models:
             raise RecipeConfigError("evolution.models may not name a model 'served'; that is the model under test")
-        removed = [key for key in ("episode_workers", "worker_executor", "worker_resources") if key in evolution]
-        if removed:
-            raise RecipeConfigError(f"evolution.{removed[0]} is not accepted; configure execution.evolution instead")
         proposals_dir = evolution.get("proposals_dir", cls.proposals_dir)
         if not isinstance(proposals_dir, str) or not proposals_dir.strip():
             raise RecipeConfigError("evolution.proposals_dir must be a non-empty path")
