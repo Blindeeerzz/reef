@@ -109,6 +109,7 @@ class TinkerTrainingRuntime(TrainingRuntime):
             algorithm_state,
             scheduling,
             batch_size=self._config.batch_size,
+            kl_coef=self._config.kl_coef,
             runtime_load_id=serving_runtime_load_id,
         )
         if prepared.payload is None:

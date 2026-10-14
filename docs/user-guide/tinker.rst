@@ -84,6 +84,8 @@ Each job trains the Tinker loss of the objective that its recipe selected
 <../developer-guide/write-a-recipe.rst#switch-methods-within-a-run>`__).
 Tinker preparation needs one advantage per trajectory, so a supervised or
 distillation objective fails before training.
+``kl-coef`` applies to every job. When it is not zero, a job whose loss has no
+KL penalty, such as ``importance_sampling``, also fails before training.
 
 ``lora-rank``, ``seed``, and ``learning-rate`` configure adapter initialization
 and Adam updates. Other Adam settings currently use the pinned SDK's defaults

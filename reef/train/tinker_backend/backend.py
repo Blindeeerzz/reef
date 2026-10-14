@@ -107,7 +107,7 @@ class TinkerTrainingBackend(TrainingBackend):
         if self._loss_family:
             if self._loss_reference:
                 register_loss_family_ref(self._loss_family, self._loss_reference, backend=BACKEND)
-            resolve_tinker_loss(self._loss_family)
+            resolve_tinker_loss(self._loss_family).check_kl_coef(self._config.kl_coef)
         if self._client is None:
             from reef.train.tinker_backend.client import TinkerSDKClient
 
@@ -143,7 +143,14 @@ class TinkerTrainingBackend(TrainingBackend):
         scheduling: StepScheduling,
     ) -> PreparedTrainingStep:
         # Staleness admission is the coordinator's; the payload carries only the rows.
-        return prepare_tinker_step(batch, method, algorithm_state, scheduling, batch_size=self._config.batch_size)
+        return prepare_tinker_step(
+            batch,
+            method,
+            algorithm_state,
+            scheduling,
+            batch_size=self._config.batch_size,
+            kl_coef=self._config.kl_coef,
+        )
 
     @contextmanager
     def prepare(

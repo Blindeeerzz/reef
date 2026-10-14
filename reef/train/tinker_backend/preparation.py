@@ -27,12 +27,14 @@ def prepare_tinker_step(
     scheduling: StepScheduling,
     *,
     batch_size: int,
+    kl_coef: float,
     runtime_load_id: str | None = None,
 ) -> PreparedTrainingStep:
     """Shape one batch into Tinker optimizer batches under the recipe's ``scheduling``.
 
     The job trains ``method``'s objective with that objective's Tinker loss,
-    which must be registered in this process; the payload records the method.
+    which must be registered in this process and accept ``kl_coef``; the
+    payload records the method.
     With ``runtime_load_id`` the payload also records that serving version
     and whether any trajectory was produced under another one; without it,
     Reef's coordinator performs staleness admission from the batch itself.
@@ -42,7 +44,7 @@ def prepare_tinker_step(
     signal = objective.prepare(batch, state)
     if signal.action == "skip":
         return PreparedTrainingStep("skip", signal.next_algorithm_state, signal.metrics)
-    resolve_tinker_loss(objective.loss_family)
+    resolve_tinker_loss(objective.loss_family).check_kl_coef(kl_coef)
     items = trajectories(batch)
     if signal.advantages is None or len(signal.advantages) != len(items):
         raise ValueError("Tinker policy training requires one advantage per trajectory")

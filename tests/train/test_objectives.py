@@ -118,7 +118,7 @@ def test_recipe_owns_the_step_schedule_and_the_objective_rejects_unsupported_epo
     with pytest.raises(ValueError, match="does not support StepScheduling"):
         prepare_slime_step(batch, TrainingMethod("tttd"), {"steps": 0}, two_passes)
     with pytest.raises(ValueError, match="does not support StepScheduling"):
-        prepare_tinker_step(batch, TrainingMethod("tttd"), {"steps": 0}, two_passes, batch_size=1)
+        prepare_tinker_step(batch, TrainingMethod("tttd"), {"steps": 0}, two_passes, batch_size=1, kl_coef=0.0)
 
 
 def test_both_backends_preserve_skip_and_proposed_state_without_resolving_a_loss():
@@ -129,7 +129,9 @@ def test_both_backends_preserve_skip_and_proposed_state_without_resolving_a_loss
         state = {"steps": 7}
         batch = TrainingBatch("empty", ())
         slime = prepare_slime_step(batch, TrainingMethod(objective.name), state, StepScheduling())
-        tinker = prepare_tinker_step(batch, TrainingMethod(objective.name), state, StepScheduling(), batch_size=1)
+        tinker = prepare_tinker_step(
+            batch, TrainingMethod(objective.name), state, StepScheduling(), batch_size=1, kl_coef=0.0
+        )
         assert slime == tinker
         assert slime.action == "skip" and slime.payload is None
         assert slime.next_algorithm_state == {"steps": 7, "skipped": True}
@@ -158,7 +160,7 @@ def test_group_advantages_are_shared_across_backends_before_optimizer_partitioni
         for advantage in TttdObjective.adaptive_entropic_advantages(list(group))[0]
     )
     slime = prepare_slime_step(batch, TrainingMethod("tttd"), state, one_sample_steps)
-    tinker = prepare_tinker_step(batch, TrainingMethod("tttd"), state, one_sample_steps, batch_size=1)
+    tinker = prepare_tinker_step(batch, TrainingMethod("tttd"), state, one_sample_steps, batch_size=1, kl_coef=0.0)
     assert slime.payload["loss"] == tinker.payload["loss"] == "tttd"
     assert slime.payload["advantages"] == pytest.approx(expected)
     assert [rows[0]["advantage"] for rows in tinker.payload["batches"]] == pytest.approx(expected)

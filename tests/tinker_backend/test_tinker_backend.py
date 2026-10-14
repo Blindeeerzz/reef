@@ -343,7 +343,7 @@ def test_schedule_keeps_comparison_sets_and_handles_epochs(objective):
     scheduling = StepScheduling(unit="comparison_set", batch_size=2, epochs=2, remainder="partial")
     batch = TrainingBatch("schedule", tuple(item("v", group) for group in ("a", "a", "b", "c")))
     step = prepare_tinker_step(
-        batch, TrainingMethod(objective.name), {}, scheduling, runtime_load_id="v", batch_size=1
+        batch, TrainingMethod(objective.name), {}, scheduling, runtime_load_id="v", batch_size=1, kl_coef=0.0
     )
     assert [len(rows) for rows in step.payload["batches"]] == [3, 1, 3, 1]
     assert step.metrics["optimizer_steps"] == 4
@@ -666,6 +666,7 @@ def test_configured_batch_size_respects_error_remainder(objective):
             scheduling,
             runtime_load_id="v",
             batch_size=2,
+            kl_coef=0.0,
         )
 
 
@@ -768,3 +769,16 @@ def test_a_method_without_a_tinker_loss_is_refused_before_training(runtime):
     with pytest.raises(ValueError, match="unsupported Tinker loss family 'sft'"):
         value.training.prepare_training_step(batch, TrainingMethod("sft"), {}, SCHEDULING, 0)
     assert client.calls == []
+
+
+def test_a_method_whose_loss_has_no_kl_penalty_is_refused_before_training(tmp_path, objective, second_objective):
+    client = RemoteClient()
+    value = Deployment(TinkerConfig(state_dir=str(tmp_path / "state"), kl_coef=0.1), client)
+    try:
+        # TTTD's loss trains the configured KL penalty; importance sampling has none to train.
+        assert scheduled(value, second_objective, None)["loss"] == "tttd"
+        with pytest.raises(ValueError, match="importance_sampling does not implement a KL penalty"):
+            scheduled(value, objective, None)
+        assert client.calls == []
+    finally:
+        value.shutdown()

@@ -1352,7 +1352,9 @@ holds their Slime reference. ``loss_fn`` names the Tinker built-in loss the
 family trains with; ``inputs(rows, base_logprobs, kl_coef=...)`` returns that
 function's token-aligned ``loss_fn_inputs``, one dictionary per row; and
 ``needs_base_logprobs`` requests frozen-base scores for a nonzero KL
-coefficient. For ``importance_sampling``, ``TokenRow.inputs`` builds the
+coefficient. ``check_kl_coef(kl_coef)`` raises ``ValueError`` for a
+coefficient the family cannot train; Reef calls it when it prepares a job,
+before any remote work. The default accepts every coefficient. For ``importance_sampling``, ``TokenRow.inputs`` builds the
 dictionary from response-token advantages, shifting prediction targets by one
 token and padding prompt positions with zeros. A ``TinkerCustomLoss`` adds
 ``loss(data, logprobs)``, which the SDK boundary passes to

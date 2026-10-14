@@ -116,6 +116,7 @@ class TinkerSDKClient(TinkerClient):
     ) -> tuple[TinkerCheckpoint, Mapping[str, Any]]:
         if len(learning_rates) != len(batches):
             raise ValueError("Tinker training needs one learning rate per optimizer batch")
+        loss.check_kl_coef(self._config.kl_coef)
         service = self._new_service()
         status = "errored"
         try:
