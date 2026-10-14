@@ -18,7 +18,7 @@ Check health and status
    curl -f "$REEF_URL/healthz"
    curl -sS -H "Authorization: Bearer $REEF_TOKEN" "$REEF_URL/reef/status"
 
-``/healthz`` answers as soon as the HTTP service is up; it says nothing about training. ``/reef/status`` is the training side: the last asynchronous error, model preload failures, and for every scenario its step counter, latest committed step outcome, runtime load ID being served, checkpoint storage state, whether a batch is waiting, the processor's state, and whether inference is admitted or paused for a weight update. The committed outcome includes the recipe-owned metrics, so a skipped or rejected update is distinguishable from one that is still running. It is the first place to look when requests keep being served by an old version.
+``/healthz`` answers as soon as the HTTP service is up; it says nothing about training. ``/reef/status`` is the training side: the last asynchronous error, model preload failures, the number of loaded scenarios (``loaded_scenarios``), and for every scenario its step counter, latest committed step outcome, runtime load ID being served, checkpoint storage state, whether a batch is waiting, the processor's state, and whether inference is admitted or paused for a weight update. The committed outcome includes the recipe-owned metrics, so a skipped or rejected update is distinguishable from one that is still running. It is the first place to look when requests keep being served by an old version.
 
 The service and every process ``reef serve`` started write logs under ``reef.run-dir`` (``.reef/run/`` by default), one ``<service>.log`` and one ``<service>.pid`` each.
 
@@ -247,6 +247,79 @@ An embedded deployment gives a ``ScenarioStorage`` instance to
 ``Dispatcher(..., scenario_storage=...)`` instead.
 
 With all backends, each scenario needs one Reef writer.
+
+Limit the scenarios a service holds
+-----------------------------------
+
+A service loads every registered scenario when it starts. By default it keeps
+each one loaded until the scenario is deleted, and it accepts any number of
+scenarios. A loaded scenario holds a storage session, its trainers and its
+local worker threads. Four ``reef`` settings change this. All are off by default.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Setting
+     - Effect
+   * - ``scenario-idle-unload-s``
+     - Unload a scenario that has been idle for this many seconds.
+   * - ``max-loaded-scenarios``
+     - The most scenarios loaded at once. To load another, Reef first unloads
+       the least recently used idle scenario. If no scenario is idle, the
+       request gets HTTP 503 with a ``Retry-After`` header.
+   * - ``max-scenarios``
+     - The most registered scenarios. A request that would create another
+       gets HTTP 409. Delete a scenario to free a place.
+   * - ``scenario-admission``
+     - A ``ScenarioAdmission`` plugin that replaces the two limits above.
+
+.. code-block:: yaml
+
+   reef:
+     scenario-idle-unload-s: 3600
+     max-loaded-scenarios: 50
+     max-scenarios: 1000
+
+Unloading keeps everything durable: the records, the commit log, the settings
+and the releases. The next request to the scenario loads it again, as a
+restart does. Counters held in memory, such as the operation metrics, start
+again from zero.
+
+A scenario is idle when all of these are true:
+
+- No request, record or local training cycle used it during the idle time.
+  The load limit does not wait for the idle time.
+- No request runs on it, and no local training cycle runs on it.
+- No trainer has records that it would still train on.
+- No release exists only in memory. With ``checkpoint_every_n_versions``
+  above 1 (see `Set the checkpoint cadence`_), a release between checkpoints
+  is kept only in memory, so the scenario stays loaded.
+- The storage backend is durable.
+
+Reef never unloads a weight-training scenario. Its runtime binding is
+released only when the scenario is deleted.
+
+The start-up preload follows the load limit. When no loaded scenario is
+idle, a registered scenario is not preloaded; it loads on its first request.
+
+An admission plugin is a subclass of ``reef.scenario.admission.ScenarioAdmission``.
+Name it as ``package.module:ClassName``, or give the name and a ``config``
+mapping, as for a storage plugin. Reef calls ``from_config(config)``. It
+implements two methods:
+
+- ``check_creation(scenario, registered_count=...)``: raise
+  ``reef.core.errors.ScenarioLimitReached`` (HTTP 409) to refuse a new scenario.
+- ``admit_load(scenario, loaded=...)``: return a ``LoadAdmission`` that names
+  how many loaded scenarios Reef must unload first and the candidates in the
+  order to try. Reef unloads only idle candidates. If too few are idle, Reef
+  refuses the load with ``reef.core.errors.ScenarioCapacityFull`` (HTTP 503).
+  The plugin can also raise that error itself.
+
+Reef calls the plugin before it creates and before it loads a scenario. The
+calls are serialized, so the methods must return quickly. ``reef.max-scenarios``
+and ``reef.max-loaded-scenarios`` configure the built-in ``ScenarioLimits``,
+so Reef refuses them together with a plugin.
 
 Back up a deployment
 --------------------

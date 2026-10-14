@@ -441,6 +441,12 @@ scenario returns HTTP 409. This means the surface, runtime, inference backend,
 and optional report schema chosen when the recipe is constructed are fixed with
 it.
 
+A deployment can limit its scenarios (see `Limit the scenarios a service holds
+<../user-guide/operate.rst#limit-the-scenarios-a-service-holds>`__). A request
+that would create a scenario past ``reef.max_scenarios`` returns HTTP 409. A
+request that must load a scenario while the service holds its limit of loaded
+scenarios, none of them idle, returns HTTP 503 with a ``Retry-After`` header.
+
 If the deployment sets ``reef.allow_implicit_scenario_creation: false``, an
 unknown scenario returns HTTP 404 and you create it first:
 
@@ -741,7 +747,9 @@ script, naming ``GET /reef/harness`` for the tree and ``POST /reef/train`` for
 a request. If install omits ``x-reef-scenario``, Reef creates a scenario with a
 generated ``harness-`` name and embeds that assignment in the wrapper script;
 when exactly one configured recipe serves harness files, it selects that recipe
-automatically.
+automatically. With ``reef.allow_implicit_scenario_creation: false``, install
+creates no scenario and answers HTTP 404: create the scenario with
+``POST /reef/scenarios`` and name it in ``x-reef-scenario``.
 
 Creating that scenario takes a few seconds, and ``curl ... | bash`` shows
 nothing until the first bytes arrive. So when the script is not ready within

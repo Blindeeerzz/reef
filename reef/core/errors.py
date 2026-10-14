@@ -17,5 +17,17 @@ class ScenarioBusy(ReefError):
     """The scenario has a training job out at its backend; the operation waits for the job to land."""
 
 
+class ScenarioLimitReached(ReefError):
+    """The service holds as many scenarios as it may register; a new one is refused."""
+
+
+class ScenarioCapacityFull(ReefError):
+    """The service holds as many loaded scenarios as it may, and none of them can be unloaded now."""
+
+    def __init__(self, message: str, *, retry_after_seconds: int = 30) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
 class DeployConfigError(ReefError):
     """A ``reef serve`` deployment config cannot be loaded or is invalid."""

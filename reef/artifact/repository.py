@@ -207,6 +207,11 @@ class Repository(ArtifactRepository):
         return self._local_root
 
     @property
+    def holds_local_releases(self) -> bool:
+        """Whether a release staged by this process exists only in memory: closing the repository loses it."""
+        return bool(self._local_artifacts)
+
+    @property
     def backend(self) -> RepositoryBackend:
         return self._backend
 

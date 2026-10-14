@@ -15,6 +15,7 @@ from functools import lru_cache
 from typing import Any
 
 from reef.core.config import ConfigArgument, config_arguments, config_metadata, config_option, parse_config_values
+from reef.scenario.admission import ScenarioAdmission
 from reef.service.cors import console_origins
 from reef.service.deploy.config_utils import config_value, interpolate_config, interpolate_config_values
 from reef.storage.postgres import postgres_url, validate_postgres_schema
@@ -191,6 +192,25 @@ class ServiceConfig:
         public_path=("reef", "allow_implicit_scenario_creation"),
         help="Allow requests to create scenarios implicitly.",
     )
+    scenario_idle_unload_s: float | None = config_option(
+        None,
+        public_path=("reef", "scenario_idle_unload_s"),
+        help="Unload a scenario idle for this many seconds; the next request loads it again (default: never).",
+    )
+    max_loaded_scenarios: int | None = config_option(
+        None,
+        public_path=("reef", "max_loaded_scenarios"),
+        help="Most scenarios loaded at once; at the limit the least recently used idle one unloads (default: no limit).",
+    )
+    max_scenarios: int | None = config_option(
+        None, public_path=("reef", "max_scenarios"), help="Most scenarios registered (default: no limit)."
+    )
+    #: A ``ScenarioAdmission`` plugin that replaces the built-in limits: ``package.module:ClassName`` or module and config.
+    scenario_admission: str | Mapping[str, Any] | None = config_option(
+        None,
+        public_path=("reef", "scenario_admission"),
+        help="ScenarioAdmission plugin reference that decides scenario creation and loading.",
+    )
     #: Deployment-level experiment provider settings, sourced from
     #: ``observability.wandb``.
     wandb_config: Mapping[str, Any] = field(
@@ -234,6 +254,21 @@ class ServiceConfig:
 
     def __post_init__(self) -> None:
         RecordRetention(max_bytes=self.agent_record_retention_max_bytes)
+        if self.scenario_idle_unload_s is not None and self.scenario_idle_unload_s <= 0:
+            raise ValueError("reef.scenario_idle_unload_s must be positive")
+        for setting, limit in (
+            ("max_loaded_scenarios", self.max_loaded_scenarios),
+            ("max_scenarios", self.max_scenarios),
+        ):
+            if limit is not None and limit < 1:
+                raise ValueError(f"reef.{setting} must be positive")
+        if self.scenario_admission is not None:
+            if self.max_loaded_scenarios is not None or self.max_scenarios is not None:
+                raise ValueError(
+                    "reef.max_loaded_scenarios and reef.max_scenarios configure the built-in admission; "
+                    "a reef.scenario_admission plugin reads its own config"
+                )
+            ScenarioAdmission.reference(self.scenario_admission, setting="reef.scenario_admission")
         if self.record_backend not in ("sqlite", "postgres"):
             if isinstance(self.record_backend, str) and ":" not in self.record_backend:
                 raise ValueError("storage.record_backend must be sqlite, postgres, or 'package.module:ClassName'")
