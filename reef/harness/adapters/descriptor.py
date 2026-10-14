@@ -681,6 +681,8 @@ def _load_quirks(
     if len(renderers) > 1:
         names = ", ".join(sorted(renderer.__name__ for renderer in renderers))
         raise DescriptorError(f"{where} quirks module defines more than one AdapterRenderer subclass: {names}")
+    if "finalize_render" in vars(module):
+        raise DescriptorError(f"{where} quirks module defines finalize_render; define it on an AdapterRenderer subclass")
     renderer = renderers[0] if renderers else AdapterRenderer
     whitelist = tuple(getattr(module, "cleanup_whitelist", ()))
     if not all(isinstance(item, str) and item for item in whitelist):

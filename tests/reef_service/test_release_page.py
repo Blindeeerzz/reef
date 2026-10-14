@@ -751,13 +751,12 @@ def test_a_review_that_did_not_run_is_named_on_the_version_page() -> None:
     assert "carried no result object" in review
 
 
-@pytest.mark.parametrize("review_key", ["result", "verdict"])
-def test_the_page_shows_the_proposers_design_and_review_and_escapes_them(review_key) -> None:
+def test_the_page_shows_the_proposers_design_and_review_and_escapes_them() -> None:
     creation = {"release_id": "rel-0", "parent_release_id": None, "operation": "creation"}
     notes = {
         "design": "Add an <away> command.\n\nA rule alone would assume the state holds.",
         "review": {
-            review_key: "partial",
+            "result": "partial",
             "covered": ["the /away command toggles the state", "the rule reads a < b"],
             "uncovered": ["no <b>notice</b> when the state clears"],
         },

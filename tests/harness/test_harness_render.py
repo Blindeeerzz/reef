@@ -1274,19 +1274,33 @@ def test_an_adapter_renderer_step_must_be_a_static_method() -> None:
                 return text
 
 
-def test_a_quirks_module_must_define_one_adapter_renderer(tmp_path, monkeypatch) -> None:
-    module_name = "two_renderer_quirks"
-    (tmp_path / f"{module_name}.py").write_text(
-        "from reef.harness.adapters.descriptor import AdapterRenderer\n"
-        "class FirstRenderer(AdapterRenderer):\n    pass\n"
-        "class SecondRenderer(AdapterRenderer):\n    pass\n"
-    )
+@pytest.mark.parametrize(
+    ("module_name", "source", "message"),
+    [
+        (
+            "two_renderer_quirks",
+            "from reef.harness.adapters.descriptor import AdapterRenderer\n"
+            "class FirstRenderer(AdapterRenderer):\n    pass\n"
+            "class SecondRenderer(AdapterRenderer):\n    pass\n",
+            "more than one AdapterRenderer subclass: FirstRenderer, SecondRenderer",
+        ),
+        (
+            "module_finalize_quirks",
+            "def finalize_render(files):\n    return files\n",
+            "defines finalize_render; define it on an AdapterRenderer subclass",
+        ),
+    ],
+)
+def test_a_quirks_module_defines_its_steps_on_one_adapter_renderer(
+    tmp_path, monkeypatch, module_name, source, message
+) -> None:
+    (tmp_path / f"{module_name}.py").write_text(source)
     monkeypatch.syspath_prepend(str(tmp_path))
     data = yaml.safe_load((Path(reef.harness.adapters.__file__).parent / "native" / "descriptor.yaml").read_text())
     data["quirks"] = module_name
     target = tmp_path / "descriptor.yaml"
     target.write_text(yaml.safe_dump(data), encoding="utf-8")
-    with pytest.raises(DescriptorError, match="more than one AdapterRenderer subclass: FirstRenderer, SecondRenderer"):
+    with pytest.raises(DescriptorError, match=message):
         load_descriptor(target)
 
 

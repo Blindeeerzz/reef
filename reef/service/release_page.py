@@ -428,7 +428,7 @@ def _review(metrics: Mapping[str, Any]) -> str:
         return ""
     parts = []
     if isinstance(review, Mapping):
-        review_result = status_span(str(review.get("result", review.get("verdict")) or "unknown"))
+        review_result = status_span(str(review.get("result") or "unknown"))
         parts.append(f"<p>The proposer's review of its entries against the request: {review_result}</p>")
         kept = kept_answer(notes)
         if kept is not None:
