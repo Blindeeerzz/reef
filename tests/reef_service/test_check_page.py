@@ -107,8 +107,7 @@ def test_plan_task_results_and_metadata_escape_untrusted_html() -> None:
     assert f"<li>{html.escape(text)}</li>" in page and "<script>" not in page
 
 
-@pytest.mark.parametrize("report_key", ["evaluation_report", "reefine_evaluation"])
-def test_records_without_a_plan_keep_the_expected_task_and_result(report_key: str) -> None:
+def test_records_without_a_plan_keep_the_expected_task_and_result() -> None:
     checks = [
         {
             "id": "request-behavior",
@@ -118,7 +117,7 @@ def test_records_without_a_plan_keep_the_expected_task_and_result(report_key: st
             "reason": "No paper was read",
         }
     ]
-    page = evaluation_html({report_key: {"checks": checks}}, result="rejected")
+    page = evaluation_html({"evaluation_report": {"checks": checks}}, result="rejected")
     assert "Read the downloaded paper" in page and "No paper was read" in page
     assert "Check plan: Ready" not in page
 
@@ -126,12 +125,3 @@ def test_records_without_a_plan_keep_the_expected_task_and_result(report_key: st
 def test_pages_without_independent_evaluation_keep_their_existing_content() -> None:
     assert evaluation_html({"candidate_score": 1}) == ""
     assert checks_html([]) == ""
-
-
-def test_current_report_takes_priority_over_legacy_report() -> None:
-    current = {
-        "checks": [{"id": "request-behavior", "group": "request", "status": "pass", "observed": "Current result"}]
-    }
-    legacy = {"checks": [{"id": "request-behavior", "group": "request", "status": "fail", "reason": "Older result"}]}
-    page = evaluation_html({"evaluation_report": current, "reefine_evaluation": legacy}, result="selected")
-    assert "Current result" in page and "Older result" not in page

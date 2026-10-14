@@ -118,14 +118,11 @@ def test_failed_required_check_rejects(tmp_path, field):
     assert measured.metrics["evaluation_report"]["current_release_id"] == "served-release"
 
 
-@pytest.mark.parametrize("report_key", ["evaluation_report", "reefine_evaluation"])
-def test_success_uses_fresh_review_context_and_writes_progress_and_record(tmp_path, report_key):
+def test_success_uses_fresh_review_context_and_writes_progress_and_record(tmp_path):
     plugin, model, backend = evaluation(tmp_path)
     item = candidate(tmp_path)
     measured = plugin.evaluate(item)
-    assert "evaluation_report" in measured.metrics and "reefine_evaluation" not in measured.metrics
-    recorded = replace(measured, metrics={report_key: measured.metrics["evaluation_report"]})
-    assert plugin.decide(item, recorded).selected
+    assert plugin.decide(item, measured).selected
     assert all(len(messages) == 1 and messages[0]["role"] == "user" for messages in model.messages_seen)
     assert all("proposal_notes" not in messages[0]["content"] for messages in model.messages_seen)
     assert '"harness": {"AGENTS.md": "new"}' in model.messages_seen[1][0]["content"]

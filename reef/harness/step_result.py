@@ -56,8 +56,8 @@ def unscored_failures(metrics: Mapping[str, Any]) -> list[str]:
 
 
 def evaluation_report(metrics: Mapping[str, object]) -> Mapping[str, object] | None:
-    """Read the check report, including records written with the earlier method-specific key."""
-    report = metrics.get("evaluation_report", metrics.get("reefine_evaluation"))
+    """Read the evaluation report from step metrics."""
+    report = metrics.get("evaluation_report")
     if not isinstance(report, Mapping):
         return None
     return report

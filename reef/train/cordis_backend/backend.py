@@ -1002,7 +1002,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         # A real rejection joins a bounded record the proposer can read back, options included.
         if not candidate.recheck and not decision.selected and self._max_rejected_history:
             rejected = list(prepared.state.get("rejected_proposals", ()))
-            feedback = decision.metrics.get("request_feedback", decision.metrics.get("reefine_feedback"))
+            feedback = decision.metrics.get("request_feedback")
             rejected.append(
                 {
                     "step": int(prepared.state["steps"]),

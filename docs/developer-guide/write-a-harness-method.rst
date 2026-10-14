@@ -334,8 +334,6 @@ target, status, expected and observed behavior, scores, reason, duration and
 optional record directory. Check statuses are ``pending``, ``running``,
 ``pass``, ``fail``, ``invalid`` and ``not_run``. Every required group and row
 must pass before ``SelectionDecision.selected`` can be true.
-Report readers also accept the older ``reefine_evaluation`` key;
-``evaluation_report`` takes priority when both keys are present.
 
 ``RequestVerifier`` is an optional operator-owned ABC. Implement
 ``verify(result: EpisodeResult, workspace: Path) -> VerificationResult``.
