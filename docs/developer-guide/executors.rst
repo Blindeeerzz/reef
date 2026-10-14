@@ -251,9 +251,8 @@ that data plane. There is no built-in torchrun, Slurm or Kubernetes backend,
 and no online TP/PP resizing. ``uni/mp`` are rejected for Slime GPU worker roles;
 it remains valid for standalone inference and recipe-owned external processes.
 
-``ReefRayTrainGroup`` remains an import alias for ``SlimeTrainGroup``. Its
-``async_*`` methods now return executor futures (or an already available value)
-and should be consumed with ``resolve``; code using ``ray.get`` directly on
+The ``async_*`` methods of ``SlimeTrainGroup`` return executor futures (or an
+already available value) and should be consumed with ``resolve``; code using ``ray.get`` directly on
 these return values must migrate. The existing Slime algorithm ``resolve``
 callback already handles this conversion.
 
@@ -527,8 +526,8 @@ external deployment with an uncertain lock requires operator restart, and the
 shared controller never terminates borrowed engines.
 
 ``reef.runtime.publication.WeightUpdateLock`` owns lock poisoning and transport
-phase-result bookkeeping without Slime or Ray imports. The legacy
-``ReefRolloutLock`` entrypoint wraps it as a serial Ray actor. Existing weight
+phase-result bookkeeping without Slime or Ray imports. Each inference worker
+runs it as a serial Ray actor with ``ray.remote(WeightUpdateLock)``. Existing weight
 updaters use the same lock methods and continue transferring directly between
 workers and engines. There is no tensor relay through the shared controller.
 
@@ -866,11 +865,10 @@ names to ``None`` while running or an exit code; a missing service is not alive.
 Custom rollout executors expose one control rank. Its RPC vocabulary is
 ``inference_url``, ``get_runtime_load_ids``, ``get_updatable_engines_and_lock``,
 ``pause_generation_for_update``, ``continue_generation_after_update``,
-``offload``, ``onload(tags)``, ``onload_weights``, ``onload_kv``,
+``offload``, ``onload_weights``, ``onload_kv``,
 ``terminate_updatable_engines``, ``prepare_training_connection``,
-``recover_updatable_engines``,
-``clear_updatable_num_new_engines``, ``health_monitoring_pause``,
-``health_monitoring_resume`` and ``check_weights(action)``. Executor shutdown
+``recover_updatable_engines``, ``clear_updatable_num_new_engines`` and
+``check_weights(action)``. Executor shutdown
 owns serving resource teardown; the manager does not manipulate backend
 server groups or actor handles directly.
 

@@ -19,7 +19,7 @@ from reef.train.algos import StepScheduling
 
 pytest.importorskip("ray", reason="requires the optional Ray runtime")
 
-from reef.inference.sglang.service import RayHealthProbe
+from reef.inference.process import RayHealthProbe
 from reef.runtime.deployment import (
     ComponentHealth,
     DeploymentResources,

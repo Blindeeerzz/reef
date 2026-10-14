@@ -16,7 +16,7 @@ import pytest
 
 from reef.harness.adapters import get_adapter
 from reef.harness.episodes.model_binding import ModelBinding
-from reef.harness.episodes.trajectory import read_terminus_atif
+from reef.harness.episodes.trajectory import TerminusAtifReader
 from reef.harness.runners.terminus import (
     TerminusTreeError,
     instruction_paths,
@@ -285,7 +285,7 @@ def test_the_written_trial_is_what_the_reader_parses(tmp_path: Path) -> None:
     (trials / "trajectory.json").write_text(_trajectory([{"n": 1}]))
     runner.write_trial(runner.trial_record("hello-world", {"accuracy": 1.0}, trials), sessions)
 
-    events = read_terminus_atif(sessions)
+    events = TerminusAtifReader()(sessions)
     assert [event["type"] for event in events] == ["verifier", "step"]
     assert events[0]["reward"] == 1.0 and events[0]["task"] == "hello-world"
     assert events[1]["n"] == 1

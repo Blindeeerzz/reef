@@ -1270,7 +1270,7 @@ def test_queued_tttd_fanout_freezes_the_head_that_reopens_admission(monkeypatch)
     async def run() -> None:
         queued = [
             asyncio.create_task(
-                service.infer(
+                service.infer_with_data(
                     {"x-reef-scenario": "math"},
                     {"messages": [{"role": "user", "content": f"rollout {rollout}"}]},
                     "/v1/chat/completions",
@@ -1295,7 +1295,7 @@ def test_queued_tttd_fanout_freezes_the_head_that_reopens_admission(monkeypatch)
             committed_training_job_id=updated.training_job_id,
         )
         responses = await asyncio.wait_for(asyncio.gather(*queued), 5)
-        assert {response["metadata"]["runtime_load_id"] for response in responses} == {"engine:1"}
+        assert {response["metadata"]["runtime_load_id"] for response, _ in responses} == {"engine:1"}
 
     asyncio.run(run())
     assert backend.versions == ["engine:1"] * (8 * 64)
@@ -1465,7 +1465,7 @@ def test_stream_and_failure_release_their_inference_admission_handles() -> None:
         assert runtime.inference_admission_status == {"open": True, "active": 0}
 
         with pytest.raises(RuntimeError, match="backend failed"):
-            await service.infer(
+            await service.infer_with_data(
                 {"x-reef-scenario": "math"},
                 {},
                 "/v1/chat/completions",

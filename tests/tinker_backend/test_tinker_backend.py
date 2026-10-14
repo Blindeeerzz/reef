@@ -218,10 +218,11 @@ def test_reload_before_and_after_commit_restores_authoritative_artifact(runtime,
     value, client = runtime
     candidate = value.training.train_candidate(prepared(value, objective).payload)
     value.inference.activate_candidate(candidate)
-    assert value.inference.pending_training_job_id == candidate.training_job_id
+    with pytest.raises(TrainingRuntimeError, match="does not match"):
+        value.inference.acknowledge_publication("another-job")
     # Reloading a different head after a failed publication drops the pending candidate.
     value.inference.activate_checkpoint(empty_artifact(tmp_path))
-    assert value.inference.pending_training_job_id is None
+    value.inference.acknowledge_publication("another-job")
     value.shutdown()
     restored = Deployment(value.config, client)
     try:

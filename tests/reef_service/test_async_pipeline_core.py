@@ -336,8 +336,8 @@ def test_weight_inference_does_not_materialize_its_checkpoint(start_dispatcher, 
         lambda ref: pytest.fail(f"unexpected inference materialization: {ref.release_id}"),
     )
 
-    response = asyncio.run(
-        RequestService(dispatcher).infer(
+    response, _ = asyncio.run(
+        RequestService(dispatcher).infer_with_data(
             {"x-reef-scenario": "math"},
             {"messages": [{"role": "user", "content": "hi"}]},
             "/v1/chat/completions",
@@ -623,7 +623,9 @@ def test_serving_only_scenarios_upload_requests_during_generation(
     async def run() -> None:
         handler = BlockingHandler()
         service = RequestService(dispatcher)
-        request = asyncio.create_task(service.infer({"x-reef-scenario": "math"}, {}, "/v1/chat/completions", handler))
+        request = asyncio.create_task(
+            service.infer_with_data({"x-reef-scenario": "math"}, {}, "/v1/chat/completions", handler)
+        )
         try:
             await asyncio.wait_for(handler.started.wait(), 2)
             sample = await asyncio.to_thread(wait_for_operational_sample, tracker, {"serve/request/active": 1})
@@ -637,7 +639,7 @@ def test_serving_only_scenarios_upload_requests_during_generation(
             assert sample["serve/request/active"] == 0
             assert sample["ingest/accepted_total"] == 0
             handler.release.set()
-            await service.infer({"x-reef-scenario": "math"}, {}, "/v1/chat/completions", handler)
+            await service.infer_with_data({"x-reef-scenario": "math"}, {}, "/v1/chat/completions", handler)
             sample = await asyncio.to_thread(
                 wait_for_operational_sample, tracker, {"serve/request/completed_total": 1}
             )

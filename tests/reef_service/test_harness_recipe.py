@@ -734,7 +734,7 @@ def test_a_terminus_episode_with_agent_steps_scores_by_its_verifier(tmp_path: Pa
     """A terminus trial's ATIF steps carry their text as a plain string ``message``: scoring reads the verifier's
     reward and finds no assistant reply, instead of taking the step's text for a wrapped message."""
     from reef.evaluation.harness import verifier_reward
-    from reef.harness.episodes.trajectory import read_terminus_atif
+    from reef.harness.episodes.trajectory import TerminusAtifReader
 
     episode_worker = EpisodeEvaluationWorker(
         descriptor=get_adapter("terminus"),
@@ -750,7 +750,7 @@ def test_a_terminus_episode_with_agent_steps_scores_by_its_verifier(tmp_path: Pa
     ]
     trial = {"task": "health", "rewards": {"reward": 1.0}, "reward": 1.0, "failed": False, "error": "", "steps": steps}
     (tmp_path / "health.json").write_text(json.dumps(trial), encoding="utf-8")
-    trajectory = read_terminus_atif(tmp_path)
+    trajectory = TerminusAtifReader()(tmp_path)
     scored = episode_worker._score_result(
         EpisodeResult(exit_code=0, stdout="", stderr="", trajectory=trajectory, residue=()), "health"
     )
@@ -2233,8 +2233,7 @@ def test_recipe_parses_recheck_config(tmp_path: Path, monkeypatch) -> None:
         CordisRecipe.from_environment({}, config=config(recheck_every=-1))
 
 
-@pytest.mark.parametrize("context_key", ["rollback_evaluation_context", "rollback_gated_against"])
-def test_recheck_fires_when_the_served_model_changes(tmp_path: Path, context_key: str) -> None:
+def test_recheck_fires_when_the_served_model_changes(tmp_path: Path) -> None:
     """A publish is gated against one served model. When the deployment
     serves a different one the recheck runs at once instead of waiting for
     the cadence, so the harness is re-gated on the ground it now runs on."""
@@ -2260,8 +2259,6 @@ def test_recheck_fires_when_the_served_model_changes(tmp_path: Path, context_key
     first = run_backend_step(b, batch(), b.initial_state())
     assert first.metrics["selected"] is True
     assert first.state["rollback_evaluation_context"]["model"] == MODEL.model
-    context = first.state.pop("rollback_evaluation_context")
-    first.state[context_key] = context
     # Same model, step 2 of a 100 step cadence: no recheck, and the stamp
     # rides through the skipped step.
     same = run_backend_step(b, batch(), first.state)

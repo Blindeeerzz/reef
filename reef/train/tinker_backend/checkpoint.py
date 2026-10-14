@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+
+from reef.runtime.recovery import write_json
 
 MANIFEST = "tinker-checkpoint.json"
 
@@ -32,8 +31,7 @@ class TinkerCheckpoint:
             raise ValueError("Tinker checkpoint model/rank does not match the runtime")
 
     def write(self, directory: Path) -> None:
-        directory.mkdir(parents=True, exist_ok=True)
-        atomic_json(directory / MANIFEST, asdict(self))
+        write_json(directory / MANIFEST, asdict(self))
 
     @classmethod
     def read(cls, directory: Path) -> TinkerCheckpoint:
@@ -41,21 +39,3 @@ class TinkerCheckpoint:
         if not isinstance(value, dict):
             raise ValueError("Tinker checkpoint manifest must be an object")
         return cls(**value)
-
-
-def atomic_json(path: Path, value: Any) -> None:
-    """Persist a complete manifest before exposing its directory to Reef."""
-    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".tinker-")
-    try:
-        with os.fdopen(descriptor, "w") as stream:
-            json.dump(value, stream, allow_nan=False, sort_keys=True)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
