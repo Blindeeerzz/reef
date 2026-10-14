@@ -141,7 +141,7 @@ def test_postgres_commit_table_keeps_identical_retries_and_rejects_different_con
         closing(storage.open("math")) as store,
     ):
         store.commit_step(expected_step=0, commit=committed())
-        commits = store.commit_log
+        commits = store.commit_history
         commits.append(CommitRecord.from_dict({**committed().to_dict(), "recorded_at": 5.0}))
         with pytest.raises(CommitLogError, match="conflicts with its existing record"):
             commits.append(CommitRecord.from_dict({**committed().to_dict(), "checkpoint": False}))

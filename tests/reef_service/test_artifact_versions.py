@@ -18,7 +18,7 @@ from reef.recipe.checkpoint_strategy import CheckpointStrategy, EveryNVersions
 from reef.runtime.interfaces import ActivatedModel, InferenceHandler, ModelCandidate, PreparedTrainingStep
 from reef.scenario import ReleaseNotRestorable
 from reef.service.app import RequestService, create_app
-from reef.storage.commit_log import CommitLogScenarioStore
+from reef.storage.commit_log import CommitHistoryScenarioStore
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train.types import TrainStepResult
 
@@ -279,8 +279,8 @@ def test_recovery_adopts_a_lost_rollback_record_without_treating_it_as_training(
 
     scenario = value.get_or_create_scenario("math")
     assert scenario is not None
-    assert isinstance(scenario.store, CommitLogScenarioStore)
-    journal = scenario.store.commit_log
+    assert isinstance(scenario.store, CommitHistoryScenarioStore)
+    journal = scenario.store.commit_history
     assert journal is not None
     path = journal.path
     records = path.read_text(encoding="utf-8").splitlines()

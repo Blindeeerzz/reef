@@ -22,7 +22,7 @@ from sqlalchemy.pool import NullPool
 
 from reef.core.errors import ReefError
 from reef.core.plugins import NoSettings
-from reef.storage.commit_log import CommitLog, CommitLogScenarioStore
+from reef.storage.commit_log import CommitHistoryScenarioStore, CommitLog
 from reef.storage.migrations import archive_imported_files, legacy_model_configs, migrate_record_storage
 from reef.storage.records import RecordRetention
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage
@@ -356,7 +356,7 @@ class SQLiteScenarioStorage(ScenarioStorage):
                 return
             self._write_database_settings(self._directory / f"{key}.sqlite3", settings)
 
-    def open(self, scenario: str) -> CommitLogScenarioStore:
+    def open(self, scenario: str) -> CommitHistoryScenarioStore:
         with self._lock:
             self._ensure_open()
             key = self._scenario_key(scenario)
@@ -364,7 +364,7 @@ class SQLiteScenarioStorage(ScenarioStorage):
             commit_log = None if self._directory is None else CommitLog(self._directory / f"{key}.commits.jsonl")
             records = SQLiteRecordStore(database)
             try:
-                return CommitLogScenarioStore(scenario, records, commit_log)
+                return CommitHistoryScenarioStore(scenario, records, commit_log)
             except BaseException:
                 records.close()
                 raise

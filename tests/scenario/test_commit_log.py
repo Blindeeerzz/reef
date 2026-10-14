@@ -35,7 +35,7 @@ from reef.recipe.base import Recipe
 from reef.recipe.checkpoint_strategy import CheckpointStrategy, EveryNVersions
 from reef.record2record import ReportGrouping, ReportRecord2Record
 from reef.runtime.interfaces import ActivatedModel, ModelCandidate, PreparedTrainingStep
-from reef.storage.commit_log import RECORD_KIND, CommitLog, CommitLogError, CommitLogScenarioStore
+from reef.storage.commit_log import RECORD_KIND, CommitHistoryScenarioStore, CommitLog, CommitLogError
 from reef.storage.commits import CommitRecord
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.surface import Surface
@@ -1179,8 +1179,8 @@ def test_artifact_commit_failure_keeps_the_pending_batch_retryable(tmp_path, mon
     committer = scenario._committer
 
     if failure_point == "commit_log":
-        assert isinstance(scenario.store, CommitLogScenarioStore)
-        target = scenario.store.commit_log
+        assert isinstance(scenario.store, CommitHistoryScenarioStore)
+        target = scenario.store.commit_history
         method_name = "append"
         assert target is not None
     elif failure_point == "activation":
@@ -1303,8 +1303,8 @@ def test_live_commit_failure_keeps_one_retryable_batch_and_one_record(tmp_path, 
         target = scenario._committer._artifacts
         method_name = "advance"
     else:
-        assert isinstance(scenario.store, CommitLogScenarioStore)
-        target = scenario.store.commit_log
+        assert isinstance(scenario.store, CommitHistoryScenarioStore)
+        target = scenario.store.commit_history
         method_name = "append"
         assert target is not None
     original = getattr(target, method_name)

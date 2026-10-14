@@ -33,7 +33,7 @@ from reef.inference.http import InferenceProxyRuntime
 from reef.recipe import RecipeConfigError
 from reef.recipe.registry import build_recipe
 from reef.sandbox.process import LocalExecutor
-from reef.storage.commit_log import CommitLogScenarioStore
+from reef.storage.commit_log import CommitHistoryScenarioStore
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
 from reef.train.trainer import Trainer
 
@@ -822,8 +822,8 @@ def test_archive_mirror_does_not_advance_when_a_no_artifact_commit_fails(tmp_pat
         assert second.state[ARCHIVE_STATE_KEY] != committed
         assert json.loads(archive_path.read_text()) == committed
 
-        assert isinstance(scenario.store, CommitLogScenarioStore)
-        commit_log = scenario.store.commit_log
+        assert isinstance(scenario.store, CommitHistoryScenarioStore)
+        commit_log = scenario.store.commit_history
         assert commit_log is not None
 
         def fail_append(record):

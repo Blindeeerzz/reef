@@ -351,7 +351,7 @@ callers remain compatible with existing adapters.
 Storage implementations explicitly subclass ``RecordStore``,
 ``ScenarioStore``, and ``ScenarioStorage`` and override their abstract
 methods and properties. Incomplete subclasses cannot be instantiated. The
-bundled ``SQLiteRecordStore``, ``CommitLogScenarioStore``, and
+bundled ``SQLiteRecordStore``, ``CommitHistoryScenarioStore``, and
 ``SQLiteScenarioStorage`` inherit those bases, respectively.
 
 .. code:: python
@@ -403,12 +403,12 @@ Direct ``Scenario`` construction requires ``store=...``. Replace the former
 ``Scenario`` does not choose a storage backend. Read committed history through
 ``scenario.store.history()`` and persistence capability through
 ``scenario.store.durable``; the former ``scenario.commit_log`` property has been
-removed. The concrete commit log store's ``commit_log`` is for backend diagnostics.
+removed. ``CommitHistoryScenarioStore.commit_history`` is for backend diagnostics.
 
 The abstract bases ``ScenarioStore`` and ``ScenarioStorage`` are exported from
 ``reef.storage.scenario``, alongside ``ScenarioSettings`` and ``ScenarioStoreConflict``.
 Concrete storage classes live under ``reef.storage``:
-``commit_log.CommitLogScenarioStore`` accepts a ``RecordStore`` and a
+``commit_log.CommitHistoryScenarioStore`` accepts a ``RecordStore`` and a
 ``CommitHistory``, either the JSONL ``commit_log.CommitLog`` or the
 ``postgres.PostgresCommitTable``; ``sqlite.SQLiteScenarioStorage`` and
 ``postgres.PostgresScenarioStorage`` assemble their respective backends. The
@@ -480,7 +480,7 @@ returns the original record, even after later steps have committed; only
 expected step, or a retry with conflicting content, raises
 ``ScenarioStoreConflict`` without advancing the store.
 
-``CommitLogScenarioStore`` serializes writers through ``CommitHistory.locked()``.
+``CommitHistoryScenarioStore`` serializes writers through ``CommitHistory.locked()``.
 ``CommitLog`` uses a local POSIX file lock. Its fsynced JSONL line is the
 durable commit point. ``PostgresCommitTable`` holds an advisory lock in one
 transaction and inserts the commit row in that transaction. The commit is

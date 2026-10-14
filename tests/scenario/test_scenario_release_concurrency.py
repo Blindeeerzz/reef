@@ -17,7 +17,7 @@ from reef.dispatcher import Dispatcher
 from reef.evaluation import EvaluationResult, UpdateCandidate
 from reef.recipe import Recipe
 from reef.scenario import Scenario
-from reef.storage.commit_log import CommitLogScenarioStore
+from reef.storage.commit_log import CommitHistoryScenarioStore
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train import CandidateBackend, PreparedStep, Trainer, TrainStepResult
 
@@ -214,8 +214,8 @@ def test_release_reads_wait_for_complete_publication(local_scenario, monkeypatch
     resume_publication = Event()
 
     assert scenario.store.durable
-    assert isinstance(scenario.store, CommitLogScenarioStore)
-    journal = scenario.store.commit_log
+    assert isinstance(scenario.store, CommitHistoryScenarioStore)
+    journal = scenario.store.commit_history
     assert journal is not None
     target = journal if phase == "journal" else scenario.trainer
     method = "append" if phase == "journal" else "commit_applied"
@@ -385,8 +385,8 @@ def test_rollback_exposes_pointer_failure_after_its_commit(local_scenario, monke
 def test_committed_record_retry_reports_pointer_failure_without_repeating_step(local_scenario, monkeypatch):
     scenario, _ = local_scenario
     result = _prepare(scenario)
-    assert isinstance(scenario.store, CommitLogScenarioStore)
-    journal = scenario.store.commit_log
+    assert isinstance(scenario.store, CommitHistoryScenarioStore)
+    journal = scenario.store.commit_history
     assert journal is not None
     append = journal.append
 

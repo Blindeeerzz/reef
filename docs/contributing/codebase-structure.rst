@@ -279,7 +279,7 @@ The extension points those packages expose are in `Python API
   schema, connections, transactions, and file maintenance. ``postgres.py`` supplies
   PostgreSQL tables, the commit table, pooled transactions, and retention.
   ``commit_log.py`` owns the ``CommitHistory`` base, the JSONL ``CommitLog``, and
-  ``CommitLogScenarioStore``, which accepts any ``RecordStore`` and
+  ``CommitHistoryScenarioStore``, which accepts any ``RecordStore`` and
   ``CommitHistory``. ``migrations.py`` holds one-time upgrades of older schemas
   and files. ``sqlite.py`` and ``postgres.py`` assemble their respective
   scenario storage services against the interfaces in ``scenario.py``.

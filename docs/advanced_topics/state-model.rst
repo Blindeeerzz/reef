@@ -91,7 +91,7 @@ Deployment assembly supplies ``ScenarioStorage``; ``ScenarioFactory`` handles
 registration and release selection, then ``recover_scenario`` opens a session
 and returns the complete ``Scenario``. The scenario owns that session and
 coordinates trainer and artifact operations. The default ``SQLiteScenarioStorage`` assembles
-``SQLiteRecordStore`` with ``CommitLogScenarioStore`` and keeps commits in
+``SQLiteRecordStore`` with ``CommitHistoryScenarioStore`` and keeps commits in
 append-only JSONL; its fsynced append is the commit point.
 ``PostgresScenarioStorage`` keeps commits in a table; the committed row is the
 commit point. A committed step

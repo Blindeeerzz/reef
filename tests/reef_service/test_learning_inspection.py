@@ -10,7 +10,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from reef.core import AgentRecord, RequestType
 from reef.dispatcher import build_default_dispatcher
 from reef.service.app import create_app
-from reef.storage.commit_log import CommitLogScenarioStore
+from reef.storage.commit_log import CommitHistoryScenarioStore
 from reef.storage.commits import CommitRecord
 from reef.storage.records import RecordRetention
 from reef.storage.sqlite import SQLiteScenarioStorage
@@ -40,8 +40,8 @@ def test_history_reads_preserve_compacted_bodies_and_isolate_scenarios(tmp_path)
                 payload={"secret": "other scenario"},
             )
         )
-        assert isinstance(scenario.store, CommitLogScenarioStore)
-        log = scenario.store.commit_log
+        assert isinstance(scenario.store, CommitHistoryScenarioStore)
+        log = scenario.store.commit_history
         assert log is not None
         commit = CommitRecord(
             scenario="one",

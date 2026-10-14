@@ -1003,7 +1003,7 @@ def test_capacity_loss_skips_orphan_report_and_remains_visible_after_restart(tmp
 def test_stale_batches_survive_restart_without_retiring_records(tmp_path):
     from reef.core.components import RECORDS_COMPONENT
     from reef.scenario.factory import recovered_trainer_states
-    from reef.storage.commit_log import CommitLogScenarioStore
+    from reef.storage.commit_log import CommitHistoryScenarioStore
     from reef.surface.base import Surface
 
     database = tmp_path / "records.sqlite3"
@@ -1017,7 +1017,7 @@ def test_stale_batches_survive_restart_without_retiring_records(tmp_path):
                 pipeline_factory=threshold_pipeline,
                 candidate_backend=_PreparingBackend(),
             )
-            with closing(CommitLogScenarioStore("math", records)) as session:
+            with closing(CommitHistoryScenarioStore("math", records)) as session:
                 consumed = recovered_trainer_states(session, "math", None, Surface())[RECORDS_COMPONENT].consumed_ids
                 trainer.reingest(up_to_sequence=0, consumed_ids=consumed)
                 batch = trainer.reserve_training_batch()

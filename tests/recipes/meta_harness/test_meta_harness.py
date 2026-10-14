@@ -27,7 +27,7 @@ from reef.harness.tree.mutations import Mutation
 from reef.inference.http import InferenceProxyRuntime
 from reef.recipe import RecipeConfigError
 from reef.recipe.registry import build_recipe
-from reef.storage.commit_log import CommitLogScenarioStore
+from reef.storage.commit_log import CommitHistoryScenarioStore
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
 from reef.train.trainer import Trainer
 
@@ -651,8 +651,8 @@ def test_failed_commit_keeps_mirror_at_previous_population_and_restart_heals_sta
         assert isinstance(backend, MetaHarnessBackend)
         with pytest.raises(RuntimeError, match="no active step"):
             _ = backend._population_store.active
-        assert isinstance(scenario.store, CommitLogScenarioStore)
-        commit_log = scenario.store.commit_log
+        assert isinstance(scenario.store, CommitHistoryScenarioStore)
+        commit_log = scenario.store.commit_history
         assert commit_log is not None
         monkeypatch.setattr(commit_log, "append", lambda record: (_ for _ in ()).throw(RuntimeError("offline")))
         with pytest.raises(RuntimeError, match="offline"):
@@ -706,8 +706,8 @@ def test_failed_publication_does_not_advance_population_or_loader(tmp_path, monk
         if failure == "publication":
             monkeypatch.setattr(scenario.repository, "publish", fail)
         elif failure == "commit":
-            assert isinstance(scenario.store, CommitLogScenarioStore)
-            monkeypatch.setattr(scenario.store.commit_log, "append", fail)
+            assert isinstance(scenario.store, CommitHistoryScenarioStore)
+            monkeypatch.setattr(scenario.store.commit_history, "append", fail)
         else:
             monkeypatch.setattr(scenario._committer, "_activate", fail)
         with pytest.raises(RuntimeError, match="unavailable"):

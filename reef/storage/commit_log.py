@@ -3,7 +3,7 @@
 CommitHistory is the contract for the ordered commits of one scenario generation.
 CommitLog implements it as a JSONL file. It does append, fsync, idempotent
 retries, torn-tail repair, and caching. Stable POSIX file locks serialize
-commit writers across sessions and processes. CommitLogScenarioStore combines
+commit writers across sessions and processes. CommitHistoryScenarioStore combines
 a CommitHistory with an injected RecordStore. The history append is the
 durable commit point; recovery restores consumption progress. Artifact
 publication is not in this module.
@@ -109,7 +109,7 @@ class CommitLog(CommitHistory):
         try:
             import fcntl
         except ImportError as exc:
-            raise ReefError("durable commit log stores require POSIX file locking (fcntl)") from exc
+            raise ReefError("durable JSONL commit logs require POSIX file locking (fcntl)") from exc
         lock_path = self._path.parent / ".locks" / f"{self._path.name}.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with open(lock_path, "a+b") as handle:
@@ -272,7 +272,7 @@ class CommitLog(CommitHistory):
         return tuple(records), True
 
 
-class CommitLogScenarioStore(ScenarioStore):
+class CommitHistoryScenarioStore(ScenarioStore):
     """Own one records connection and an optional durable commit history.
 
     Passing no commit history preserves the existing in-memory configuration. Its
@@ -284,7 +284,7 @@ class CommitLogScenarioStore(ScenarioStore):
         self,
         scenario: str,
         records: RecordStore,
-        commit_log: CommitHistory | None = None,
+        commit_history: CommitHistory | None = None,
         *,
         initial_step: int = 0,
     ) -> None:
@@ -294,7 +294,7 @@ class CommitLogScenarioStore(ScenarioStore):
             raise ValueError("initial_step must be a non-negative integer")
         self._scenario = scenario
         self._records = records
-        self._commit_log = commit_log
+        self._commit_history = commit_history
         self._initial_step = initial_step
         self._memory_history: list[CommitRecord] = []
         self._memory_run_segment = 0
@@ -312,14 +312,14 @@ class CommitLogScenarioStore(ScenarioStore):
 
     @property
     def durable(self) -> bool:
-        return self._commit_log is not None
+        return self._commit_history is not None
 
     @property
-    def commit_log(self) -> CommitHistory | None:
+    def commit_history(self) -> CommitHistory | None:
         """The commit history, for callers of the concrete storage adapters."""
         with self._lock:
             self._ensure_open()
-            return self._commit_log
+            return self._commit_history
 
     def history(self) -> tuple[CommitRecord, ...]:
         with self._locked():
@@ -327,8 +327,8 @@ class CommitLogScenarioStore(ScenarioStore):
 
     def training_run_position(self) -> tuple[int, int]:
         with self._locked():
-            if self._commit_log is not None:
-                return self._commit_log.training_run_position()
+            if self._commit_history is not None:
+                return self._commit_history.training_run_position()
             return self._memory_run_segment, self._memory_run_step
 
     def commit_step(self, *, expected_step: int, commit: CommitRecord) -> CommitRecord:
@@ -360,18 +360,19 @@ class CommitLogScenarioStore(ScenarioStore):
                     raise ReefError("recovery requires an activated checkpoint commit")
             checkpoint_step = 0 if checkpoint is None else checkpoint.step
             records = self._history()
-            log_label = "<no commit log>" if self._commit_log is None else self._commit_log.label
+            history_label = "<no commit history>" if self._commit_history is None else self._commit_history.label
             applicable = [record for record in records if record.step > checkpoint_step]
             for previous, current in itertools.pairwise(applicable):
                 if current.step != previous.step + 1:
                     raise ReefError(
-                        f"commit log {log_label} jumps from step {previous.step} to {current.step}; the log is corrupt"
+                        f"commit history {history_label} jumps from step {previous.step} to {current.step}; "
+                        "the history is corrupt"
                     )
             if applicable and applicable[0].step != checkpoint_step + 1:
                 raise ReefError(
-                    f"commit log {log_label} resumes at step {applicable[0].step}, "
+                    f"commit history {history_label} resumes at step {applicable[0].step}, "
                     f"expected {checkpoint_step + 1} after the checkpointed step "
-                    f"{checkpoint_step}; the log is corrupt"
+                    f"{checkpoint_step}; the history is corrupt"
                 )
             last_step = records[-1].step if records else 0
             if checkpoint is not None and checkpoint_step > last_step:
@@ -402,14 +403,14 @@ class CommitLogScenarioStore(ScenarioStore):
     def _locked(self) -> Iterator[None]:
         with self._lock:
             self._ensure_open()
-            if self._commit_log is None:
+            if self._commit_history is None:
                 yield
                 return
-            with self._commit_log.locked():
+            with self._commit_history.locked():
                 yield
 
     def _history(self) -> tuple[CommitRecord, ...]:
-        records = tuple(self._memory_history) if self._commit_log is None else self._commit_log.records()
+        records = tuple(self._memory_history) if self._commit_history is None else self._commit_history.records()
         if records is self._cached_history:
             return records
         previous = self._cached_history
@@ -418,16 +419,16 @@ class CommitLogScenarioStore(ScenarioStore):
             self._commits_by_step.clear()
         for record in records[len(previous) if appended else 0 :]:
             if record.scenario != self._scenario:
-                log_label = "<no commit log>" if self._commit_log is None else self._commit_log.label
+                history_label = "<no commit history>" if self._commit_history is None else self._commit_history.label
                 raise ReefError(
-                    f"commit log {log_label} holds records for {record.scenario!r}, not {self._scenario!r}"
+                    f"commit history {history_label} holds records for {record.scenario!r}, not {self._scenario!r}"
                 )
             self._commits_by_step[record.step] = record
         self._cached_history = records
         return records
 
     def _append(self, commit: CommitRecord) -> None:
-        if self._commit_log is None:
+        if self._commit_history is None:
             self._memory_history.append(commit)
             if commit.operation == "rollback":
                 self._memory_run_segment = commit.step
@@ -435,15 +436,15 @@ class CommitLogScenarioStore(ScenarioStore):
             elif commit.operation == "training" and commit.step > self._memory_run_segment:
                 self._memory_run_step += 1
         else:
-            self._commit_log.append(commit)
+            self._commit_history.append(commit)
 
 
 __all__ = [
     "RECORD_KIND",
     "CommitHistory",
+    "CommitHistoryScenarioStore",
     "CommitLog",
     "CommitLogError",
-    "CommitLogScenarioStore",
     "CommitRecord",
     "same_commit",
     "training_run_position",

@@ -20,7 +20,7 @@ from tests.recipes.meta_harness.test_meta_harness import (
 from reef.artifact import GitLFSRepositoryBackend, InMemoryRepositoryBackend
 from reef.artifact.artifact import Artifact, ArtifactConflict, ArtifactPublicationError
 from reef.dispatcher import Dispatcher
-from reef.storage.commit_log import CommitLogScenarioStore
+from reef.storage.commit_log import CommitHistoryScenarioStore
 from reef.storage.sqlite import SQLiteScenarioStorage
 
 
@@ -58,8 +58,8 @@ def test_failed_selected_commit_never_serves_or_recovers_staged_artifact(publica
         _report_once(scenario, "selected-commit", "1")
         result = scenario.prepare_training_step()
         assert result.artifact is not None and len(chat.prompts) == 1
-        assert isinstance(scenario.store, CommitLogScenarioStore)
-        journal = scenario.store.commit_log
+        assert isinstance(scenario.store, CommitHistoryScenarioStore)
+        journal = scenario.store.commit_history
         assert journal is not None
         append = journal.append
 
@@ -177,8 +177,8 @@ def test_lost_journal_ack_retries_the_committed_release_without_evaluating_again
         monkeypatch.setattr(scenario._committer, "_should_checkpoint", lambda result: checkpoint)
         _report_once(scenario, "lost-journal-ack", "1")
         result = scenario.prepare_training_step()
-        assert isinstance(scenario.store, CommitLogScenarioStore)
-        journal = scenario.store.commit_log
+        assert isinstance(scenario.store, CommitHistoryScenarioStore)
+        journal = scenario.store.commit_history
         assert journal is not None
         append = journal.append
 

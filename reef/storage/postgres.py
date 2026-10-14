@@ -47,8 +47,8 @@ from reef.core.errors import ReefError
 from reef.core.plugins import PluginSettings
 from reef.storage.commit_log import (
     CommitHistory,
+    CommitHistoryScenarioStore,
     CommitLog,
-    CommitLogScenarioStore,
     same_commit,
     training_run_position,
 )
@@ -502,13 +502,13 @@ class PostgresScenarioStorage(ScenarioStorage):
     def durable(self) -> bool:
         return True
 
-    def open(self, scenario: str) -> CommitLogScenarioStore:
+    def open(self, scenario: str) -> CommitHistoryScenarioStore:
         with self._lock:
             self._ensure_open()
             records = PostgresRecordStore(self._database, name=scenario)
             try:
                 commits = PostgresCommitTable(self._database, records.storage_id)
-                return CommitLogScenarioStore(scenario, records, commits)
+                return CommitHistoryScenarioStore(scenario, records, commits)
             except BaseException:
                 records.close()
                 raise
