@@ -579,7 +579,7 @@ def test_external_checkpoint_evaluation_rejects_before_serving_activation(tmp_pa
         assert runtime.activations == []
         assert len(runtime.rejections) == 1
         candidate, decision = runtime.rejections[0]
-        assert decision.outcome == "reject"
+        assert decision.selected is False
         assert decision.evaluation.evaluator == "external_checkpoint"
         assert decision.evaluation.metrics == {
             "score": 0.25,

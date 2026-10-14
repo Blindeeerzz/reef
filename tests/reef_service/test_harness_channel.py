@@ -351,7 +351,7 @@ def test_status_reports_a_committed_gate_rejection(tmp_path) -> None:
             assert scenario["scenario_step"] == committed["step"] == 1
             assert committed["metrics"]["published"] is False
             assert committed["metrics"]["selected"] is False
-            assert committed["metrics"]["selection"]["outcome"] == "reject"
+            assert committed["metrics"]["selection"]["selected"] is False
             response = await client.get("/reef/harness", headers={"x-reef-scenario": "delivery"})
             assert response.status == 404
         finally:

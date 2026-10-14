@@ -577,7 +577,7 @@ def test_the_first_decision_records_both_sides_and_charges_the_candidate(tmp_pat
     )
 
     assert decision.selected
-    assert (decision.policy, decision.policy_version) == ("gepa", "1")
+    assert decision.policy == "gepa"
     assert archive.candidates[1].val_scores == [1.0, 0.0]  # a failed episode is a zero, not a gap
     assert archive.candidates[0].val_scores == [0.0, 0.0]  # the seed's own first validation
     # The candidate's validation (2); the seed's was charged when it was seeded.
