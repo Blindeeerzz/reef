@@ -348,7 +348,7 @@ def test_checkpoint_metadata_decodes_directly_to_commit_record(operation) -> Non
 )
 def test_checkpoint_metadata_rejects_invalid_recovery_state(changes, message) -> None:
     from reef.core.artifact_ref import ArtifactRef, encode_artifact_ref
-    from reef.storage.commits import parse_scenario_metadata, scenario_metadata_for
+    from reef.storage.commits import parse_scenario_metadata
 
     base = ArtifactRef("base", "base", None)
     metadata = {

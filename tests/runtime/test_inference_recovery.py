@@ -3,12 +3,7 @@
 import pytest
 
 from reef.runtime.publication import WeightUpdateLock
-from reef.runtime.recovery import (
-    InferenceControl,
-    InferenceEngineGroup,
-    InferenceMonitor,
-    WeightUpdateConnection,
-)
+from reef.runtime.recovery import InferenceControl, InferenceEngineGroup, InferenceMonitor, WeightUpdateConnection
 
 
 class MemoryEngines(InferenceEngineGroup):

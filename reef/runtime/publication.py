@@ -298,7 +298,7 @@ class AdapterResidencyManager:
         )
 
     def _eviction_candidate(self, superseding: str | None) -> _Slot | None:
-        candidates = [slot for slot in self._slots.values() if slot.name == superseding or not self._is_current(slot)]
+        candidates = [slot for slot in self._slots.values() if slot.name == superseding or not self.is_current(slot)]
         if not candidates:
             return None
         # Leaked slots are retried first: reclaiming one costs no live adapter.
@@ -367,13 +367,13 @@ class AdapterResidencyManager:
                     continue
                 block = scenarios.setdefault(slot.scenario, {"current": None, "resident": []})
                 block["resident"].append(slot.runtime_load_id)
-                if self._is_current(slot):
+                if self.is_current(slot):
                     block["current"] = {"runtime_load_id": slot.runtime_load_id, "adapter": slot.name}
             return {
                 "capacity": self._capacity,
                 "resident": len(slots),
                 "leaked": sum(1 for slot in slots if slot.state == "leaked"),
-                "protected": sum(1 for slot in slots if self._is_current(slot)),
+                "protected": sum(1 for slot in slots if self.is_current(slot)),
                 # Reef holds no per-request adapter leases; the key keeps the status shape.
                 "in_flight": 0,
                 "counters": dict(self._counters),
@@ -381,7 +381,7 @@ class AdapterResidencyManager:
                 "scenarios": scenarios,
             }
 
-    def _is_current(self, slot: _Slot) -> bool:
+    def is_current(self, slot: _Slot) -> bool:
         return self._current.get(slot.scenario) == slot.name
 
 

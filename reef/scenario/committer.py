@@ -365,7 +365,7 @@ class ScenarioCommitter:
             checkpoint = artifacts.checkpoint
             next_step = self._step + 1
             prepared = self._trainer.prepare_commit(None)
-            recorded = self._recorded_retry(
+            recorded = self.recorded_retry(
                 prepared, next_step, operation=operation, rollback_target_release_id=release_id
             )
             if recorded is not None:
@@ -608,7 +608,7 @@ class ScenarioCommitter:
                 # The record names the base its batch was reserved against; the metrics say what it landed on.
                 result = trainer.add_commit_metrics(result, {"merged_onto": served})
             prepared = trainer.prepare_commit(result)
-            recorded = self._recorded_retry(prepared, next_step, pending=result.pending, component=component)
+            recorded = self.recorded_retry(prepared, next_step, pending=result.pending, component=component)
             if recorded is not None:
                 self.finish_recorded_retry(recorded, prepared, trainer)
                 return result.state
@@ -652,7 +652,9 @@ class ScenarioCommitter:
                     )
                 self.commit_live_weights(publication, prepared, trainer)
             else:
-                self.commit_saved_artifact(result, publication, prepared, trainer, component, checkpointed=checkpointed)
+                self.commit_saved_artifact(
+                    result, publication, prepared, trainer, component, checkpointed=checkpointed
+                )
             return result.state
 
     def _should_checkpoint(self, result: TrainStepResult) -> bool:
@@ -930,7 +932,7 @@ class ScenarioCommitter:
             self.settled_sibling = record
             return
 
-    def _recorded_retry(
+    def recorded_retry(
         self,
         prepared: PreparedCommit,
         next_step: int,
