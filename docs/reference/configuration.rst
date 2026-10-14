@@ -1201,15 +1201,16 @@ name. The record stage releases these plays without training them, and the
 generator still gets their rewards. A round that played no train task is
 followed at once. So is a round whose eval tasks left fewer train groups than
 the next round waits for: ``batches_per_round`` batches of ``tasks_per_step``
-groups. Each round summary records each task's split and the round's
-``eval_fraction`` and ``split_seed``. After each round, the stage writes
-``state_dir/<scenario>/split-manifest.json``, a split manifest of every played
-task. Its task names are directories under ``generator.tasks-root``, so
-``evolution.task_manifest`` can name it, with ``evolution.tasks_root`` set to
-that directory. The split depends only on the task, the seed and the
-fraction, so a restart places each task in the same split. A restart with
-another ``eval_fraction`` or ``split_seed`` than the round summaries record is
-refused: keep both for the life of a ``state_dir``.
+groups. With ``eval_fraction`` above 0, each round summary records each task's
+split and the round's ``eval_fraction`` and ``split_seed``, and after each
+round the stage writes ``state_dir/<scenario>/split-manifest.json``, a split
+manifest of every played task. Its task names are directories under
+``generator.tasks-root``, so ``evolution.task_manifest`` can name it, with
+``evolution.tasks_root`` set to that directory. The stage logs a warning while
+the manifest has no eval task. The split depends only on the task, the seed
+and the fraction, so a restart places each task in the same split. A restart
+with another ``eval_fraction`` or ``split_seed`` than the round summaries
+record is refused: keep both for the life of a ``state_dir``.
 
 ``GeneratedTaskBatches`` batches complete task groups:
 

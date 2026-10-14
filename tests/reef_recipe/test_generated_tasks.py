@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import logging
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -603,10 +604,8 @@ def test_the_next_round_waits_for_batches_per_round(tmp_path: Path) -> None:
         looked(p)
     assert len(task_generator.requests) == 2 and p.status()["task_generation"]["completed"] == 2
     assert sorted(entry.name for entry in (tmp_path / "state" / "tasks").iterdir()) == [
-        ".staging",
         "round-00000.json",
         "round-00001.json",
-        "split-manifest.json",
     ]
 
 
@@ -808,8 +807,10 @@ def test_without_an_eval_fraction_every_task_trains_as_before(tmp_path: Path, co
     p.acknowledge(p.build_batch().batch_id)
     assert not p.ready() and [job.round_number for job in worker.submitted] == [0, 1]
     assert [result.split for result in task_generator.results[0]] == ["train", "train"]
-    manifest = read_split_manifest(tmp_path / "state" / "tasks" / "split-manifest.json")
-    assert manifest == TaskSplit(("harbor-00000-000", "harbor-00000-001"), (), config.get("split_seed", 0), 0.0)
+    assert not (tmp_path / "state" / "tasks" / "split-manifest.json").exists()
+    document = summary(tmp_path, 0)
+    assert set(document) == {"round", "error", "source_record_ids", "tasks"}
+    assert set(document["tasks"][0]) == {"name", "error", "training_rewards", "measurement_rewards", "reported_plays"}
 
 
 def test_tasks_made_from_the_same_records_land_in_one_split(tmp_path: Path) -> None:
@@ -879,7 +880,7 @@ def test_a_restart_with_other_split_settings_is_refused(tmp_path: Path) -> None:
     rounds(tmp_path, ScriptedGenerator(), eval_fraction=0.5, split_seed=seed)[0].close()
 
 
-def test_a_summary_from_before_the_splits_counts_as_no_eval_fraction(tmp_path: Path) -> None:
+def test_a_summary_without_split_settings_counts_as_no_eval_fraction(tmp_path: Path) -> None:
     state = tmp_path / "state" / "tasks"
     state.mkdir(parents=True)
     old_tasks = [{"name": "harbor-old-000", "error": ""}, {"name": "harbor-old-001", "error": "oracle check refused"}]
@@ -889,8 +890,23 @@ def test_a_summary_from_before_the_splits_counts_as_no_eval_fraction(tmp_path: P
     # Without an eval fraction the seed places nothing, so it may change.
     p, _ = rounds(tmp_path, ScriptedGenerator([generated(1, 0)]), split_seed=9)
     assert not looked(p)
-    manifest = read_split_manifest(state / "split-manifest.json")
-    assert (manifest.train, manifest.eval) == (("harbor-00001-000", "harbor-old-000"), ())
+    assert summary(tmp_path, 1)["tasks"][0]["name"] == "harbor-00001-000"
+
+
+def test_a_split_cannot_start_on_rounds_that_trained_without_one(tmp_path: Path) -> None:
+    first, _ = rounds(tmp_path, ScriptedGenerator([generated(0, 0)]))
+    assert not looked(first)
+    first.close()
+    with pytest.raises(PluginConfigError, match=r"round 0 under .* eval_fraction 0\.0 and split_seed None, not 0\.5"):
+        rounds(tmp_path, ScriptedGenerator(), eval_fraction=0.5)
+
+
+def test_a_split_with_no_eval_task_yet_logs_a_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    seed = seed_placing({"designer-0": "train"})
+    p, _ = rounds(tmp_path, ScriptedGenerator([generated(0, 0)]), eval_fraction=0.5, split_seed=seed)
+    with caplog.at_level(logging.WARNING, logger="reef.recipe.generated_tasks.processor"):
+        assert not looked(p)
+    assert "has no eval task yet: none of its 1 played tasks hashed to eval" in caplog.text
 
 
 @pytest.mark.parametrize(

@@ -23,7 +23,8 @@ The first round starts when the pipeline first looks for a batch. The next round
 while it runs, so the generator always writes for the policy that trains now. A round that played no
 train task is followed at once, and so is a round whose eval tasks left too few train groups for those
 batches. A summary of each round goes under ``state_dir/<scenario>``; a restart reads it to continue with
-the next round. After each round, ``split-manifest.json`` there lists each played task in its split.
+the next round. With an eval fraction above 0, ``split-manifest.json`` there lists each played task in its
+split after each round.
 
 Only the training arm, labeled ``plain``, trains. An eval task plays on the held out arm, labeled
 ``heldout``. The record stage releases reports of other arms, and reports without an arm, such as a
@@ -135,8 +136,8 @@ def recorded_reported_plays(state_dir: Path) -> dict[str, int]:
 def changed_split_settings(state_dir: Path, *, seed: int, eval_fraction: float) -> str:
     """Why the round summaries refuse these split settings, or empty when every summary used them.
 
-    A summary written before the splits were kept trained every task, as ``eval_fraction`` 0 does. With
-    ``eval_fraction`` 0 the seed places nothing.
+    A summary without split settings trained every task: it was written with ``eval_fraction`` 0, or before
+    the splits were kept. With ``eval_fraction`` 0 the seed places nothing.
     """
     for round_number in recorded_rounds(state_dir):
         document = json.loads((state_dir / f"{ROUND_PREFIX}{round_number:05d}.json").read_text(encoding="utf-8"))
@@ -624,10 +625,18 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             error = error or str(exc) or type(exc).__name__
             logger.exception("the task generator did not take the results of round %d", job.round_number)
         self.write_round_summary(job.round_number, tuple(results), error, reported_plays, job.source_records)
-        write_split_manifest(
-            self.state_dir / SPLIT_MANIFEST,
-            recorded_split(self.state_dir, seed=self.split_seed, eval_fraction=self.eval_fraction),
-        )
+        if self.eval_fraction > 0:
+            task_split = recorded_split(self.state_dir, seed=self.split_seed, eval_fraction=self.eval_fraction)
+            write_split_manifest(self.state_dir / SPLIT_MANIFEST, task_split)
+            if task_split.train and not task_split.eval:
+                logger.warning(
+                    "scenario %r has no eval task yet: none of its %d played tasks hashed to eval with "
+                    "eval_fraction %s and split_seed %d",
+                    self.scenario,
+                    len(task_split.train),
+                    self.eval_fraction,
+                    self.split_seed,
+                )
         return RoundOutcome(receipt=job.receipt, round_number=job.round_number, results=tuple(results), error=error)
 
     async def played(
@@ -688,18 +697,21 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         reported_plays: Mapping[str, int],
         source_records: tuple[AgentRecord, ...] = (),
     ) -> Path:
-        """Keep each task's result, split and reported plays, and the round's error, split settings and source IDs.
+        """Keep each task's result and reported plays, the round's error, and its source records' IDs.
 
-        A restart counts these files, reads the reported plays back, and refuses other split settings.
+        With an eval fraction above 0, also keep each task's split and the split settings. A restart counts these
+        files, reads the reported plays back, and refuses other split settings.
         """
         if self.state_dir is None:
             raise RuntimeError("a round summary needs a state_dir")
         self.state_dir.mkdir(parents=True, exist_ok=True)
+        # Without an eval fraction every task trains, and the summary is the one written before the splits.
+        is_split = self.eval_fraction > 0
+        settings = {"eval_fraction": self.eval_fraction, "split_seed": self.split_seed} if is_split else {}
         document = {
             "round": round_number,
             "error": error,
-            "eval_fraction": self.eval_fraction,
-            "split_seed": self.split_seed,
+            **settings,
             "source_record_ids": [record.agent_record_id for record in source_records],
             "tasks": [
                 {
@@ -708,7 +720,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
                     "training_rewards": list(result.training_rewards),
                     "measurement_rewards": {arm: list(rewards) for arm, rewards in result.measurement_rewards.items()},
                     "reported_plays": reported_plays.get(result.task.name),
-                    "split": result.split,
+                    **({"split": result.split} if is_split else {}),
                 }
                 for result in results
             ],
