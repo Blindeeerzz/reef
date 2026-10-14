@@ -38,7 +38,7 @@ from pathlib import Path
 
 from reef.core.errors import ReefError
 
-ISOLATION_ENV = "REEF_EPISODEISOLATION"
+ISOLATION_ENV = "REEF_EPISODE_ISOLATION"
 
 EPISODE_OWNER_LEASE: ContextVar[bool] = ContextVar("episode_owner_lease", default=False)
 
