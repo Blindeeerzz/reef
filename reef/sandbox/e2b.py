@@ -304,9 +304,13 @@ class E2BExecutor(EpisodeExecutor):
         return bound, remote_binary
 
     def open_session(self, *, forward_ports: tuple[int, ...] = (), timeout_s: float) -> EpisodeExecutor:
-        """One sandbox for the run, each forwarded port reachable inside it through the tunnel."""
+        """One sandbox for the run, each forwarded port reachable inside it through the tunnel.
+
+        The sandbox lives at least as long as this executor's own ``timeout_s``: a run may launch several
+        processes, each within ``timeout_s``.
+        """
         ports = tuple(dict.fromkeys((*self.forward_ports, *forward_ports)))
-        return replace(self, forward_ports=ports, timeout_s=timeout_s).open()
+        return replace(self, forward_ports=ports, timeout_s=max(self.timeout_s, timeout_s)).open()
 
     def labels(self) -> dict[str, str]:
         """The metadata every sandbox this executor starts carries."""
