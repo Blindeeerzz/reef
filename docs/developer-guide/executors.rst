@@ -251,9 +251,8 @@ that data plane. There is no built-in torchrun, Slurm or Kubernetes backend,
 and no online TP/PP resizing. ``uni/mp`` are rejected for Slime GPU worker roles;
 it remains valid for standalone inference and recipe-owned external processes.
 
-``ReefRayTrainGroup`` remains an import alias for ``SlimeTrainGroup``. Its
-``async_*`` methods now return executor futures (or an already available value)
-and should be consumed with ``resolve``; code using ``ray.get`` directly on
+The ``async_*`` methods of ``SlimeTrainGroup`` return executor futures (or an
+already available value) and should be consumed with ``resolve``; code using ``ray.get`` directly on
 these return values must migrate. The existing Slime algorithm ``resolve``
 callback already handles this conversion.
 
