@@ -281,11 +281,12 @@ class Trainer:
             return self._pending is not None or self._pipeline.ready()
 
     def holds_untrained_records(self) -> bool:
-        """Whether a backend would still train on this trainer's records: rows unread, a batch ready, or a job running.
+        """Whether this trainer has records that its backend would still train on.
 
-        A trainer without a candidate backend trains nothing. Rows a pipeline
-        reads and keeps for a later batch are not counted: a rebuilt trainer
-        reads them again from storage.
+        That is the case when rows are unread, a batch is ready or reserved,
+        or a background job runs. A trainer without a candidate backend
+        trains nothing. The rows that the pipeline keeps for a later batch do
+        not count, because a rebuilt trainer reads them again from storage.
         """
         if self._candidate_backend is None:
             return False

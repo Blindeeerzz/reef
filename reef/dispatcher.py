@@ -182,7 +182,7 @@ class WorkerCoordination(ReplacedScenarioCloser):
         ready.wait(timeout=STOOD_ASIDE_RETRY_SECONDS if waiting else None)
         ready.clear()
         with self.lock:
-            # A worker started for a reloaded scenario under the same key replaces this one, which stops.
+            # A worker for a reloaded instance with the same key replaces this worker. Then this worker stops.
             worker = self.workers.get((scenario, component))
             return self.phase != "closed" and worker is not None and worker.ready is ready
 
@@ -237,7 +237,7 @@ class WorkerCoordination(ReplacedScenarioCloser):
             with self.cycle_lock(scenario):
                 yield
         finally:
-            # A cycle is a use: the idle time of a scenario starts when its last cycle ends.
+            # A cycle is a use of the scenario. Its idle time starts when its last cycle ends.
             self.registry.touch(scenario)
             self.close_replaced_instances(scenario)
 
@@ -284,6 +284,12 @@ class WorkerCoordination(ReplacedScenarioCloser):
             with self.lock:
                 if not state.replaced:
                     return
+
+    def instance_change_pending(self, scenario: str) -> bool:
+        """Whether a deferred reload of ``scenario`` waits, or a replaced instance of it waits to close."""
+        with self.lock:
+            state = self.scenarios.get(scenario)
+            return state is not None and (state.reload_pending or bool(state.replaced))
 
     def take_replaced(self) -> list[Scenario]:
         """Collect remaining replacements after all workers have joined."""
@@ -346,8 +352,9 @@ class Dispatcher(ScenarioUnloader):
     :class:`ScenarioRegistry`).
     Local training backends are unlimited and drain on per-scenario threads.
     The dispatcher owns its recipe's runtime and closes it after all scenarios.
-    It unloads an idle scenario after ``scenario_idle_unload_seconds`` and
-    when the registry's admission needs its load slot (see :meth:`scenario_is_idle`).
+    It unloads an idle scenario (see :meth:`scenario_is_idle`) after
+    ``scenario_idle_unload_seconds``, and when scenario admission needs a
+    load slot.
     """
 
     storage_retry_seconds: float = 5.0
@@ -367,7 +374,7 @@ class Dispatcher(ScenarioUnloader):
     # so the alarm rides the health polling that already watches the service.
     undrained_warning_seconds: float = 60.0
     operational_metrics_interval_seconds: float = 10.0
-    # The longest wait between two looks for scenarios that have been idle long enough to unload.
+    # The longest time between two checks for scenarios that are idle for long enough to unload.
     idle_unload_check_seconds: float = 30.0
 
     def __init__(
@@ -386,9 +393,11 @@ class Dispatcher(ScenarioUnloader):
         """``hold_local_cycles``: run no local cycle until :meth:`open_local_cycles`, for a service whose recipe
         calls this same service, which does not answer yet while the dispatcher starts.
 
-        ``scenario_idle_unload_seconds``: unload a scenario that has been idle
-        this long; ``None`` keeps every scenario loaded. ``scenario_admission``
-        decides whether a scenario is created or loaded; the default admits all.
+        ``scenario_idle_unload_seconds``: unload a scenario that is idle for
+        this time. With ``None``, every scenario stays loaded.
+
+        ``scenario_admission``: decides whether a scenario is created or
+        loaded. The default admits all scenarios.
         """
         if scenario_idle_unload_seconds is not None and scenario_idle_unload_seconds <= 0:
             raise ValueError("scenario_idle_unload_seconds must be positive")
@@ -529,32 +538,37 @@ class Dispatcher(ScenarioUnloader):
         return {"scenario": scenario, "archived": archived}
 
     def scenario_is_idle(self, current: Scenario) -> bool:
-        """Whether unloading ``current`` loses nothing and stops no work.
+        """Whether Reef can unload ``current`` with no loss of data and no stop of work.
 
-        A scenario is idle when its storage is durable, no request runs on
-        it, no trainer holds records still to train, and no release exists
-        only in memory. A weight-training scenario is never idle: its runtime
-        binding is released only on delete. The caller holds the scenario's
-        lock and cycle lock, so no record or cycle starts meanwhile.
+        A scenario is idle when all of these are true:
+
+        - Its storage is durable.
+        - No request runs on it.
+        - No trainer has records that it would still train on.
+        - No release exists only in memory.
+        - No reload or close of an instance waits.
+
+        A weight-training scenario is never idle, because only a delete
+        releases its runtime binding. The caller holds the lock and the
+        cycle lock of the scenario, so no record or cycle starts meanwhile.
         """
         if current.training_runtime is not None or not current.store.durable:
             return False
-        if current.operations.active_count() or current.repository.holds_local_releases:
+        if current.operations.active_count() > 0 or current.repository.holds_local_releases:
             return False
-        with self._training.lock:
-            cycles = self.workers.scenarios.get(current.name)
-            if cycles is not None and (cycles.reload_pending or cycles.replaced):
-                return False
+        if self.workers.instance_change_pending(current.name):
+            return False
         return not any(bound.trainer.holds_untrained_records() for bound in current.trainers)
 
     def unload_if_idle(self, scenario: str) -> bool:
-        """Close the loaded instance of an idle scenario and stop its local workers; whether it was unloaded.
+        """Unload ``scenario`` if it is idle, and return whether it was unloaded.
 
-        This is what delete does without the archive: the storage, the
-        repository registration and the settings stay, and the next request
-        loads the scenario again. Counters held in memory start again from
-        zero. A scenario whose lock or cycle lock is held is busy, so this
-        never waits for either.
+        Unload closes the loaded instance and stops its local workers. It is
+        a delete without the archive: the storage, the repository
+        registration and the settings stay, and the next request loads the
+        scenario again. Counters in memory start again from zero. If another
+        thread holds the lock or the cycle lock of the scenario, the scenario
+        is busy, so this method never waits for them.
         """
         lock = self._registry.lock_for(scenario)
         if not lock.acquire(blocking=False):
@@ -579,14 +593,10 @@ class Dispatcher(ScenarioUnloader):
         return True
 
     def run_idle_unload(self, idle_seconds: float) -> None:
-        """Unload the scenarios that have been idle for ``idle_seconds`` until the dispatcher closes."""
+        """Until the dispatcher closes, unload each scenario that has no use for ``idle_seconds`` and is idle."""
         while not self.workers.closed.wait(min(idle_seconds, self.idle_unload_check_seconds)):
-            self.unload_idle_scenarios(idle_seconds)
-
-    def unload_idle_scenarios(self, idle_seconds: float) -> tuple[str, ...]:
-        """Unload every scenario unused for ``idle_seconds`` that is idle now; the unloaded names."""
-        unused = self._registry.unused_since(time.monotonic() - idle_seconds)
-        return tuple(name for name in unused if self.unload_if_idle(name))
+            for name in self._registry.unused_since(time.monotonic() - idle_seconds):
+                self.unload_if_idle(name)
 
     def training_job_in_flight(self, scenario: str) -> bool:
         """Whether the training runtime's durable job marker names a job of ``scenario`` still out.
@@ -958,7 +968,7 @@ class Dispatcher(ScenarioUnloader):
                     # Rows left unread before the restart train now, not once the next record arrives.
                     self._wake_training(current)
             except ScenarioCapacityFull:
-                # Not a preload failure: the scenario loads on its first request once a load slot is free.
+                # This is not a preload failure. The scenario loads on its first request, when a load slot is free.
                 logger.info("scenario %r is not preloaded: the service holds its limit of loaded scenarios", scenario)
             except Exception as exc:
                 logger.exception("failed to preload scenario %r", scenario)

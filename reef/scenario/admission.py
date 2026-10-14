@@ -1,10 +1,12 @@
-"""Whether a service registers a new scenario, and which loaded scenarios it unloads to load another.
+"""Scenario admission: whether a service creates a scenario, and what it unloads to load one.
 
-The registry asks a :class:`ScenarioAdmission` before it creates a scenario and
-before it loads one. The plugin owns the policy: how many scenarios a service
-holds and which loaded ones go first. Reef owns the safety: it unloads only a
-scenario that is idle, and it refuses the load when too few are idle.
-:class:`ScenarioLimits` is the built-in plugin; it applies
+The registry asks a :class:`ScenarioAdmission` plugin before it creates a
+scenario and before it loads one. The plugin sets the policy: how many
+scenarios the service holds, and which loaded scenarios unload first. Reef
+keeps the data safe: it unloads only idle scenarios. If too few scenarios are
+idle, Reef refuses the load.
+
+:class:`ScenarioLimits` is the built-in plugin. It applies
 ``reef.max_loaded_scenarios`` and ``reef.max_scenarios``.
 """
 
@@ -19,52 +21,57 @@ from reef.core.plugins import ConfiguredPlugin
 
 @dataclass(frozen=True)
 class LoadedScenario:
-    """One scenario that holds a load slot, as admission sees it."""
+    """A scenario that holds a load slot."""
 
     name: str
-    #: ``time.monotonic()`` of the scenario's last request, record or local cycle.
+    #: The ``time.monotonic()`` value of the last request, record or local cycle of the scenario.
     last_used_at: float
-    #: True while the scenario is still loading; Reef cannot unload it.
+    #: True while the scenario loads. Reef cannot unload a scenario that loads.
     loading: bool = False
 
 
 @dataclass(frozen=True)
 class LoadAdmission:
-    """What Reef does before it loads a scenario."""
+    """The unloads that must occur before a scenario loads."""
 
-    #: How many loaded scenarios Reef must unload first.
+    #: The number of loaded scenarios that Reef must unload first.
     unload_count: int = 0
-    #: The scenarios Reef tries to unload, in this order; it skips one that is not idle.
+    #: The scenarios that Reef tries to unload, in this order. Reef skips a scenario that is not idle.
     candidates: tuple[str, ...] = ()
 
 
 class ScenarioAdmission(ConfiguredPlugin, ABC):
-    """Decides whether a service creates a scenario and what it unloads to load one.
+    """Decides whether a service creates a scenario, and what it unloads to load one.
 
-    Reef calls the methods for one scenario under that scenario's lock, and it
-    serializes the calls for different scenarios. A method must return
-    quickly and must not call the dispatcher.
+    Reef calls the methods for a scenario while it holds the lock of that
+    scenario. The calls for different scenarios occur one at a time. A method
+    must return quickly, and it must not call the dispatcher.
     """
 
     @abstractmethod
     def check_creation(self, scenario: str, *, registered_count: int) -> None:
-        """Refuse a new scenario with ``ScenarioLimitReached``; ``registered_count`` excludes it."""
+        """Check whether the new ``scenario`` may be created.
+
+        ``registered_count`` is the number of registered scenarios, without
+        ``scenario``. To refuse the scenario, raise ``ScenarioLimitReached``.
+        """
 
     @abstractmethod
     def admit_load(self, scenario: str, *, loaded: tuple[LoadedScenario, ...]) -> LoadAdmission:
-        """What Reef unloads before it loads ``scenario``; ``ScenarioCapacityFull`` refuses the load.
+        """Tell what Reef must unload before it loads ``scenario``.
 
-        ``loaded`` holds every scenario with a load slot, including those
-        still loading. When fewer of the candidates are idle than
+        ``loaded`` contains every scenario with a load slot, also the
+        scenarios that still load. If fewer candidates are idle than
         ``unload_count``, Reef refuses the load with ``ScenarioCapacityFull``.
+        To refuse the load directly, raise ``ScenarioCapacityFull``.
         """
 
 
 class ScenarioLimits(ScenarioAdmission):
-    """The built-in admission: at most ``max_loaded_scenarios`` loaded and ``max_scenarios`` registered.
+    """The built-in admission. It limits the loaded scenarios and the registered scenarios.
 
-    ``None`` means no limit. At the load limit, the least recently used idle
-    scenario is unloaded first.
+    ``None`` means no limit. At the load limit, Reef unloads the idle
+    scenario with the oldest use first.
     """
 
     def __init__(self, *, max_loaded_scenarios: int | None = None, max_scenarios: int | None = None) -> None:

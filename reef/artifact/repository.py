@@ -208,7 +208,7 @@ class Repository(ArtifactRepository):
 
     @property
     def holds_local_releases(self) -> bool:
-        """Whether a release staged by this process exists only in memory: closing the repository loses it."""
+        """Whether a release that this process staged exists only in memory. A close of the repository loses it."""
         return bool(self._local_artifacts)
 
     @property

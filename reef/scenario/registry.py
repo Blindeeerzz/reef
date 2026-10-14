@@ -4,9 +4,9 @@ single-training-scenario invariant.
 Owns the scenario dict, per-scenario RLocks, the scenario factory, and the
 training-binding invariant (at most one training scenario per process). All
 table access goes through this registry; the dispatcher delegates scenario
-resolution and uses the registry for lookups. Before it creates or loads a
-scenario, the registry asks its ``ScenarioAdmission``; to free a load slot it
-asks the dispatcher, as its ``ScenarioUnloader``, to unload an idle scenario.
+resolution and uses the registry for lookups. Before the registry creates or
+loads a scenario, it asks its ``ScenarioAdmission``. To free a load slot, it
+asks its ``ScenarioUnloader`` (the dispatcher) to unload an idle scenario.
 """
 
 from __future__ import annotations
@@ -52,15 +52,18 @@ class CloseReplacedAtOnce(ReplacedScenarioCloser):
 
 
 class ScenarioUnloader(ABC):
-    """Unloads a loaded scenario when it is idle, to make room for another."""
+    """Unloads an idle scenario to free its load slot."""
 
     @abstractmethod
     def unload_if_idle(self, scenario: str) -> bool:
-        """Unload ``scenario`` if it is idle now; whether it was unloaded. Must not wait for a scenario's lock."""
+        """Unload ``scenario`` if it is idle now, and return whether it was unloaded.
+
+        The method must not wait for a lock of the scenario.
+        """
 
 
 class NeverUnload(ScenarioUnloader):
-    """The registry's own unloader: without a dispatcher, no scenario is known to be idle."""
+    """The default unloader of the registry. Without a dispatcher, the registry cannot know that a scenario is idle."""
 
     def unload_if_idle(self, scenario: str) -> bool:
         return False
@@ -107,14 +110,14 @@ class ScenarioRegistry:
         self.replaced_closer: ReplacedScenarioCloser = CloseReplacedAtOnce()
         self._allow_implicit_creation = allow_implicit_creation
         self._on_training_scenario_resolved: Callable[[Scenario], None] | None = None
-        self._admission = admission if admission is not None else ScenarioLimits()
-        #: Serializes admission, so two loads cannot both take the last load slot.
-        self._admission_lock = Lock()
+        self.admission = admission if admission is not None else ScenarioLimits()
+        #: Makes admission serial, so that two loads cannot both take the last load slot.
+        self.admission_lock = Lock()
         self.unloader: ScenarioUnloader = NeverUnload()
-        #: ``time.monotonic()`` of each loaded scenario's last request, record or local cycle.
-        self._last_used: dict[str, float] = {}
-        #: Scenarios that admission let load and that are not loaded yet; each holds a load slot.
-        self._loading: set[str] = set()
+        #: The ``time.monotonic()`` value of the last request, record or local cycle of each loaded scenario.
+        self.last_used_at: dict[str, float] = {}
+        #: The scenarios that admission let load and that are not loaded yet. Each one holds a load slot.
+        self.loading: set[str] = set()
 
     @property
     def training_scenario_name(self) -> str | None:
@@ -159,19 +162,19 @@ class ScenarioRegistry:
         self.replaced_closer = closer
 
     def set_unloader(self, unloader: ScenarioUnloader) -> None:
-        """Who unloads an idle scenario when admission needs its load slot."""
+        """Set the unloader that frees a load slot for admission."""
         self.unloader = unloader
 
     def touch(self, scenario: str) -> None:
-        """Note a use of a loaded scenario; a scenario that is not loaded is ignored."""
+        """Record a use of a loaded scenario. A scenario that is not loaded is ignored."""
         with self._lock:
             if scenario in self._scenarios:
-                self._last_used[scenario] = time.monotonic()
+                self.last_used_at[scenario] = time.monotonic()
 
-    def unused_since(self, moment: float) -> tuple[str, ...]:
-        """The loaded scenarios last used before the ``time.monotonic()`` value ``moment``."""
+    def unused_since(self, monotonic_seconds: float) -> tuple[str, ...]:
+        """The loaded scenarios with no use after the ``time.monotonic()`` value ``monotonic_seconds``."""
         with self._lock:
-            return tuple(name for name in self._scenarios if self._last_used.get(name, 0.0) < moment)
+            return tuple(name for name in self._scenarios if self.last_used_at[name] < monotonic_seconds)
 
     def has(self, scenario: str) -> bool:
         """True when the scenario exists in memory or in durable registration."""
@@ -281,8 +284,8 @@ class ScenarioRegistry:
             if not create and not exists:
                 raise UnknownScenario(f"unknown scenario {scenario!r}")
             if not exists:
-                # Checked before the settings are stored: a refused scenario leaves nothing behind.
-                self._check_creation(scenario)
+                # Check before the settings are stored, so that a refused scenario leaves nothing behind.
+                self.check_creation(scenario)
             # Creating an existing scenario never overwrites its configuration.
             if not create or not exists:
                 candidate = ModelConfig.from_value(value)
@@ -309,6 +312,7 @@ class ScenarioRegistry:
             with self._lock:
                 dropped = self._scenarios.get(scenario)
                 self._scenarios[scenario] = recovered
+                self.last_used_at[scenario] = time.monotonic()
             if dropped is not None:
                 # Close outside the state lock: teardown may join processor
                 # worker threads. Accepts reach the recovered instance, so
@@ -326,22 +330,22 @@ class ScenarioRegistry:
         """
         with self._lock:
             dropped = self._scenarios.pop(scenario, None)
-            self._last_used.pop(scenario, None)
+            self.last_used_at.pop(scenario, None)
             self._training_scenarios = [name for name in self._training_scenarios if name != scenario]
             self._model_configs.pop(scenario, None)
             self._preload_errors.pop(scenario, None)
         return dropped
 
     def unload(self, scenario: str) -> Scenario | None:
-        """Drop the loaded instance and keep everything durable; the instance, for the caller to close.
+        """Remove the loaded instance from the table and return it. The caller closes it.
 
-        The next request loads the scenario again. The cached model
-        configuration stays, so the scenario keeps its runtime. Call under
-        ``lock_for(scenario)``.
+        All durable state stays, and the next request loads the scenario
+        again. The cached model configuration also stays, so the scenario
+        keeps its runtime. Call this method under ``lock_for(scenario)``.
         """
         with self._lock:
             dropped = self._scenarios.pop(scenario, None)
-            self._last_used.pop(scenario, None)
+            self.last_used_at.pop(scenario, None)
         return dropped
 
     def archive_registration(self, scenario: str) -> tuple[str, ...]:
@@ -404,8 +408,8 @@ class ScenarioRegistry:
             self.touch(scenario)
             return current
         if not self._scenario_factory.has_registration(scenario):
-            self._check_creation(scenario)
-        self._admit_load(scenario)
+            self.check_creation(scenario)
+        self.take_load_slot(scenario)
         try:
             current = self._scenario_factory.load_or_create(
                 scenario, release_id, model_config=self._model_config(scenario)
@@ -413,7 +417,7 @@ class ScenarioRegistry:
             self._apply_stored_training_mode(current)
         finally:
             with self._lock:
-                self._loading.discard(scenario)
+                self.loading.discard(scenario)
         training_runtime = current.training_runtime
         with self._lock:
             shared_runtime = training_runtime is not None and training_runtime.concurrent_training_scenarios
@@ -428,52 +432,58 @@ class ScenarioRegistry:
             if training_runtime is not None and scenario not in self._training_scenarios:
                 self._training_scenarios.append(scenario)
             self._scenarios[scenario] = current
-            self._last_used[scenario] = time.monotonic()
+            self.last_used_at[scenario] = time.monotonic()
         if training_runtime is not None and self._on_training_scenario_resolved is not None:
             self._on_training_scenario_resolved(current)
         return current
 
-    def _check_creation(self, scenario: str) -> None:
+    def check_creation(self, scenario: str) -> None:
+        """Ask admission whether the new ``scenario`` may be created. If admission refuses it, the error propagates."""
         if isinstance(self._backend_factory, EnumerableRepositoryBackendFactory):
             registered_count = len(self._backend_factory.list_registrations())
         else:
             with self._lock:
                 registered_count = len(self._scenarios)
         try:
-            self._admission.check_creation(scenario, registered_count=registered_count)
+            self.admission.check_creation(scenario, registered_count=registered_count)
         except ReefError as exc:
             logger.warning("refused to create scenario %r: %s", scenario, exc)
             raise
 
-    def _admit_load(self, scenario: str) -> None:
-        """Take a load slot for ``scenario``, unloading the idle scenarios admission names; release it after the load.
+    def take_load_slot(self, scenario: str) -> None:
+        """Take a load slot for ``scenario`` before it loads. ``_resolve`` releases the slot after the load.
 
-        Lock order: the scenario's lock, then the admission lock. The
-        unloader only tries the other scenarios' locks, so no wait can close
-        a cycle.
+        Admission tells how many loaded scenarios must unload first. This
+        method unloads idle candidates until there are enough. If there are
+        too few, it raises ``ScenarioCapacityFull``.
+
+        Lock order: the lock of ``scenario``, then the admission lock. The
+        unloader only tries the locks of other scenarios and never waits for
+        them, so no deadlock can occur.
         """
-        with self._admission_lock:
+        with self.admission_lock:
             now = time.monotonic()
             with self._lock:
                 loaded = (
-                    *(LoadedScenario(name, self._last_used.get(name, 0.0)) for name in self._scenarios),
-                    *(LoadedScenario(name, now, loading=True) for name in self._loading),
+                    *(LoadedScenario(name, self.last_used_at[name]) for name in self._scenarios),
+                    *(LoadedScenario(name, now, loading=True) for name in self.loading),
                 )
             try:
-                admission = self._admission.admit_load(scenario, loaded=loaded)
-                unloaded_count = 0
-                for candidate in admission.candidates:
-                    if unloaded_count >= admission.unload_count:
-                        break
-                    if candidate != scenario and self.unloader.unload_if_idle(candidate):
-                        unloaded_count += 1
-                if unloaded_count < admission.unload_count:
-                    raise ScenarioCapacityFull(
-                        f"cannot load scenario {scenario!r}: {len(loaded)} scenarios are loaded and too few of "
-                        "them are idle to make room; retry later"
-                    )
+                load_admission = self.admission.admit_load(scenario, loaded=loaded)
             except ReefError as exc:
                 logger.warning("refused to load scenario %r: %s", scenario, exc)
                 raise
+            unloaded_count = 0
+            for candidate in load_admission.candidates:
+                if unloaded_count == load_admission.unload_count:
+                    break
+                if self.unloader.unload_if_idle(candidate):
+                    unloaded_count += 1
+            if unloaded_count < load_admission.unload_count:
+                logger.warning("refused to load scenario %r: too few loaded scenarios are idle", scenario)
+                raise ScenarioCapacityFull(
+                    f"cannot load scenario {scenario!r}: {len(loaded)} scenarios are loaded, and too few of them "
+                    "are idle to free a load slot; retry later"
+                )
             with self._lock:
-                self._loading.add(scenario)
+                self.loading.add(scenario)

@@ -74,7 +74,7 @@ def translate_error(exc: Exception) -> web.HTTPError | None:
     """The HTTP error for a domain exception, or None when it is not mapped."""
     if isinstance(exc, UpstreamStatusError):  # before the table: status is dynamic
         return _translate_upstream(exc)
-    if isinstance(exc, ScenarioCapacityFull):  # before the table: the response names when to retry
+    if isinstance(exc, ScenarioCapacityFull):  # Before the table: the response tells when to retry.
         return web.HTTPServiceUnavailable(text=str(exc), headers={"Retry-After": str(exc.retry_after_seconds)})
     for error_type, http_error in ERROR_STATUS_TABLE:
         if isinstance(exc, error_type):

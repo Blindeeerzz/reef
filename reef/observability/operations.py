@@ -62,7 +62,7 @@ class OperationMetrics:
         return measurement
 
     def active_count(self) -> int:
-        """The calls that run now."""
+        """The number of calls that run now."""
         with self.lock:
             return len(self.active_operations)
 

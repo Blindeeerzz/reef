@@ -1,8 +1,9 @@
-"""Idle scenarios unload and load again; admission limits how many a service registers and loads."""
+"""Idle scenarios unload and load again. Admission limits the scenarios that a service registers and loads."""
 
 from __future__ import annotations
 
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, Thread
@@ -26,13 +27,14 @@ MODEL_CONFIG = {"url": "http://127.0.0.1:9", "model": "custom-model"}
 
 
 class StepBackend(CandidateBackend):
-    """A local backend whose every batch publishes one new release; ``block`` holds a cycle in preparation."""
+    """A local backend that publishes one release for each batch. With ``block``, a cycle waits in preparation."""
 
     def __init__(self, artifact_dir: Path) -> None:
         self.artifact_dir = artifact_dir
         self.block = False
         self.started = Event()
         self.resume = Event()
+        self.result: TrainStepResult | None = None
 
     def initial_state(self):
         return {"steps": 0}
@@ -80,6 +82,7 @@ def make_dispatcher(
     checkpoint_every: int = 1,
     admission: ScenarioAdmission | None = None,
     idle_unload_seconds: float | None = None,
+    storage: SQLiteScenarioStorage | None = None,
 ) -> Dispatcher:
     initial = tmp_path / "initial"
     initial.mkdir(exist_ok=True)
@@ -88,7 +91,7 @@ def make_dispatcher(
         StepRecipe(backend=backend, checkpoint_strategy=EveryNVersions(checkpoint_every)),
         InMemoryRepositoryBackend.factory(initial, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "staged",
-        scenario_storage=SQLiteScenarioStorage(tmp_path / "records"),
+        scenario_storage=storage if storage is not None else SQLiteScenarioStorage(tmp_path / "records"),
         scenario_admission=admission,
         scenario_idle_unload_seconds=idle_unload_seconds,
     )
@@ -123,7 +126,7 @@ def wait_for(condition, timeout_seconds: float = 10.0) -> None:
 
 
 def trained(dispatcher: Dispatcher, name: str, step: int) -> Scenario:
-    """Accept one scored pair and wait until the local worker committed ``step``."""
+    """Accept one scored pair, and wait until the local worker commits ``step``."""
     current = dispatcher.get_or_create_scenario(name)
     assert current is not None
     dispatcher.accept_records(scored_pair(name, step))
@@ -173,7 +176,7 @@ def test_scenario_with_untrained_records_stays_loaded(tmp_path) -> None:
     try:
         current = dispatcher.get_or_create_scenario("math")
         assert current is not None
-        # Appended past the dispatcher: no worker reads the rows, so they wait untrained.
+        # The rows go around the dispatcher. No worker reads them, so they stay untrained.
         for item in scored_pair("math", 1):
             current.records.append(item)
 
@@ -193,7 +196,6 @@ def test_scenario_with_a_running_cycle_stays_loaded(tmp_path) -> None:
         assert backend.started.wait(10)
 
         assert not dispatcher.unload_if_idle("math")
-        backend.resume.set()
     finally:
         backend.resume.set()
         dispatcher.close()
@@ -231,7 +233,7 @@ def test_load_limit_unloads_the_least_recently_used_idle_scenario(tmp_path) -> N
     try:
         dispatcher.get_or_create_scenario("a")
         dispatcher.get_or_create_scenario("b")
-        dispatcher.get_or_create_scenario("a")  # a is now the more recently used
+        dispatcher.get_or_create_scenario("a")  # Now the last use of "b" is older than that of "a".
 
         dispatcher.get_or_create_scenario("c")
 
@@ -264,7 +266,7 @@ def test_full_service_refuses_a_load_when_no_scenario_is_idle(tmp_path) -> None:
 @pytest.mark.unit
 def test_concurrent_loads_share_the_load_limit(tmp_path) -> None:
     class SlowLoads(ScenarioLimits):
-        """Admits like the built-in, but gives a second load time to race the first."""
+        """The built-in admission, with a delay. The delay lets a second load run at the same time as the first."""
 
         def admit_load(self, scenario: str, *, loaded: tuple[LoadedScenario, ...]) -> LoadAdmission:
             admission = super().admit_load(scenario, loaded=loaded)
@@ -272,15 +274,13 @@ def test_concurrent_loads_share_the_load_limit(tmp_path) -> None:
             return admission
 
     dispatcher = make_dispatcher(tmp_path, admission=SlowLoads(max_loaded_scenarios=1))
+
+    def load(name: str) -> None:
+        # Timing decides which load is refused. The test checks only the limit.
+        with suppress(ScenarioCapacityFull):
+            dispatcher.get_or_create_scenario(name)
+
     try:
-        results: dict[str, object] = {}
-
-        def load(name: str) -> None:
-            try:
-                results[name] = dispatcher.get_or_create_scenario(name)
-            except ScenarioCapacityFull as exc:
-                results[name] = exc
-
         threads = [Thread(target=load, args=(name,)) for name in ("a", "b")]
         for thread in threads:
             thread.start()
@@ -294,12 +294,13 @@ def test_concurrent_loads_share_the_load_limit(tmp_path) -> None:
 
 @pytest.mark.unit
 def test_registration_limit_refuses_a_new_scenario_and_stores_nothing(tmp_path) -> None:
-    dispatcher = make_dispatcher(tmp_path, admission=ScenarioLimits(max_scenarios=1))
+    storage = SQLiteScenarioStorage(tmp_path / "records")
+    dispatcher = make_dispatcher(tmp_path, admission=ScenarioLimits(max_scenarios=1), storage=storage)
     try:
         dispatcher.get_or_create_scenario("a")
         assert dispatcher.unload_if_idle("a")
 
-        # A registered scenario loads again: the limit counts registrations, not loads.
+        # A registered scenario loads again. The limit counts registrations, not loads.
         assert dispatcher.get_or_create_scenario("a") is not None
         with pytest.raises(ScenarioLimitReached, match=r"reef\.max_scenarios"):
             dispatcher.get_or_create_scenario("b")
@@ -307,7 +308,7 @@ def test_registration_limit_refuses_a_new_scenario_and_stores_nothing(tmp_path) 
             dispatcher.configure_scenario_model("b", MODEL_CONFIG, create=True)
 
         assert not dispatcher.has_scenario("b")
-        assert dispatcher._storage.read_settings("b").model_config is None
+        assert storage.read_settings("b").model_config is None
     finally:
         dispatcher.close()
 

@@ -15,7 +15,7 @@ from functools import lru_cache
 from typing import Any
 
 from reef.core.config import ConfigArgument, config_arguments, config_metadata, config_option, parse_config_values
-from reef.scenario.admission import ScenarioAdmission
+from reef.scenario.admission import ScenarioAdmission, ScenarioLimits
 from reef.service.cors import console_origins
 from reef.service.deploy.config_utils import config_value, interpolate_config, interpolate_config_values
 from reef.storage.postgres import postgres_url, validate_postgres_schema
@@ -195,21 +195,22 @@ class ServiceConfig:
     scenario_idle_unload_s: float | None = config_option(
         None,
         public_path=("reef", "scenario_idle_unload_s"),
-        help="Unload a scenario idle for this many seconds; the next request loads it again (default: never).",
+        help="Unload a scenario that is idle for this many seconds. The next request loads it again. Default: never.",
     )
     max_loaded_scenarios: int | None = config_option(
         None,
         public_path=("reef", "max_loaded_scenarios"),
-        help="Most scenarios loaded at once; at the limit the least recently used idle one unloads (default: no limit).",
+        help="Maximum loaded scenarios. At the limit, the idle scenario with the oldest use unloads. Default: no limit.",
     )
     max_scenarios: int | None = config_option(
-        None, public_path=("reef", "max_scenarios"), help="Most scenarios registered (default: no limit)."
+        None, public_path=("reef", "max_scenarios"), help="Maximum registered scenarios. Default: no limit."
     )
-    #: A ``ScenarioAdmission`` plugin that replaces the built-in limits: ``package.module:ClassName`` or module and config.
+    #: A ``ScenarioAdmission`` plugin that replaces the built-in limits. Give ``package.module:ClassName``, or
+    #: a mapping with module and config.
     scenario_admission: str | Mapping[str, Any] | None = config_option(
         None,
         public_path=("reef", "scenario_admission"),
-        help="ScenarioAdmission plugin reference that decides scenario creation and loading.",
+        help="ScenarioAdmission plugin reference. The plugin decides whether a scenario is created or loaded.",
     )
     #: Deployment-level experiment provider settings, sourced from
     #: ``observability.wandb``.
@@ -256,12 +257,8 @@ class ServiceConfig:
         RecordRetention(max_bytes=self.agent_record_retention_max_bytes)
         if self.scenario_idle_unload_s is not None and self.scenario_idle_unload_s <= 0:
             raise ValueError("reef.scenario_idle_unload_s must be positive")
-        for setting, limit in (
-            ("max_loaded_scenarios", self.max_loaded_scenarios),
-            ("max_scenarios", self.max_scenarios),
-        ):
-            if limit is not None and limit < 1:
-                raise ValueError(f"reef.{setting} must be positive")
+        # The built-in admission checks its own limits.
+        ScenarioLimits(max_loaded_scenarios=self.max_loaded_scenarios, max_scenarios=self.max_scenarios)
         if self.scenario_admission is not None:
             if self.max_loaded_scenarios is not None or self.max_scenarios is not None:
                 raise ValueError(

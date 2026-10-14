@@ -251,10 +251,11 @@ With all backends, each scenario needs one Reef writer.
 Limit the scenarios a service holds
 -----------------------------------
 
-A service loads every registered scenario when it starts. By default it keeps
-each one loaded until the scenario is deleted, and it accepts any number of
-scenarios. A loaded scenario holds a storage session, its trainers and its
-local worker threads. Four ``reef`` settings change this. All are off by default.
+A service loads every registered scenario when it starts. By default, each
+scenario stays loaded until you delete it. A service also accepts any number
+of scenarios. A loaded scenario holds a storage session, its trainers and its
+local worker threads. Four ``reef`` settings change this. All of them are off
+by default.
 
 .. list-table::
    :header-rows: 1
@@ -263,16 +264,16 @@ local worker threads. Four ``reef`` settings change this. All are off by default
    * - Setting
      - Effect
    * - ``scenario-idle-unload-s``
-     - Unload a scenario that has been idle for this many seconds.
+     - Reef unloads a scenario that is idle for this number of seconds.
    * - ``max-loaded-scenarios``
-     - The most scenarios loaded at once. To load another, Reef first unloads
-       the least recently used idle scenario. If no scenario is idle, the
-       request gets HTTP 503 with a ``Retry-After`` header.
+     - The maximum number of loaded scenarios. To load one more, Reef first
+       unloads the idle scenario with the oldest use. If no scenario is idle,
+       the request gets HTTP 503 with a ``Retry-After`` header.
    * - ``max-scenarios``
-     - The most registered scenarios. A request that would create another
-       gets HTTP 409. Delete a scenario to free a place.
+     - The maximum number of registered scenarios. A request that would
+       create one more gets HTTP 409. To free a place, delete a scenario.
    * - ``scenario-admission``
-     - A ``ScenarioAdmission`` plugin that replaces the two limits above.
+     - A ``ScenarioAdmission`` plugin. It replaces the two limits above.
 
 .. code-block:: yaml
 
@@ -281,45 +282,50 @@ local worker threads. Four ``reef`` settings change this. All are off by default
      max-loaded-scenarios: 50
      max-scenarios: 1000
 
-Unloading keeps everything durable: the records, the commit log, the settings
-and the releases. The next request to the scenario loads it again, as a
-restart does. Counters held in memory, such as the operation metrics, start
-again from zero.
+An unload keeps all durable state: the records, the commit log, the settings
+and the releases. The next request to the scenario loads it again, as after a
+restart. Counters in memory, such as the operation metrics, start again from
+zero.
 
-A scenario is idle when all of these are true:
+A scenario is idle when all of these conditions are true:
 
 - No request, record or local training cycle used it during the idle time.
-  The load limit does not wait for the idle time.
-- No request runs on it, and no local training cycle runs on it.
+  Only ``scenario-idle-unload-s`` uses this condition. To free a place for
+  ``max-loaded-scenarios``, Reef does not wait for the idle time.
+- No request or local training cycle runs on it.
 - No trainer has records that it would still train on.
 - No release exists only in memory. With ``checkpoint_every_n_versions``
-  above 1 (see `Set the checkpoint cadence`_), a release between checkpoints
-  is kept only in memory, so the scenario stays loaded.
+  above 1 (see `Set the checkpoint cadence`_), Reef keeps a release between
+  two checkpoints only in memory. Thus the scenario stays loaded.
 - The storage backend is durable.
 
-Reef never unloads a weight-training scenario. Its runtime binding is
-released only when the scenario is deleted.
+Reef never unloads a weight-training scenario, because only a delete releases
+its runtime binding.
 
-The start-up preload follows the load limit. When no loaded scenario is
-idle, a registered scenario is not preloaded; it loads on its first request.
+The start-up preload also obeys ``max-loaded-scenarios``. If no loaded
+scenario is idle, Reef does not preload the next scenario. That scenario loads
+on its first request.
 
-An admission plugin is a subclass of ``reef.scenario.admission.ScenarioAdmission``.
-Name it as ``package.module:ClassName``, or give the name and a ``config``
-mapping, as for a storage plugin. Reef calls ``from_config(config)``. It
-implements two methods:
+To set a different policy, write a subclass of
+``reef.scenario.admission.ScenarioAdmission``. Give its name as
+``package.module:ClassName``, or give the name and a ``config`` mapping, as for
+a storage plugin. Reef calls ``from_config(config)`` to make the plugin. The
+plugin implements two methods:
 
-- ``check_creation(scenario, registered_count=...)``: raise
-  ``reef.core.errors.ScenarioLimitReached`` (HTTP 409) to refuse a new scenario.
-- ``admit_load(scenario, loaded=...)``: return a ``LoadAdmission`` that names
-  how many loaded scenarios Reef must unload first and the candidates in the
-  order to try. Reef unloads only idle candidates. If too few are idle, Reef
+- ``check_creation(scenario, registered_count=...)``: to refuse a new
+  scenario, raise ``reef.core.errors.ScenarioLimitReached`` (HTTP 409).
+- ``admit_load(scenario, loaded=...)``: return a ``LoadAdmission``. Its
+  ``unload_count`` is the number of loaded scenarios that Reef must unload
+  first. Its ``candidates`` are the scenarios that Reef tries, in that order.
+  Reef unloads only idle candidates. If too few candidates are idle, Reef
   refuses the load with ``reef.core.errors.ScenarioCapacityFull`` (HTTP 503).
   The plugin can also raise that error itself.
 
-Reef calls the plugin before it creates and before it loads a scenario. The
-calls are serialized, so the methods must return quickly. ``reef.max-scenarios``
-and ``reef.max-loaded-scenarios`` configure the built-in ``ScenarioLimits``,
-so Reef refuses them together with a plugin.
+Reef calls the plugin before it creates a scenario and before it loads one.
+Reef makes these calls one at a time, so the methods must return quickly.
+``max-scenarios`` and ``max-loaded-scenarios`` configure the built-in plugin,
+``ScenarioLimits``. If you set ``scenario-admission``, do not set them: Reef
+refuses that configuration.
 
 Back up a deployment
 --------------------
