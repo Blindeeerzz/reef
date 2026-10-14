@@ -324,6 +324,22 @@ Working on continual self-improving agent?
 If Reef looks useful to you, please give it a ⭐ — it helps the community to discover and contribute to the project.
 
 
+## 📚 Citation
+
+If you use Reef in your research, please cite:
+
+```bibtex
+@misc{reef2026,
+  title  = {Reef: Infrastructure for Continually Self-Improving Agents},
+  author = {{Reef Contributors}},
+  year   = {2026},
+  url    = {https://github.com/Human-Agent-Society/reef}
+}
+```
+
+Citation metadata is also available in [CITATION.cff](CITATION.cff).
+
+
 ## 👥 The Team
 
 Reef brings together people exploring how agents can learn from experience and
