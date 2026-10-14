@@ -344,10 +344,10 @@ class SQLiteScenarioStorage(ScenarioStorage):
                     moved.append(str(target))
             return tuple(moved)
 
-    def prune(self, *, days: float, max_bytes: int) -> int:
+    def prune(self, *, max_bytes: int) -> int:
         with self._lock:
             self._ensure_open()
-            retention = RecordRetention(days, max_bytes)
+            retention = RecordRetention(max_bytes=max_bytes)
             return 0 if self._directory is None else SQLiteRecordRetention(retention).prune(self._directory)
 
     def state_paths(self, scenario: str) -> tuple[Path, ...]:

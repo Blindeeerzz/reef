@@ -378,7 +378,7 @@ def test_storage_capacity_includes_unconsumed_archived_records(tmp_path):
         session.commit_step(expected_step=0, commit=commit())
     archived = factory.archive("math")
 
-    assert factory.prune(days=7.0, max_bytes=1) == 2
+    assert factory.prune(max_bytes=1) == 2
 
     database = next(Path(path) for path in archived if path.endswith(".sqlite3"))
     with SQLiteRecordStore(database) as records:
@@ -392,7 +392,7 @@ def test_storage_close_preserves_existing_session_and_rejects_new_operations():
     with closing(factory.open("math")) as session:
         assert factory.durable is False
         assert factory.archive("math") == ()
-        assert factory.prune(days=7.0, max_bytes=1) == 0
+        assert factory.prune(max_bytes=1) == 0
         factory.close()
         factory.close()
         session.commit_step(expected_step=0, commit=commit())
@@ -401,7 +401,7 @@ def test_storage_close_preserves_existing_session_and_rejects_new_operations():
         with pytest.raises(RuntimeError, match="storage is closed"):
             factory.archive("math")
         with pytest.raises(RuntimeError, match="storage is closed"):
-            factory.prune(days=7.0, max_bytes=1)
+            factory.prune(max_bytes=1)
 
 
 def test_import_and_in_memory_storage_do_not_require_posix_locks(tmp_path):

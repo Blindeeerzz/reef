@@ -367,7 +367,7 @@ def build_dispatcher(
 
 
 def build_app(settings: ServiceConfig, *, environ: Mapping[str, str] | None = None, connector: Any = None) -> Any:
-    record_retention = RecordRetention(settings.agent_record_retention_days, settings.agent_record_retention_max_bytes)
+    record_retention = RecordRetention(max_bytes=settings.agent_record_retention_max_bytes)
     retry_policy = InferenceRetryPolicy(
         initial_s=settings.inference_retry_initial_s,
         max_s=settings.inference_retry_max_s,

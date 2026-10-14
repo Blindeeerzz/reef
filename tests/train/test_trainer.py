@@ -962,7 +962,7 @@ def test_capacity_loss_skips_orphan_report_and_remains_visible_after_restart(tmp
                 "SELECT body_bytes FROM agent_record WHERE agent_record_id='r2'"
             ).scalar_one()
         with closing(SQLiteScenarioStorage(tmp_path)) as storage:
-            assert storage.prune(days=7, max_bytes=keep_bytes) == 1
+            assert storage.prune(max_bytes=keep_bytes) == 1
         records.append(positioned_inference(3))
         records.append(positioned_report(4, "i3", 1.0))
         trainer = Trainer.build(

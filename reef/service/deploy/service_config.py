@@ -177,11 +177,6 @@ class ServiceConfig:
     record_database_schema: str = config_option(
         "reef_records", public_path=("storage", "record_database_schema"), help="PostgreSQL schema."
     )
-    agent_record_retention_days: float = config_option(
-        7.0,
-        public_path=("storage", "agent_record_retention_days"),
-        help="Deprecated compatibility setting; records are evicted by capacity, not age.",
-    )
     agent_record_retention_max_bytes: int = config_option(
         20 * 1024**3,
         public_path=("storage", "agent_record_retention_max_bytes"),
@@ -234,7 +229,7 @@ class ServiceConfig:
     preset_config: Mapping[str, Any] | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        RecordRetention(self.agent_record_retention_days, self.agent_record_retention_max_bytes)
+        RecordRetention(max_bytes=self.agent_record_retention_max_bytes)
         if self.record_backend not in {"sqlite", "postgres"}:
             raise ValueError("reef.record_backend must be sqlite or postgres")
         if self.record_backend == "postgres":

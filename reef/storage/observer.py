@@ -166,8 +166,8 @@ class ObservedScenarioStorage(ScenarioStorage):
     def archive(self, scenario: str) -> tuple[str, ...]:
         return self._inner.archive(scenario)
 
-    def prune(self, *, days: float, max_bytes: int) -> int:
-        return self._inner.prune(days=days, max_bytes=max_bytes)
+    def prune(self, *, max_bytes: int) -> int:
+        return self._inner.prune(max_bytes=max_bytes)
 
     def close(self) -> None:
         try:

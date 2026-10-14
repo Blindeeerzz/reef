@@ -668,7 +668,6 @@ persistent.
    storage.artifact-work-dir | .reef/artifact-work | materialization scratch
    storage.artifact-cache-dir | .reef/artifact-cache | fetched artifact cache
    storage.agent-record-dir | .reef/agent-record | the record store
-   storage.agent-record-retention-days | 7.0 | deprecated compatibility setting; automatic cleanup no longer expires data by age
    storage.agent-record-retention-max-bytes | 21474836480 | 20 GiB shared across all record bodies, including unconsumed records
 
 .. warning::
@@ -681,8 +680,7 @@ Storage manages cleanup independently: the HTTP service runs a sweep at startup
 and every 60 seconds. When the total record-body size exceeds the configured
 budget, storage evicts the oldest records by stored creation time, breaking ties
 by append sequence. Both consumed and unconsumed data are eligible; processors
-cannot protect disk records from capacity eviction. The deprecated
-``storage.agent-record-retention-days`` option is accepted but has no cleanup effect.
+cannot protect disk records from capacity eviction. Records do not expire by age.
 
 The budget measures UTF-8 JSON payloads, references and artifact references
 across active and archived scenarios. SQLite shares it across the record
