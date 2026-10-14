@@ -10,7 +10,7 @@ from tests.support._threshold_processor import ThresholdBatches, ThresholdTasks,
 from tests.support.runtime_stubs import StubInferenceRuntime, StubTrainingRuntime, candidate_backend, runtime_bindings
 
 import reef.record2task.assembly as reported_module
-from recipes.sao import SAOBatches, SAORecord2Record, SAOTasks
+from recipes.sao import SAOBatches, SAOTasks
 from recipes.tttd import TTTDBatches, TTTDGridSettings, TTTDGroupedRolloutReport, TTTDRecord2Record, TTTDTasks
 from reef.artifact import InMemoryRepositoryBackend
 from reef.core import AgentRecord, RequestType
@@ -25,7 +25,7 @@ from reef.evaluation import (
     UpdateCandidate,
 )
 from reef.recipe import WeightTrainingRecipe
-from reef.record2record import ReportGrouping, ReportRecord2Record
+from reef.record2record import ExclusiveReportRecord2Record, ReportGrouping, ReportRecord2Record
 from reef.record2task.assembly import SampleAssemblySettings
 from reef.runtime.interfaces import ActivatedModel, ModelCandidate, PreparedTrainingStep, TrainingMethod
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
@@ -43,7 +43,7 @@ def sao_pipeline(
 ) -> TrainingPipeline:
     return TrainingPipeline(
         context,
-        record2record=SAORecord2Record(context),
+        record2record=ExclusiveReportRecord2Record(context),
         record2task=SAOTasks(SampleAssemblySettings(accept_multi_turn_policy_samples=accept_multi_turn)),
         task2batch=SAOBatches(context, batch_size),
     )
@@ -299,7 +299,7 @@ def test_cookbook_processors_assemble_before_rejecting_multi_turn_reports(
         context = PipelineContext("math")
         processor = TrainingPipeline(
             context,
-            record2record=SAORecord2Record(context),
+            record2record=ExclusiveReportRecord2Record(context),
             record2task=SAOTasks(SampleAssemblySettings()),
             task2batch=SAOBatches(context, 1),
         )
@@ -854,7 +854,7 @@ def test_scenario_runtime_executes_grpo_as_one_async_transaction(tmp_path) -> No
         def activate_candidate(self, candidate):
             return ActivatedModel(candidate.candidate_id, "slime-v1")
 
-        def reject_candidate(self, candidate, decision):
+        def reject_candidate(self, candidate):
             raise AssertionError("candidate should be selected")
 
     training_runtime = FakeTrainingRuntime()
@@ -964,7 +964,7 @@ def test_capacity_loss_skips_orphan_report_and_remains_visible_after_restart(tmp
                 "SELECT body_bytes FROM agent_record WHERE agent_record_id='r2'"
             ).scalar_one()
         with closing(SQLiteScenarioStorage(tmp_path)) as storage:
-            assert storage.prune(days=7, max_bytes=keep_bytes) == 1
+            assert storage.prune(max_bytes=keep_bytes) == 1
         records.append(positioned_inference(3))
         records.append(positioned_report(4, "i3", 1.0))
         trainer = Trainer.build(

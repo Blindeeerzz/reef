@@ -21,7 +21,6 @@ from typing import Any
 
 from reef.artifact.artifact import Artifact
 from reef.core.batches import StepScheduling, TrainingBatch
-from reef.core.evaluation import SelectionDecision
 from reef.runtime.interfaces import (
     ModelCandidate,
     PreparedTrainingStep,
@@ -157,7 +156,7 @@ class TinkerTrainingRuntime(TrainingRuntime):
             self._candidates[identity] = (candidate, checkpoint)
         return candidate
 
-    def reject_candidate(self, candidate: ModelCandidate, decision: SelectionDecision) -> None:
+    def reject_candidate(self, candidate: ModelCandidate) -> None:
         with self._lock:
             if candidate.candidate_id not in self._candidates:
                 raise ValueError("unknown Tinker candidate")

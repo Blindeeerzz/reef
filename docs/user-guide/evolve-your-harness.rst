@@ -607,8 +607,7 @@ the built-in Reefine profile and name the model:
 
 The profile is Reefine's own default (loopback, port 8901, no token unless
 ``REEF_TOKEN`` is set, state under ``.reef/reefine/``); its proposer and evaluator
-ship in the wheel, so it needs no checkout, and ``--recipe harness-evolve``,
-the former name of the profile folded into it, starts the same profile. This
+ship in the wheel, so it needs no checkout. This
 example's own stack stays in ``configs/serve.yaml``, which ``run.sh`` passes
 with ``-c``. `The CLI reference <../reference/cli.rst>`__ describes provider
 settings and legacy shorthand.
@@ -1206,8 +1205,7 @@ remove them or take their names, and they are absent in the episode form,
 so a candidate cannot pass the checks by calling them:
 
 - ``harness_inspect(what)``: ``tree`` is the live entries and the mounted
-  release; ``graph`` is ``main`` and every named graph; ``results`` (also
-  accepted as ``verdicts`` for existing sessions) is the
+  release; ``graph`` is ``main`` and every named graph; ``results`` is the
   newest releases with the evaluation metrics that admitted each, and the
   rejected proposals when Reef exposes them; ``status`` is the status above.
 - ``harness_try(mutations)``: mounts the served entries plus the mutations

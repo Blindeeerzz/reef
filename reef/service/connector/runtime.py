@@ -146,8 +146,6 @@ class ReefRuntime:
 
     async def execute(self, command: dict[str, Any]) -> dict[str, Any]:
         action = command.get("action")
-        if action == "refresh":
-            return await self.snapshot()
         name = scenario_name(command.get("scenario"))
         path = "/reef/scenarios/" + quote(name, safe="")
         if action == "releases":
@@ -315,11 +313,6 @@ def release_summary(row: Any) -> dict[str, Any]:
             selected = selection.get("selected")
             if isinstance(selected, bool):
                 decision["selected"] = selected
-            else:
-                # Older selection records store a select-or-reject string.
-                outcome = selection.get("outcome")
-                if outcome in ("select", "reject"):
-                    decision["selected"] = outcome == "select"
             if isinstance(selection.get("metrics"), dict):
                 decision["metrics"] = finite_numbers(selection["metrics"], ("passed", "failed", "floor_score"))
             evaluation = selection.get("evaluation")

@@ -9,14 +9,13 @@ it, so a job branched from this checkpoint continues the schedule.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from reef.runtime.interfaces import LearningRateScheduleState
+from reef.runtime.recovery import write_json
 
 MANIFEST = "tinker-checkpoint.json"
 
@@ -63,27 +62,8 @@ class TinkerCheckpoint:
         )
 
     def write(self, directory: Path) -> None:
-        directory.mkdir(parents=True, exist_ok=True)
-        atomic_json(directory / MANIFEST, self.to_dict())
+        write_json(directory / MANIFEST, self.to_dict())
 
     @classmethod
     def read(cls, directory: Path) -> TinkerCheckpoint:
         return cls.from_dict(json.loads((directory / MANIFEST).read_text()))
-
-
-def atomic_json(path: Path, value: Any) -> None:
-    """Persist a complete manifest before exposing its directory to Reef."""
-    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".tinker-")
-    try:
-        with os.fdopen(descriptor, "w") as stream:
-            json.dump(value, stream, allow_nan=False, sort_keys=True)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
-        Path(temporary).unlink(missing_ok=True)

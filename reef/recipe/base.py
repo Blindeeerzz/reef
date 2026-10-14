@@ -15,6 +15,7 @@ from typing import Any, ClassVar
 
 from reef.artifact.artifact import Artifact, ArtifactValidator
 from reef.core.components import RECORDS_COMPONENT
+from reef.core.config import config_arguments
 from reef.core.plugins import PluginConfigError
 from reef.core.reports import ReportBase
 from reef.evaluation import CandidateEvaluationConfig, CandidateEvaluationConfigError, build_candidate_evaluation
@@ -24,7 +25,7 @@ from reef.observability import ExperimentLogger
 from reef.pipeline_context import PipelineContext
 from reef.recipe.checkpoint_strategy import CheckpointStrategy, EveryNVersions
 from reef.recipe.config import config_positive_int
-from reef.recipe.config_fields import config_field, parse_int, recipe_config_fields, resolve_config_field_values
+from reef.recipe.config_fields import config_field, resolve_config_field_values
 from reef.recipe.errors import RecipeConfigError
 from reef.record2task import Record2Task
 from reef.runtime.interfaces import (
@@ -515,21 +516,21 @@ class WeightTrainingRecipe(Recipe):
         field resolution performs type conversion before construction. A key this recipe does not declare
         is a loud error: the operator set a value nothing would consume.
         """
-        config_fields = recipe_config_fields(cls)
+        field_names = {argument.name for argument in config_arguments(cls)}
         data: dict[str, Any] = {}
         unknown: list[str] = []
         checkpoint_every: Any = None
         for key, value in settings.items():
             if key == "checkpoint_every_n_versions":
                 checkpoint_every = value
-            elif key in config_fields:
+            elif key in field_names:
                 # A YAML key left empty (None) is unset, not a value to parse.
                 if value is not None:
                     data[key] = value
             else:
                 unknown.append(key)
         if unknown:
-            known = ", ".join(f"reef.{name}" for name in [*sorted(config_fields), "checkpoint_every_n_versions"])
+            known = ", ".join(f"reef.{name}" for name in [*sorted(field_names), "checkpoint_every_n_versions"])
             raise RecipeConfigError(
                 f"{cls.__name__} does not consume {', '.join(f'reef.{key}' for key in sorted(unknown))}; "
                 f"the recipe would silently run with its defaults instead. "
@@ -539,9 +540,7 @@ class WeightTrainingRecipe(Recipe):
             )
         config: dict[str, Any] = {"data": data, "model": {"path": model_path}}
         if checkpoint_every is not None:
-            config["artifact"] = {
-                "checkpoint_every_n_versions": parse_int(checkpoint_every, "reef.checkpoint_every_n_versions")
-            }
+            config["artifact"] = {"checkpoint_every_n_versions": checkpoint_every}
         return config
 
     @classmethod

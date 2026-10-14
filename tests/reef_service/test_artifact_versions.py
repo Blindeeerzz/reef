@@ -65,8 +65,7 @@ class RollbackRuntime(StubTrainingRuntime):
     def activate_candidate(self, candidate):
         return ActivatedModel(candidate.candidate_id, self.candidate_versions[candidate.candidate_id])
 
-    def reject_candidate(self, candidate, decision):
-        del decision
+    def reject_candidate(self, candidate):
         self.candidate_versions.pop(candidate.candidate_id, None)
 
     @property

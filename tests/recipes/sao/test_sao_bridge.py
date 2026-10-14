@@ -590,7 +590,7 @@ def critic_prep_args(**overrides):
 @pytest.mark.unit
 def test_prepare_critic_args_keeps_the_custom_advantage_path_and_pins_lambda() -> None:
     from reef.train.slime_backend.reef_adapters.preflight import configure_megatron_runtime
-    from reef.train.slime_backend.reef_adapters.ray_train_groups import prepare_critic_args
+    from reef.train.slime_backend.reef_adapters.train_groups import prepare_critic_args
 
     args = critic_prep_args()
     configure_megatron_runtime(args)
@@ -606,7 +606,7 @@ def test_prepare_critic_args_keeps_the_custom_advantage_path_and_pins_lambda() -
 @pytest.mark.unit
 def test_prepare_critic_args_starts_the_critic_from_an_init_checkpoint_until_it_has_its_own(tmp_path) -> None:
     from reef.train.slime_backend.reef_adapters.preflight import configure_megatron_runtime
-    from reef.train.slime_backend.reef_adapters.ray_train_groups import prepare_critic_args
+    from reef.train.slime_backend.reef_adapters.train_groups import prepare_critic_args
 
     critic_save, critic_init = tmp_path / "megatron-critic", tmp_path / "critic-init"
     critic_init.mkdir()
@@ -638,7 +638,7 @@ def test_prepare_critic_args_starts_the_critic_from_an_init_checkpoint_until_it_
 @pytest.mark.unit
 def test_prepare_critic_args_applies_the_critic_learning_rate() -> None:
     from reef.train.slime_backend.reef_adapters.preflight import configure_megatron_runtime
-    from reef.train.slime_backend.reef_adapters.ray_train_groups import prepare_critic_args
+    from reef.train.slime_backend.reef_adapters.train_groups import prepare_critic_args
 
     args = critic_prep_args(critic_lr=5e-6, lr=1e-6)
     configure_megatron_runtime(args)
@@ -651,7 +651,7 @@ def test_prepare_critic_args_applies_the_critic_learning_rate() -> None:
 @pytest.mark.unit
 def test_prepare_critic_args_inherits_the_policy_lr_when_unset() -> None:
     from reef.train.slime_backend.reef_adapters.preflight import configure_megatron_runtime
-    from reef.train.slime_backend.reef_adapters.ray_train_groups import prepare_critic_args
+    from reef.train.slime_backend.reef_adapters.train_groups import prepare_critic_args
 
     args = critic_prep_args(lr=1e-6)
     configure_megatron_runtime(args)
@@ -668,8 +668,8 @@ def test_prepare_critic_args_keeps_lora_for_the_critic() -> None:
     parameter and could not sit beside a LoRA actor of the same model.
     """
     from reef.train.slime_backend.reef_adapters.preflight import configure_megatron_runtime
-    from reef.train.slime_backend.reef_adapters.ray_train_groups import prepare_critic_args
     from reef.train.slime_backend.reef_adapters.slime_arguments import REEF_MODEL_PROVIDER_PATH
+    from reef.train.slime_backend.reef_adapters.train_groups import prepare_critic_args
 
     # The state finalize_reef_slime_args leaves for a LoRA actor: alpha
     # defaulted, Reef's provider installed, the user's provider chained.
@@ -693,7 +693,7 @@ def test_prepare_critic_args_keeps_lora_for_the_critic() -> None:
 @pytest.mark.unit
 def test_prepare_critic_args_without_lora_restores_the_user_provider() -> None:
     from reef.train.slime_backend.reef_adapters.preflight import configure_megatron_runtime
-    from reef.train.slime_backend.reef_adapters.ray_train_groups import prepare_critic_args
+    from reef.train.slime_backend.reef_adapters.train_groups import prepare_critic_args
 
     args = critic_prep_args(megatron_lora_rank=0, custom_model_provider_path="my.provider:build")
     configure_megatron_runtime(args)
@@ -706,7 +706,7 @@ def test_prepare_critic_args_without_lora_restores_the_user_provider() -> None:
 
 @pytest.mark.unit
 def test_prepare_critic_args_restores_from_the_critic_root_when_present(tmp_path) -> None:
-    from reef.train.slime_backend.reef_adapters.ray_train_groups import prepare_critic_args
+    from reef.train.slime_backend.reef_adapters.train_groups import prepare_critic_args
 
     critic_root = tmp_path / "megatron-critic"
     critic_root.mkdir()
@@ -723,7 +723,7 @@ def test_prepare_critic_args_restores_from_the_critic_root_when_present(tmp_path
 
 @pytest.mark.unit
 def test_prepare_critic_args_first_boot_keeps_the_inherited_load_fallback(tmp_path) -> None:
-    from reef.train.slime_backend.reef_adapters.ray_train_groups import prepare_critic_args
+    from reef.train.slime_backend.reef_adapters.train_groups import prepare_critic_args
 
     critic_root = tmp_path / "megatron-critic"  # no checkpoint tracker yet
 
@@ -741,7 +741,7 @@ def test_megatron_config_critic_role_pins_lambda(tmp_path) -> None:
     # The --megatron-config-path role surgery must still apply SAO's
     # critic-role lambda policy even with a megatron config.
     from reef.train.slime_backend.reef_adapters.preflight import configure_megatron_runtime
-    from reef.train.slime_backend.reef_adapters.ray_train_groups import prepare_critic_args
+    from reef.train.slime_backend.reef_adapters.train_groups import prepare_critic_args
 
     _install_slime_parser_stubs()
     config_path = tmp_path / "megatron.yaml"

@@ -26,7 +26,7 @@ from reef.recipe.base import ServedEndpoint
 from reef.recipe.composite import CompositeRecipe
 from reef.recipe.config_fields import resolve_config_field_values
 from reef.recipe.registry import build_named_recipe, build_recipe, recipe_class_for
-from reef.runtime.deployment import RuntimeConnectionConfig, RuntimeRegistry, runtime_pair
+from reef.runtime.deployment import RuntimeRegistry, runtime_pair
 from reef.runtime.interfaces import InferenceRuntime, TrainingRuntime
 from reef.service.app import InferenceRetryPolicy, create_app
 from reef.service.deploy.service_config import ServiceConfig, service_owned_keys
@@ -79,11 +79,6 @@ def _connect_training_runtime(
     connector: Any = None,
 ) -> tuple[TrainingRuntime, InferenceRuntime]:
     """Build the selected integration's runtime, independently of its process topology."""
-    RuntimeConnectionConfig(
-        inference_timeout_s=settings.inference_timeout_s,
-        train_timeout_s=settings.train_timeout_s,
-        max_staleness=max_staleness,
-    )
     backend = training_deployment_for(settings.training_backend)
     runtime_config = backend.runtime_config(asdict(settings), max_staleness=max_staleness, connector=connector)
     built = RuntimeRegistry().build(runtime_config, model_path=model_path)
@@ -91,6 +86,14 @@ def _connect_training_runtime(
     if pair is None:
         raise TypeError("training backend runtime factory must build a (TrainingRuntime, InferenceRuntime) pair")
     return pair
+
+
+def shutdown_runtimes(*components: TrainingRuntime | InferenceRuntime | None) -> None:
+    """Release the runtimes of a failed build; the build error stays the one raised."""
+    for component in components:
+        if component is not None:
+            with suppress(Exception):
+                component.shutdown()
 
 
 def _upstream_runtime(settings: ServiceConfig) -> InferenceRuntime | None:
@@ -116,8 +119,8 @@ def _training_recipe(
 ) -> Recipe:
     """Build a weight-training recipe on the selected backend runtime."""
     model_path = _require_non_empty(settings.model_path, "reef.model_path")
-    # Translate the legacy layout, then resolve the recipe fields once before
-    # connecting its runtime. Construction consumes those same resolved values.
+    # Resolve the recipe fields once before connecting its runtime.
+    # Construction consumes those same resolved values.
     recipe_config = recipe_type.service_config(_recipe_owned_settings(settings), model_path=model_path)
     if settings.evaluation_settings is not None:
         recipe_config["evaluation"] = dict(settings.evaluation_settings)
@@ -138,9 +141,7 @@ def _training_recipe(
             recipe_config, resolved_recipe_data, environ=env, runtime=runtime, training_runtime=training_runtime
         )
     except BaseException:
-        for component in (training_runtime, runtime):
-            with suppress(Exception):
-                component.shutdown()
+        shutdown_runtimes(training_runtime, runtime)
         raise
 
 
@@ -202,9 +203,7 @@ def composed_training_recipe(
     try:
         return build_recipe(selected, env, config=config, runtime=runtime, training_runtime=training_runtime)
     except BaseException:
-        for component in (training_runtime, runtime):
-            with suppress(Exception):
-                component.shutdown()
+        shutdown_runtimes(training_runtime, runtime)
         raise
 
 
@@ -265,10 +264,7 @@ def _serving_recipe(selected: str, settings: ServiceConfig, env: Mapping[str, st
         try:
             return build_recipe(selected, env, config=config, runtime=runtime, training_runtime=training_runtime)
         except BaseException:
-            for component in (training_runtime, runtime):
-                if component is not None:
-                    with suppress(Exception):
-                        component.shutdown()
+            shutdown_runtimes(training_runtime, runtime)
             raise
     refuse_weight_training_sections(settings)
     if settings.pipeline_settings is not None:
@@ -363,10 +359,7 @@ def build_dispatcher(
         if scenario_storage is not None:
             with suppress(Exception):
                 scenario_storage.close()
-        for component in (recipe.training_runtime, recipe.runtime):
-            if component is not None:
-                with suppress(Exception):
-                    component.shutdown()
+        shutdown_runtimes(recipe.training_runtime, recipe.runtime)
         if experiment_tracker is not None:
             with suppress(Exception):
                 experiment_tracker.close()
@@ -374,7 +367,7 @@ def build_dispatcher(
 
 
 def build_app(settings: ServiceConfig, *, environ: Mapping[str, str] | None = None, connector: Any = None) -> Any:
-    record_retention = RecordRetention(settings.agent_record_retention_days, settings.agent_record_retention_max_bytes)
+    record_retention = RecordRetention(max_bytes=settings.agent_record_retention_max_bytes)
     retry_policy = InferenceRetryPolicy(
         initial_s=settings.inference_retry_initial_s,
         max_s=settings.inference_retry_max_s,

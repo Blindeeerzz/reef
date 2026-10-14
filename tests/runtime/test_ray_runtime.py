@@ -14,11 +14,11 @@ from tests.support.runtime_stubs import ExecutorRuntimeFixture
 
 from reef.artifact import LiveWeightArtifactRef
 from reef.core import RuntimeLoadSpan
-from reef.evaluation import EvaluationResult, SelectionDecision
 from reef.observability.operations import OperationMetrics
 from reef.runtime.executor import ray as ray_executor
 from reef.runtime.executor.connection import RayCoordinatorClient, RayRuntimeError, RemoteRayCoordinatorClient
 from reef.runtime.interfaces import (
+    ActivatedModel,
     InferenceAdmissionController,
     InferenceHandler,
     InferenceStream,
@@ -338,12 +338,9 @@ def test_ray_runtime_prepares_and_executes_one_transaction() -> None:
     assert prepared.payload is not None
     payload = prepared.payload
     assert payload["scenario_step"] == 7 and payload["expected_runtime_load_id"] == "v0"
-    assert runtime.execute_training_job(payload) == TrainingJobResult(
-        outcome="complete",
-        runtime_load_id="v1",
-        checkpoint_path="/checkpoint",
-        training_job_id="job-0",
-    )
+    candidate = runtime.train_candidate(payload)
+    assert candidate.training_job_id == "job-0" and candidate.checkpoint_path == "/checkpoint"
+    assert runtime.activate_candidate(candidate) == ActivatedModel("job-0", "v1")
 
 
 @pytest.mark.unit
@@ -381,7 +378,7 @@ def test_ray_runtime_rejects_unstructured_training_results() -> None:
     runtime = ExecutorRuntimeFixture(train_group_handle=InvalidResultTrainGroup(), inference_url="http://router")
 
     with pytest.raises(RayRuntimeError, match="invalid training result: dict"):
-        runtime.execute_training_job({"scenario_step": 1})
+        runtime.train_candidate({"scenario_step": 1})
 
 
 @pytest.mark.unit
@@ -973,7 +970,8 @@ def test_noncolocated_weight_update_preserves_inflight_and_queues_new_requests_u
     inflight = asyncio.run(runtime.acquire_inference())
     assert runtime.current_runtime_load_id() == "engine:0"
 
-    result = runtime.execute_training_job({"scenario_step": 0})
+    result = runtime.train_candidate({"scenario_step": 0})
+    runtime.activate_candidate(result)
 
     assert result.training_job_id == "job-0"
     assert handle.calls == ["execute", "update_weights"]
@@ -1005,11 +1003,7 @@ def test_candidate_rejection_leaves_serving_weights_unchanged() -> None:
     runtime = ExecutorRuntimeFixture(train_group_handle=handle, inference_url="http://router")
 
     candidate = runtime.train_candidate({"scenario_step": 0})
-    evaluation = EvaluationResult("test", "1", {})
-    runtime.reject_candidate(
-        candidate,
-        SelectionDecision(False, "test", "rejected by test", evaluation),
-    )
+    runtime.reject_candidate(candidate)
 
     assert handle.calls == ["execute", "reject"]
     assert runtime.serving_runtime_load_id() == "engine:0"
@@ -1024,7 +1018,8 @@ def test_colocated_weight_update_retracts_without_draining_inflight() -> None:
     inflight = asyncio.run(runtime.acquire_inference())
     assert runtime.current_runtime_load_id() == "engine:0"
 
-    result = runtime.execute_training_job({"scenario_step": 0})
+    result = runtime.train_candidate({"scenario_step": 0})
+    runtime.activate_candidate(result)
 
     assert handle.calls == ["execute", "update_weights"]
     assert runtime.inference_admission_status == {"open": False, "active": 1}
@@ -1047,7 +1042,8 @@ def test_colocated_weight_update_does_not_wait_for_inference_timeout() -> None:
     )
     inflight = asyncio.run(runtime.acquire_inference())
 
-    result = runtime.execute_training_job({"scenario_step": 0})
+    result = runtime.train_candidate({"scenario_step": 0})
+    runtime.activate_candidate(result)
 
     assert result.training_job_id == handle.training_job_id
     assert handle.calls == ["execute", "update_weights"]
@@ -1068,7 +1064,7 @@ def test_colocated_checkpoint_rejection_reopens_admission_when_backend_stayed_id
     runtime = ExecutorRuntimeFixture(train_group_handle=handle, inference_url="http://router")
 
     with pytest.raises(RuntimeError, match="checkpoint rejected"):
-        runtime.execute_training_job({"scenario_step": 0})
+        runtime.train_candidate({"scenario_step": 0})
 
     assert handle.calls == ["execute"]
     assert runtime.inference_admission_status == {"open": True, "active": 0}
@@ -1140,29 +1136,6 @@ def test_a_failure_the_group_does_not_call_recoverable_is_still_unhealthy() -> N
         ExecutorRuntimeFixture(
             train_group_handle=DeadPublicationHandle(status="COMPLETE"), inference_url="http://router"
         )
-
-
-@pytest.mark.unit
-def test_colocated_completed_checkpoint_replay_reopens_admission() -> None:
-    class CompletedReplay(DeferredWeightUpdateTrainGroupHandle):
-        def execute_training_job(self, payload: Mapping[str, Any]) -> TrainingJobResult:
-            del payload
-            self.calls.append("execute")
-            self.status = "COMPLETE"
-            return TrainingJobResult(
-                outcome="complete",
-                runtime_load_id="engine:1",
-                checkpoint_path="/checkpoint",
-            )
-
-    handle = CompletedReplay(colocate=True)
-    runtime = ExecutorRuntimeFixture(train_group_handle=handle, inference_url="http://router")
-
-    result = runtime.execute_training_job({"scenario_step": 0})
-
-    assert result.outcome == "complete"
-    assert handle.calls == ["execute"]
-    assert runtime.inference_admission_status == {"open": True, "active": 0}
 
 
 @pytest.mark.unit
@@ -1260,7 +1233,8 @@ def test_queued_tttd_fanout_freezes_the_head_that_reopens_admission(monkeypatch)
     monkeypatch.setattr(asyncio, "to_thread", call_inline)
     handle = DeferredWeightUpdateTrainGroupHandle()
     runtime = ExecutorRuntimeFixture(train_group_handle=handle, inference_url="http://router")
-    updated = runtime.execute_training_job({"scenario_step": 0})
+    updated = runtime.train_candidate({"scenario_step": 0})
+    runtime.activate_candidate(updated)
 
     class Scenario:
         operations = OperationMetrics(("serve/request", "serve/admission"))
@@ -1311,7 +1285,7 @@ def test_queued_tttd_fanout_freezes_the_head_that_reopens_admission(monkeypatch)
     async def run() -> None:
         queued = [
             asyncio.create_task(
-                service.infer(
+                service.infer_with_data(
                     {"x-reef-scenario": "math"},
                     {"messages": [{"role": "user", "content": f"rollout {rollout}"}]},
                     "/v1/chat/completions",
@@ -1336,7 +1310,7 @@ def test_queued_tttd_fanout_freezes_the_head_that_reopens_admission(monkeypatch)
             committed_training_job_id=updated.training_job_id,
         )
         responses = await asyncio.wait_for(asyncio.gather(*queued), 5)
-        assert {response["metadata"]["runtime_load_id"] for response in responses} == {"engine:1"}
+        assert {response["metadata"]["runtime_load_id"] for response, _ in responses} == {"engine:1"}
 
     asyncio.run(run())
     assert backend.versions == ["engine:1"] * (8 * 64)
@@ -1506,7 +1480,7 @@ def test_stream_and_failure_release_their_inference_admission_handles() -> None:
         assert runtime.inference_admission_status == {"open": True, "active": 0}
 
         with pytest.raises(RuntimeError, match="backend failed"):
-            await service.infer(
+            await service.infer_with_data(
                 {"x-reef-scenario": "math"},
                 {},
                 "/v1/chat/completions",

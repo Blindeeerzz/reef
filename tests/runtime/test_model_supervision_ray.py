@@ -21,7 +21,7 @@ from reef.train.runtime_backend import FixedTrainingMethodSelector
 
 pytest.importorskip("ray", reason="requires the optional Ray runtime")
 
-from reef.inference.sglang.service import RayHealthProbe
+from reef.inference.process import RayHealthProbe
 from reef.runtime.deployment import (
     ComponentHealth,
     DeploymentResources,
@@ -113,9 +113,6 @@ class Publisher(WeightPublisher):
 
     def publish(self, marker, *, force_full):
         raise AssertionError("startup must not publish a new candidate")
-
-    def republish(self, runtime_load_id, marker):
-        raise AssertionError("startup restores its checkpoint explicitly")
 
     def restore_incumbent(self):
         raise AssertionError("startup must not reject a candidate")

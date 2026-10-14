@@ -1045,10 +1045,8 @@ naming it.
 Evaluation metadata uses ``evaluation``, ``evaluation_sides``,
 ``evaluation_task_count`` and ``evaluation_context``. Running episodes use the
 phase ``evaluating``. Reviews and settled proposals store their outcome under
-``result``. New records use these names. Readers also accept the earlier ``verdict``,
-``gate_sides``, ``gated_against`` and ``rollback_gated_against`` fields, and the
-``gating`` phase. Harness manifests expose ``gate`` as an alias of ``evaluation``
-for existing clients.
+``result``. A harness manifest carries the evaluation metrics under
+``evaluation`` only.
 
 Both pages are links a person opens in a browser, which sends no header, so
 they also take the scenario and a credential as query parameters,

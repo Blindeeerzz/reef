@@ -252,7 +252,7 @@ def test_factory_commit_recovery_and_archive(postgres_config, tmp_path, monkeypa
         with closing(factory.open("math")) as store:
             assert store.history() == ()
             assert store.records.append_result(record()).inserted
-        assert factory.prune(days=7, max_bytes=1) == 2
+        assert factory.prune(max_bytes=1) == 2
 
 
 def test_archive_move_failure_cannot_replay_old_log(postgres_config, tmp_path, monkeypatch):

@@ -734,7 +734,7 @@ def test_a_terminus_episode_with_agent_steps_scores_by_its_verifier(tmp_path: Pa
     """A terminus trial's ATIF steps carry their text as a plain string ``message``: scoring reads the verifier's
     reward and finds no assistant reply, instead of taking the step's text for a wrapped message."""
     from reef.evaluation.harness import verifier_reward
-    from reef.harness.episodes.trajectory import read_terminus_atif
+    from reef.harness.episodes.trajectory import TerminusAtifReader
 
     episode_worker = EpisodeEvaluationWorker(
         descriptor=get_adapter("terminus"),
@@ -750,7 +750,7 @@ def test_a_terminus_episode_with_agent_steps_scores_by_its_verifier(tmp_path: Pa
     ]
     trial = {"task": "health", "rewards": {"reward": 1.0}, "reward": 1.0, "failed": False, "error": "", "steps": steps}
     (tmp_path / "health.json").write_text(json.dumps(trial), encoding="utf-8")
-    trajectory = read_terminus_atif(tmp_path)
+    trajectory = TerminusAtifReader()(tmp_path)
     scored = episode_worker._score_result(
         EpisodeResult(exit_code=0, stdout="", stderr="", trajectory=trajectory, residue=()), "health"
     )
@@ -1109,8 +1109,6 @@ def test_recipe_rejects_removed_acceptance_and_raw_selection_callable(tmp_path, 
             }
         }
 
-    with pytest.raises(RecipeConfigError, match=r"evolution\.acceptance was removed"):
-        CordisRecipe.from_environment({}, config=config(acceptance="always"))
     # evolution.selection names a SelectionPlugin class, so a reference to
     # anything else is the misconfiguration.
     with pytest.raises(RecipeConfigError, match=r"inherits SelectionPlugin"):
@@ -1164,12 +1162,6 @@ def test_recipe_resolves_selection_plugin(tmp_path, monkeypatch) -> None:
     dotted = CordisRecipe.from_environment({}, config=config(selection="demo_selection:DemoPlugin"))
     assert dotted.selection.plugin_class.__name__ == "DemoPlugin"
     assert type(dotted.selection_plugin(object())).__name__ == "DemoPlugin"
-
-    with pytest.raises(RecipeConfigError, match="acceptance was removed"):
-        CordisRecipe.from_environment(
-            {},
-            config=config(selection="always", acceptance="pairwise"),
-        )
 
 
 def test_model_binding_reaches_episodes_but_never_the_published_tree(tmp_path: Path, monkeypatch) -> None:
@@ -1470,7 +1462,7 @@ def test_recipe_builds_the_stages_its_pipeline_section_names(tmp_path: Path, mon
 
     reported = CordisRecipe.from_environment({}, config=config(), runtime=proxy)
     trainer = reported.build("demo", SQLiteRecordStore())
-    assert type(trainer.pipeline.record2record).__name__ == "TraceRecord2Record"
+    assert type(trainer.pipeline.record2record).__name__ == "ReportRecord2Record"
     assert type(trainer.pipeline.record2task).__name__ == "TraceTasks"
     assert type(trainer.pipeline.task2batch).__name__ == "TraceBatches"
     assert trainer.pipeline.task2batch.batch_size == 1
@@ -2007,7 +1999,7 @@ def _task_order_score(task, result):
     return float(task == "task two")
 
 
-def test_episode_workers_run_both_sides_in_one_wave(tmp_path: Path) -> None:
+def test_evaluation_workers_run_both_sides_in_one_wave(tmp_path: Path) -> None:
     """With more than one worker, evaluation episodes of the candidate and
     the current composition run at once and still report in task order."""
     from reef.runtime.executor.config import ExecutorSettings
@@ -2049,25 +2041,6 @@ def test_episode_workers_run_both_sides_in_one_wave(tmp_path: Path) -> None:
         b.close()
 
 
-def test_episode_workers_config_is_a_positive_integer(tmp_path: Path) -> None:
-    def config(**evolution):
-        return {
-            "evolution": {
-                "propose": resolve_proposer(lambda n, s, m: None),
-                "evaluate": resolve_episode_scorer(evaluate),
-                "tasks": ["one"],
-                **evolution,
-            }
-        }
-
-    assert CordisRecipe.from_environment({}, config=config(episode_workers=3)).episode_workers == 3
-    assert CordisRecipe.from_environment({}, config=config(episode_workers="16")).episode_workers == 16  # ${VAR}
-    assert CordisRecipe.from_environment({}, config=config()).episode_workers == 1
-    for bad in (0, "many", True):
-        with pytest.raises(RecipeConfigError, match="episode_workers"):
-            CordisRecipe.from_environment({}, config=config(episode_workers=bad))
-
-
 @pytest.mark.parametrize("workers, expected", [(1, "uni"), (2, "mp")])
 def test_harness_evolve_auto_runs_real_episodes_on_selected_backend(tmp_path, workers, expected, caplog):
     from reef.runtime.executor.config import ExecutorSettings
@@ -2098,21 +2071,17 @@ def test_evolution_worker_selector_is_independent_of_sandbox_selector():
     from reef.runtime.executor.config import ExecutorSettings
 
     config = {
-        "execution": {"evolution": "mp"},
+        "execution": {"evolution": {"backend": "mp", "workers": 2}},
         "evolution": {
             "propose": resolve_proposer(lambda n, s, m: None),
             "evaluate": resolve_episode_scorer(evaluate),
             "tasks": ["one"],
-            "episode_workers": 2,
         },
     }
     recipe = CordisRecipe.from_environment({}, config=config)
     assert recipe.worker_executor == ExecutorSettings("mp", workers=2)
     assert type(recipe.executor).__name__ == "LocalExecutor"
-    config["evolution"]["worker_executor"] = "auto"
-    recipe = CordisRecipe.from_environment({}, config=config)
-    assert recipe.worker_executor.backend == "auto"
-    config["evolution"]["worker_executor"] = "uni"
+    config["execution"]["evolution"]["backend"] = "uni"
     with pytest.raises(RecipeConfigError, match="exactly one"):
         CordisRecipe.from_environment({}, config=config)
 
@@ -2120,21 +2089,20 @@ def test_evolution_worker_selector_is_independent_of_sandbox_selector():
 def test_evolution_explicit_ray_does_not_require_local_gpus(monkeypatch):
     monkeypatch.setattr("reef.runtime.executor.config.visible_cuda_devices", lambda: ())
     config = {
+        "execution": {"evolution": {"backend": "ray", "resources": {"gpus_per_worker": 1}}},
         "evolution": {
             "propose": resolve_proposer(lambda n, s, m: None),
             "evaluate": resolve_episode_scorer(evaluate),
             "tasks": ["one"],
-            "worker_resources": {"num_gpus": 1},
-            "worker_executor": "ray",
-        }
+        },
     }
     recipe = CordisRecipe.from_environment({}, config=config)
     from reef.evaluation.harness import evaluation_selection
 
-    selected, requirements = evaluation_selection(recipe.score_episode, 1, recipe.worker_executor, recipe.worker_gpus)
+    selected, requirements = evaluation_selection(recipe.score_episode, recipe.worker_executor)
     assert selected.settings.backend == "ray"
     assert requirements.gpus_per_worker == 1
-    config["evolution"]["worker_executor"] = "mp"
+    config["execution"]["evolution"]["backend"] = "mp"
     with pytest.raises(RecipeConfigError, match="visible on this host"):
         CordisRecipe.from_environment({}, config=config)
 
@@ -2257,8 +2225,7 @@ def test_recipe_parses_recheck_config(tmp_path: Path, monkeypatch) -> None:
         CordisRecipe.from_environment({}, config=config(recheck_every=-1))
 
 
-@pytest.mark.parametrize("context_key", ["rollback_evaluation_context", "rollback_gated_against"])
-def test_recheck_fires_when_the_served_model_changes(tmp_path: Path, context_key: str) -> None:
+def test_recheck_fires_when_the_served_model_changes(tmp_path: Path) -> None:
     """A publish is gated against one served model. When the deployment
     serves a different one the recheck runs at once instead of waiting for
     the cadence, so the harness is re-gated on the ground it now runs on."""
@@ -2284,8 +2251,6 @@ def test_recheck_fires_when_the_served_model_changes(tmp_path: Path, context_key
     first = run_backend_step(b, batch(), b.initial_state())
     assert first.metrics["selected"] is True
     assert first.state["rollback_evaluation_context"]["model"] == MODEL.model
-    context = first.state.pop("rollback_evaluation_context")
-    first.state[context_key] = context
     # Same model, step 2 of a 100 step cadence: no recheck, and the stamp
     # rides through the skipped step.
     same = run_backend_step(b, batch(), first.state)

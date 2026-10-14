@@ -139,7 +139,7 @@ def worker_runtime(recipe):
     Ray reads RAY_ADDRESS when set; without it, start a local Ray runtime.
     Do not tear down an externally owned runtime when embedding this driver.
     """
-    selection, _ = evaluation_selection(recipe.score_episode, None, recipe.worker_executor)
+    selection, _ = evaluation_selection(recipe.score_episode, recipe.worker_executor)
     if selection.settings.backend != "ray":
         yield
         return

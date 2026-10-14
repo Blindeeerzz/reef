@@ -367,10 +367,10 @@ class PostgresScenarioStorage(ScenarioStorage):
                 archived.append(str(target))
             return tuple(archived)
 
-    def prune(self, *, days: float, max_bytes: int) -> int:
+    def prune(self, *, max_bytes: int) -> int:
         with self._lock:
             self._ensure_open()
-            return self._database.prune(RecordRetention(days, max_bytes))
+            return self._database.prune(RecordRetention(max_bytes=max_bytes))
 
     def close(self) -> None:
         with self._lock:
