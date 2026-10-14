@@ -33,10 +33,6 @@ from pathlib import Path
 from typing import Any
 
 from reef.core.errors import ReefError
-from reef.core.tasks import harbor
-
-# Preserve the original import path for callers of the shared reward reader.
-primary_reward = harbor.primary_reward
 
 
 class TrajectoryError(ReefError):

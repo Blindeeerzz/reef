@@ -263,7 +263,4 @@ def self_tools(state: ServeState) -> list[HostTool]:
     ]
 
 
-# Compatibility aliases for existing imports.
-VERDICT_ROWS = RESULT_ROWS
-
-__all__ = ["RESERVED_NAMES", "RESULT_ROWS", "VERDICT_ROWS", "HostTool", "SelfTools", "ServeState", "self_tools"]
+__all__ = ["RESERVED_NAMES", "RESULT_ROWS", "HostTool", "SelfTools", "ServeState", "self_tools"]

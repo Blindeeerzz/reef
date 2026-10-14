@@ -532,8 +532,8 @@ external deployment with an uncertain lock requires operator restart, and the
 shared controller never terminates borrowed engines.
 
 ``reef.runtime.publication.WeightUpdateLock`` owns lock poisoning and transport
-phase-result bookkeeping without Slime or Ray imports. The legacy
-``ReefRolloutLock`` entrypoint wraps it as a serial Ray actor. Existing weight
+phase-result bookkeeping without Slime or Ray imports. Each inference worker
+runs it as a serial Ray actor with ``ray.remote(WeightUpdateLock)``. Existing weight
 updaters use the same lock methods and continue transferring directly between
 workers and engines. There is no tensor relay through the shared controller.
 
