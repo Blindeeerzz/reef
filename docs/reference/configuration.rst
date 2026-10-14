@@ -667,13 +667,15 @@ persistent.
    storage.artifact-repository | .reef/artifacts.git | the Git-backed release chain
    storage.artifact-work-dir | .reef/artifact-work | materialization scratch
    storage.artifact-cache-dir | .reef/artifact-cache | fetched artifact cache
-   storage.agent-record-dir | .reef/agent-record | the record store
+   storage.agent-record-dir | .reef/agent-record | the SQLite scenario storage: records, commit logs and settings
+   storage.record-backend | sqlite | where scenario records, commits and settings live: ``sqlite``, ``postgres``, or a ``ScenarioStorage`` plugin reference
    storage.agent-record-retention-max-bytes | 21474836480 | 20 GiB shared across all record bodies, including unconsumed records
 
 .. warning::
 
-   On ephemeral storage, a restart loses the record store, the commit logs, and
-   every version.
+   On ephemeral storage, a restart loses the scenario storage (with SQLite) and
+   every version. See `Back up a deployment
+   <../user-guide/operate.rst#back-up-a-deployment>`__.
 
 Training completion updates consumption progress without retiring stored bodies.
 Storage manages cleanup independently: the HTTP service runs a sweep at startup
