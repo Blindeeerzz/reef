@@ -70,7 +70,7 @@ from reef.service.deploy.service_config import (
     service_override,
 )
 from reef.service.deploy.training import assemble_training_services, local_model_required
-from reef.service.profiles import PROFILES_DIR, UnknownProfileError, profile_alias_notice, profile_path
+from reef.service.profiles import PROFILES_DIR, UnknownProfileError, profile_path
 
 _DEFAULT_GRACE_TIMEOUT = 30
 _WATCHDOG_INTERVAL = 5
@@ -587,9 +587,6 @@ def _resolve_config(config: str | None, recipe: str | None) -> str | None:
             path = profile_path(recipe)
         except UnknownProfileError as exc:
             raise DeployConfigError(str(exc)) from exc
-        notice = profile_alias_notice(recipe)
-        if notice is not None:
-            print(notice, file=sys.stderr)
         return str(path)
     return None
 

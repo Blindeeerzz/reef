@@ -258,7 +258,7 @@ def build_serve_parser(
         "--recipe",
         default=None,
         metavar="NAME",
-        help="Start a built in recipe's profile instead of a config file (reefine; harness-evolve is its former name).",
+        help="Start a built in recipe's profile instead of a config file (reefine).",
     )
     parser.add_argument(
         "--model",
