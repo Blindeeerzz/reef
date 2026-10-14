@@ -161,9 +161,7 @@ def prepared(runtime, objective, *, step=0):
 
 
 def decision(selected):
-    return SelectionDecision(
-        "select" if selected else "reject", "test", "test decision", EvaluationResult("test", "1", {})
-    )
+    return SelectionDecision(selected, "test", "test decision", EvaluationResult("test", "1", {}))
 
 
 def empty_artifact(tmp_path):

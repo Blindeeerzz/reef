@@ -1170,8 +1170,8 @@ exact result it was given.
 |                                   | name, version, and a metrics mapping          |
 +-----------------------------------+-----------------------------------------------+
 | ``decide(candidate, evaluation)`` | returns a ``SelectionDecision`` whose         |
-|                                   | ``outcome`` is ``select`` or ``reject``, and  |
-|                                   | which must carry the evaluation it was given  |
+|                                   | ``selected`` is a boolean, and which must     |
+|                                   | carry the evaluation it was given             |
 +-----------------------------------+-----------------------------------------------+
 
 A rejection leaves the previous artifact serving. An exception is fail-closed:

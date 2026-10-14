@@ -685,7 +685,7 @@ class ScoreComparisonMixin(CandidateEvaluationPlugin):
         if self._min_win_margin:
             metrics["min_win_margin"] = self._min_win_margin
         return SelectionDecision(
-            outcome="select" if selected else "reject",
+            selected=selected,
             policy="score_comparison",
             reason=(
                 f"candidate won {wins} task pairings and lost {losses}"
@@ -741,7 +741,7 @@ class FloorMixin(CandidateEvaluationPlugin):
         else:
             reason = f"candidate met the floor on all {len(scores)} tasks"
         return SelectionDecision(
-            outcome="select" if scores and not failed else "reject",
+            selected=bool(scores) and not failed,
             policy="floor",
             reason=reason,
             evaluation=evaluation,

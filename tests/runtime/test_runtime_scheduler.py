@@ -225,7 +225,7 @@ def test_rejection_must_finish_before_colocated_inference_reopens():
     inference = WeightReceiver()
     scheduler = RuntimeScheduler(training, inference)
     candidate = scheduler.train_candidate({})
-    decision = SelectionDecision("reject", "test", "failed evaluation", EvaluationResult("test", "1", {}))
+    decision = SelectionDecision(False, "test", "failed evaluation", EvaluationResult("test", "1", {}))
     training.failure = TimeoutError("rejection result unknown")
     with pytest.raises(TimeoutError, match="rejection result unknown"):
         scheduler.reject_candidate(candidate, decision)

@@ -380,14 +380,14 @@ def test_training_result_metrics_reach_the_durable_commit(start_dispatcher) -> N
     committed = scenario.metrics_for_version(scenario.current_artifact_ref().release_id)
     assert committed is not None
     assert {key: committed[key] for key in metrics} == metrics
-    assert committed["selection"]["outcome"] == "select"
+    assert committed["selection"]["selected"] is True
     status = dispatcher.build_training_status()["scenarios"]["math"]["last_committed_step"]
     assert status["step"] == 1
     assert isinstance(status["recorded_at"], float)
     assert status["metrics"] == committed
-    status["metrics"]["selection"]["outcome"] = "mutated by caller"
+    status["metrics"]["selection"]["selected"] = False
     refreshed = dispatcher.build_training_status()["scenarios"]["math"]["last_committed_step"]
-    assert refreshed["metrics"]["selection"]["outcome"] == "select"
+    assert refreshed["metrics"]["selection"]["selected"] is True
 
 
 @pytest.mark.unit

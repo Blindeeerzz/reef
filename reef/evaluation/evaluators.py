@@ -64,7 +64,7 @@ class AlwaysSelectMixin(CandidateEvaluationPlugin):
 
     def decide(self, candidate: UpdateCandidate, evaluation: EvaluationResult) -> SelectionDecision:
         return SelectionDecision(
-            outcome="select",
+            selected=True,
             policy="always",
             reason="the method selects every successfully evaluated candidate",
             evaluation=evaluation,
@@ -119,14 +119,14 @@ class RegressionCheckMixin(CandidateEvaluationPlugin):
             self._best = score if self._best is None else max(self._best, score)
             new_best_raw = self._best if self._higher_is_better else -self._best
             return SelectionDecision(
-                outcome="select",
+                selected=True,
                 policy="regression-check",
                 reason=f"{self._metric} {raw:g} within margin of best {new_best_raw:g}",
                 evaluation=evaluation,
                 metrics=metrics,
             )
         return SelectionDecision(
-            outcome="reject",
+            selected=False,
             policy="regression-check",
             reason=(
                 f"{self._metric} {raw:g} regressed past margin {self._margin:g} below best {best_raw:g}; "

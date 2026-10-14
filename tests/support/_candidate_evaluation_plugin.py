@@ -46,7 +46,7 @@ class CheckpointEvaluator(ConfiguredEvaluationPlugin):
         score = float(evaluation.metrics["score"])
         selected = score >= self.threshold
         return SelectionDecision(
-            outcome="select" if selected else "reject",
+            selected=selected,
             policy="external_threshold",
             reason=f"score {score} {'met' if selected else 'missed'} threshold {self.threshold}",
             evaluation=evaluation,
