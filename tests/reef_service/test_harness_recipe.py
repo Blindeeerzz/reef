@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-from reef_service._trajectories import recorded_trajectory
+from tests.support._strategies import resolve_episode_scorer, resolve_proposer
+from tests.support._trajectories import recorded_trajectory
 
 import reef.evaluation.harness as reef_evaluation_harness
 import reef.train.cordis_backend.backend as reef_cordis_backend
@@ -39,8 +40,6 @@ from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
 from reef.train.cordis_backend import CordisBackend, FailureManifest, Mutation, MutationError, Promoter
 from reef.train.trainer import Trainer
 from reef.train.types import NoArtifactPublication, SavedArtifactPublication, TrainingBatch, TrainStepResult
-
-from ._strategies import resolve_episode_scorer, resolve_proposer
 
 # The fake harness scores itself: its trajectory carries the rules text, so
 # the episode scorer can prefer compositions containing the marker.

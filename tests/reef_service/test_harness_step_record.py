@@ -12,6 +12,17 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
+from tests.reef_service.test_harness_recipe import (
+    MODEL,
+    _ChatBinding,
+    batch,
+    evaluate,
+    make_binary,
+    run_backend_step,
+    runtime,
+    seeded_state,
+)
+from tests.support._strategies import resolve_episode_scorer, resolve_proposer
 
 from reef.evaluation.harness import EpisodeEvaluationWorker, ScoreComparisonPlugin
 from reef.harness.adapters import get_adapter
@@ -23,18 +34,6 @@ from reef.harness.tree.render import render_composition
 from reef.recipe import RecipeConfigError
 from reef.recipe.cordis import CordisRecipe
 from reef.train.cordis_backend import CordisBackend, Mutation
-
-from ._strategies import resolve_episode_scorer, resolve_proposer
-from .test_harness_recipe import (
-    MODEL,
-    _ChatBinding,
-    batch,
-    evaluate,
-    make_binary,
-    run_backend_step,
-    runtime,
-    seeded_state,
-)
 
 # A harness shaped like the native loop: the root session, one delegated checker
 # turn under agents/, and the rendered rules echoed into the header for the scorer.
