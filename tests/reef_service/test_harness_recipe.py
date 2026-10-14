@@ -1470,7 +1470,7 @@ def test_recipe_builds_the_stages_its_pipeline_section_names(tmp_path: Path, mon
 
     reported = CordisRecipe.from_environment({}, config=config(), runtime=proxy)
     trainer = reported.build("demo", SQLiteRecordStore())
-    assert type(trainer.pipeline.record2record).__name__ == "TraceRecord2Record"
+    assert type(trainer.pipeline.record2record).__name__ == "ReportRecord2Record"
     assert type(trainer.pipeline.record2task).__name__ == "TraceTasks"
     assert type(trainer.pipeline.task2batch).__name__ == "TraceBatches"
     assert trainer.pipeline.task2batch.batch_size == 1

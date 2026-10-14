@@ -1,4 +1,4 @@
-"""Record set pool contracts: selection order, reservations, and eligibility checks."""
+"""Record set pool contracts: selection order, reservations, and the staleness check."""
 
 from __future__ import annotations
 
@@ -7,16 +7,8 @@ from dataclasses import dataclass
 
 import pytest
 
-from reef.record2record import (
-    ArrivalOrder,
-    EligibilityCheck,
-    GroupKeyOrder,
-    IneligibleSet,
-    RecordSet,
-    RecordSetPool,
-    SelectionPolicy,
-    StalenessCheck,
-)
+from reef.record2record import ArrivalOrder, GroupKeyOrder, RecordSet, RecordSetPool, SelectionPolicy
+from reef.record2record.staleness import stale_sets
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -88,39 +80,15 @@ def test_staleness_check_keeps_sets_within_the_window_of_the_last_source_record(
         version("other-incarnation", "f:5", 2),
         version("unparsed", "v1", 1),
     )
-    reasons = {result.record_set.set_id: result.reason for result in StalenessCheck(1).ineligible_sets(record_sets)}
-    assert reasons == {
-        "two-behind": "policy_lag_exceeded",
-        "ahead": "future_producing_runtime_load_id",
-        "other-incarnation": "cross_incarnation",
-        "unparsed": "malformed_producing_runtime_load_id",
-    }
+    # Too far behind, ahead, another incarnation, and an unparsed version are stale.
+    stale = {"two-behind", "ahead", "other-incarnation", "unparsed"}
+    assert {record_set.set_id for record_set in stale_sets(record_sets, 1)} == stale
     # Window 0 keeps only the reference version.
-    assert {result.record_set.set_id for result in StalenessCheck().ineligible_sets(record_sets)} == set(reasons) | {
-        "one-behind"
-    }
+    assert {record_set.set_id for record_set in stale_sets(record_sets, 0)} == stale | {"one-behind"}
 
 
 def test_staleness_check_compares_non_canonical_ids_by_equality() -> None:
     late_judgment = NamedSet(set_id="late", arrival_index=3, runtime_load_id="v1", source_index=1)
     newest = NamedSet(set_id="newest", arrival_index=2, runtime_load_id="v2", source_index=3)
     same_version = NamedSet(set_id="same", arrival_index=1, runtime_load_id="v2", source_index=2)
-    dropped = StalenessCheck(5).ineligible_sets((late_judgment, newest, same_version))
-    assert [(result.record_set.set_id, result.reason) for result in dropped] == [("late", "different_runtime_load_id")]
-    with pytest.raises(ValueError, match="non-negative"):
-        StalenessCheck(-1)
-
-
-def test_drop_ineligible_removes_and_returns_the_sets_that_fail_each_check() -> None:
-    pool = RecordSetPool(checks=(StalenessCheck(),))
-    for name, version in (("old", "e:1"), ("new", "e:2")):
-        pool.put(NamedSet(set_id=name, arrival_index=pool.next_arrival_index(), runtime_load_id=version))
-    assert [result.record_set.set_id for result in pool.drop_ineligible()] == ["old"]
-    assert [held.set_id for held in pool.sets()] == ["new"]
-
-    class ForeignCheck(EligibilityCheck):
-        def ineligible_sets(self, record_sets: Sequence[RecordSet]) -> tuple[IneligibleSet, ...]:
-            return (IneligibleSet(named("not-held", 1), "foreign"),)
-
-    with pytest.raises(ValueError, match="does not hold"):
-        RecordSetPool(checks=(ForeignCheck(),)).drop_ineligible()
+    assert [record_set.set_id for record_set in stale_sets((late_judgment, newest, same_version), 5)] == ["late"]

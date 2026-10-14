@@ -43,7 +43,7 @@ from reef.surface.harnesses import create_harness_surface
 from reef.train import CandidateBackend, PreparedStep, Trainer, TrainStepResult
 from reef.train.algos import StepScheduling
 from reef.train.cordis_backend import CordisBackend
-from reef.train.cordis_backend.processor import TraceBatches, TraceRecord2Record, TraceTasks
+from reef.train.cordis_backend.processor import TraceBatches, TraceTasks
 from reef.train.pipeline import TrainingPipeline
 
 
@@ -996,7 +996,7 @@ class _HarnessEvolveTestRecipe(Recipe):
             records,
             pipeline_factory=lambda context: TrainingPipeline(
                 context,
-                record2record=TraceRecord2Record(context),
+                record2record=ReportRecord2Record(context, ReportGrouping()),
                 record2task=TraceTasks(),
                 task2batch=TraceBatches(context, self.batch_size),
             ),

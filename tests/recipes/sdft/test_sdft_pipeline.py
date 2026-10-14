@@ -27,7 +27,7 @@ from reef.core.trajectories import source_record_id
 from reef.recipe.checkpoint_strategy import EveryNVersions
 from reef.recipe.errors import RecipeConfigError
 from reef.recipe.registry import build_recipe, recipe_class_for
-from reef.record2task.distill import DistillRecord2Record
+from reef.record2record import ExclusiveReportRecord2Record
 from reef.train import PipelineContext
 from reef.train.algos import StepScheduling
 from reef.train.pipeline import TrainingPipeline
@@ -117,7 +117,7 @@ def _processor(**config: Any) -> TrainingPipeline:
     context = PipelineContext("science", TeacherContextReport)
     return TrainingPipeline(
         context,
-        record2record=DistillRecord2Record(context),
+        record2record=ExclusiveReportRecord2Record(context),
         record2task=SDFTTasks(SDFTSettings(tokenizer_path=TOKENIZER_PATH, **config)),
         task2batch=SDFTBatches(context, 1),
     )
@@ -223,7 +223,7 @@ def test_sdft_recipe_resolves_by_dotted_reference(tokenizer: CountingTokenizer) 
     assert (spec.objective, spec.loss_family) == ("sdft", "sdft")
     assert spec.scheduling == StepScheduling(unit="sample")
     pipeline = recipe.build_pipeline(PipelineContext("science", TeacherContextReport))
-    assert isinstance(pipeline.record2record, DistillRecord2Record)
+    assert isinstance(pipeline.record2record, ExclusiveReportRecord2Record)
     assert isinstance(pipeline.record2task, SDFTTasks)
     assert isinstance(pipeline.task2batch, SDFTBatches)
     assert pipeline.task2batch.batch_size == 1

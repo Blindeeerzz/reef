@@ -10,7 +10,7 @@ from tests.support._threshold_processor import ThresholdBatches, ThresholdTasks,
 from tests.support.runtime_stubs import StubInferenceRuntime, StubTrainingRuntime, candidate_backend, runtime_bindings
 
 import reef.record2task.assembly as reported_module
-from recipes.sao import SAOBatches, SAORecord2Record, SAOTasks
+from recipes.sao import SAOBatches, SAOTasks
 from recipes.tttd import TTTDBatches, TTTDGridSettings, TTTDGroupedRolloutReport, TTTDRecord2Record, TTTDTasks
 from reef.artifact import InMemoryRepositoryBackend
 from reef.core import AgentRecord, RequestType
@@ -25,7 +25,7 @@ from reef.evaluation import (
     UpdateCandidate,
 )
 from reef.recipe import WeightTrainingRecipe
-from reef.record2record import ReportGrouping, ReportRecord2Record
+from reef.record2record import ExclusiveReportRecord2Record, ReportGrouping, ReportRecord2Record
 from reef.record2task.assembly import SampleAssemblySettings
 from reef.runtime.interfaces import ActivatedModel, ModelCandidate, PreparedTrainingStep
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
@@ -43,7 +43,7 @@ def sao_pipeline(
 ) -> TrainingPipeline:
     return TrainingPipeline(
         context,
-        record2record=SAORecord2Record(context),
+        record2record=ExclusiveReportRecord2Record(context),
         record2task=SAOTasks(SampleAssemblySettings(accept_multi_turn_policy_samples=accept_multi_turn)),
         task2batch=SAOBatches(context, batch_size),
     )
@@ -299,7 +299,7 @@ def test_cookbook_processors_assemble_before_rejecting_multi_turn_reports(
         context = PipelineContext("math")
         processor = TrainingPipeline(
             context,
-            record2record=SAORecord2Record(context),
+            record2record=ExclusiveReportRecord2Record(context),
             record2task=SAOTasks(SampleAssemblySettings()),
             task2batch=SAOBatches(context, 1),
         )
