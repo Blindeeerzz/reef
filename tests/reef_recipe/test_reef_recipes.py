@@ -137,7 +137,7 @@ def test_concrete_recipe_builds_its_processor_objective_and_report_type(
         assert trainer.candidate_backend is None
     else:
         assert isinstance(trainer.candidate_backend, RuntimeCandidateBackend)
-        assert trainer.candidate_backend.objective == objective
+        assert trainer.candidate_backend.training_method_selector.method.objective == objective
     assert trainer.pipeline.context.report_type is report_type
 
 
@@ -183,7 +183,7 @@ def test_tttd_build_resolves_its_backend_registered_objective_in_a_fresh_process
                 "stages = PipelineConfig.from_setting(grid, spec=TTTDRecipe.pipeline_spec(), environ={})\n"
                 "trainer = TTTDRecipe(**runtime_bindings(StubTrainingRuntime()), pipeline_stages=stages)"
                 ".build('math', SQLiteRecordStore())\n"
-                "assert trainer.candidate_backend.objective == 'tttd'\n"
+                "assert trainer.candidate_backend.training_method_selector.method.objective == 'tttd'\n"
             ),
         ],
         check=True,
