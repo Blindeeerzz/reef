@@ -63,7 +63,6 @@ from reef.runtime.executor.config import ExecutorSettings
 from reef.train.backend import STALE_RESULT_POLICIES, CandidateBackend, PreparedStep, StaleResultPolicy
 from reef.train.cordis_backend.contracts import ProposalValidator, StepProgress, StepProgressReader, StepRecords
 from reef.train.cordis_backend.manifest import FailureManifest
-from reef.train.cordis_backend.manifest import FailureRecord as FailureRecord  # re-export: manifest entry type
 from reef.train.cordis_backend.manifest import advance
 from reef.train.cordis_backend.proposals import Proposal, ProposalInbox
 from reef.train.cordis_backend.strategies import AgentHost, Promoter, Proposer, ProposerCalls, StepProposal
@@ -795,8 +794,8 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             return PreparedStep.with_candidate(
                 HarnessCandidate(
                     candidate_id=f"{batch.batch_id}:recheck",
-                    candidate_files=render_composition(self._nodes_from(target), self._descriptor),
-                    current_files=render_composition(self._nodes_from(published), self._descriptor),
+                    candidate_files=render_composition(nodes_from_entries(target), self._descriptor),
+                    current_files=render_composition(nodes_from_entries(published), self._descriptor),
                     candidate_entries=tuple(target),
                     current_entries=tuple(published),
                     mutations=(),
@@ -1202,10 +1201,6 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
     def _nodes(self) -> tuple[tuple[str, Any], ...]:
         """The enabled composition in tree order, as (kind, config) pairs."""
         return nodes_from_entries(self._entries())
-
-    @staticmethod
-    def _nodes_from(entries: Sequence[Mapping[str, Any]]) -> tuple[tuple[str, Any], ...]:
-        return nodes_from_entries(entries)
 
     def _entries(self) -> list[EntryOptions]:
         """Live entry options in tree order."""
