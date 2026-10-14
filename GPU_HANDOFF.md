@@ -63,6 +63,12 @@ cd data && sha256sum -c r2d-handoff-1.tar.gz.sha256 && tar xzf r2d-handoff-1.tar
 
    Each arm has `tasks/<task>/` (Harbor task folders), `manifest.json` (a Reef split manifest; `train` is the whole pool), and `generation.jsonl` (per task: the session, its repository, the check results, the `gpt-6-luna` rewards and the 9B rewards where measured). `DATASHEET.md` says how the pools were made. Both N = 100 and N = 300 come from this archive (Step 5).
 
+   ```bash
+   hf download reef-record/r2d-handoff --repo-type dataset --include "r2d-handoff-2.*" --local-dir data
+   cd data && sha256sum -c r2d-handoff-2.tar.gz.sha256 && tar xzf r2d-handoff-2.tar.gz
+   cd r2d-handoff-2 && sha256sum -c --quiet SHA256SUMS
+   ```
+
 SWE-bench Verified is not in an archive. Use Harbor's registry dataset `swebench-verified@1.0`, all 500 tasks.
 
 **Credentials:** the user gives you environment files, mode 600: `E2B_API_KEY`, and `HF_TOKEN` with read access to `reef-record/r2d-handoff`.
