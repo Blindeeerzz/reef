@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from reef.inference.tinker import TinkerSDKSampler
+from reef.runtime.interfaces import UpstreamStatusError
 from reef.train.tinker_backend.checkpoint import TinkerCheckpoint
 from reef.train.tinker_backend.client import TinkerSDKClient
 from reef.train.tinker_backend.config import TinkerConfig
@@ -52,6 +53,7 @@ class Sampler:
     def __init__(self, events):
         self.events = events
         self.logprobs = [-0.25, -0.5]
+        self.refusal: Exception | None = None
 
     def get_base_model(self):
         return "Qwen/Qwen3-8B"
@@ -61,6 +63,8 @@ class Sampler:
 
     def sample(self, *, prompt, num_samples, sampling_params):
         self.events.append(("sample", prompt, num_samples, sampling_params))
+        if self.refusal is not None:
+            raise self.refusal
         return Future(
             SimpleNamespace(sequences=[SimpleNamespace(tokens=[20, 21], logprobs=self.logprobs, stop_reason="length")])
         )
@@ -101,7 +105,12 @@ class ModelInput:
         return tuple(tokens)
 
 
+class BadRequestError(Exception):
+    pass
+
+
 class SDK:
+    BadRequestError = BadRequestError
     ModelInput = ModelInput
     Datum = SimpleNamespace
     AdamParams = SimpleNamespace
@@ -229,6 +238,20 @@ def test_initial_snapshot_and_sampling_use_explicit_immutable_paths(client, samp
         sampler.sample(checkpoint.sampler_path, [10, 11], {"max_tokens": 2})
     client.close()
     assert client._sdk.events[-1] == ("close", "success")
+
+
+def test_a_refused_sample_is_the_callers_400_and_an_overflow_names_the_context_length(sampler):
+    # Tinker's message for a Qwen3.5-4B episode whose history outgrew the 64K window.
+    sampler._base_sampler.refusal = BadRequestError(
+        "Error code: 400 - Prompt length plus max_tokens exceeds the model's context window: "
+        "65614 prompt tokens + 4096 max_tokens > 65536"
+    )
+    with pytest.raises(UpstreamStatusError, match=r"maximum context length.*65614 prompt tokens") as overflow:
+        sampler.sample(None, [10, 11], {"max_tokens": 2})
+    assert overflow.value.status == 400 and str(overflow.value).startswith("context_length_exceeded")
+    sampler._base_sampler.refusal = BadRequestError("Error code: 400 - invalid sampling params")
+    with pytest.raises(UpstreamStatusError, match=r"^Error code: 400 - invalid sampling params$"):
+        sampler.sample(None, [10, 11], {"max_tokens": 2})
 
 
 def test_frozen_base_logprobs_align_to_response_and_reject_missing_values(client):
