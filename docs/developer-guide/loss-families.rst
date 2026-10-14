@@ -18,8 +18,8 @@ A recipe binds ``WeightTrainingSpec(objective=..., scheduling=...)``.
 ``WeightTrainingSpec.loss_family`` derives the family from that objective;
 ``StepSignal`` carries advantages, metrics and proposed state, and the recipe's
 ``StepScheduling`` says how the runtime cuts the batch into optimizer steps.
-The workers start with that objective's family. When a recipe selects another
-objective for a job, the same workers train that objective's family (see
+The workers start with that objective's family. A job that selects another
+objective trains that objective's family on the same workers (see
 `Per-job families`_).
 
 Layout
@@ -46,9 +46,7 @@ Family to driver flags
 ----------------------
 
 The recipe's ``loss_family`` and the driver's flags must describe the same
-objective; the driver checks it at start and refuses a mismatch. These flags
-describe the startup family. A family that a later job selects sets its own
-``--loss-type`` (see `Per-job families`_).
+objective; the driver checks it at start and refuses a mismatch.
 
 +---------------------+-----------------------------+----------------------------+
 | Loss family         | ``--loss-type``             | Rollout log-probs          |
@@ -158,69 +156,32 @@ frozen Megatron teacher), ``recipes/sdft/slime/`` and ``recipes/sdpo/slime/``
 Per-job families
 ----------------
 
-A recipe's ``training_method_selector`` can give a job an objective with
-another loss family (`Switch methods within a run
+A job can select an objective of another family (`Switch methods within a run
 <write-a-recipe.rst#switch-methods-within-a-run>`__). The workers keep their
-startup arguments. On the first job of a new family, the bridge derives the
-family's arguments from the startup arguments. Then it validates the family
-against them.
+startup flags. The family brings its ``--loss-type``, objective hooks,
+advantage routing, wire keys, and default driver options. Before the family's
+first job starts, the bridge validates the family against the startup flags.
+Only the actor workers switch; the critic keeps the startup family. A ``self``
+distillation teacher copies the actor's weights at the family's first job, and
+Reef does not checkpoint that copy.
 
-The family sets:
+The bridge refuses a family that:
 
-- ``loss_family``, its reference, and its ``loss_type``;
-- its objective hooks, which the worker resolves again;
-- the advantage routing: the CISPO callsite for a pg-primitive family, and
-  otherwise the estimator the driver was started with;
-- Slime's pre-train advantage pass, which is on only for a family that allows it;
-- its wire declarations;
-- its driver options, at their defaults.
+- needs driver options;
+- configures the critic, as SAO does;
+- is a second distillation family;
+- declares a wire key with a dtype that another family of the run declares
+  differently;
+- fails its own validation against the startup flags.
 
-These options keep their startup values, and the bridge validates the family
-against them:
-
-- the model and parallelism;
-- the optimizer and its learning-rate flags;
-- ``--use-rollout-logprobs``;
-- ``--kl-coef`` and the reference model;
-- ``--num-steps-per-rollout``;
-- the critic;
-- ``--score-centering``.
-
-The bridge refuses the family when it prepares the job, before the job starts,
-if:
-
-- it needs driver options, because the driver parses only the startup
-  family's flags;
-- it configures the critic: it overrides ``configure_critic_args`` or sets
-  ``critic_value_head_zero_init``, as SAO does;
-- it is a second distillation family, since a worker keeps one teacher built
-  from the first family's settings;
-- it declares a wire key with a dtype that another family of the run
-  declares differently;
-- its own validation refuses the startup options.
-
-The actor workers switch to the family when they receive the job's data. The
-critic keeps the startup family. A family's actor init hook runs on the
-family's first job. A ``self`` distillation teacher copies the actor's weights
-at that job. Reef does not checkpoint this copy, so after a restart the
-teacher copies the loaded weights in the same way.
-
-A job's learning-rate schedule sets the rate of each actor optimizer step
-through Slime's before-train-step hook. Reef runs any
-``--custom-megatron-before-train-step-hook-path`` first. The job's
-``train/lr-pg_*`` step metrics report the rate that Reef set. Megatron's
-scheduler keeps its own configured curve and step count, so a checkpoint still
-loads under the startup flags.
-
-The bridge records each scenario's schedule and completed steps in
-``reef_learning_rate_schedules.json``, beside the job marker. It writes the
-file with each checkpoint of a job that trained under a schedule. A
-critic-only step does not advance the schedule.
-
-- At startup, the bridge refuses to start if the file records progress after
-  the checkpoint that the workers loaded.
-- Before a job trains, the bridge refuses its schedule if the run uses
-  ``--decoupled-lr`` parameter groups.
+A learning-rate schedule sets the rate of each actor optimizer step through
+Slime's before-train-step hook. Reef runs any
+``--custom-megatron-before-train-step-hook-path`` first. Megatron's scheduler
+keeps its configured curve, so a checkpoint still loads under the startup
+flags. The bridge records each scenario's schedule progress in
+``reef_learning_rate_schedules.json`` beside the job marker, with each
+checkpoint. It refuses to start when that file records progress after the
+loaded checkpoint. It refuses a schedule when the run uses ``--decoupled-lr``.
 
 The distillation base
 ---------------------
