@@ -25,6 +25,11 @@ from reef.service.deploy.service_config import service_config_arguments, service
 _MISSING = object()
 #: Appended to unknown-section and unknown-field errors.
 LAYOUT_HINT = "see the configuration layout in docs/reference/configuration.rst"
+#: Public recipe sections and the resolved paths they move to.
+RECIPE_SECTION_PATHS: Mapping[tuple[str, ...], tuple[str, ...]] = {
+    ("recipe", "config"): ("reef", "data"),
+    ("recipe", "runtime"): ("reef", "runtime"),
+}
 
 
 @dataclass(frozen=True)
@@ -110,8 +115,7 @@ def translate_layout(config: Mapping[str, Any]) -> dict[str, Any]:
         if value is not _MISSING:
             _put(resolved, argument.path, value)
     for path, target in (
-        (("recipe", "config"), ("reef", "data")),
-        (("recipe", "runtime"), ("reef", "runtime")),
+        *RECIPE_SECTION_PATHS.items(),
         (("execution",), ("execution",)),
         (("executors",), ("executors",)),
     ):
@@ -192,7 +196,7 @@ def translate_references(config: dict[str, Any], arguments: tuple[ConfigArgument
         ".".join(argument.public_path or argument.path): ".".join(argument.path)
         for argument in (*service_config_arguments(), *arguments)
     }
-    paths.update({"recipe.runtime": "reef.runtime", "recipe.config": "reef.data"})
+    paths.update({".".join(public): ".".join(internal) for public, internal in RECIPE_SECTION_PATHS.items()})
 
     def convert(value: Any) -> Any:
         if isinstance(value, str):
