@@ -118,8 +118,8 @@ class DurableRuntime(StubTrainingRuntime):
         self.serving_version = runtime_load_id
         return ActivatedModel(candidate.candidate_id, runtime_load_id)
 
-    def reject_candidate(self, candidate, decision):
-        del candidate, decision
+    def reject_candidate(self, candidate):
+        del candidate
 
 
 class BlockingLostAckBackend(InMemoryRepositoryBackend):

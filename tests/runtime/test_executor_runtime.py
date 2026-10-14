@@ -12,7 +12,6 @@ from tests.support.runtime_stubs import ExecutorRuntimeFixture, runtime_bindings
 
 from reef.artifact import InMemoryRepositoryBackend
 from reef.dispatcher import Dispatcher
-from reef.evaluation import EvaluationResult, SelectionDecision
 from reef.inference.runtime import ExecutorInferenceRuntime
 from reef.recipe import Recipe
 from reef.recipe.errors import RecipeConfigError
@@ -122,8 +121,7 @@ def test_mapping_config_resolves_worker_import_and_constructor_arguments():
         assert runtime.base_url == "http://custom-router"
         candidate = runtime.train_candidate({})
         assert runtime.inference_admission_status["open"] is False
-        decision = SelectionDecision(False, "test", "test rejection", EvaluationResult("test", "1", {}))
-        runtime.reject_candidate(candidate, decision)
+        runtime.reject_candidate(candidate)
         assert runtime.inference_admission_status["open"] is True
         assert runtime.serving_runtime_load_id() == "engine:0"
     finally:

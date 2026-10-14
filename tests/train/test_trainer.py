@@ -852,7 +852,7 @@ def test_scenario_runtime_executes_grpo_as_one_async_transaction(tmp_path) -> No
         def activate_candidate(self, candidate):
             return ActivatedModel(candidate.candidate_id, "slime-v1")
 
-        def reject_candidate(self, candidate, decision):
+        def reject_candidate(self, candidate):
             raise AssertionError("candidate should be selected")
 
     training_runtime = FakeTrainingRuntime()

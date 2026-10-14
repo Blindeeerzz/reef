@@ -203,7 +203,7 @@ def test_rejected_and_uncertain_candidates_leave_incumbent_optimizer_unchanged(r
     candidate = value.training.train_candidate(payload)
     assert value.training.train_candidate(payload) == candidate
     assert len(client.calls) == 1
-    value.training.reject_candidate(candidate, decision(False))
+    value.training.reject_candidate(candidate)
     client.fail = True
     with pytest.raises(TimeoutError):
         value.training.train_candidate(payload)

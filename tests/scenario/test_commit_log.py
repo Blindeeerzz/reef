@@ -388,8 +388,7 @@ class RecordingRuntime(StubTrainingRuntime):
         self._served_version = runtime_load_id
         return ActivatedModel(candidate.candidate_id, runtime_load_id)
 
-    def reject_candidate(self, candidate, decision):
-        del decision
+    def reject_candidate(self, candidate):
         self._candidate_versions.pop(candidate.candidate_id, None)
 
     def serving_runtime_load_id(self):

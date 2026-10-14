@@ -145,7 +145,7 @@ class RuntimeCandidateBackend(CandidateBackend):
             "selection": {"candidate_id": candidate.candidate_id, **decision.to_dict()},
         }
         if not decision.selected:
-            self.reject_candidate(candidate, decision)
+            self.reject_candidate(candidate)
             return TrainStepResult(
                 state=prepared.state,
                 metrics=metrics,
@@ -164,17 +164,7 @@ class RuntimeCandidateBackend(CandidateBackend):
         )
 
     def abort_step(self, prepared: PreparedStep) -> None:
-        candidate = self._prepared_candidate(prepared)
-        evaluation = EvaluationResult("reef_abort", "1", {})
-        self.reject_candidate(
-            candidate,
-            SelectionDecision(
-                False,
-                "reef_abort",
-                "candidate processing failed before settlement",
-                evaluation,
-            ),
-        )
+        self.reject_candidate(self._prepared_candidate(prepared))
 
     def prepare_training_step(
         self,
@@ -192,8 +182,8 @@ class RuntimeCandidateBackend(CandidateBackend):
     def activate_candidate(self, candidate: ModelCandidate) -> ActivatedModel:
         return self.scheduler.activate_candidate(candidate)
 
-    def reject_candidate(self, candidate: ModelCandidate, decision: SelectionDecision) -> None:
-        self.scheduler.reject_candidate(candidate, decision)
+    def reject_candidate(self, candidate: ModelCandidate) -> None:
+        self.scheduler.reject_candidate(candidate)
 
     @staticmethod
     def _model_candidate(candidate: UpdateCandidate) -> ModelCandidate:

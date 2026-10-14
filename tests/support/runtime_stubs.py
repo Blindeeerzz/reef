@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from reef.core.evaluation import SelectionDecision
 from reef.inference.http import InferenceProxyRuntime
 from reef.runtime.interfaces import (
     ActivatedModel,
@@ -62,7 +61,7 @@ class StubTrainingRuntime(TrainingRuntime):
     def activate_candidate(self, candidate: ModelCandidate) -> ActivatedModel:
         raise NotImplementedError("StubTrainingRuntime does not activate candidates")
 
-    def reject_candidate(self, candidate: ModelCandidate, decision: SelectionDecision) -> None:
+    def reject_candidate(self, candidate: ModelCandidate) -> None:
         raise NotImplementedError("StubTrainingRuntime does not reject candidates")
 
     @property

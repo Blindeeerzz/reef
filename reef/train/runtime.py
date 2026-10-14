@@ -11,7 +11,6 @@ from typing import Any
 
 from reef.core.artifact_ref import parse_runtime_load_spans
 from reef.core.batches import StepScheduling, TrainingBatch, TrajectoryItem, trajectories
-from reef.core.evaluation import SelectionDecision
 from reef.runtime.executor.connection import CoordinatorClient, training_job_status
 from reef.runtime.interfaces import (
     CandidateTrainingDeferred,
@@ -142,7 +141,7 @@ class ExecutorTrainingRuntime(TrainingRuntime):
             training_metrics=dict(checkpoint.metrics or {}),
         )
 
-    def reject_candidate(self, candidate: ModelCandidate, decision: SelectionDecision) -> None:
+    def reject_candidate(self, candidate: ModelCandidate) -> None:
         self.reject_training_job(candidate.training_job_id)
 
     def reject_training_job(self, training_job_id: str) -> None:

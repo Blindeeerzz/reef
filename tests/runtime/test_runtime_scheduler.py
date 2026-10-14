@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from reef.core.batches import TrainingBatch
-from reef.core.evaluation import EvaluationResult, SelectionDecision
 from reef.harness.episodes.model_binding import ModelBinding
 from reef.runtime.interfaces import (
     ActivatedModel,
@@ -62,7 +61,7 @@ class CheckpointTrainer(TrainingRuntime):
             current_runtime_load_id=None,
         )
 
-    def reject_candidate(self, candidate, decision):
+    def reject_candidate(self, candidate):
         self.reject_training_job(candidate.training_job_id)
 
     def reject_training_job(self, training_job_id):
@@ -225,10 +224,9 @@ def test_rejection_must_finish_before_colocated_inference_reopens():
     inference = WeightReceiver()
     scheduler = RuntimeScheduler(training, inference)
     candidate = scheduler.train_candidate({})
-    decision = SelectionDecision(False, "test", "failed evaluation", EvaluationResult("test", "1", {}))
     training.failure = TimeoutError("rejection result unknown")
     with pytest.raises(TimeoutError, match="rejection result unknown"):
-        scheduler.reject_candidate(candidate, decision)
+        scheduler.reject_candidate(candidate)
     assert not inference.inference_admission_status["open"]
     staged_journal(training, state="REJECTING")
     training.failure = None

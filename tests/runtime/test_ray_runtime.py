@@ -14,7 +14,6 @@ from tests.support.runtime_stubs import ExecutorRuntimeFixture
 
 from reef.artifact import LiveWeightArtifactRef
 from reef.core import RuntimeLoadSpan
-from reef.evaluation import EvaluationResult, SelectionDecision
 from reef.observability.operations import OperationMetrics
 from reef.runtime.executor import ray as ray_executor
 from reef.runtime.executor.connection import RayCoordinatorClient, RayRuntimeError, RemoteRayCoordinatorClient
@@ -989,11 +988,7 @@ def test_candidate_rejection_leaves_serving_weights_unchanged() -> None:
     runtime = ExecutorRuntimeFixture(train_group_handle=handle, inference_url="http://router")
 
     candidate = runtime.train_candidate({"scenario_step": 0})
-    evaluation = EvaluationResult("test", "1", {})
-    runtime.reject_candidate(
-        candidate,
-        SelectionDecision(False, "test", "rejected by test", evaluation),
-    )
+    runtime.reject_candidate(candidate)
 
     assert handle.calls == ["execute", "reject"]
     assert runtime.serving_runtime_load_id() == "engine:0"

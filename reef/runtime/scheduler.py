@@ -30,7 +30,6 @@ from typing import Any, Literal
 
 from reef.core.artifact_ref import parse_runtime_load_spans
 from reef.core.batches import StepScheduling, TrainingBatch
-from reef.core.evaluation import SelectionDecision
 from reef.observability.operations import OperationMetrics
 from reef.runtime.interfaces import (
     ActivatedModel,
@@ -642,9 +641,9 @@ class RuntimeScheduler:
         with self.operations.measure("weight_sync"):
             return self.inference_runtime.activate_candidate(candidate)
 
-    def reject_candidate(self, candidate: ModelCandidate, decision: SelectionDecision) -> None:
+    def reject_candidate(self, candidate: ModelCandidate) -> None:
         """Discard a candidate before reopening the unchanged serving version."""
-        self.training_runtime.reject_candidate(candidate, decision)
+        self.training_runtime.reject_candidate(candidate)
         self.inference_runtime.resume_admission()
 
     @contextmanager

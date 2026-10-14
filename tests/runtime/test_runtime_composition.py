@@ -45,7 +45,7 @@ class CheckpointTrainer(TrainingRuntime):
             current_runtime_load_id=None,
         )
 
-    def reject_candidate(self, candidate, decision):
+    def reject_candidate(self, candidate):
         self.checkpoint.unlink()
 
 

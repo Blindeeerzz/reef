@@ -436,7 +436,7 @@ class _StubTrainingRuntime(StubTrainingRuntime):
         self.jobs: list[dict[str, Any]] = []
         self.completed: dict[int, ModelCandidate] = {}
         self.activations: list[ModelCandidate] = []
-        self.rejections: list[tuple[ModelCandidate, Any]] = []
+        self.rejections: list[ModelCandidate] = []
         # The version the serving engine answers from. A train step hot-swaps
         # new weights in, so this moves from v3 -> v4 the first time a job
         # completes; starting below the synced value keeps the serving-swap
@@ -498,8 +498,8 @@ class _StubTrainingRuntime(StubTrainingRuntime):
         self._served_version = "slime-v4"
         return ActivatedModel(candidate.candidate_id, self._served_version)
 
-    def reject_candidate(self, candidate, decision):
-        self.rejections.append((candidate, decision))
+    def reject_candidate(self, candidate):
+        self.rejections.append(candidate)
 
 
 def _wait_for_step(dispatcher: Dispatcher, step: int) -> None:
@@ -578,14 +578,17 @@ def test_external_checkpoint_evaluation_rejects_before_serving_activation(tmp_pa
         assert runtime.serving_runtime_load_id() == "slime-v3"
         assert runtime.activations == []
         assert len(runtime.rejections) == 1
-        candidate, decision = runtime.rejections[0]
-        assert decision.selected is False
-        assert decision.evaluation.evaluator == "external_checkpoint"
-        assert decision.evaluation.metrics == {
+        candidate = runtime.rejections[0]
+        status = dispatcher.get_or_create_scenario("math").commit_status
+        selection = status["last_committed_step"]["metrics"]["selection"]
+        assert selection["candidate_id"] == candidate.candidate_id
+        assert selection["selected"] is False
+        assert selection["evaluation"]["evaluator"] == "external_checkpoint"
+        assert selection["evaluation"]["metrics"] == {
             "score": 0.25,
             "checkpoint_path": candidate.checkpoint_path,
         }
-        assert decision.evaluation.metadata == {"scenario": "math", "token_present": True}
+        assert selection["evaluation"]["metadata"] == {"scenario": "math", "token_present": True}
     finally:
         dispatcher.close()
 

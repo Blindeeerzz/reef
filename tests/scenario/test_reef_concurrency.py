@@ -24,7 +24,6 @@ from reef.artifact import (
 )
 from reef.core import AgentRecord, RequestType
 from reef.dispatcher import Dispatcher, build_default_dispatcher
-from reef.evaluation import SelectionDecision
 from reef.recipe.checkpoint_strategy import EveryNVersions
 from reef.runtime.interfaces import ActivatedModel, ModelCandidate, PreparedTrainingStep
 from reef.storage.sqlite import SQLiteScenarioStorage
@@ -70,8 +69,8 @@ class CountingRuntime(StubTrainingRuntime):
     def activate_candidate(self, candidate):
         return ActivatedModel(candidate.candidate_id, str(candidate.metadata["runtime_load_id"]))
 
-    def reject_candidate(self, candidate, decision: SelectionDecision):
-        del candidate, decision
+    def reject_candidate(self, candidate):
+        del candidate
 
 
 def sft_inference(agent_record_id: str) -> AgentRecord:
