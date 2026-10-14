@@ -9,8 +9,9 @@ from typing import Any
 
 import pytest
 import ray
-from reef_service._trajectories import policy_trajectory
-from reef_service.slime_coordinator import build_slime_coordinator
+from tests.slime_backend.test_slime_bridge import _DurableGroup, _FakeRolloutManager
+from tests.support._trajectories import policy_trajectory
+from tests.support.slime_coordinator import build_slime_coordinator
 
 from reef.core.trajectories import trajectory_reward
 from reef.runtime.interfaces import LearningRateSchedule, LearningRateScheduleState, TrainingMethod
@@ -25,10 +26,8 @@ from reef.train.slime_backend.reef_adapters.batches import WORKER_SWITCH_KEY
 from reef.train.slime_backend.reef_adapters.training_job.storage import LEARNING_RATE_SCHEDULES_FILENAME
 from reef.train.types import TrainingBatch, trajectories
 
-from .test_slime_bridge import _DurableGroup, _FakeRolloutManager
-
 #: A policy objective over the suite's ``pg`` family, named by dotted reference like a cookbook method's.
-REWARD_OBJECTIVE = "reef_service.test_slime_training_methods:RewardObjective"
+REWARD_OBJECTIVE = "tests.slime_backend.test_slime_training_methods:RewardObjective"
 WARMUP = LearningRateSchedule("warmup", 1e-4, warmup_steps=4)
 # One optimizer step per sample: two samples make a two-step job.
 ONE_SAMPLE_STEPS = StepScheduling(unit="sample", batch_size=1)

@@ -7,7 +7,8 @@ from collections.abc import Mapping
 from typing import Any
 
 import pytest
-from reef_service.runtime_stubs import StubTrainingRuntime
+from tests.reef_recipe.test_recipe_config_fields import StagedRecipe
+from tests.support.runtime_stubs import StubTrainingRuntime
 
 from reef.runtime.interfaces import (
     LearningRateSchedule,
@@ -21,8 +22,6 @@ from reef.storage.sqlite import SQLiteRecordStore
 from reef.train.algos import StepScheduling
 from reef.train.runtime_backend import FixedTrainingMethodSelector, RuntimeCandidateBackend, TrainingMethodSelector
 from reef.train.types import TrainingBatch
-
-from .test_recipe_config_fields import StagedRecipe
 
 SFT = LearningRateSchedule("sft", 2e-5, warmup_steps=4, decay_style="cosine", decay_steps=8, min_learning_rate=2e-6)
 RL = LearningRateSchedule("rl", 1e-6, warmup_steps=2)
