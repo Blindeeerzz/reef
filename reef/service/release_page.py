@@ -493,11 +493,10 @@ def result_html(row: Mapping[str, Any], metrics: Mapping[str, Any], rows: Sequen
     )
     numbers = []
     for field in RESULT_FIELDS:
-        legacy_field = "gate_sides" if field == "evaluation_sides" else field
         if unscored and field == "candidate_score":
             continue
-        if field in metrics or legacy_field in metrics:
-            value = metrics.get(field, metrics.get(legacy_field))
+        if field in metrics:
+            value = metrics[field]
             if isinstance(value, Sequence) and not isinstance(value, str):
                 shown = ", ".join(_strings(value))
             else:
