@@ -238,7 +238,7 @@ def test_winning_mutation_publishes_an_artifact(tmp_path: Path) -> None:
     result = run_backend_step(b, batch(), b.initial_state())
     assert result.metrics["published"] is True
     assert result.metrics["selected"] is True
-    assert result.metrics["selection"]["outcome"] == "select"
+    assert result.metrics["selection"]["selected"] is True
     assert result.metrics["selection"]["policy"] == "score_comparison"
     assert result.metrics["selection"]["candidate_id"] == "demo:trace:1:candidate"
     assert result.metrics["selection"]["metrics"] == {"wins": 1, "losses": 0, "ties": 0}
@@ -261,7 +261,7 @@ def test_losing_mutation_reverts_and_publishes_nothing(tmp_path: Path) -> None:
     result = run_backend_step(b, batch(), b.initial_state())
     assert result.metrics["published"] is False
     assert result.metrics["selected"] is False
-    assert result.metrics["selection"]["outcome"] == "reject"
+    assert result.metrics["selection"]["selected"] is False
     assert isinstance(result.publication, NoArtifactPublication)
     assert result.state["entries"] == []
 
@@ -1140,7 +1140,7 @@ def test_recipe_resolves_selection_plugin(tmp_path, monkeypatch) -> None:
         "        return self._backend.evaluate(candidate)\n\n"
         "    def decide(self, candidate, evaluation):\n"
         "        from reef.evaluation import SelectionDecision\n"
-        "        return SelectionDecision('select', 'demo', '1', 'selected by demo', evaluation)\n"
+        "        return SelectionDecision(True, 'demo', 'selected by demo', evaluation)\n"
     )
     monkeypatch.syspath_prepend(str(tmp_path))
 
