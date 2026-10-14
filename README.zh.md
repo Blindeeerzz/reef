@@ -279,6 +279,22 @@ recipe 链接到其指南，每个已测 benchmark 链接到其结果页，[Reci
 如果 Reef 对你有帮助，欢迎点个 Star ⭐，让更多人发现并参与进来。
 
 
+## 📚 引用
+
+如果你在研究中使用 Reef，请引用：
+
+```bibtex
+@misc{reef2026,
+  title  = {Reef: Infrastructure for Continually Self-Improving Agents},
+  author = {{Reef Contributors}},
+  year   = {2026},
+  url    = {https://github.com/Human-Agent-Society/reef}
+}
+```
+
+引用元数据也可在 [CITATION.cff](CITATION.cff) 中获取。
+
+
 ## 👥 团队
 
 Reef 汇聚了一群探索 Agent 如何从经验中学习、持续进化的人。以下成员共同将这一想法
