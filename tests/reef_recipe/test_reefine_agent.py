@@ -435,7 +435,7 @@ def test_an_isolated_sandbox_runs_the_jail_under_pasta_with_every_forward_named(
     from reef.harness.episodes.executor import SandboxExecutor
 
     executor = SandboxExecutor(network="isolated", forward_ports=(4123,))
-    argv = executor._bwrap_argv(["pi"], root=tmp_path, workspace=tmp_path / "workspace", env={})
+    argv = executor.bwrap_argv(["pi"], root=tmp_path, workspace=tmp_path / "workspace", env={})
     separator = argv.index("--")
     assert argv[:separator] == [
         "pasta",
@@ -452,7 +452,7 @@ def test_an_isolated_sandbox_runs_the_jail_under_pasta_with_every_forward_named(
         "none",
     ]
     assert argv[separator + 1] == "bwrap" and "--unshare-net" not in argv
-    assert "--unshare-net" in SandboxExecutor()._bwrap_argv(["pi"], root=tmp_path, workspace=tmp_path, env={})
+    assert "--unshare-net" in SandboxExecutor().bwrap_argv(["pi"], root=tmp_path, workspace=tmp_path, env={})
 
 
 @pytest.mark.unit

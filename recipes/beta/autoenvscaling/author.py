@@ -44,6 +44,7 @@ from reef.record2task.generator.designer import (
     DesignerError,
     ReefDesigner,
 )
+from reef.sandbox.environment import download_directory
 from reef.train.cordis_backend.strategies import AgentHost, ProposerCalls
 
 logger = logging.getLogger(__name__)
@@ -382,7 +383,7 @@ class AgentTools(WorkspaceTools):
         result: dict[str, object] = {"ran": False, "error": "the check failed; the service log has the cause"}
         try:
             if self.session is not None:
-                self.session.pull(self.root, "workspace")
+                download_directory(self.session, self.root, "workspace")
             result = self.checks.check(self.root / "workspace" / "task")
         finally:
             with self.lock:

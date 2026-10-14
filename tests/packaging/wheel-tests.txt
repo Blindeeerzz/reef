@@ -218,3 +218,4 @@ tests/train/test_sample_task_metadata.py
 tests/train/test_step_schedule.py
 tests/train/test_trainer.py
 tests/train/test_training_data_items.py
+tests/sandbox/test_environment.py

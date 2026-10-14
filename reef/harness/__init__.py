@@ -28,7 +28,7 @@ The map, one subpackage per job:
     what a settled step means for the person who asked, and the next action
     it offers: the words the wrapper prints and the harness pages render.
 
-This package depends on core values and runtime contracts, never on training,
+This package depends on core values, runtime contracts and sandbox execution, never on training,
 recipes, scenario coordination, or the HTTP service.
 
 The evolution loop itself, propose, gate and publish, is

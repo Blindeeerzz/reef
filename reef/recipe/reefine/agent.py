@@ -47,6 +47,7 @@ from reef.harness.tree.render import render_composition
 from reef.recipe.reefine import evolution
 from reef.recipe.reefine.agent_gateway import AgentGateway, WorkspaceTools
 from reef.recipe.reefine.multimodal import MultimodalProvider
+from reef.sandbox.environment import download_directory, execute
 from reef.train.cordis_backend.manifest import FailureManifest
 from reef.train.cordis_backend.strategies import AgentHost, Proposer, StepProposal
 from reef.train.types import TrajectoryItem
@@ -267,7 +268,8 @@ def launch_pi(
         driver = root / "trial-driver.mjs"
         shutil.copyfile(TRIAL_DRIVER, driver)
         argv = ["node", str(driver)]
-    outcome = executor.launch(
+    outcome = execute(
+        executor,
         argv,
         root=root,
         workspace=workspace,
@@ -372,7 +374,7 @@ class AgentRun(WorkspaceTools):
         with self.workspace_lock:
             if self.session is not None:
                 # The agent edits its copy in the sandbox; the check reads that copy as it stands now.
-                self.session.pull(self.workspace.parent, self.workspace.name)
+                download_directory(self.session, self.workspace.parent, self.workspace.name)
             mutations, problems = workspace_mutations(self.workspace, self.entries, self.nodes)
             self.keep_workspace()
         admitted, refusal = admit_mutations(self.entries, mutations, self.host.descriptor)

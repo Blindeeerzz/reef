@@ -176,6 +176,7 @@ def test_ordinary_episode_reads_remote_trajectory_and_residue_and_closes(monkeyp
         (root / "unexpected.txt").write_text("residue")
 
     monkeypatch.setattr(session, "pull", pull)
+    monkeypatch.setattr(E2BExecutor, "preflight", lambda self: None)
     monkeypatch.setattr(E2BExecutor, "open", lambda self: session)
     result = run_episode(
         get_adapter("pi"),

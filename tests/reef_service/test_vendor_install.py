@@ -351,7 +351,7 @@ def test_sandboxed_backend_binds_the_vendor_tree_readonly(monkeypatch, tmp_path,
     seen = []
 
     def launch(executor, argv, **kwargs):
-        seen.append(executor._bwrap_argv(argv, **{k: v for k, v in kwargs.items() if k != "timeout"}))
+        seen.append(executor.bwrap_argv(argv, **{k: v for k, v in kwargs.items() if k != "timeout"}))
         return LocalExecutor().launch(argv, **kwargs)
 
     monkeypatch.setattr(SandboxExecutor, "launch", launch)

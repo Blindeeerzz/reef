@@ -167,6 +167,9 @@ class RecordingSandbox(SandboxExecutor):
 
     launched: list[tuple[Path, dict[str, str]]] = field(default_factory=list)
 
+    def preflight(self) -> None:
+        return None
+
     def launch(
         self,
         argv: Sequence[str],

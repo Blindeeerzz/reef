@@ -1607,7 +1607,7 @@ def test_recipe_selects_the_episode_executor(tmp_path: Path, monkeypatch) -> Non
     local = CordisRecipe.from_environment({}, config=config(executor="local"))
     assert type(local.executor).__name__ == "LocalExecutor"
 
-    monkeypatch.setattr("reef.harness.episodes.executor.shutil.which", lambda name: None)
+    monkeypatch.setattr("reef.sandbox.process.shutil.which", lambda name: None)
     with pytest.raises(RecipeConfigError, match="bubblewrap"):
         CordisRecipe.from_environment({}, config=config(executor="sandbox"))
 

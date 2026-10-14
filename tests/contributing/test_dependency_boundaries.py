@@ -398,8 +398,12 @@ def test_reef_package_dependencies_are_acyclic() -> None:
         raise AssertionError(f"Reef package dependency cycle: {cycle}\n" + "\n".join(details)) from exc
 
 
-def test_storage_and_core_only_depend_on_lower_layers() -> None:
-    allowed = {"core": ("reef.core",), "storage": ("reef.core", "reef.storage")}
+def test_core_storage_and_sandbox_only_depend_on_lower_layers() -> None:
+    allowed = {
+        "core": ("reef.core",),
+        "storage": ("reef.core", "reef.storage"),
+        "sandbox": ("reef.core", "reef.sandbox"),
+    }
     for owner, prefixes in allowed.items():
         for path in sorted((REPO_ROOT / "reef" / owner).rglob("*.py")):
             package = ".".join(path.parent.relative_to(REPO_ROOT).parts)

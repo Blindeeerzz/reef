@@ -40,6 +40,7 @@ from reef.harness.episodes.executor import (
     SandboxExecutor,
 )
 from reef.harness.episodes.trajectory import reader_for
+from reef.sandbox.environment import execute
 
 
 class EpisodeError(ReefError):
@@ -205,7 +206,8 @@ def run_episode(
                     env[key] = value
         argv = [binary or descriptor.binary, *(token.replace("{prompt}", prompt) for token in descriptor.argv)]
         try:
-            outcome = executor.launch(
+            outcome = execute(
+                executor,
                 argv,
                 root=root,
                 workspace=workspace,
