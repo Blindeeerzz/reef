@@ -70,6 +70,14 @@ class CapturedGeneration:
             raise ValueError("captured top-k indices and log-probs must be given together")
 
 
+@dataclass(frozen=True)
+class ParsedToolCall:
+    """One tool call in the shape the chat facade reads: a name and its JSON argument text."""
+
+    name: str
+    parameters: str
+
+
 class NativeGenerateClient(ABC):
     """One engine's token-native generate API: prompt ids in, exact sample out."""
 
@@ -154,22 +162,29 @@ async def sse_json_events(chunks: AsyncIterator[bytes]) -> AsyncIterator[dict[st
         yield decode_event(payload)
 
 
+def held_suffix(value: str, delimiter: str) -> int:
+    """How many trailing characters of ``value`` could be the start of ``delimiter``."""
+    for size in range(min(len(value), len(delimiter) - 1), 0, -1):
+        if delimiter.startswith(value[-size:]):
+            return size
+    return 0
+
+
 class ReasoningStreamSplitter:
-    """Split sampled thinking tags without waiting for the full completion."""
+    """Split sampled thinking tags without waiting for the full completion.
+
+    With ``tool_call_start``, a tool call that opens before ``</think>`` ends
+    the thinking: the call and the text after it are text. Without it, only
+    the closing tag ends the thinking.
+    """
 
     _OPEN = "<think>"
     _CLOSE = "</think>"
 
-    def __init__(self, *, enabled: bool, force_reasoning: bool) -> None:
+    def __init__(self, *, enabled: bool, force_reasoning: bool, tool_call_start: str | None = None) -> None:
         self._mode = "thinking" if enabled and force_reasoning else ("undecided" if enabled else "text")
         self._buffer = ""
-
-    @staticmethod
-    def _held_suffix(value: str, delimiter: str) -> int:
-        for size in range(min(len(value), len(delimiter) - 1), 0, -1):
-            if delimiter.startswith(value[-size:]):
-                return size
-        return 0
+        self._tool_call_start = tool_call_start
 
     def feed(self, delta: str) -> list[tuple[str, str]]:
         if not delta:
@@ -188,6 +203,14 @@ class ReasoningStreamSplitter:
                 self._mode = "text"
                 return [("text", value)]
 
+        if self._tool_call_start:
+            call = self._buffer.find(self._tool_call_start)
+            close = self._buffer.find(self._CLOSE)
+            if call != -1 and (close == -1 or call < close):
+                thinking, text = self._buffer[:call], self._buffer[call:]
+                self._buffer = ""
+                self._mode = "text"
+                return [*([("thinking", thinking)] if thinking else []), ("text", text)]
         before, separator, after = self._buffer.partition(self._CLOSE)
         if separator:
             self._buffer = ""
@@ -197,7 +220,9 @@ class ReasoningStreamSplitter:
             if visible:
                 parts.append(("text", visible))
             return parts
-        held = self._held_suffix(self._buffer, self._CLOSE)
+        held = held_suffix(self._buffer, self._CLOSE)
+        if self._tool_call_start:
+            held = max(held, held_suffix(self._buffer, self._tool_call_start))
         if held:
             value = self._buffer[:-held]
             self._buffer = self._buffer[-held:]
@@ -272,7 +297,7 @@ class _StreamWriter(ABC):
         """Close the stream with the protocol's own view of the completed response."""
 
 
-class _OpenAIChunkWriter(_StreamWriter):
+class OpenAIChunkWriter(_StreamWriter):
     """``chat.completion.chunk`` events sharing one id, model and timestamp."""
 
     def __init__(self, common: Mapping[str, Any]) -> None:
@@ -685,7 +710,7 @@ class TokenNativeChatHandler(HttpInferenceHandler):
                 model=str(call.payload.get("model", self._model_path)),
                 input_tokens=len(call.prompt_ids),
             )
-        return _OpenAIChunkWriter(
+        return OpenAIChunkWriter(
             {
                 "id": chat_id,
                 "object": "chat.completion.chunk",
@@ -1105,14 +1130,14 @@ class TokenNativeChatHandler(HttpInferenceHandler):
             raise ValueError("chat_template_kwargs must be an object")
         if "tools" in template_kwargs:
             raise ValueError("chat_template_kwargs.tools is reserved; use the top-level tools field")
-        template_messages = self._template_messages(messages)
+        rendered_messages = template_messages(messages)
         tools = self._request_tools(payload)
         render_kwargs = dict(template_kwargs)
         if tools is not None and payload.get("tool_choice") != "none":
             render_kwargs["tools"] = tools
         tokenizer = self._require_tokenizer()
         rendered = tokenizer.apply_chat_template(
-            template_messages,
+            rendered_messages,
             tokenize=True,
             add_generation_prompt=True,
             **render_kwargs,
@@ -1146,31 +1171,6 @@ class TokenNativeChatHandler(HttpInferenceHandler):
             raise ValueError("tools must be a non-empty list of objects")
         return [dict(tool) for tool in tools]
 
-    @staticmethod
-    def _template_messages(messages: list[Any]) -> list[dict[str, Any]]:
-        normalized: list[dict[str, Any]] = []
-        for message in messages:
-            entry = dict(message)
-            tool_calls = entry.get("tool_calls")
-            if isinstance(tool_calls, list):
-                normalized_calls = []
-                for call in tool_calls:
-                    if not isinstance(call, Mapping) or not isinstance(call.get("function"), Mapping):
-                        raise ValueError("assistant tool_calls must contain function objects")
-                    normalized_call = dict(call)
-                    function = dict(call["function"])
-                    arguments = function.get("arguments")
-                    if isinstance(arguments, str):
-                        try:
-                            function["arguments"] = json.loads(arguments)
-                        except json.JSONDecodeError as exc:
-                            raise ValueError("assistant tool-call arguments must be valid JSON") from exc
-                    normalized_call["function"] = function
-                    normalized_calls.append(normalized_call)
-                entry["tool_calls"] = normalized_calls
-            normalized.append(entry)
-        return normalized
-
     def reasoning_is_pre_opened(self) -> bool:
         """Whether this model's chat template opens ``<think>`` for the model.
 
@@ -1196,54 +1196,9 @@ class TokenNativeChatHandler(HttpInferenceHandler):
         *,
         force_reasoning: bool = False,
     ) -> tuple[dict[str, Any], bool]:
-        # Thinking-template models emit reasoning before the last </think>
-        # (the opening tag is auto-inserted by the chat template, so it is
-        # usually absent from the sampled text). OpenAI-shaped clients render
-        # content verbatim, so reasoning must ride the standard
-        # reasoning_content field — otherwise every consumer downstream
-        # (agents, judges, user simulators) sees chain-of-thought as the
-        # reply. Training tensors are captured from the raw token stream and
-        # are unaffected by this presentation split.
-        reasoning: str | None = None
-        if cls.SPLIT_REASONING and "</think>" in text:
-            head, _, tail = text.rpartition("</think>")
-            reasoning = head.replace("<think>", "").strip()
-            text = tail.lstrip("\n")
-        elif cls.SPLIT_REASONING and force_reasoning:
-            # A pre-opened template with no closing tag: the generation hit
-            # its token cap mid-thought. The whole sample is reasoning, so
-            # fail closed — handing it back as content is exactly the
-            # chain-of-thought-as-reply this split exists to prevent, and a
-            # judge scoring it scores the wrong text. SGLang's own parser
-            # takes the same branch (force_reasoning => normal_text empty).
-            reasoning = text.replace("<think>", "").strip()
-            text = ""
-        message: dict[str, Any] = {"role": "assistant", "content": text}
-        if reasoning:
-            message["reasoning_content"] = reasoning
-        if tool_parser is None or not tool_parser.has_tool_call(text):
-            return message, False
-        try:
-            remaining_text, parsed = tool_parser.parse_non_stream(text)
-        except Exception as exc:
-            raise ValueError("tool-call parser could not parse the sampled output") from exc
-        if not parsed:
-            return message, False
-        tool_calls = []
-        for call in parsed:
-            arguments = call.parameters
-            if not isinstance(arguments, str):
-                arguments = json.dumps(arguments, ensure_ascii=False)
-            tool_calls.append(
-                {
-                    "id": f"call_{uuid.uuid4().hex[:24]}",
-                    "type": "function",
-                    "function": {"name": call.name, "arguments": arguments},
-                }
-            )
-        message["content"] = remaining_text or None
-        message["tool_calls"] = tool_calls
-        return message, True
+        return assistant_message(
+            text, tool_parser, split_reasoning=cls.SPLIT_REASONING, force_reasoning=force_reasoning
+        )
 
     def _openai_logprobs(self, token_ids: list[int], log_probs: list[float]) -> list[dict[str, Any]]:
         tokenizer = self._require_tokenizer()
@@ -1262,6 +1217,99 @@ class TokenNativeChatHandler(HttpInferenceHandler):
                 }
             )
         return values
+
+
+def template_messages(messages: list[Any]) -> list[dict[str, Any]]:
+    """Copy chat messages for the chat template, parsing JSON-string tool-call arguments into objects.
+
+    Raises ``ValueError`` for a tool call that is not a function object or
+    whose arguments are not valid JSON.
+    """
+    normalized: list[dict[str, Any]] = []
+    for message in messages:
+        entry = dict(message)
+        tool_calls = entry.get("tool_calls")
+        if isinstance(tool_calls, list):
+            normalized_calls = []
+            for call in tool_calls:
+                if not isinstance(call, Mapping) or not isinstance(call.get("function"), Mapping):
+                    raise ValueError("assistant tool_calls must contain function objects")
+                normalized_call = dict(call)
+                function = dict(call["function"])
+                arguments = function.get("arguments")
+                if isinstance(arguments, str):
+                    try:
+                        function["arguments"] = json.loads(arguments)
+                    except json.JSONDecodeError as exc:
+                        raise ValueError("assistant tool-call arguments must be valid JSON") from exc
+                normalized_call["function"] = function
+                normalized_calls.append(normalized_call)
+            entry["tool_calls"] = normalized_calls
+        normalized.append(entry)
+    return normalized
+
+
+def assistant_message(
+    text: str,
+    tool_parser: Any,
+    *,
+    split_reasoning: bool = True,
+    force_reasoning: bool = False,
+    tool_call_start: str | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """Split sampled text into an OpenAI assistant message; ``True`` when it carries tool calls.
+
+    Reasoning before the last ``</think>`` goes to ``reasoning_content``; the
+    chat template usually inserts the opening tag, so the sample often lacks
+    it. With ``force_reasoning`` the template opened the block, and a sample
+    with no closing tag is reasoning that hit the token cap: all of it is
+    ``reasoning_content`` and ``content`` is empty. With ``tool_call_start``,
+    a tool call that opens inside unclosed thinking ends the thinking there.
+
+    The training tensors come from the raw token stream; this split changes
+    only what the client reads. A parser that cannot parse text it
+    recognised as a call raises ``ValueError``.
+    """
+    reasoning: str | None = None
+    if split_reasoning:
+        close = text.rfind("</think>")
+        thinking_open = force_reasoning or text.lstrip().startswith("<think>")
+        call = text.find(tool_call_start) if tool_call_start and thinking_open and close == -1 else -1
+        if call != -1:
+            reasoning = text[:call].replace("<think>", "").strip()
+            text = text[call:]
+        elif close != -1:
+            reasoning = text[:close].replace("<think>", "").strip()
+            text = text[close + len("</think>") :].lstrip("\n")
+        elif force_reasoning:
+            reasoning = text.replace("<think>", "").strip()
+            text = ""
+    message: dict[str, Any] = {"role": "assistant", "content": text}
+    if reasoning:
+        message["reasoning_content"] = reasoning
+    if tool_parser is None or not tool_parser.has_tool_call(text):
+        return message, False
+    try:
+        remaining_text, parsed = tool_parser.parse_non_stream(text)
+    except Exception as exc:
+        raise ValueError("tool-call parser could not parse the sampled output") from exc
+    if not parsed:
+        return message, False
+    tool_calls = []
+    for call_item in parsed:
+        arguments = call_item.parameters
+        if not isinstance(arguments, str):
+            arguments = json.dumps(arguments, ensure_ascii=False)
+        tool_calls.append(
+            {
+                "id": _new_call_id(),
+                "type": "function",
+                "function": {"name": call_item.name, "arguments": arguments},
+            }
+        )
+    message["content"] = remaining_text or None
+    message["tool_calls"] = tool_calls
+    return message, True
 
 
 def integer_tokens(value: Any, label: str) -> list[int]:
@@ -1312,12 +1360,17 @@ __all__ = [
     "ChatCall",
     "ChatStreamRelay",
     "NativeGenerateClient",
+    "OpenAIChunkWriter",
+    "ParsedToolCall",
     "ReasoningStreamSplitter",
     "TokenNativeChatHandler",
+    "assistant_message",
     "finite_log_prob",
+    "held_suffix",
     "integer_tokens",
     "normalize_finish_reason",
     "positive_max_tokens",
     "sse_json_events",
     "stream_ids",
+    "template_messages",
 ]
