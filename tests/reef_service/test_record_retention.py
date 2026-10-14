@@ -102,9 +102,7 @@ def test_retention_rejects_invalid_budgets(size):
 def test_service_config_defaults_to_twenty_gib_and_accepts_overrides():
     defaults = service_config_from_mapping({"reef": {"recipe": "recipe"}})
     assert defaults.agent_record_retention_max_bytes == 20 * 1024**3
-    settings = service_config_from_mapping(
-        {"reef": {"recipe": "recipe", "agent_record_retention_max_bytes": 1024}}
-    )
+    settings = service_config_from_mapping({"reef": {"recipe": "recipe", "agent_record_retention_max_bytes": 1024}})
     assert settings.agent_record_retention_max_bytes == 1024
     assert "agent_record_retention_max_bytes" not in assembly._recipe_owned_settings(settings)
     with pytest.raises(ValueError, match="retention_max_bytes"):

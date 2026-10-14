@@ -158,9 +158,7 @@ def test_scorer_can_declare_gpu_needs_without_yaml(monkeypatch):
     assert selected.settings.backend == "mp"
     assert requirements.workers == 2 and requirements.gpus_per_worker == 1
     with pytest.raises(ValueError, match="below"):
-        evaluation_selection(
-            GPUScorer(), ExecutorSettings(workers=2, resources=WorkerResources(gpus_per_worker=0))
-        )
+        evaluation_selection(GPUScorer(), ExecutorSettings(workers=2, resources=WorkerResources(gpus_per_worker=0)))
 
 
 @pytest.mark.parametrize("value", [-1, True, float("nan"), float("inf"), "1"])

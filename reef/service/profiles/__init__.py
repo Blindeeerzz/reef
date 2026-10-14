@@ -29,5 +29,7 @@ def profile_path(name: str) -> Path:
     """The profile file of ``name``, or an error naming the recipes that have one."""
     path = PROFILES_DIR / f"{name}.yaml"
     if "/" in name or not path.is_file():
-        raise UnknownProfileError(f"no profile for recipe {name!r}; recipes with a profile: {', '.join(profile_names())}")
+        raise UnknownProfileError(
+            f"no profile for recipe {name!r}; recipes with a profile: {', '.join(profile_names())}"
+        )
     return path

@@ -10,12 +10,12 @@ from pathlib import Path
 
 import pytest
 
+from reef.core.config import config_arguments
 from reef.core.plugins import PluginReference
 from reef.evaluation.harness import FloorPlugin, ScoreComparisonPlugin
 from reef.harness.episodes.requests import REQUESTS_ENTRY_ID
 from reef.harness.episodes.run import EpisodeResult
 from reef.harness.runners.terminus.runner import trial_record
-from reef.core.config import config_arguments
 from reef.recipe.errors import RecipeConfigError
 from reef.recipe.reefine import ReefineRecipe
 from reef.recipe.reefine.evolution import HEALTH_TASK_DIRECTORY, evaluate

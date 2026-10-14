@@ -28,12 +28,7 @@ from reef.core.plugins import PluginConfigError, PluginReference
 from reef.core.reports import ScoredRolloutReport
 from reef.core.tasks import TaskSplitError, manifest_task_paths
 from reef.evaluation.evaluators import BackendAlwaysSelectPlugin, SelectionPlugin
-from reef.evaluation.harness import (
-    EpisodeScorer,
-    FloorPlugin,
-    ScoreComparisonPlugin,
-    evaluation_selection,
-)
+from reef.evaluation.harness import EpisodeScorer, FloorPlugin, ScoreComparisonPlugin, evaluation_selection
 from reef.harness.adapters import get_adapter
 from reef.harness.adapters.descriptor import DescriptorError
 from reef.harness.episodes.e2b import E2BExecutor, deployment_owner
