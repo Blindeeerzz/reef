@@ -1,12 +1,12 @@
 """Commit history storage and its scenario store implementation.
 
-CommitHistory is the contract of one scenario generation's ordered commits.
-CommitLog implements it as a JSONL file: append, fsync, idempotent retries,
-torn-tail repair, and caching; stable POSIX file locks serialize commit
-writers across sessions and processes. CommitLogScenarioStore combines any
-CommitHistory with an injected RecordStore. The history append is the durable
-commit point; recovery restores consumption progress. Artifact publication
-remains outside this module.
+CommitHistory is the contract for the ordered commits of one scenario generation.
+CommitLog implements it as a JSONL file. It does append, fsync, idempotent
+retries, torn-tail repair, and caching. Stable POSIX file locks serialize
+commit writers across sessions and processes. CommitLogScenarioStore combines
+a CommitHistory with an injected RecordStore. The history append is the
+durable commit point; recovery restores consumption progress. Artifact
+publication is not in this module.
 """
 
 from __future__ import annotations

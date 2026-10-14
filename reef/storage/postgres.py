@@ -53,12 +53,7 @@ from reef.storage.commit_log import (
     training_run_position,
 )
 from reef.storage.commits import CommitLogError, CommitRecord
-from reef.storage.migrations import (
-    archive_imported_files,
-    legacy_model_config_files,
-    migrate_record_storage,
-    read_legacy_model_config,
-)
+from reef.storage.migrations import archive_imported_files, legacy_model_configs, migrate_record_storage
 from reef.storage.records import RecordLoss, RecordRetention
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage
 from reef.storage.sql_records import RecordTables, SQLRecordRetention, SQLRecordStore
@@ -383,13 +378,13 @@ class PostgresRecordStore(SQLRecordStore):
 
 
 class PostgresCommitTable(CommitHistory):
-    """One store generation's commits in the ``scenario_commit`` table.
+    """The commits of one store generation, in the ``scenario_commit`` table.
 
-    ``locked`` holds a transaction-scoped advisory lock on one connection; the
-    reads and appends of the locking thread run in that transaction, so the
-    append becomes durable when the locked block ends. Outside a locked block
-    each call runs its own transaction. Commits are append-only, so reads fetch
-    only the steps after the cached ones.
+    ``locked`` holds an advisory lock in one transaction. The reads and appends
+    of the locking thread use that transaction, so an append is durable when
+    the locked block ends. Outside a locked block, each call uses its own
+    transaction. Commits are append-only, so a read gets only the steps after
+    the cached ones.
     """
 
     def __init__(self, database: PostgresRecordDatabase, storage_id: str) -> None:
@@ -501,7 +496,6 @@ class PostgresScenarioStorage(ScenarioStorage):
     @classmethod
     def from_config(cls, config: Mapping[str, Any], *, directory: Path) -> Self:
         settings = PostgresStorageSettings.parse(config, plugin_class=cls)
-        validate_postgres_schema(settings.schema)
         return cls(settings.database_url, directory, schema=settings.schema)
 
     @property
@@ -558,7 +552,7 @@ class PostgresScenarioStorage(ScenarioStorage):
         Only files of this schema's active store generations are imported;
         files of another schema that shares the directory stay in place.
         """
-        model_files = dict(legacy_model_config_files(self._directory))
+        model_configs = legacy_model_configs(self._directory)
         imported = []
         for storage_id, name in self._database.active_stores():
             log_path = self._directory / f"postgres-{storage_id}.commits.jsonl"
@@ -567,12 +561,12 @@ class PostgresScenarioStorage(ScenarioStorage):
                 for record in CommitLog(log_path).records():
                     commits.append(record)
                 imported.append(log_path)
-            model_path = model_files.get(hashlib.sha256(name.encode("utf-8")).hexdigest())
-            if model_path is not None:
-                value = read_legacy_model_config(model_path)
-                if value is not None:
-                    with closing(PostgresRecordStore(self._database, name=name)) as records:
-                        records.write_settings(replace(records.read_settings(), model_config=value))
+            model_config = model_configs.get(hashlib.sha256(name.encode("utf-8")).hexdigest())
+            if model_config is not None:
+                value, model_path = model_config
+                # Older versions stored no other setting, so the import replaces all settings.
+                with closing(PostgresRecordStore(self._database, name=name)) as records:
+                    records.write_settings(ScenarioSettings(model_config=value))
                 imported.append(model_path)
         for location in archive_imported_files(self._directory, imported):
             logger.info("Imported a scenario file into PostgreSQL; the file moved to %s", location)

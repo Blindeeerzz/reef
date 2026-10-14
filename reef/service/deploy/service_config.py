@@ -234,7 +234,7 @@ class ServiceConfig:
 
     def __post_init__(self) -> None:
         RecordRetention(max_bytes=self.agent_record_retention_max_bytes)
-        if isinstance(self.record_backend, Mapping) or self.record_backend not in {"sqlite", "postgres"}:
+        if self.record_backend not in ("sqlite", "postgres"):
             if isinstance(self.record_backend, str) and ":" not in self.record_backend:
                 raise ValueError("storage.record_backend must be sqlite, postgres, or 'package.module:ClassName'")
             ScenarioStorage.reference(self.record_backend, setting="storage.record_backend")

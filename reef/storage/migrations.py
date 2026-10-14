@@ -131,25 +131,21 @@ def migrate_record_storage(connection: Connection, records: Table, consumption: 
         operations.drop_column(records.name, "compacted_at", schema=schema)
 
 
-def legacy_model_config_files(directory: Path) -> tuple[tuple[str, Path], ...]:
-    """Model configuration files that older versions kept beside the records.
+def legacy_model_configs(directory: Path) -> dict[str, tuple[Mapping[str, object] | None, Path]]:
+    """Read the model configuration files that older versions kept beside the records.
 
-    Each file is named after its scenario key, the SHA-256 of the scenario name.
-    Returns ``(key, path)`` pairs in name order.
+    The result maps each scenario key (the SHA-256 of the scenario name) to the
+    stored value and its file. A ``null`` value selected the recipe's model.
     """
-    return tuple(
-        (path.name.removesuffix("-model.json"), path)
-        for path in sorted(directory.glob("*-model.json"))
-        if re.fullmatch(r"[0-9a-f]{64}-model\.json", path.name)
-    )
-
-
-def read_legacy_model_config(path: Path) -> Mapping[str, object] | None:
-    """Read one legacy model configuration file; ``null`` selected the recipe's model."""
-    value = json.loads(path.read_text())
-    if value is not None and not isinstance(value, dict):
-        raise ValueError(f"model configuration file {path} must hold an object or null")
-    return value
+    configs: dict[str, tuple[Mapping[str, object] | None, Path]] = {}
+    for path in sorted(directory.glob("*-model.json")):
+        if re.fullmatch(r"[0-9a-f]{64}-model\.json", path.name) is None:
+            continue
+        value = json.loads(path.read_text())
+        if value is not None and not isinstance(value, dict):
+            raise ValueError(f"model configuration file {path} must hold an object or null")
+        configs[path.name.removesuffix("-model.json")] = (value, path)
+    return configs
 
 
 def archive_imported_files(directory: Path, paths: Sequence[Path]) -> tuple[str, ...]:

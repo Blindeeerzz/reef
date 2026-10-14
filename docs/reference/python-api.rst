@@ -377,11 +377,10 @@ their chosen storage service explicitly. For ephemeral records, commits and
 settings, pass ``SQLiteScenarioStorage()`` without a directory. Passing a
 directory preserves SQLite schemas, JSONL format, and scenario filenames.
 
-The storage service owns every piece of per-scenario state, including each
-scenario's ``ScenarioSettings``: the model configuration and the selected
-training mode. The scenario registry reads and writes them through
-``read_settings`` and ``write_settings``, and ``archive`` retires them with the
-records and commits.
+The storage service keeps all per-scenario state. This includes the
+``ScenarioSettings`` of each scenario: the model configuration and the
+selected training mode. The scenario registry uses ``read_settings`` and
+``write_settings``. ``archive`` retires the settings with the records and commits.
 
 ``Recipe.with_model_config(config)`` accepts the concrete ``ModelConfig`` from
 ``reef.inference.model_config``. ``ModelConfig.from_value(value)`` validates the
@@ -482,11 +481,11 @@ expected step, or a retry with conflicting content, raises
 ``ScenarioStoreConflict`` without advancing the store.
 
 ``CommitLogScenarioStore`` serializes writers through ``CommitHistory.locked()``.
-``CommitLog`` uses a local POSIX file lock and fsyncs the JSONL record as the
-durable commit point. ``PostgresCommitTable`` holds a transaction-scoped
-advisory lock and inserts the commit row in that transaction, so the commit
-becomes durable when the locked block ends. Direct writes through a
-``CommitHistory`` bypass this store contract.
+``CommitLog`` uses a local POSIX file lock. Its fsynced JSONL line is the
+durable commit point. ``PostgresCommitTable`` holds an advisory lock in one
+transaction and inserts the commit row in that transaction. The commit is
+durable when the transaction ends. Direct writes through a ``CommitHistory``
+bypass this store contract.
 A failure after append can leave the step committed. Retry the exact commit or
 recover the session; do not infer rollback from an exception. Recovery uses
 committed ``consumed_ids`` and separate skipped-batch receipts to rebuild

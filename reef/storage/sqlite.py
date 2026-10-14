@@ -11,7 +11,6 @@ import time
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
-from dataclasses import replace
 from pathlib import Path
 from threading import RLock
 from typing import Any, Self
@@ -24,12 +23,7 @@ from sqlalchemy.pool import NullPool
 from reef.core.errors import ReefError
 from reef.core.plugins import NoSettings
 from reef.storage.commit_log import CommitLog, CommitLogScenarioStore
-from reef.storage.migrations import (
-    archive_imported_files,
-    legacy_model_config_files,
-    migrate_record_storage,
-    read_legacy_model_config,
-)
+from reef.storage.migrations import archive_imported_files, legacy_model_configs, migrate_record_storage
 from reef.storage.records import RecordRetention
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage
 from reef.storage.sql_records import RecordTables, SQLRecordRetention, SQLRecordStore
@@ -319,8 +313,8 @@ class SQLiteScenarioStorage(ScenarioStorage):
     """Open existing hashed SQLite and JSONL paths and manage their lifecycle.
 
     Each scenario has one database file for its records and settings and one
-    JSONL commit log. Without a directory, records, commits and settings live
-    in memory: records and commits for one session, settings for the storage.
+    JSONL commit log. Without a directory, all state is in memory. Records and
+    commits then last for one session, and settings last for the storage.
     """
 
     def __init__(self, directory: Path | None = None) -> None:
@@ -419,13 +413,11 @@ class SQLiteScenarioStorage(ScenarioStorage):
     def _import_model_config_files(directory: Path) -> None:
         """Move model configuration files of older versions into their scenario databases."""
         imported = []
-        for key, path in legacy_model_config_files(directory):
-            value = read_legacy_model_config(path)
-            if value is not None:
-                database = directory / f"{key}.sqlite3"
-                with closing(SQLiteRecordStore(database)) as records:
-                    settings = replace(records.read_settings(), model_config=value)
-                SQLiteScenarioStorage._write_database_settings(database, settings)
+        for key, (value, path) in legacy_model_configs(directory).items():
+            # Older versions stored no other setting, so the import replaces all settings.
+            SQLiteScenarioStorage._write_database_settings(
+                directory / f"{key}.sqlite3", ScenarioSettings(model_config=value)
+            )
             imported.append(path)
         for location in archive_imported_files(directory, imported):
             logger.info("Imported a model configuration into its scenario database; the file moved to %s", location)
@@ -438,8 +430,8 @@ class SQLiteScenarioStorage(ScenarioStorage):
     def _write_database_settings(database: Path, settings: ScenarioSettings) -> None:
         """Write settings into a scenario database and keep its files owner-only.
 
-        A model configuration can hold an upstream credential, so the database
-        and its WAL files get the mode the separate model file had.
+        A model configuration can hold an upstream credential. Thus the database
+        and its WAL files get the owner-only mode of the old model file.
         """
         with closing(SQLiteRecordStore(database)) as records:
             records.write_settings(settings)
