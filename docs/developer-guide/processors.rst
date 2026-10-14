@@ -323,7 +323,10 @@ train. A generated task whose measurement arm is
 named ``plain`` comes back unplayed with an error. The record stage groups
 the training reports by ``metadata.task.name``. A group is complete at
 ``plays_per_task`` episodes, and a batch holds ``tasks_per_step`` complete
-groups. The ``task_group`` objective centers and scales each reward within its
+groups. A training play that reports nothing, such as a failed trial, never
+joins its group. When the task's plays end, its group is complete at the
+number of plays that reported; a group of one is discarded. The
+``task_group`` objective centers and scales each reward within its
 task group, on Tinker's ``importance_sampling`` loss. The record stage
 releases the reports of measurement arms and reports without an arm, such as a
 generator's own reports, without assembling them.
