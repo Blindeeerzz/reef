@@ -325,14 +325,9 @@ class OpencodeSessionReader(TrajectoryReader):
         )
 
 
-# Module-level instances for backward-compatible call syntax.
+# The readers reef.harness exports as functions.
 read_pi_session = PiSessionReader()
-read_claude_session = ClaudeSessionReader()
-read_codex_session = CodexSessionReader()
-read_deepseek_session = DeepseekSessionReader()
-read_hermes_session = HermesSessionReader()
 read_opencode_session = OpencodeSessionReader()
-read_terminus_atif = TerminusAtifReader()
 
 
 @register_trajectory_reader

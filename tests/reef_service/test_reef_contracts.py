@@ -299,7 +299,7 @@ def test_inference_payload_is_recorded_without_reef_body_fields() -> None:
             assert request_payload == payload
             return {"provider": "ok"}
 
-        await service.infer(
+        await service.infer_with_data(
             {"x-reef-scenario": "chat"},
             payload,
             "/v1/chat/completions",

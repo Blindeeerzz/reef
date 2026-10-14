@@ -248,16 +248,6 @@ class RequestService:
         )
         return parsed, item
 
-    async def infer(
-        self,
-        headers: Mapping[str, str],
-        payload: dict[str, Any],
-        path: str,
-        handler: InferenceHandler,
-    ) -> dict[str, Any]:
-        response, _ = await self.infer_with_data(headers, payload, path, handler)
-        return response
-
     async def infer_with_data(
         self,
         headers: Mapping[str, str],

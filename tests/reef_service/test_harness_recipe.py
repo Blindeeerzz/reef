@@ -734,7 +734,7 @@ def test_a_terminus_episode_with_agent_steps_scores_by_its_verifier(tmp_path: Pa
     """A terminus trial's ATIF steps carry their text as a plain string ``message``: scoring reads the verifier's
     reward and finds no assistant reply, instead of taking the step's text for a wrapped message."""
     from reef.evaluation.harness import verifier_reward
-    from reef.harness.episodes.trajectory import read_terminus_atif
+    from reef.harness.episodes.trajectory import TerminusAtifReader
 
     episode_worker = EpisodeEvaluationWorker(
         descriptor=get_adapter("terminus"),
@@ -750,7 +750,7 @@ def test_a_terminus_episode_with_agent_steps_scores_by_its_verifier(tmp_path: Pa
     ]
     trial = {"task": "health", "rewards": {"reward": 1.0}, "reward": 1.0, "failed": False, "error": "", "steps": steps}
     (tmp_path / "health.json").write_text(json.dumps(trial), encoding="utf-8")
-    trajectory = read_terminus_atif(tmp_path)
+    trajectory = TerminusAtifReader()(tmp_path)
     scored = episode_worker._score_result(
         EpisodeResult(exit_code=0, stdout="", stderr="", trajectory=trajectory, residue=()), "health"
     )
