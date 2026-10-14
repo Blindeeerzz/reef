@@ -483,6 +483,21 @@ class ReportRecord2Record(Record2Record):
         }
 
 
+class ExclusiveReportRecord2Record(ReportRecord2Record):
+    """Every valid report trains by itself, and a report that ends owns its inference records outright. No config.
+
+    Use it when each report has its own inferences, as one scored rollout or one distillation sample does.
+    """
+
+    def __init__(self, context: PipelineContext) -> None:
+        super().__init__(context, ReportGrouping(), exclusive_sources=True)
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any], *, context: PipelineContext, environ: Mapping[str, str]) -> Self:
+        NoSettings.parse(config, plugin_class=cls)
+        return cls(context)
+
+
 def candidate_context(record_set: RecordSet) -> ReportContext:
     """Return the report of a formed candidate. A report stage forms only report candidates."""
     if not isinstance(record_set, ReportCandidate):

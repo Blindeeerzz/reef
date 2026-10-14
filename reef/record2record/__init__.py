@@ -22,7 +22,8 @@ Stages:
   record and decides nothing.
 * ``ReportRecord2Record`` (``reports.py``): reports and the inference records that
   they reference, alone or in groups. A recipe's ``ReportGrouping`` decides
-  which reports train and how they form groups.
+  which reports train and how they form groups. ``ExclusiveReportRecord2Record``
+  trains every valid report by itself, and each report owns its inference records.
 * ``JudgingRecord2Record`` (``judging.py``): records that a model judges on a
   background worker after later traffic completes them. A recipe's
   ``RecordJudging`` holds the correlation and the judge.
@@ -52,6 +53,7 @@ from reef.record2record.base import InferenceRecord2Record, PassThroughRecord2Re
 from reef.record2record.judging import JudgedSet, JudgingRecord2Record, RecordJudging
 from reef.record2record.pool import RecordSetPool
 from reef.record2record.reports import (
+    ExclusiveReportRecord2Record,
     GroupDecision,
     ReportCandidate,
     ReportContext,
@@ -64,6 +66,7 @@ from reef.record2record.sets import RecordSet, SingleRecordSet
 
 __all__ = [
     "ArrivalOrder",
+    "ExclusiveReportRecord2Record",
     "GroupDecision",
     "GroupKeyOrder",
     "InferenceRecord2Record",

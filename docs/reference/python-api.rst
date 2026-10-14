@@ -732,7 +732,9 @@ A reported-feedback recipe implements these hooks:
 The recipe owns the report policy. Its record stage is a subclass of
 ``ReportRecord2Record(context, grouping, *, exclusive_sources=False,
 ordered_groups=False)``; ``ReportRecord2Record(context, ReportGrouping())``
-trains every report by itself. A ``ReportGrouping`` runs in the
+trains every report by itself. ``ExclusiveReportRecord2Record(context)`` also
+trains every report by itself, and a report that ends owns its inference
+records. A ``ReportGrouping`` runs in the
 record-to-record stage and reads only records:
 
 .. list-table::

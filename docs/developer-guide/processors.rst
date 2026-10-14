@@ -131,6 +131,8 @@ names it, so the record never trains after a restart.
      - nothing; the default of a pipeline that trains no weights
    * - ``ReportRecord2Record``
      - report validation, groups and slots, the manual-mode limit, source release
+   * - ``ExclusiveReportRecord2Record``
+     - a ``ReportRecord2Record`` that trains every report by itself; a report that ends owns its inference records
    * - ``JudgingRecord2Record``
      - correlation, the judging worker, and the ``max_staleness`` check
    * - ``InferenceRecord2Record``

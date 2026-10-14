@@ -55,13 +55,14 @@ from reef.inference.model_config import ModelConfig
 from reef.observability import ExperimentLogger
 from reef.recipe.base import Recipe, ServedEndpoint
 from reef.recipe.errors import RecipeConfigError
+from reef.record2record import ReportRecord2Record
 from reef.runtime.executor.config import ExecutorSettings, WorkerResources, executor_settings, role_executor_settings
 from reef.storage.records import RecordStore
 from reef.surface.base import Surface
 from reef.surface.harnesses import create_harness_surface
 from reef.train.backend import STALE_RESULT_POLICIES, StaleResultPolicy
 from reef.train.cordis_backend.backend import CordisBackend
-from reef.train.cordis_backend.processor import TraceBatches, TraceRecord2Record, TraceTasks
+from reef.train.cordis_backend.processor import TraceBatches, TraceTasks
 from reef.train.cordis_backend.strategies import Promoter, Proposer
 from reef.train.pipeline import PipelineSpec
 from reef.train.trainer import Trainer
@@ -309,7 +310,7 @@ class CordisRecipe(Recipe):
 
     @classmethod
     def pipeline_spec(cls) -> PipelineSpec:
-        return PipelineSpec(record2record=TraceRecord2Record, record2task=TraceTasks, task2batch=TraceBatches)
+        return PipelineSpec(record2record=ReportRecord2Record, record2task=TraceTasks, task2batch=TraceBatches)
 
     @property
     def harness_adapter(self) -> str | None:
