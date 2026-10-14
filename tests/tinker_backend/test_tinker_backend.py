@@ -713,7 +713,7 @@ def test_a_schedule_counts_optimizer_steps_across_jobs_rejections_and_restarts(r
     assert manifest.learning_rate_schedule_state == LearningRateScheduleState(WARMUP, 3)
 
     # A rejected job leaves the incumbent and its progress: the next job repeats the same rates.
-    value.training.reject_candidate(first, decision(False))
+    value.training.reject_candidate(first)
     kept = value.training.train_candidate(scheduled(value, objective, WARMUP, step=1))
     assert client.learning_rates[-1] == pytest.approx((0.0, 2.5e-5, 5e-5))
     value.training.commit_candidate(kept.training_job_id)
