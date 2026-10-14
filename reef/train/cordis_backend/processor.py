@@ -12,8 +12,8 @@ from reef.pipeline_context import PipelineContext
 from reef.record2record import Record2Record, RecordSet, ReportContext, SingleRecordSet
 from reef.record2task import Record2Task, ReportTasks, TaskResult
 from reef.record2task.assembly import reported_task
-from reef.task2batch import BatchSettings, Task2Batch
-from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem
+from reef.task2batch import DistillBatches
+from reef.train.types import TrajectoryItem
 
 
 class TraceTasks(ReportTasks):
@@ -72,7 +72,7 @@ class InferenceTasks(Record2Task):
         return TaskResult.ready((make_trajectory((record_set.record,)),))
 
 
-class TraceBatches(Task2Batch):
+class TraceBatches(DistillBatches):
     """Batch trace tasks unmodified; the backends consume them without more processing.
 
     In ``hybrid`` a queued instruction batches with the traces that an
@@ -80,20 +80,6 @@ class TraceBatches(Task2Batch):
     reads the request beside them; in ``manual`` it runs alone.
     """
 
+    batch_label = "harness_evolve"
     supported_training_modes = frozenset({"auto", "manual", "hybrid"})
     required_request_types = frozenset(RequestType)
-
-    @classmethod
-    def from_config(
-        cls,
-        config: Mapping[str, Any],
-        *,
-        context: PipelineContext,
-        record2record: Record2Record,
-        record2task: Record2Task,
-        environ: Mapping[str, str],
-    ) -> Self:
-        return cls(context, BatchSettings.parse(config, plugin_class=cls).batch_size)
-
-    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
-        return TrainingBatch(f"{self.scenario}:harness_evolve:{batch_number}", tasks)
