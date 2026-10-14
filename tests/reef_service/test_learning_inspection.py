@@ -19,7 +19,6 @@ from reef.storage.sqlite import SQLiteScenarioStorage
 def test_history_reads_preserve_compacted_bodies_and_isolate_scenarios(tmp_path):
     async def run():
         dispatcher = build_default_dispatcher(
-            agent_record_dir=tmp_path / "records",
             scenario_storage=SQLiteScenarioStorage(tmp_path / "records"),
         )
         scenario = dispatcher.get_or_create_scenario("one")
@@ -138,7 +137,6 @@ def test_history_reads_preserve_compacted_bodies_and_isolate_scenarios(tmp_path)
 def test_record_list_filters_by_request_type(tmp_path):
     async def run():
         dispatcher = build_default_dispatcher(
-            agent_record_dir=tmp_path / "records",
             scenario_storage=SQLiteScenarioStorage(tmp_path / "records"),
         )
         scenario = dispatcher.get_or_create_scenario("one")

@@ -959,7 +959,7 @@ def test_capacity_loss_skips_orphan_report_and_remains_visible_after_restart(tmp
         records.append(positioned_inference(1))
         records.append(positioned_report(2, "i1", 1.0))
         # Keep the report but evict its input before the processor sees either.
-        with records._transaction("math", write=False) as connection:
+        with records._transaction(write=False) as connection:
             keep_bytes = connection.exec_driver_sql(
                 "SELECT body_bytes FROM agent_record WHERE agent_record_id='r2'"
             ).scalar_one()

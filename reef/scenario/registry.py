@@ -9,8 +9,10 @@ resolution and uses the registry for lookups.
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from threading import Lock, RLock
 from typing import Any
@@ -26,8 +28,9 @@ from reef.observability import ExperimentTracker, NullExperimentTracker
 from reef.recipe.base import Recipe
 from reef.scenario.factory import ScenarioFactory
 from reef.scenario.scenario import Scenario
-from reef.storage.model_config import archive_model_config, read_model_config, write_model_config
 from reef.storage.scenario import ScenarioStorage
+
+logger = logging.getLogger(__name__)
 
 
 class ReplacedScenarioCloser(ABC):
@@ -60,12 +63,10 @@ class ScenarioRegistry:
         backend_factory: RepositoryBackendFactory,
         *,
         local_artifact_dir: Path | None = None,
-        agent_record_dir: Path | None = None,
         allow_implicit_creation: bool = True,
         experiment_tracker: ExperimentTracker | None = None,
         scenario_storage: ScenarioStorage,
     ) -> None:
-        self._agent_record_dir = None if agent_record_dir is None else Path(agent_record_dir)
         self._model_configs: dict[str, ModelConfig] = {}
         self._storage = scenario_storage
         self._scenario_factory = ScenarioFactory(
@@ -82,8 +83,6 @@ class ScenarioRegistry:
         self._lock = Lock()
         #: Every training scenario in binding order; the first is the one a single-scenario runtime binds.
         self._training_scenarios: list[str] = []
-        # The mode a person selected per scenario; a reload in this process applies it again, a restart does not.
-        self._training_modes: dict[str, str] = {}
         self._preload_errors: dict[str, str] = {}
         self.replaced_closer: ReplacedScenarioCloser = CloseReplacedAtOnce()
         self._allow_implicit_creation = allow_implicit_creation
@@ -222,12 +221,12 @@ class ScenarioRegistry:
             return lock
 
     def set_training_mode(self, scenario: str, training_mode: str) -> Scenario:
-        """Select an existing scenario's mode and keep it for the reloads this process runs."""
+        """Select an existing scenario's mode and store it, so reloads and restarts apply it again."""
         with self.lock_for(scenario):
             current = self.require(scenario)
             current.set_training_mode(training_mode)
-            with self._lock:
-                self._training_modes[scenario] = training_mode
+            settings = self._storage.read_settings(scenario)
+            self._storage.write_settings(scenario, replace(settings, training_mode=training_mode))
             return current
 
     def configure_model(
@@ -242,7 +241,10 @@ class ScenarioRegistry:
                 candidate = ModelConfig.from_value(value)
                 self._recipe.with_model_config(candidate)
                 current = self._model_config(scenario)
-                write_model_config(self._agent_record_dir, scenario, value)
+                # A validated value is an object or null.
+                stored = value if isinstance(value, Mapping) else None
+                settings = self._storage.read_settings(scenario)
+                self._storage.write_settings(scenario, replace(settings, model_config=stored))
                 current.runtime = candidate.runtime
             return self._resolve(scenario, release_id)
 
@@ -256,14 +258,7 @@ class ScenarioRegistry:
             recovered = self._scenario_factory.load_or_create(
                 scenario, None, model_config=self._model_config(scenario)
             )
-            with self._lock:
-                training_mode = self._training_modes.get(scenario)
-            if training_mode is not None and recovered.training_mode != training_mode:
-                try:
-                    recovered.set_training_mode(training_mode)
-                except Exception:
-                    recovered.close()
-                    raise
+            self._apply_stored_training_mode(recovered)
             with self._lock:
                 dropped = self._scenarios.get(scenario)
                 self._scenarios[scenario] = recovered
@@ -279,14 +274,13 @@ class ScenarioRegistry:
 
         The training thread's list loses the name first, so a step already
         in flight finds no scenario to commit to and no durable state to
-        reload; the mode a person selected and any preload error go with it.
-        Call under ``lock_for(scenario)``.
+        reload; any preload error goes with it. The stored settings stay
+        until ``archive_store``. Call under ``lock_for(scenario)``.
         """
         with self._lock:
             dropped = self._scenarios.pop(scenario, None)
             self._training_scenarios = [name for name in self._training_scenarios if name != scenario]
             self._model_configs.pop(scenario, None)
-            self._training_modes.pop(scenario, None)
             self._preload_errors.pop(scenario, None)
         return dropped
 
@@ -302,8 +296,7 @@ class ScenarioRegistry:
             self._scenario_locks.pop(scenario, None)
 
     def archive_store(self, scenario: str) -> tuple[str, ...]:
-        archived = self._storage.archive(scenario)
-        return (*archived, *archive_model_config(self._agent_record_dir, scenario))
+        return self._storage.archive(scenario)
 
     def loaded_scenarios(self) -> tuple[Scenario, ...]:
         """Return the currently loaded scenario instances as a tuple."""
@@ -312,9 +305,32 @@ class ScenarioRegistry:
 
     def _model_config(self, scenario: str) -> ModelConfig:
         if scenario not in self._model_configs:
-            value = read_model_config(self._agent_record_dir, scenario)
+            value = self._storage.read_settings(scenario).model_config
             self._model_configs[scenario] = ModelConfig.from_value(value)
         return self._model_configs[scenario]
+
+    def _apply_stored_training_mode(self, instance: Scenario) -> None:
+        """Select the mode a person stored for the scenario on a newly built instance.
+
+        A mode the recipe no longer supports keeps the recipe's default, so the
+        scenario still loads and a person can select another mode. Any other
+        failure closes the instance.
+        """
+        training_mode = self._storage.read_settings(instance.name).training_mode
+        if training_mode is None or instance.training_mode == training_mode:
+            return
+        try:
+            instance.set_training_mode(training_mode)
+        except NotImplementedError as exc:
+            logger.warning(
+                "Scenario %r keeps its default training mode: the stored mode %r is not supported (%s)",
+                instance.name,
+                training_mode,
+                exc,
+            )
+        except BaseException:
+            instance.close()
+            raise
 
     def _resolve(
         self,
@@ -329,6 +345,7 @@ class ScenarioRegistry:
         current = self._scenario_factory.load_or_create(
             scenario, release_id, model_config=self._model_config(scenario)
         )
+        self._apply_stored_training_mode(current)
         training_runtime = current.training_runtime
         with self._lock:
             shared_runtime = training_runtime is not None and training_runtime.concurrent_training_scenarios

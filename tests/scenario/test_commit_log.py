@@ -430,7 +430,6 @@ def build_training_dispatcher(
         ),
         backend_factory,
         local_artifact_dir=tmp_path / "staged",
-        agent_record_dir=agent_record_dir,
         scenario_storage=SQLiteScenarioStorage(agent_record_dir),
     )
 
@@ -502,7 +501,6 @@ def _build_saved_artifact_dispatcher(tmp_path, *, agent_record_dir=None):
         _SavedArtifactRecipe(backend=backend),
         InMemoryRepositoryBackend.factory(initial, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "staged",
-        agent_record_dir=agent_record_dir,
         scenario_storage=SQLiteScenarioStorage(agent_record_dir),
     )
     return dispatcher, backend
@@ -655,7 +653,6 @@ def test_recovery_resumes_record_progress_without_retraining(tmp_path) -> None:
             recipe(runtime),
             backend_factory,
             local_artifact_dir=tmp_path / "staged",
-            agent_record_dir=agent_record_dir,
             scenario_storage=SQLiteScenarioStorage(agent_record_dir),
         )
 
@@ -1022,7 +1019,6 @@ def build_harness_evolve_dispatcher(
         recipe,
         backend_factory,
         local_artifact_dir=tmp_path / "staged",
-        agent_record_dir=agent_record_dir,
         scenario_storage=SQLiteScenarioStorage(agent_record_dir),
     )
 

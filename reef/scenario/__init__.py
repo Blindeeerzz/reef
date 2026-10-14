@@ -7,7 +7,7 @@ The modules follow these responsibilities:
   deployment-selected admission, surface, runtime, and inference backend.
 - ``registry`` owns loaded instances, per-scenario locks, model updates, and
   scenario archival coordination. It caches concrete ``runtime.model_config.ModelConfig``
-  instances and calls ``storage.model_config`` functions for private JSON files.
+  instances and keeps each scenario's settings through the injected storage.
   Recipes and the factory receive only the current scenario's configuration.
 - ``factory`` registers the base artifact, validates release selectors,
   opens storage, reconciles committed state, synchronizes and

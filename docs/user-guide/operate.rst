@@ -164,23 +164,39 @@ Reef retries synchronization; if it still fails, the new commit stops before
 publishing or writing its commit record. A conflict never overwrites the other
 writer's head. Restart also synchronizes the head before loading the scenario.
 
-The record store, commit logs, and repository live under ``.reef/`` by default (``agent_record_dir``, ``artifact_repository``, ``artifact_work_dir``, ``artifact_cache_dir``). On ephemeral storage none of the guarantees above hold past its loss. Each scenario needs one Reef writer; run a second deployment on other ports and storage paths rather than two services on one store. `State model <../advanced_topics/state-model.rst#commit-ordering>`__ describes the commit ordering behind the table. ``DELETE /reef/scenarios/{scenario}`` retires a scenario: its record store, commit log, proposal inbox and step records move under an ``archived/`` sibling and its repository ref is renamed into ``refs/reef/archived/``, so a name can be reused without the old chain. A scenario whose weight training job is out at its backend answers 409 until the job has landed.
+The scenario storage and the repository live under ``.reef/`` by default (``agent_record_dir``, ``artifact_repository``, ``artifact_work_dir``, ``artifact_cache_dir``). On ephemeral storage none of the guarantees above hold past its loss. Each scenario needs one Reef writer; run a second deployment on other ports and storage paths rather than two services on one store. `State model <../advanced_topics/state-model.rst#commit-ordering>`__ describes the commit ordering behind the table. ``DELETE /reef/scenarios/{scenario}`` retires a scenario: the storage backend archives its records, commits and settings, its proposal inbox and step records move under an ``archived/`` sibling and its repository ref is renamed into ``refs/reef/archived/``, so a name can be reused without the old chain. A scenario whose weight training job is out at its backend answers 409 until the job has landed.
 
-The bundled ``SQLiteScenarioStorage`` combines SQLite records with a
-``CommitLogScenarioStore`` for JSONL commits, preserving existing databases and
-log formats. Embedded
-deployments must supply a ``ScenarioStorage`` subclass through
-``Dispatcher(..., scenario_storage=...)``; the `Python storage contract
-<../reference/python-api.rst#scenario-stores>`__ describes the required commit,
-recovery, and lifecycle behavior. The storage service also performs archival
-and record retention. Direct Python construction uses ``SQLiteRecordStore``
-for SQLite records and requires ``store=...`` for a ``Scenario``; see the
-`record API <../reference/python-api.rst#record-storage-and-audit>`__ for migration.
+Choose the storage backend
+--------------------------
 
-Choose the record backend in the deployment's ``storage`` section. SQLite remains
-the default and requires no new settings. To use PostgreSQL, install the driver
-with ``uv pip install 'reef-infra[postgres]'`` (or ``uv pip install -e '.[postgres]'``
-from a checkout), then configure:
+The storage backend keeps every scenario's records, commits, and settings. The
+settings are the scenario's model configuration (``POST
+/reef/scenarios/{scenario}/update`` with ``model``) and its selected training
+mode (the same route with ``training_mode``). A restart applies the stored
+mode again. If the recipe no longer supports that mode, the scenario loads in
+the recipe's default mode, Reef logs a warning, and you can select another mode.
+
+Select the backend with ``storage.record-backend``:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Value
+     - Where scenario state is kept
+   * - ``sqlite`` (default)
+     - One SQLite database per scenario (records and settings) and one JSONL
+       commit log per scenario, both under ``agent_record_dir``
+   * - ``postgres``
+     - Tables in one PostgreSQL schema; ``agent_record_dir`` holds no scenario state
+   * - a plugin reference
+     - The ``ScenarioStorage`` subclass that the reference names
+
+A SQLite database that holds a model configuration is readable by its owner
+only, because the configuration can hold an upstream ``api_key``. Responses
+never return the key; they report only ``has_api_key``.
+
+To use PostgreSQL, install the driver with ``uv pip install 'reef-infra[postgres]'``
+(or ``uv pip install -e '.[postgres]'`` from a checkout), then configure:
 
 .. code-block:: yaml
 
@@ -198,15 +214,67 @@ first startup. Give independent deployments distinct schemas (default:
 ``reef_records``). PostgreSQL 14 and newer are supported. Connection strings
 using ``postgresql+psycopg://`` are also accepted.
 
-``PostgresRecordStore`` uses the same SQL record operations as SQLite. A shared
-connection pool returns connections after each operation. Archived records stay
-in PostgreSQL under their old storage identifier; a recreated scenario gets a
-new identifier. The same retention settings apply across all active and archived
-stores in the configured schema, while preserving active records and retry hashes.
+A shared connection pool returns connections after each operation. Archived
+scenarios stay in PostgreSQL under their old storage identifier; a recreated
+scenario gets a new identifier. The same retention settings apply across all
+active and archived stores in the configured schema, while preserving active
+records and retry hashes.
 
-``agent_record_dir`` still holds local JSONL commit logs and scenario settings;
-keep it on persistent storage alongside the artifact configuration. PostgreSQL
-record storage does not make scenario commits or artifacts remote, and each
-scenario still needs one Reef writer. Changing backends does not migrate existing
-records or commit history. Use a fresh deployment directory/schema for a new
-backend; moving an existing deployment requires a separate data migration.
+Earlier versions kept PostgreSQL commit logs (``postgres-<id>.commits.jsonl``)
+and model configuration files (``<hash>-model.json``) under ``agent_record_dir``.
+On the first start of this version, Reef imports them into the database and
+moves them under ``agent_record_dir/archived/imported-*``. A SQLite deployment
+imports its model configuration files into the scenario databases the same
+way; its commit logs stay where they are. Changing from one backend to another
+does not migrate records or commit history. Use a fresh deployment directory
+or schema for a new backend.
+
+A plugin backend is a class that inherits ``reef.storage.scenario.ScenarioStorage``
+and implements its abstract methods, including the ``from_config`` class method.
+Name it as ``package.module:ClassName``, or give its configuration as well:
+
+.. code-block:: yaml
+
+   storage:
+     record-backend:
+       module: my_package.storage:ObjectStoreScenarioStorage
+       config:
+         bucket: reef-state
+     agent-record-dir: .reef/agent-record
+
+Reef calls ``from_config(config, directory=...)`` with the ``config`` mapping and
+``agent_record_dir``. The `Python storage contract
+<../reference/python-api.rst#scenario-stores>`__ describes the required commit,
+recovery, settings, and lifecycle behavior. Embedded deployments pass a
+``ScenarioStorage`` instance through ``Dispatcher(..., scenario_storage=...)``
+instead.
+
+Each scenario still needs one Reef writer, whichever backend you choose.
+
+Back up a deployment
+--------------------
+
+A backup must hold the scenario state and the artifact repository
+(``storage.artifact_repository``). The other local directories,
+``artifact_work_dir`` and ``artifact_cache_dir``, are caches that Reef rebuilds
+from the repository.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Backend
+     - What to back up
+   * - ``sqlite``
+     - ``agent_record_dir`` and the artifact repository, copied while the
+       service is stopped
+   * - ``postgres``
+     - A dump of the configured schema and the artifact repository; with a
+       remote ``artifact_repository``, the database dump and the Git remote
+   * - a plugin
+     - The plugin's own store and the artifact repository
+
+With PostgreSQL and a remote artifact repository, a new host with the same
+configuration resumes every scenario from the database and the Git remote. A
+recipe's own directories, such as Reefine's ``step_record_dir`` and
+``proposals_dir``, are not scenario storage; keep them on a persistent volume
+if the recipe uses them.

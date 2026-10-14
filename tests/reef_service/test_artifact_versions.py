@@ -154,7 +154,6 @@ def dispatcher(tmp_path, *, checkpoint_every: int = 1, experiment_tracker=None):
         ),
         backend_factory,
         local_artifact_dir=tmp_path / "staged",
-        agent_record_dir=tmp_path / "agent-record",
         experiment_tracker=experiment_tracker,
         scenario_storage=SQLiteScenarioStorage(tmp_path / "agent-record"),
     )
@@ -294,7 +293,6 @@ def test_recovery_adopts_a_lost_rollback_record_without_treating_it_as_training(
         ),
         backend_factory,
         local_artifact_dir=tmp_path / "restarted-staged",
-        agent_record_dir=tmp_path / "agent-record",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "agent-record"),
     )
     recovered = restarted.get_or_create_scenario("math")
@@ -323,7 +321,6 @@ def test_older_versions_and_version_catalog_survive_restart(tmp_path) -> None:
         TestPolicyRecipe(**runtime_bindings(restarted_runtime), checkpoint_strategy=EveryNVersions(1)),
         backend_factory,
         local_artifact_dir=tmp_path / "restarted-staged",
-        agent_record_dir=tmp_path / "agent-record",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "agent-record"),
     )
     recovered = restarted.get_or_create_scenario("math")

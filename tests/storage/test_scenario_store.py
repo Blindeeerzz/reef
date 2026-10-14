@@ -20,6 +20,7 @@ from reef.core.errors import ReefError
 from reef.core.records_types import AgentRecord, RequestType
 from reef.storage.commit_log import CommitLog, CommitLogScenarioStore
 from reef.storage.commits import CommitRecord
+from reef.storage.postgres import PostgresScenarioStorage
 from reef.storage.scenario import ScenarioStoreConflict
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
 
@@ -47,13 +48,26 @@ def commit(step: int = 1, *, scenario: str = "math") -> CommitRecord:
     )
 
 
-@pytest.fixture(params=[False, True], ids=["memory", "durable"])
+@pytest.fixture(params=["memory", "durable", "postgres"])
 def store(request, tmp_path):
-    factory = SQLiteScenarioStorage(tmp_path if request.param else None)
+    if request.param == "postgres":
+        url, schema = request.getfixturevalue("postgres_config")
+        factory = PostgresScenarioStorage(url, tmp_path, schema=schema)
+    else:
+        factory = SQLiteScenarioStorage(tmp_path if request.param == "durable" else None)
     session = factory.open("math")
     yield session
     session.close()
     factory.close()
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+def open_storage(request, tmp_path):
+    """Open independent storages over one durable location."""
+    if request.param == "postgres":
+        url, schema = request.getfixturevalue("postgres_config")
+        return lambda: PostgresScenarioStorage(url, tmp_path, schema=schema)
+    return lambda: SQLiteScenarioStorage(tmp_path)
 
 
 def test_commit_is_fenced_and_preserves_readable_records(store):
@@ -261,9 +275,9 @@ def test_existing_initial_step_is_fenced_without_history():
         session.commit_step(expected_step=3, commit=commit(4))
 
 
-def test_conflicting_sessions_have_only_one_winner(tmp_path):
-    first_factory = SQLiteScenarioStorage(tmp_path)
-    second_factory = SQLiteScenarioStorage(tmp_path)
+def test_conflicting_sessions_have_only_one_winner(open_storage):
+    first_factory = open_storage()
+    second_factory = open_storage()
     with closing(first_factory.open("math")) as first, closing(second_factory.open("math")) as second:
         barrier = Barrier(2)
 
@@ -285,8 +299,8 @@ def test_conflicting_sessions_have_only_one_winner(tmp_path):
     second_factory.close()
 
 
-def test_session_refreshes_cached_history_after_another_writer(tmp_path):
-    factory = SQLiteScenarioStorage(tmp_path)
+def test_session_refreshes_cached_history_after_another_writer(open_storage):
+    factory = open_storage()
     with closing(factory.open("math")) as first, closing(factory.open("math")) as second:
         first.commit_step(expected_step=0, commit=commit())
         assert first.history() == (commit(),)

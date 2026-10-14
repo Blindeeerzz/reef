@@ -366,7 +366,6 @@ class Dispatcher:
         backend_factory: RepositoryBackendFactory,
         *,
         local_artifact_dir: Path | None = None,
-        agent_record_dir: Path | None = None,
         allow_implicit_creation: bool = True,
         experiment_tracker: ExperimentTracker | None = None,
         scenario_storage: ScenarioStorage,
@@ -382,7 +381,6 @@ class Dispatcher:
             recipe,
             backend_factory,
             local_artifact_dir=local_artifact_dir,
-            agent_record_dir=agent_record_dir,
             scenario_storage=scenario_storage,
             allow_implicit_creation=allow_implicit_creation,
             experiment_tracker=self._experiment_tracker,
@@ -467,8 +465,8 @@ class Dispatcher:
 
         Under the scenario's lock, so no accept or commit interleaves: the
         training thread and the local worker lose the name, the loaded
-        instance closes, the records and commit log move under
-        ``agent_record_dir/archived``, the recipe's own directories move
+        instance closes, the storage archives the records, commits and
+        settings, the recipe's own directories move
         beside themselves, and the repository registration is archived so
         the name is free. Artifacts other scenarios share stay.
         """
@@ -1550,7 +1548,6 @@ def build_default_dispatcher(
     backend_factory: RepositoryBackendFactory | None = None,
     checkpoint_strategy: CheckpointStrategy | None = None,
     local_artifact_dir: Path | None = None,
-    agent_record_dir: Path | None = None,
     scenario_storage: ScenarioStorage,
 ) -> Dispatcher:
     """Build a Dispatcher serving the core record-only ``recipe``.
@@ -1574,6 +1571,5 @@ def build_default_dispatcher(
         recipe,
         backend_factory,
         local_artifact_dir=local_artifact_dir,
-        agent_record_dir=agent_record_dir,
         scenario_storage=scenario_storage,
     )

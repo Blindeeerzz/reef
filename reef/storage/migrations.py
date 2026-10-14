@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import shutil
 import time
+import uuid
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
@@ -124,3 +129,39 @@ def migrate_record_storage(connection: Connection, records: Table, consumption: 
             ):
                 operations.drop_index(index_name, table_name=records.name, schema=schema)
         operations.drop_column(records.name, "compacted_at", schema=schema)
+
+
+def legacy_model_config_files(directory: Path) -> tuple[tuple[str, Path], ...]:
+    """Model configuration files that older versions kept beside the records.
+
+    Each file is named after its scenario key, the SHA-256 of the scenario name.
+    Returns ``(key, path)`` pairs in name order.
+    """
+    return tuple(
+        (path.name.removesuffix("-model.json"), path)
+        for path in sorted(directory.glob("*-model.json"))
+        if re.fullmatch(r"[0-9a-f]{64}-model\.json", path.name)
+    )
+
+
+def read_legacy_model_config(path: Path) -> Mapping[str, object] | None:
+    """Read one legacy model configuration file; ``null`` selected the recipe's model."""
+    value = json.loads(path.read_text())
+    if value is not None and not isinstance(value, dict):
+        raise ValueError(f"model configuration file {path} must hold an object or null")
+    return value
+
+
+def archive_imported_files(directory: Path, paths: Sequence[Path]) -> tuple[str, ...]:
+    """Move files whose content is now in the storage backend under ``archived/``; return the new locations."""
+    if not paths:
+        return ()
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    destination = directory / "archived" / f"imported-{stamp}-{uuid.uuid4().hex}"
+    destination.mkdir(parents=True, exist_ok=True)
+    moved = []
+    for path in paths:
+        target = destination / path.name
+        shutil.move(str(path), str(target))
+        moved.append(str(target))
+    return tuple(moved)

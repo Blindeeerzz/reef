@@ -41,12 +41,14 @@ returns the key. An invalid update leaves the current settings unchanged.
 Model overrides require an inference-only runtime, since a training runtime
 owns the weights it serves.
 
-Settings are atomically saved beside the scenario record store in a private
-file with mode ``0600``. Keep that directory when restarting a deployment.
-Without a durable record directory, settings last for the process lifetime.
-Malformed saved settings fail scenario recovery. They do not silently select
-the deployment model. Scenario deletion archives this file with its records.
-Keys never enter published artifacts, algorithm state or API receipts.
+Settings are saved in the deployment's storage backend with the scenario's
+records and commits. With SQLite, they are in the scenario's database file,
+which only its owner can read. With PostgreSQL, they are in the deployment
+schema. Without a durable record directory, settings last for the process
+lifetime. Invalid saved settings fail scenario recovery. They do not silently
+select the deployment model. Scenario deletion archives the settings with the
+records. Keys never enter published artifacts, algorithm state or API receipts.
+See `Choose the storage backend <operate.rst#choose-the-storage-backend>`__.
 
 Harness evolution
 -----------------

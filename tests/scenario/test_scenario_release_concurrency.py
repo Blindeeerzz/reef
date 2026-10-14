@@ -90,7 +90,6 @@ def local_scenario(tmp_path):
         _LocalRecipe(backend=backend),
         InMemoryRepositoryBackend.factory(initial, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "staged",
-        agent_record_dir=tmp_path / "records",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "records"),
     )
     scenario = dispatcher.get_or_create_scenario("math")
