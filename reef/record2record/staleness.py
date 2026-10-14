@@ -30,7 +30,9 @@ def stale_sets(record_sets: Sequence[RecordSet], max_staleness: int) -> tuple[Re
         return ()
     newest = max(
         record_sets,
-        key=lambda record_set: record_set.arrival_index if record_set.source_index is None else record_set.source_index,
+        key=lambda record_set: (
+            record_set.arrival_index if record_set.source_index is None else record_set.source_index
+        ),
     )
     reference = canonical_runtime_load_id(newest.runtime_load_id)
     if reference is None:

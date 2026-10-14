@@ -344,7 +344,9 @@ SLOT_GROUP_STAGES = PipelineSpec(
 ORDERED_MIX_STAGES = PipelineSpec(
     record2record=OrderedMixRecord2Record, record2task=AssembledTasks, task2batch=SlotBatches
 )
-DISTILL_STAGES = PipelineSpec(record2record=ExclusiveReportRecord2Record, record2task=DistillTasks, task2batch=DistillBatches)
+DISTILL_STAGES = PipelineSpec(
+    record2record=ExclusiveReportRecord2Record, record2task=DistillTasks, task2batch=DistillBatches
+)
 #: The harness-evolution pipeline of reported traces.
 TRACE_STAGES = PipelineSpec(record2record=ReportRecord2Record, record2task=TraceTasks, task2batch=TraceBatches)
 
