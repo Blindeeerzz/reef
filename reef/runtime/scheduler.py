@@ -481,16 +481,12 @@ class TrainingExecution:
             raise RuntimeError("training job checkpoint path is not configured")
         marker = self._store.read()
         disposition = marker_disposition(marker, job_id)
-        if disposition == "conflict":
-            if marker is None:
-                raise RuntimeError("conflicting training disposition has no marker")
+        if marker is not None and disposition == "conflict":
             raise RuntimeError(
                 f"training marker is {marker['status']} for job {marker['job_id']}, not this batch's job "
                 f"{job_id}; operator recovery required (see Training-step coordination in the executors guide)"
             )
-        if disposition != "fresh":
-            if marker is None:
-                raise RuntimeError("replayed training disposition has no marker")
+        if marker is not None and disposition != "fresh":
             return marker_result(marker) if marker["status"] == "COMPLETE" else marker_checkpoint_result(marker)
         admission_metrics: Mapping[str, Any] = {}
         if self._context is not None:
