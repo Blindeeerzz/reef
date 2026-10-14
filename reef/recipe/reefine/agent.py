@@ -8,7 +8,7 @@ from reef.train.reefine.agent import AGENT_TOOLS, TOOLS_ENTRY_ID, TRIAL_DRIVER
 from reef.train.reefine.agent import AgentProposer as Implementation
 from reef.train.reefine.agent import AgentRun, WorkspaceTools
 from reef.train.reefine.agent import agent_rules as render_agent_rules
-from reef.train.reefine.agent import launch_pi, workspace_mutations, write_workspace
+from reef.train.reefine.agent import launch_pi, rendered_files, workspace_mutations, write_workspace
 from reef.train.reefine.multimodal import MultimodalProvider
 
 AGENT_RULES = Path(__file__).with_name("agent_rules.md")
@@ -40,6 +40,7 @@ __all__ = [
     "launch_pi",
     "propose",
     "render_agent_rules",
+    "rendered_files",
     "workspace_mutations",
     "write_workspace",
 ]
