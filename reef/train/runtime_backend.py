@@ -15,7 +15,6 @@ from reef.runtime.interfaces import (
     PreparedTrainingStep,
     RuntimeContractError,
     StaleCandidate,
-    TrainingJobResult,
     TrainingRuntime,
 )
 from reef.runtime.scheduler import JOB_OWNER_KEY, RuntimeScheduler
@@ -186,9 +185,6 @@ class RuntimeCandidateBackend(CandidateBackend):
         scenario_step: int,
     ) -> PreparedTrainingStep:
         return self.scheduler.prepare_training_step(batch, objective, algorithm_state, scheduling, scenario_step)
-
-    def execute_training_job(self, payload: Mapping[str, Any]) -> TrainingJobResult:
-        return self.scheduler.execute_training_job(payload)
 
     def train_candidate(self, payload: Mapping[str, Any]) -> ModelCandidate:
         return self.scheduler.train_candidate(payload)

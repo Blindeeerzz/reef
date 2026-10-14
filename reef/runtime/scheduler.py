@@ -618,37 +618,6 @@ class RuntimeScheduler:
             ),
         )
 
-    def execute_training_job(self, payload: Mapping[str, Any]) -> TrainingJobResult:
-        """Execute a native checkpoint job and stage its uncommitted weights."""
-        with self._colocated_pause():
-            checkpoint = self._validated_result(self.training_runtime.execute_training_job(payload))
-        if checkpoint.outcome == "stale":
-            self.operations.increment("stale_batches_total")
-        if checkpoint.outcome in {"stale", "storage_blocked"}:
-            self._resume_if_colocated()
-            return checkpoint
-        if checkpoint.outcome == "complete":
-            if (self.training_runtime.training_job_status() or {}).get("commit_acknowledged") is True:
-                self.inference_runtime.resume_admission()
-            else:
-                self.inference_runtime.pause_admission()
-            return checkpoint
-        if checkpoint.outcome != "checkpoint" or checkpoint.training_job_id is None:
-            raise TrainingRuntimeError("deferred weight updates require a checkpoint with a training_job_id")
-        if not self._colocated:
-            # Training and checkpointing may overlap inference on disjoint
-            # GPUs. Close admission only for the short serving-weight update.
-            self.inference_runtime.pause_admission()
-        with self.operations.measure("weight_sync"):
-            updated = self.inference_runtime.resume_weight_update(checkpoint.training_job_id)
-        return TrainingJobResult(
-            "complete",
-            updated.runtime_load_id,
-            checkpoint.checkpoint_path,
-            metrics=checkpoint.metrics,
-            training_job_id=checkpoint.training_job_id,
-        )
-
     def train_candidate(self, payload: Mapping[str, Any]) -> ModelCandidate:
         """Train a checkpoint, preserving the currently published source version."""
         current = self.inference_runtime.current_runtime_load_id()
@@ -804,12 +773,6 @@ class RuntimeScheduler:
             return True
         self.inference_runtime.pause_admission()
         return False
-
-    @staticmethod
-    def _validated_result(result: Any) -> TrainingJobResult:
-        if not isinstance(result, TrainingJobResult):
-            raise TrainingRuntimeError(f"train group handle returned invalid training result: {type(result).__name__}")
-        return result
 
 
 def pending_job_identity(training_job: Mapping[str, Any]) -> tuple[int, str]:

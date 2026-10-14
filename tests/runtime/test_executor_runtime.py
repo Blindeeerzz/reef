@@ -142,8 +142,7 @@ def test_training_operations_target_only_the_selected_coordinator():
         )
     )
     try:
-        result = runtime.execute_training_job({"job": "test"})
-        assert result.outcome == "complete"
+        runtime.activate_candidate(runtime.train_candidate({"job": "test"}))
         assert worker0.calls == []
         assert worker1.calls == ["execute", "update_weights"]
     finally:
