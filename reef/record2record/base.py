@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Hashable, Mapping, Sequence
+from collections.abc import Hashable, Mapping
 from dataclasses import replace
 from enum import Enum
 from typing import Any, Self
@@ -14,7 +14,6 @@ from typing import Any, Self
 from reef.core.plugins import NoSettings, Plugin, PluginConfigError
 from reef.core.records_types import AgentRecord, RequestType
 from reef.pipeline_context import PipelineContext
-from reef.record2record.eligibility import EligibilityCheck
 from reef.record2record.pool import RecordSetPool
 from reef.record2record.selection import SelectionPolicy
 from reef.record2record.sets import RecordSet, SingleRecordSet
@@ -40,8 +39,8 @@ class Record2Record(ABC, Plugin):
     the result back (``settle``). The stage holds each set that has tasks in
     its ``pool`` until the pipeline reserves it for a batch; the pipeline
     reserves and consumes through the pool, and the stage ends the consumed
-    sets (``consume``). The pool applies the stage's selection policy and
-    eligibility checks. The stage never calls the pipeline.
+    sets (``consume``). The pool applies the stage's selection policy. The
+    stage never calls the pipeline.
 
     A record that the stage ends, for example a record that can no longer
     train, appears in ``releasable_record_ids``. The trainer adds those IDs to
@@ -65,9 +64,9 @@ class Record2Record(ABC, Plugin):
         """
         raise PluginConfigError(f"{cls.__name__} cannot be built from a deployment file: it has no from_config")
 
-    def __init__(self, selection: SelectionPolicy | None = None, checks: Sequence[EligibilityCheck] = ()) -> None:
+    def __init__(self, selection: SelectionPolicy | None = None) -> None:
         #: The held sets. The pipeline reserves a batch from it and consumes the reservation.
-        self.pool = RecordSetPool(selection, checks)
+        self.pool = RecordSetPool(selection)
         #: Formed sets that ended after the task stage saw them. The pipeline forgets their tasks.
         self.ended_set_ids: set[Hashable] = set()
         #: Records that ended and that no live set references, until their release.
@@ -96,7 +95,7 @@ class Record2Record(ABC, Plugin):
         """Keep or end a formed set from what the task stage made of it.
 
         ``runtime_load_id`` is the version of the set's training data, when the
-        task stage knows it. The eligibility checks read it.
+        task stage knows it. A stage's staleness check reads it.
         """
         if status is TaskStatus.READY:
             self.accept(record_set, runtime_load_id)

@@ -34,14 +34,14 @@ Stages:
 Components of the pool:
 
 * ``RecordSet`` (``sets.py``): the base of every set, with the fields that the
-  pool, the selection policies, and the eligibility checks read.
+  pool, the selection policies, and the staleness check read.
 * ``RecordSetPool`` (``pool.py``): the held sets, and the reserved batch.
 * ``SelectionPolicy`` (``selection.py``): the order in which sets go into a
   batch. ``ArrivalOrder`` takes the oldest first. ``GroupKeyOrder`` takes
   ungrouped sets, then groups by key.
-* ``EligibilityCheck`` (``eligibility.py``): finds held sets that can no
-  longer train. ``StalenessCheck`` drops sets that are more than
-  ``max_staleness`` versions behind the newest held set.
+* ``stale_sets`` (``staleness.py``): finds held sets that are more than
+  ``max_staleness`` versions behind the newest held set. ``JudgingRecord2Record``
+  drops them.
 
 The package depends only on ``reef.core``, ``reef.runtime.interfaces``,
 ``reef.observability``, ``reef.background_jobs``, and ``reef.pipeline_context``. Thus record-to-task and
@@ -49,7 +49,6 @@ the trainer can both use it.
 """
 
 from reef.record2record.base import InferenceRecord2Record, PassThroughRecord2Record, Record2Record, TaskStatus
-from reef.record2record.eligibility import EligibilityCheck, IneligibleSet, StalenessCheck
 from reef.record2record.judging import JudgedSet, JudgingRecord2Record, RecordJudging
 from reef.record2record.pool import RecordSetPool
 from reef.record2record.reports import (
@@ -65,10 +64,8 @@ from reef.record2record.sets import RecordSet, SingleRecordSet
 
 __all__ = [
     "ArrivalOrder",
-    "EligibilityCheck",
     "GroupDecision",
     "GroupKeyOrder",
-    "IneligibleSet",
     "InferenceRecord2Record",
     "JudgedSet",
     "JudgingRecord2Record",
@@ -85,6 +82,5 @@ __all__ = [
     "RoundRecord2Record",
     "SelectionPolicy",
     "SingleRecordSet",
-    "StalenessCheck",
     "TaskStatus",
 ]

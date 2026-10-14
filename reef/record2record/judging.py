@@ -24,9 +24,9 @@ from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Faile
 from reef.core.records_types import AgentRecord
 from reef.pipeline_context import PipelineContext
 from reef.record2record.base import Record2Record
-from reef.record2record.eligibility import StalenessCheck
 from reef.record2record.selection import ArrivalOrder
 from reef.record2record.sets import RecordSet
+from reef.record2record.staleness import stale_sets
 
 
 class RecordJudging(BackgroundJobRunner, ABC):
@@ -86,8 +86,8 @@ class JudgingRecord2Record(Record2Record):
 
     Every record is in exactly one state: tracked, in flight, held in the
     pool, or terminal. Terminal records are released from memory and never
-    batch. Judged sets wait in the order that their judgments arrived. A
-    ``StalenessCheck`` drops sets that are more than ``max_staleness``
+    batch. Judged sets wait in the order that their judgments arrived. The
+    staleness check (``stale_sets``) drops sets that are more than ``max_staleness``
     versions behind the newest one (the context's ``max_staleness``), by record arrival, while no batch is out:
     continual serving advances the version every step, and stale sets would
     otherwise block the queue.
@@ -96,7 +96,8 @@ class JudgingRecord2Record(Record2Record):
     """
 
     def __init__(self, context: PipelineContext, judging: RecordJudging, worker: BackgroundJobWorker | None) -> None:
-        super().__init__(ArrivalOrder(), (StalenessCheck(context.max_staleness),))
+        super().__init__(ArrivalOrder())
+        self.max_staleness = context.max_staleness
         self.judging = judging
         self.worker = worker
         self.tracked: dict[str, AgentRecord] = {}
@@ -140,10 +141,10 @@ class JudgingRecord2Record(Record2Record):
 
     def accept(self, record_set: RecordSet, runtime_load_id: str | None) -> None:
         super().accept(record_set, runtime_load_id)
-        # The eligibility checks never run under a reserved batch: its samples reference held sets.
+        # The staleness check never runs under a reserved batch: its samples reference held sets.
         if self.pool.reserved is None:
-            dropped_sets = judged_sets(tuple(dropped.record_set for dropped in self.pool.drop_ineligible()))
-            for judged_set in dropped_sets:
+            for judged_set in judged_sets(stale_sets(self.pool.sets(), self.max_staleness)):
+                self.pool.remove(judged_set.set_id)
                 self.retire(judged_set.receipt)
                 self.ended_set_ids.add(judged_set.set_id)
 
