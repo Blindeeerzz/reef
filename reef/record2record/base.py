@@ -72,14 +72,17 @@ class Record2Record(ABC, Plugin):
         self.ended_set_ids: set[Hashable] = set()
         #: Records that ended and that no live set references, until their release.
         self.terminal: set[str] = set()
+        #: Sets formed since the last ``take_formed``, in the order they formed.
+        self.formed: list[RecordSet] = []
 
     @abstractmethod
     def ingest(self, record: AgentRecord) -> None:
         """Read one record. The stage must not block on network or model calls."""
 
-    @abstractmethod
     def take_formed(self) -> tuple[RecordSet, ...]:
         """Return the record sets formed since the last call, in the order they formed."""
+        formed, self.formed = tuple(self.formed), []
+        return formed
 
     def poll(self, now: float) -> None:
         """Absorb background work, such as finished judgments. ``now`` is a monotonic time."""
@@ -166,20 +169,10 @@ class PassThroughRecord2Record(Record2Record):
         NoSettings.parse(config, plugin_class=cls)
         return cls()
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.formed: list[RecordSet] = []
-        self.arrival_count = 0
-
     def ingest(self, record: AgentRecord) -> None:
-        self.arrival_count += 1
         self.formed.append(
-            SingleRecordSet(set_id=record.agent_record_id, arrival_index=self.arrival_count, record=record)
+            SingleRecordSet(set_id=record.agent_record_id, arrival_index=self.pool.next_arrival_index(), record=record)
         )
-
-    def take_formed(self) -> tuple[RecordSet, ...]:
-        formed, self.formed = tuple(self.formed), []
-        return formed
 
     def accept(self, record_set: RecordSet, runtime_load_id: str | None) -> None:
         raise TypeError(f"{type(self).__name__} holds no set: pair it with NoTasks, or hold sets in another stage")
@@ -199,10 +192,6 @@ class InferenceRecord2Record(Record2Record):
         NoSettings.parse(config, plugin_class=cls)
         return cls()
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.formed: list[RecordSet] = []
-
     def ingest(self, record: AgentRecord) -> None:
         # A record that is not an inference ends at once.
         if record.request_type is not RequestType.INFERENCE:
@@ -211,7 +200,3 @@ class InferenceRecord2Record(Record2Record):
         self.formed.append(
             SingleRecordSet(set_id=record.agent_record_id, arrival_index=self.pool.next_arrival_index(), record=record)
         )
-
-    def take_formed(self) -> tuple[RecordSet, ...]:
-        formed, self.formed = tuple(self.formed), []
-        return formed

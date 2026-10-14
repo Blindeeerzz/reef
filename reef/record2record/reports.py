@@ -220,7 +220,6 @@ class ReportRecord2Record(Record2Record):
         self.available_limit = context.held_set_limit
         self.grouping = grouping
         self.exclusive_sources = exclusive_sources
-        self.formed: list[ReportCandidate] = []
         self.candidate_count = 0
         #: The inference records, by ID, until their release.
         self.inferences: dict[str, AgentRecord] = {}
@@ -300,11 +299,6 @@ class ReportRecord2Record(Record2Record):
     def handle_other_report(self, report: AgentRecord) -> None:
         """End a valid report that this method does not train on. A subclass can keep it for another use."""
         self.end_report(report)
-
-    def take_formed(self) -> tuple[RecordSet, ...]:
-        formed: tuple[RecordSet, ...] = tuple(self.formed)
-        self.formed = []
-        return formed
 
     def report_context(self, report: AgentRecord, parsed_report: ReportBase | None) -> ReportContext:
         missing = [ref for ref in report.references if ref not in self.inferences]
