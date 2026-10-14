@@ -643,9 +643,10 @@ class TrainingPublication:
             yield
 
     def prepare_recovery(self, marker: dict[str, Any] | None) -> None:
-        """Reassert startup pause, including committed and marker-free restarts."""
-        if marker is not None and marker["status"] == "RUNNING":
-            raise RuntimeError(f"ambiguous training job {marker['job_id']}")
+        """Reassert startup pause, including committed and marker-free restarts.
+
+        ``TrainingExecution.recover`` has already refused an ambiguous RUNNING marker.
+        """
         try:
             with self._aborting_on_failure():
                 self._publisher.pause()
