@@ -453,10 +453,6 @@ class InferenceEngineGroup(ABC):
         """Retire owned engines after an uncertain update; never kill borrowed engines."""
 
 
-#: Legacy name of :class:`InferenceEngineGroup`, kept for integrations written against it.
-InferenceEngines = InferenceEngineGroup
-
-
 class InferenceMonitor(ABC):
     """Background engine monitoring must respect publication/recovery barriers."""
 
