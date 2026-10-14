@@ -7,9 +7,10 @@ bubblewrap and E2B execution implementations. Harness rendering and candidate
 evaluation remain outside this package.
 
 Callers do not need to know which sandbox runs their commands. Only
-``reef.sandbox.config.build_executor`` names a sandbox kind: it reads the
-deployment's ``executor`` setting and returns an ``EpisodeExecutor``. Every
-other caller uses that interface.
+configuration code names a sandbox kind. For example,
+``reef.sandbox.config.build_executor`` reads the deployment's ``executor``
+setting and returns an ``EpisodeExecutor``. Every other caller uses that
+interface.
 
 
 Run a command
