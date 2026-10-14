@@ -256,7 +256,7 @@ def test_default_build_uses_declared_stages_and_their_pipeline_config() -> None:
     assert isinstance(trainer.candidate_backend, RuntimeCandidateBackend)
     assert isinstance(trainer.candidate_evaluator, BackendAlwaysSelectPlugin)
     assert trainer.candidate_evaluator._candidate_backend is trainer.candidate_backend
-    assert trainer.candidate_backend.objective == "sft"
+    assert trainer.candidate_backend.training_method_selector.method.objective == "sft"
     assert trainer.pipeline.batch_size == 2
     # The shared recipe field reaches the stages as the typed context field, not as stage config.
     assert trainer.pipeline.context.max_staleness == 3

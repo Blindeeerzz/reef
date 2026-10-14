@@ -1024,6 +1024,15 @@ valid, as they are for a clipped ratio. ``validate_scheduling`` rejects
 ``epochs > 1`` otherwise, at recipe build and again in each backend before
 preparation.
 
+``WeightTrainingRecipe.training_method_selector()`` returns a
+``TrainingMethodSelector`` (``reef.train.runtime_backend``). Its
+``select(batch, algorithm_state)`` returns the ``TrainingMethod``
+(``reef.runtime.interfaces``) of each job: an objective reference and an
+optional ``LearningRateSchedule``. The default ``FixedTrainingMethodSelector``
+returns ``training_spec().objective``. The method is part of the job's
+identity. See `Write a recipe
+<../developer-guide/write-a-recipe.rst#switch-methods-within-a-run>`__.
+
 ``StepSignal`` carries:
 
 - ``action``: ``train`` runs backend training; ``skip`` commits a state-only
@@ -1056,6 +1065,14 @@ including the coordinator RPC. Update custom runtimes and upgrade coordinators
 and workers together. Experiment backend metadata now uses ``objective`` and
 ``scheduling`` instead of ``step_preparer``; committed algorithm state,
 training payloads, checkpoints and artifact formats are unchanged.
+
+Migration to per-job training methods: the second argument of every
+``prepare_training_step``, including the coordinator RPC, is now the job's
+``TrainingMethod``. ``RuntimeCandidateBackend`` takes a
+``TrainingMethodSelector`` instead of the objective string. Update custom
+runtimes, and upgrade coordinators and workers together. Training payloads gain
+a ``method`` entry, so the same rows produce a different job id. Finish or
+reject the jobs in flight before you upgrade.
 
 Harness method
 --------------
@@ -1335,7 +1352,9 @@ holds their Slime reference. ``loss_fn`` names the Tinker built-in loss the
 family trains with; ``inputs(rows, base_logprobs, kl_coef=...)`` returns that
 function's token-aligned ``loss_fn_inputs``, one dictionary per row; and
 ``needs_base_logprobs`` requests frozen-base scores for a nonzero KL
-coefficient. For ``importance_sampling``, ``TokenRow.inputs`` builds the
+coefficient. ``check_kl_coef(kl_coef)`` raises ``ValueError`` for a
+coefficient the family cannot train; Reef calls it when it prepares a job,
+before any remote work. The default accepts every coefficient. For ``importance_sampling``, ``TokenRow.inputs`` builds the
 dictionary from response-token advantages, shifting prediction targets by one
 token and padding prompt positions with zeros. A ``TinkerCustomLoss`` adds
 ``loss(data, logprobs)``, which the SDK boundary passes to
