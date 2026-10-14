@@ -14,6 +14,7 @@ from reef.core.reports import TeacherContextReport
 from reef.pipeline_context import PipelineContext
 from reef.recipe.registry import build_recipe
 from reef.record2record import ExclusiveReportRecord2Record
+from reef.runtime.interfaces import TrainingMethod
 from reef.train.algos import StepScheduling
 from reef.train.pipeline import TrainingPipeline
 from reef.train.slime_backend.data_builder import to_slime_rollout_data
@@ -77,7 +78,7 @@ def test_exact_student_tokens_and_no_scalar_reward_reach_slime(processor: Traini
     batch = processor.build_batch()
     assert isinstance(batch, TrainingBatch)
     assert batch.batch_id == "math:opd:1"
-    prepared = prepare_slime_step(batch, "opd", {}, StepScheduling(unit="sample", batch_size="actual"))
+    prepared = prepare_slime_step(batch, TrainingMethod("opd"), {}, StepScheduling(unit="sample", batch_size="actual"))
     payload = prepared.payload
     assert payload is not None
     assert "advantages" not in payload

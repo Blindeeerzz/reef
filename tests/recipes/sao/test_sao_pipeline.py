@@ -30,7 +30,13 @@ from reef.recipe.errors import RecipeConfigError
 from reef.recipe.registry import build_recipe, recipe_class_for
 from reef.record2record import ExclusiveReportRecord2Record
 from reef.record2task.assembly import SampleAssemblySettings
-from reef.runtime.interfaces import ActivatedModel, ModelCandidate, PreparedTrainingStep, StaleCandidate
+from reef.runtime.interfaces import (
+    ActivatedModel,
+    ModelCandidate,
+    PreparedTrainingStep,
+    StaleCandidate,
+    TrainingMethod,
+)
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
 from reef.train import PipelineContext, Trainer
 from reef.train.algos import StepScheduling
@@ -70,7 +76,7 @@ class _StateOnlySaoBackend(CandidateBackend):
 
     def prepare_step(self, batch, state, scenario_step):
         del scenario_step
-        prepared = prepare_slime_step(batch, "sao", state, StepScheduling(unit="sample"))
+        prepared = prepare_slime_step(batch, TrainingMethod("sao"), state, StepScheduling(unit="sample"))
         return PreparedStep.skipped(state=prepared.next_algorithm_state, metrics=prepared.metrics)
 
     def evaluate(self, candidate):
@@ -317,7 +323,7 @@ def test_backend_rejects_rollout_that_trains_a_non_action_token() -> None:
     processor.ingest(_sao_report("r1", "i1", 1.0))
 
     batch = processor.build_batch()
-    prepared = prepare_slime_step(batch, "sao", {}, StepScheduling(unit="sample"))
+    prepared = prepare_slime_step(batch, TrainingMethod("sao"), {}, StepScheduling(unit="sample"))
     with pytest.raises(ValueError):
         to_slime_rollout_data(prepared.payload)
     assert processor.releasable_record_ids().isdisjoint({"i1", "r1"})
@@ -330,7 +336,7 @@ def test_backend_rejects_rollout_with_logprob_length_mismatch() -> None:
     processor.ingest(_sao_report("r1", "i1", 1.0))
 
     batch = processor.build_batch()
-    prepared = prepare_slime_step(batch, "sao", {}, StepScheduling(unit="sample"))
+    prepared = prepare_slime_step(batch, TrainingMethod("sao"), {}, StepScheduling(unit="sample"))
     with pytest.raises(ValueError):
         to_slime_rollout_data(prepared.payload)
     assert processor.releasable_record_ids().isdisjoint({"i1", "r1"})
@@ -352,7 +358,7 @@ def test_malformed_training_data_is_preserved_until_backend_validation() -> None
     processor.ingest(_sao_inference("i1", loss_mask=(0, 0, 0)))
     processor.ingest(_sao_report("r1", "i1", 1.0))
     batch = processor.build_batch()
-    prepared = prepare_slime_step(batch, "sao", {}, StepScheduling(unit="sample"))
+    prepared = prepare_slime_step(batch, TrainingMethod("sao"), {}, StepScheduling(unit="sample"))
     with pytest.raises(ValueError):
         to_slime_rollout_data(prepared.payload)
     assert processor.releasable_record_ids().isdisjoint({"i1", "r1"})
@@ -397,7 +403,7 @@ def test_backend_declares_sao_and_defers_model_dependent_advantages() -> None:
         (policy_trajectory("i1", (5, 1), (1,), (-0.1,), 0.5, action_mask=(1,)),),
     )
 
-    result = prepare_slime_step(batch, "sao", {}, StepScheduling(unit="sample"))
+    result = prepare_slime_step(batch, TrainingMethod("sao"), {}, StepScheduling(unit="sample"))
 
     assert result.payload is not None and result.payload["loss"] == "sao"
     assert "advantages" not in result.payload
@@ -411,8 +417,10 @@ def test_backend_preparation_advances_step_state() -> None:
         (policy_trajectory("i1", (5, 1), (1,), (-0.1,), 0.5, action_mask=(1,)),),
     )
 
-    first = prepare_slime_step(batch, "sao", {}, StepScheduling(unit="sample"))
-    second = prepare_slime_step(batch, "sao", first.next_algorithm_state, StepScheduling(unit="sample"))
+    first = prepare_slime_step(batch, TrainingMethod("sao"), {}, StepScheduling(unit="sample"))
+    second = prepare_slime_step(
+        batch, TrainingMethod("sao"), first.next_algorithm_state, StepScheduling(unit="sample")
+    )
 
     assert first.next_algorithm_state == {"steps": 1}
     assert second.next_algorithm_state == {"steps": 2}
