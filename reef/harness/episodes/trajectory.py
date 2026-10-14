@@ -17,9 +17,8 @@ Subclass :class:`TrajectoryReader`, set the class attribute ``format``, implemen
         def __call__(self, path):
             ...
 
-External readers are either registered at runtime via
-:func:`register_reader` or named as a dotted ``"module:callable"`` reference
-resolved by :func:`reader_for`; plain callables from a dotted reference are
+An external reader is named as a dotted ``"module:callable"`` reference that
+:func:`reader_for` resolves; a plain callable from a dotted reference is
 wrapped by :class:`_CallableTrajectoryReader`.
 """
 
@@ -78,8 +77,7 @@ _readers: dict[str, TrajectoryReader] = {}
 """Bundled trajectory readers registered at import time by
 :func:`register_trajectory_reader`.
 
-Read by :func:`reader_for`; external readers are registered at runtime
-through :func:`register_reader`.
+Read by :func:`reader_for`; an external reader is a dotted reference instead.
 """
 
 
@@ -91,17 +89,6 @@ def register_trajectory_reader(cls: type[TrajectoryReader]) -> type[TrajectoryRe
         raise ValueError(f"trajectory reader {fmt!r} is already registered")
     _readers[fmt] = instance
     return cls
-
-
-def register_reader(reader: TrajectoryReader) -> TrajectoryReader:
-    """Register an external trajectory reader (module-level convenience)."""
-    if not isinstance(reader, TrajectoryReader):
-        raise TypeError(f"a trajectory reader registers a TrajectoryReader, got {type(reader).__name__}")
-    fmt = reader.format
-    if fmt in _readers:
-        raise ValueError(f"trajectory reader {fmt!r} is already registered")
-    _readers[fmt] = reader
-    return reader
 
 
 def reader_for(format_: str) -> TrajectoryReader:

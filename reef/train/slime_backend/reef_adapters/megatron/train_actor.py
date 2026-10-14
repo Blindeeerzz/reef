@@ -134,10 +134,6 @@ class ReefMegatronTrainRayActor(MegatronTrainRayActor):
         slots = self.adapter_slots
         return None if slots is None else slots.active
 
-    def known_scenarios(self) -> tuple[str, ...]:
-        slots = self.adapter_slots
-        return () if slots is None else slots.scenarios
-
     def initialize_runtime_load_id(self, runtime_load_id: str) -> None:
         """Initialize only the sender's metadata; Reef initializes receivers."""
         self.weight_updater.initialize_exact_runtime_load_id(runtime_load_id)
