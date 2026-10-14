@@ -477,17 +477,12 @@ class HarnessCandidate(UpdateCandidate):
     mutations: tuple[Mutation, ...]
     #: Seed tasks, then promoted traffic prompts; the seed set when promotion is off.
     evaluation_tasks: tuple[str, ...] = ()
-    #: Legacy constructor keyword; new candidates use evaluation_tasks.
-    gate_tasks: tuple[str, ...] = ()
     #: The candidate is the rollback target, so selecting it rolls back.
     recheck: bool = False
     #: The inbox proposal these mutations came from, settled with the result; None for the method's own.
     proposal_id: str | None = None
     #: The step record directory claimed for it at prepare time; ``None`` with the record off.
     record_dir: Path | None = None
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
 
 
 def clip_redacted(text: str, limit: int) -> str:
@@ -565,7 +560,7 @@ class HarnessEpisodeEvaluator(CandidateEvaluator):
 
     def evaluation_tasks(self, candidate: HarnessCandidate) -> tuple[str, ...]:
         """The tasks the candidate carries; an older candidate carries none and falls back to the seed set."""
-        return candidate.evaluation_tasks or candidate.gate_tasks or self._tasks
+        return candidate.evaluation_tasks or self._tasks
 
     def episode_count(self, candidate: HarnessCandidate, side_count: int) -> int:
         """How many episodes :meth:`evaluate` runs for ``candidate`` on ``side_count`` sides."""
