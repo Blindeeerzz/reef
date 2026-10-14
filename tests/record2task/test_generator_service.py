@@ -626,6 +626,7 @@ def test_the_generator_section_is_parsed_in_either_spelling_and_unknown_fields_a
         ({"tasks-root": "/tmp/t", "agent": {"kwargs": {}}}, "Harbor agent name"),
         ({"tasks-root": "/tmp/t", "port": 0}, "port must be"),
         ({"tasks-root": "/tmp/t", "tasks_root": "/tmp/u"}, "twice"),
+        ({"tasks-root": "/tmp/t", "designer-api": "anthropic"}, "designer-api must be openai or responses"),
     ):
         with pytest.raises(ValueError, match=message):
             generator_settings(section)
@@ -677,7 +678,7 @@ def test_history_and_materials_reach_the_designer_and_feedback_uses_its_receipt(
         context = PipelineContext("spade")
         round_stage = GeneratedTaskRecord2Record(context, TaskGroupSettings(plays_per_task=2))
         generation = GeneratedTaskTasks(context, RoundSettings(), round_stage, task_player=generator)
-        result = await generation.played(item, 0)
+        result, _ = await generation.played(item, 0)
         assert result.is_played and len(result.training_rewards) == 2 and set(result.measurement_rewards) == {"hint"}
         assert read_harbor_task(tmp_path / "tasks" / task.name).source_agent_record_ids == task.source_agent_record_ids
         await task_generator.record_results((result,))

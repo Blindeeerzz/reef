@@ -190,6 +190,36 @@ def test_the_assembly_spans_an_episodes_turns_and_realigns_the_think_scaffold() 
     assert episode_assembly(2).settings.scaffold_tolerance == 2
 
 
+def test_an_episode_whose_response_was_cut_at_max_tokens_still_trains() -> None:
+    # Tinker's default max_tokens is 1024: a cut response plus the four-token think scaffold drifts 1028 tokens.
+    scaffold, response = [90, 91, 92, 93], list(range(1000, 2024))
+
+    def turn(record_id: str, tokens: list[int], response_length: int) -> AgentRecord:
+        training = {
+            "tokens": tokens,
+            "loss_mask": [1] * response_length,
+            "rollout_log_probs": [-0.1] * response_length,
+            "runtime_load_id": "r1",
+        }
+        return AgentRecord.create(
+            scenario="tasks",
+            request_type=RequestType.INFERENCE,
+            payload={"response": {"training": training}},
+            agent_record_id=record_id,
+        )
+
+    p = processor(tasks_per_step=1)
+    p.ingest(turn("rec-0", [1, 2, *scaffold, *response], len(response)))
+    p.ingest(turn("rec-1", [1, 2, *response, 3, *scaffold, 4], 1))
+    payload = {**report("rep-0", "rec-0", "harbor-00000-000", 1.0).payload, "references": ["rec-0", "rec-1"]}
+    p.ingest(
+        AgentRecord.create(scenario="tasks", request_type=RequestType.REPORT, payload=payload, agent_record_id="rep-0")
+    )
+    played(p, "harbor-00000-000", 1, 0.0)
+    assert p.ready()
+    assert [sample.training.get("turn_count", 1) for sample in p.build_batch().items] == [2, 1]
+
+
 def test_the_objective_centers_and_scales_rewards_within_each_task_group() -> None:
     p = processor()
     for index, score in enumerate((1.0, 0.0)):
@@ -486,6 +516,54 @@ def test_a_refused_write_or_a_task_the_agent_cannot_play_comes_back_unplayed(tmp
     assert [call["arm"] for call in unplayable.plays] == ["plain"], "no measurement arm for a task that cannot run"
     assert unplayable.deleted == ["harbor-00000-000"]
     assert task_generator.results[0][0].error == "the agent could not play the task: Failed to start tmux session."
+
+
+class PartlyReported(StandInGenerator):
+    """Plays whose first ``reported`` episodes reach Reef; the rest end unreported, as a failed trial does."""
+
+    def __init__(self, root: Path, *, reported: int) -> None:
+        super().__init__(root)
+        self.reported = reported
+
+    async def play(self, task_path, **fields) -> tuple[TaskPlay, ...]:
+        plays = await super().play(task_path, **fields)
+        return tuple(
+            play if index < self.reported else dataclasses.replace(play, report_agent_record_ids=())
+            for index, play in enumerate(plays)
+        )
+
+
+@pytest.mark.parametrize(("reported", "is_trained"), [(2, True), (1, False)])
+def test_a_task_group_completes_at_the_episodes_its_plays_reported(
+    tmp_path: Path, reported: int, is_trained: bool
+) -> None:
+    worker = DeferredWorker()
+    player = PartlyReported(tmp_path / "tasks", reported=reported)
+    p, _ = rounds(
+        tmp_path, ScriptedGenerator([generated(0, 0)]), player, worker=worker, plays_per_task=4, tasks_per_step=1
+    )
+    assert not p.ready() and [job.round_number for job in worker.submitted] == [0]
+    for index in range(reported):
+        played(p, "harbor-00000-000", index, float(index % 2))
+    assert not p.ready(), "the plays are still out, so the group waits for all four"
+    worker.finish()
+    assert p.ready() is is_trained
+    if is_trained:
+        assert len(p.build_batch().items) == 2
+    else:
+        assert {"rep-harbor-00000-000-0", "rec-harbor-00000-000-0"} <= p.releasable_record_ids()
+
+
+def test_a_restarted_processor_closes_a_group_at_the_count_its_round_summary_kept(tmp_path: Path) -> None:
+    player = PartlyReported(tmp_path / "tasks", reported=2)
+    config: dict[str, Any] = {"plays_per_task": 4, "tasks_per_step": 1, "rounds": 1}
+    first, _ = rounds(tmp_path, ScriptedGenerator([generated(0, 0)]), player, **config)
+    assert not looked(first)
+    first.close()
+    restarted, _ = rounds(tmp_path, ScriptedGenerator(), player, **config)
+    for index in range(2):
+        played(restarted, "harbor-00000-000", index, float(index % 2))
+    assert restarted.ready() and len(restarted.build_batch().items) == 2
 
 
 def test_the_next_round_waits_for_batches_per_round(tmp_path: Path) -> None:
