@@ -11,6 +11,8 @@ abstract, so only the pairing is instantiable.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import pytest
 
 from reef.evaluation import (
@@ -48,7 +50,7 @@ def evaluation() -> EvaluationResult:
 def test_evaluation_and_selection_remain_independent_nominal_capabilities() -> None:
     class Selector(CandidateSelector):
         def decide(self, candidate, result):
-            return SelectionDecision("select", "test", "1", "accepted", result)
+            return SelectionDecision("select", "test", "accepted", result)
 
     evaluator = DecideOnlyBackend()
     selector = Selector()
@@ -110,7 +112,6 @@ def test_a_plugin_mixes_its_measurement_and_its_decision() -> None:
             return SelectionDecision(
                 outcome="select",
                 policy="demo",
-                policy_version="1",
                 reason=f"selected {candidate.candidate_id}",
                 evaluation=result,
             )
@@ -165,11 +166,31 @@ def test_rejected_decision_is_not_selected() -> None:
     decision = SelectionDecision(
         outcome="reject",
         policy="minimum-improvement",
-        policy_version="2",
         reason="candidate did not clear the configured delta",
         evaluation=evaluation(),
     )
     assert decision.selected is False
+
+
+@pytest.mark.parametrize("outcome", ["select", "reject"])
+def test_selection_decision_serializes_without_policy_version(outcome: Literal["select", "reject"]) -> None:
+    result = evaluation()
+    decision = SelectionDecision(
+        outcome=outcome,
+        policy="demo",
+        reason="compared candidate scores",
+        evaluation=result,
+        metrics={"wins": 2, "losses": 1},
+    )
+
+    assert decision.selected is (outcome == "select")
+    assert decision.to_dict() == {
+        "outcome": outcome,
+        "policy": "demo",
+        "reason": "compared candidate scores",
+        "evaluation": result.to_dict(),
+        "metrics": {"wins": 2, "losses": 1},
+    }
 
 
 def test_candidate_identity_is_validated() -> None:
@@ -182,7 +203,6 @@ def test_decision_rejects_an_unknown_outcome() -> None:
         SelectionDecision(
             outcome="defer",  # type: ignore[arg-type]
             policy="demo",
-            policy_version="1",
             reason="not terminal",
             evaluation=evaluation(),
         )

@@ -297,7 +297,6 @@ only when at least one task improves and none regresses.
            return SelectionDecision(
                outcome="select" if selected else "reject",
                policy="pareto",
-               policy_version="1",
                reason="no task regressed and at least one improved" if selected else "Pareto failed",
                evaluation=evaluation,
            )

@@ -687,7 +687,6 @@ class ScoreComparisonMixin(CandidateEvaluationPlugin):
         return SelectionDecision(
             outcome="select" if selected else "reject",
             policy="score_comparison",
-            policy_version="1",
             reason=(
                 f"candidate won {wins} task pairings and lost {losses}"
                 if selected
@@ -744,7 +743,6 @@ class FloorMixin(CandidateEvaluationPlugin):
         return SelectionDecision(
             outcome="select" if scores and not failed else "reject",
             policy="floor",
-            policy_version="1",
             reason=reason,
             evaluation=evaluation,
             metrics={"passed": passed, "failed": failed, "floor_score": self._floor_score},

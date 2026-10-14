@@ -53,7 +53,6 @@ class SelectionDecision:
 
     outcome: Literal["select", "reject"]
     policy: str
-    policy_version: str
     reason: str
     evaluation: EvaluationResult
     metrics: Mapping[str, Any] = field(default_factory=dict)
@@ -63,8 +62,6 @@ class SelectionDecision:
             raise ValueError("selection outcome must be 'select' or 'reject'")
         if not isinstance(self.policy, str) or not self.policy:
             raise ValueError("policy must be a non-empty string")
-        if not isinstance(self.policy_version, str) or not self.policy_version:
-            raise ValueError("policy_version must be a non-empty string")
         if not isinstance(self.reason, str) or not self.reason:
             raise ValueError("reason must be a non-empty string")
 
@@ -76,7 +73,6 @@ class SelectionDecision:
         return {
             "outcome": self.outcome,
             "policy": self.policy,
-            "policy_version": self.policy_version,
             "reason": self.reason,
             "evaluation": self.evaluation.to_dict(),
             "metrics": dict(self.metrics),

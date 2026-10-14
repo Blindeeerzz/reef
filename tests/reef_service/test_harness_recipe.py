@@ -1140,7 +1140,7 @@ def test_recipe_resolves_selection_plugin(tmp_path, monkeypatch) -> None:
         "        return self._backend.evaluate(candidate)\n\n"
         "    def decide(self, candidate, evaluation):\n"
         "        from reef.evaluation import SelectionDecision\n"
-        "        return SelectionDecision('select', 'demo', '1', 'selected by demo', evaluation)\n"
+        "        return SelectionDecision('select', 'demo', 'selected by demo', evaluation)\n"
     )
     monkeypatch.syspath_prepend(str(tmp_path))
 

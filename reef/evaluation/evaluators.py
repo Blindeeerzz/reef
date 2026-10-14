@@ -66,7 +66,6 @@ class AlwaysSelectMixin(CandidateEvaluationPlugin):
         return SelectionDecision(
             outcome="select",
             policy="always",
-            policy_version="1",
             reason="the method selects every successfully evaluated candidate",
             evaluation=evaluation,
         )
@@ -122,7 +121,6 @@ class RegressionCheckMixin(CandidateEvaluationPlugin):
             return SelectionDecision(
                 outcome="select",
                 policy="regression-check",
-                policy_version="1",
                 reason=f"{self._metric} {raw:g} within margin of best {new_best_raw:g}",
                 evaluation=evaluation,
                 metrics=metrics,
@@ -130,7 +128,6 @@ class RegressionCheckMixin(CandidateEvaluationPlugin):
         return SelectionDecision(
             outcome="reject",
             policy="regression-check",
-            policy_version="1",
             reason=(
                 f"{self._metric} {raw:g} regressed past margin {self._margin:g} below best {best_raw:g}; "
                 "holding the last selected weights"

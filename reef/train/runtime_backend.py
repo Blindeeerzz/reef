@@ -172,7 +172,6 @@ class RuntimeCandidateBackend(CandidateBackend):
             SelectionDecision(
                 "reject",
                 "reef_abort",
-                "1",
                 "candidate processing failed before settlement",
                 evaluation,
             ),

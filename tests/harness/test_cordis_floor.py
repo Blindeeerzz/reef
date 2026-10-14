@@ -55,7 +55,7 @@ def test_floor_selects_only_when_every_task_meets_the_floor() -> None:
     plugin = FloorPlugin(DecideOnlyBackend())
 
     met = plugin.decide(candidate, _evaluation((1.0, 1.5)))
-    assert met.selected and met.policy == "floor" and met.policy_version == "1"
+    assert met.selected and met.policy == "floor"
     assert met.metrics == {"passed": 2, "failed": 0, "floor_score": 1.0}
     assert met.reason == "candidate met the floor on all 2 tasks"
 

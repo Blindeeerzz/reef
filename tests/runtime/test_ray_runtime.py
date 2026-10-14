@@ -993,7 +993,7 @@ def test_candidate_rejection_leaves_serving_weights_unchanged() -> None:
     evaluation = EvaluationResult("test", "1", {})
     runtime.reject_candidate(
         candidate,
-        SelectionDecision("reject", "test", "1", "rejected by test", evaluation),
+        SelectionDecision("reject", "test", "rejected by test", evaluation),
     )
 
     assert handle.calls == ["execute", "reject"]

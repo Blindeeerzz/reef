@@ -122,7 +122,7 @@ def test_mapping_config_resolves_worker_import_and_constructor_arguments():
         assert runtime.base_url == "http://custom-router"
         candidate = runtime.train_candidate({})
         assert runtime.inference_admission_status["open"] is False
-        decision = SelectionDecision("reject", "test", "1", "test rejection", EvaluationResult("test", "1", {}))
+        decision = SelectionDecision("reject", "test", "test rejection", EvaluationResult("test", "1", {}))
         runtime.reject_candidate(candidate, decision)
         assert runtime.inference_admission_status["open"] is True
         assert runtime.serving_runtime_load_id() == "engine:0"

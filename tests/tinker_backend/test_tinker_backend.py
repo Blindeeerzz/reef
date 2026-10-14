@@ -162,7 +162,7 @@ def prepared(runtime, objective, *, step=0):
 
 def decision(selected):
     return SelectionDecision(
-        "select" if selected else "reject", "test", "1", "test decision", EvaluationResult("test", "1", {})
+        "select" if selected else "reject", "test", "test decision", EvaluationResult("test", "1", {})
     )
 
 
