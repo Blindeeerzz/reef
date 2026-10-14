@@ -7,6 +7,7 @@ import math
 import subprocess
 from pathlib import Path
 
+from reef.evaluation.harness import EpisodeScorer
 from reef.harness import EpisodeResult
 
 MANIFEST = json.loads(Path(__file__).with_name("tasks.json").read_text(encoding="utf-8"))
@@ -59,3 +60,10 @@ def evaluate(task: str, result: EpisodeResult) -> float:
     if reward not in (0, 1):
         raise ValueError("Terminal-Bench verifier reward must be binary")
     return float(reward)
+
+
+class VerifierScorer(EpisodeScorer):
+    """:func:`evaluate` as the ``evolution.evaluate`` plugin terminal_bench.yaml names."""
+
+    def score(self, task: str, result: EpisodeResult) -> float:
+        return evaluate(task, result)

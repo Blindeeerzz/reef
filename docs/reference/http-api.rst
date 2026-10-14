@@ -161,6 +161,7 @@ Scenario model settings
 ``POST /reef/scenarios`` accepts an optional ``model`` object with ``url``,
 ``model``, ``api`` and ``api_key``. It applies only when creating a new
 scenario. Existing scenarios retain their settings on repeated creation.
+The creation response carries the scenario's ``model`` view.
 ``POST /reef/scenarios/{scenario}/update`` accepts ``model`` alongside the
 existing ``training_mode`` field. Send ``model: null`` to restore deployment
 defaults. Responses redact the API key and report ``has_api_key`` instead.
@@ -337,10 +338,10 @@ runs instructions only and never batches on traffic; harness evolution
 runs an instruction alone, without samples. ``hybrid`` batches on traffic and
 runs instructions: a queued instruction goes first, oldest first, one per
 step, and the units an automatic batch would take next, up to
-``batch_size`` and possibly none, ride beside it as the batch's samples
-(scored traces, or records under
-``data.batch_policy: records``), so the proposer reads the request next
-to them; with none queued the step batches as ``auto`` does.
+``pipeline.task2batch.config.batch_size`` and possibly none, ride beside it
+as the batch's samples (scored traces, or unscored records when the
+``pipeline`` section names the inference stages), so the proposer reads the
+request next to them; with none queued the step batches as ``auto`` does.
 
 .. code:: bash
 
@@ -1214,7 +1215,6 @@ trailing slash, credentials, or wildcard:
 
 .. code-block:: yaml
 
-   schema-version: 2
    reef:
      console-origins:
        - "https://api.reefinfra.ai"

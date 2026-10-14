@@ -10,9 +10,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from reef.evaluation.reefine import RequestVerifier, VerificationResult
 from reef.harness.episodes.run import EpisodeResult
 from reef.harness.episodes.trajectory import final_assistant_text
-from reef.train.evaluation.reefine import RequestVerifier, VerificationResult
 
 
 class BugfixVerifier(RequestVerifier):

@@ -1,8 +1,9 @@
 """Harness evolution recipe: boots the composition mutation loop from config.
 
-``CordisRecipe`` boots the loop from a config yaml. ``propose`` and
-``evaluate`` are Python callables, named as dotted ``module:attribute``
-references in YAML or passed directly when registering from code; ``propose``
+``CordisRecipe`` boots the loop from a config yaml. ``propose``, ``evaluate``
+and ``promote`` name :class:`Proposer`, :class:`EpisodeScorer` and
+:class:`Promoter` classes (``module:ClassName``, or a mapping with ``module``
+and ``config``); code may pass built instances instead. ``propose``
 returns one ``Mutation``, a sequence of them (one composite proposal under
 one selection decision), a ``StepProposal`` (the mutations plus notes the
 step records), or ``None``. ``CordisBackend`` owns the
@@ -22,9 +23,19 @@ from typing import Any, ClassVar
 from urllib.parse import quote
 
 from reef.core.errors import ReefError
+from reef.core.evaluation import CandidateEvaluationPlugin
 from reef.core.model_metadata import ModelMetadata
+from reef.core.plugins import PluginConfigError, PluginReference
 from reef.core.reports import ScoredRolloutReport
 from reef.core.tasks import TaskSplitError, manifest_task_paths
+from reef.evaluation.evaluators import BackendAlwaysSelectPlugin, SelectionPlugin
+from reef.evaluation.harness import (
+    EpisodeScorer,
+    FloorPlugin,
+    ScoreComparisonPlugin,
+    evaluation_selection,
+    legacy_worker_settings,
+)
 from reef.harness.adapters import get_adapter
 from reef.harness.adapters.descriptor import DescriptorError
 from reef.harness.episodes.e2b import E2BExecutor, deployment_owner
@@ -38,41 +49,28 @@ from reef.harness.episodes.executor import (
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindings, ModelBindingsResolver
 from reef.harness.episodes.requests import request_entries
 from reef.harness.episodes.version_check import version_check_entry
-from reef.harness.tree.render import render_composition
+from reef.harness.tree.render import render_composition, tree_files
 from reef.inference.http import InferenceProxyRuntime
 from reef.inference.model_config import ModelConfig
 from reef.observability import ExperimentLogger
 from reef.recipe.base import Recipe, ServedEndpoint
-from reef.recipe.config_fields import config_field
 from reef.recipe.errors import RecipeConfigError
 from reef.runtime.executor.config import ExecutorSettings, WorkerResources, executor_settings, role_executor_settings
 from reef.storage.records import RecordStore
 from reef.surface.base import Surface
 from reef.surface.harnesses import create_harness_surface
 from reef.train.backend import STALE_RESULT_POLICIES, StaleResultPolicy
-from reef.train.cordis_backend.backend import (
-    CordisBackend,
-    FloorPluginFactory,
-    ScoreComparisonPluginFactory,
-    tree_files,
-)
-from reef.train.cordis_backend.execution import evaluation_selection, legacy_worker_settings
-from reef.train.cordis_backend.processor import CordisProcessor, RecordDrivenTraceProcessor
-from reef.train.cordis_backend.strategies import (
-    EpisodeScorer,
-    Promoter,
-    Proposer,
-    resolve_episode_scorer,
-    resolve_promoter,
-    resolve_proposer,
-)
-from reef.train.evaluation.evaluators import AlwaysSelectPluginFactory, CandidatePluginFactory
+from reef.train.cordis_backend.backend import CordisBackend
+from reef.train.cordis_backend.processor import TraceBatches, TraceRecord2Record, TraceTasks
+from reef.train.cordis_backend.strategies import Promoter, Proposer
+from reef.train.pipeline import PipelineSpec
 from reef.train.trainer import Trainer
 
-_CANDIDATE_PLUGIN_FACTORIES: dict[str, CandidatePluginFactory] = {
-    "score_comparison": ScoreComparisonPluginFactory(),
-    "floor": FloorPluginFactory(),
-    "always": AlwaysSelectPluginFactory(),
+#: The built-in ``evolution.selection`` names.
+_SELECTION_PLUGINS: dict[str, type[SelectionPlugin]] = {
+    "score_comparison": ScoreComparisonPlugin,
+    "floor": FloorPlugin,
+    "always": BackendAlwaysSelectPlugin,
 }
 
 
@@ -156,21 +154,6 @@ class _ScenarioModels(ModelBindingsResolver):
         return ModelBindings(served=served, named=named)
 
 
-def _resolve_callable(value: Any, what: str) -> Any:
-    """A callable as-is, or a dotted ``module:attribute`` reference to one."""
-    if callable(value):
-        return value
-    if isinstance(value, str) and ":" in value:
-        module_name, _, attribute = value.partition(":")
-        try:
-            resolved = getattr(importlib.import_module(module_name), attribute)
-        except (ImportError, AttributeError) as exc:
-            raise RecipeConfigError(f"cannot import {what} {value!r}: {exc}") from exc
-        if callable(resolved):
-            return resolved
-    raise RecipeConfigError(f"{what} must be a callable or a dotted 'module:attribute' reference")
-
-
 def _resolve_seed_entries(value: str) -> Sequence[Mapping[str, Any]]:
     """The entry sequence a dotted ``module:attribute`` seed reference names."""
     module_name, _, attribute = value.partition(":")
@@ -185,24 +168,14 @@ def _resolve_seed_entries(value: str) -> Sequence[Mapping[str, Any]]:
     return resolved
 
 
-def _resolve_candidate_plugin(value: Any) -> CandidatePluginFactory:
-    if isinstance(value, str) and value in _CANDIDATE_PLUGIN_FACTORIES:
-        return _CANDIDATE_PLUGIN_FACTORIES[value]
-    resolved = value
-    if isinstance(value, str) and ":" in value:
-        module_name, _, attribute = value.partition(":")
-        try:
-            resolved = getattr(importlib.import_module(module_name), attribute)
-        except (ImportError, AttributeError) as exc:
-            raise RecipeConfigError(f"cannot import evolution.selection {value!r}: {exc}") from exc
-    if isinstance(resolved, type) and issubclass(resolved, CandidatePluginFactory):
-        resolved = resolved()
-    if isinstance(resolved, CandidatePluginFactory):
-        return resolved
-    raise RecipeConfigError(
-        "evolution.selection must be a built-in name or a dotted reference to a "
-        "candidate-evaluation plugin factory inheriting CandidatePluginFactory"
-    )
+def _selection_reference(value: object) -> PluginReference:
+    """``evolution.selection``: a built-in name, or a :class:`SelectionPlugin` class reference."""
+    if isinstance(value, str) and value in _SELECTION_PLUGINS:
+        return PluginReference(_SELECTION_PLUGINS[value])
+    try:
+        return SelectionPlugin.reference(value, setting="evolution.selection")
+    except PluginConfigError as exc:
+        raise RecipeConfigError(f"{exc}; built-in selections: {', '.join(_SELECTION_PLUGINS)}") from exc
 
 
 @dataclass(frozen=True)
@@ -211,7 +184,7 @@ class CordisRecipe(Recipe):
 
     Config shape (the ``evolution`` section): ``adapter`` (a name
     ``reef.harness.adapters.get_adapter`` resolves), ``propose`` and
-    ``evaluate`` (callables or dotted references), ``tasks`` (the episode
+    ``evaluate`` (:class:`Proposer` and :class:`EpisodeScorer` class references), ``tasks`` (the episode
     prompts scored per step), optional ``binary`` (a path to the harness
     binary; left unset, backend construction installs the adapter descriptor's
     pinned version through the vendor's own channel, into the same prefix a
@@ -223,7 +196,7 @@ class CordisRecipe(Recipe):
     candidate-selection policy: ``score_comparison``, the default; ``floor``,
     which runs the candidate alone and selects it when every task scores at
     least ``floor_score``, default ``1.0``; ``always``;
-    or a dotted reference to a ``CandidatePluginFactory`` subclass or instance),
+    or a reference to a :class:`~reef.evaluation.SelectionPlugin` class),
     optional ``step_record_dir`` (a directory under which every scenario's
     steps write the proposer's model calls, the parsed proposal and each evaluation
     episode's trajectory files, so the decision is reconstructible; off by
@@ -313,7 +286,7 @@ class CordisRecipe(Recipe):
     #: What a result becomes when another component's commit replaced its base while it was evaluated:
     #: merged onto the release served now, evaluated again, or refused and proposed again.
     on_stale: StaleResultPolicy = "merge"
-    candidate_plugin: CandidatePluginFactory = field(default_factory=ScoreComparisonPluginFactory, repr=False)
+    selection: PluginReference = field(default_factory=lambda: PluginReference(ScoreComparisonPlugin), repr=False)
     episode_workers: int | None = None  # Deprecated Python compatibility alias.
     #: Default proposal inbox root, with one directory per scenario.
     proposals_dir: str = ".reef/proposals"
@@ -327,8 +300,6 @@ class CordisRecipe(Recipe):
     agent_trial_timeout_s: float = 300.0
     config_sections: ClassVar[tuple[str, ...]] = ("evolution",)
 
-    batch_size: int = config_field(1)
-    batch_policy: str = config_field("reports")
     name: str = field(default="harness_evolve", kw_only=True)
     scenario_model: ModelConfig | None = field(default=None, repr=False, kw_only=True)
 
@@ -339,6 +310,10 @@ class CordisRecipe(Recipe):
     @property
     def report_type(self) -> type[ScoredRolloutReport]:
         return ScoredRolloutReport
+
+    @classmethod
+    def pipeline_spec(cls) -> PipelineSpec:
+        return PipelineSpec(record2record=TraceRecord2Record, record2task=TraceTasks, task2batch=TraceBatches)
 
     @property
     def harness_adapter(self) -> str | None:
@@ -352,14 +327,10 @@ class CordisRecipe(Recipe):
             raise ValueError("harness evolution requires an EpisodeScorer")
         if not self.tasks:
             raise ValueError("harness evolution requires tasks")
-        if self.batch_size <= 0:
-            raise ValueError("batch_size must be positive")
         settings = legacy_worker_settings(self.worker_executor, self.episode_workers, self.worker_gpus)
         _, requirements = evaluation_selection(self.score_episode, None, settings)
         object.__setattr__(self, "worker_executor", settings)
         object.__setattr__(self, "episode_workers", requirements.workers)
-        if self.batch_policy not in ("reports", "records"):
-            raise ValueError("batch_policy must be 'reports' or 'records'")
         if self.episode_timeout_s <= 0:
             raise ValueError("episode_timeout_s must be positive")
         if self.episode_repeats < 1:
@@ -380,8 +351,10 @@ class CordisRecipe(Recipe):
             raise ValueError("floor_score must be positive")
         if self.publish not in ("auto", "review"):
             raise ValueError("publish must be 'auto' or 'review'")
-        if not isinstance(self.candidate_plugin, CandidatePluginFactory):
-            raise ValueError("candidate_plugin must be a CandidatePluginFactory instance")
+        if not isinstance(self.selection, PluginReference) or not issubclass(
+            self.selection.plugin_class, SelectionPlugin
+        ):
+            raise ValueError("selection must reference a SelectionPlugin class")
         if not isinstance(self.proposals_dir, str) or not self.proposals_dir.strip():
             raise ValueError("proposals_dir must be a non-empty path")
         if isinstance(self.max_pending_proposals, bool) or self.max_pending_proposals < 1:
@@ -499,21 +472,21 @@ class CordisRecipe(Recipe):
         seed = entries
         if "acceptance" in evolution:
             raise RecipeConfigError("evolution.acceptance was removed; configure evolution.selection")
-        selection = evolution.get("selection", "score_comparison")
-        candidate_plugin = _resolve_candidate_plugin(selection)
+        selection_setting = evolution.get("selection", "score_comparison")
+        selection = _selection_reference(selection_setting)
         if budgets["min_win_margin"]:
-            if selection != "score_comparison":
+            if selection_setting != "score_comparison":
                 raise RecipeConfigError("evolution.min_win_margin applies only to the score_comparison selection")
-            candidate_plugin = ScoreComparisonPluginFactory(min_win_margin=budgets["min_win_margin"])
+            selection = PluginReference(ScoreComparisonPlugin, {"min_win_margin": budgets["min_win_margin"]})
         floor_score = evolution.get("floor_score", 1.0)
         if isinstance(floor_score, bool) or not isinstance(floor_score, (int, float)) or floor_score <= 0:
             raise RecipeConfigError("evolution.floor_score must be a positive number")
         if "floor_score" in evolution:
-            if selection != "floor":
+            if selection_setting != "floor":
                 raise RecipeConfigError("evolution.floor_score applies only to the floor selection")
-            candidate_plugin = FloorPluginFactory(floor_score=float(floor_score))
+            selection = PluginReference(FloorPlugin, {"floor_score": float(floor_score)})
         # A recheck compares two trees; the floor evaluates one.
-        if selection == "floor" and budgets["recheck_every"]:
+        if selection_setting == "floor" and budgets["recheck_every"]:
             raise RecipeConfigError("evolution.recheck_every does not apply to the floor selection")
         publish = evolution.get("publish", "auto")
         if publish not in ("auto", "review"):
@@ -616,8 +589,14 @@ class CordisRecipe(Recipe):
                     stacklevel=3,
                 )
             worker_executor = legacy_worker_settings(worker_executor, episode_workers, worker_gpus)
-            scorer = resolve_episode_scorer(evolution.get("evaluate"))
+            scorer = EpisodeScorer.from_setting(evolution.get("evaluate"), setting="evolution.evaluate")
             evaluation_selection(scorer, episode_workers, worker_executor, worker_gpus)
+            propose = Proposer.from_setting(evolution.get("propose"), setting="evolution.propose")
+            promote = (
+                Promoter.from_setting(evolution["promote"], setting="evolution.promote")
+                if "promote" in evolution
+                else None
+            )
         except (TypeError, ValueError) as exc:
             raise RecipeConfigError(str(exc)) from exc
         agent_executor, agent_timeout_s, agent_trial_timeout_s = proposer_agent_settings(
@@ -628,13 +607,14 @@ class CordisRecipe(Recipe):
             # previous run left, which a stop mid run never closed.
             agent_executor = replace(agent_executor, owner=deployment_owner(Path(proposals_dir.strip())))
         return {
+            **super()._recipe_kwargs(settings, values),
             "agent_executor": agent_executor,
             "agent_timeout_s": agent_timeout_s,
             "agent_trial_timeout_s": agent_trial_timeout_s,
             "proposals_dir": proposals_dir.strip(),
             "max_pending_proposals": max_pending,
-            "propose": resolve_proposer(evolution.get("propose")),
-            "promote": resolve_promoter(evolution["promote"]) if "promote" in evolution else None,
+            "propose": propose,
+            "promote": promote,
             "score_episode": scorer,
             "worker_executor": worker_executor,
             "worker_gpus": worker_gpus,
@@ -658,7 +638,7 @@ class CordisRecipe(Recipe):
             "model_name": model_name if isinstance(model_name, str) and model_name else None,
             "models": models,
             "model_metadata": model_metadata,
-            "candidate_plugin": candidate_plugin,
+            "selection": selection,
             "episode_workers": episode_workers,
             "step_record_dir": None if step_record_dir is None else step_record_dir.strip(),
         }
@@ -779,6 +759,7 @@ class CordisRecipe(Recipe):
             scenario,
             records,
             candidate_backend,
+            self.selection_plugin(candidate_backend),
             algorithm_state=algorithm_state,
             experiment_logger=experiment_logger,
         )
@@ -817,11 +798,17 @@ class CordisRecipe(Recipe):
             "agent_trial_timeout_s": self.agent_trial_timeout_s,
         }
 
+    def selection_plugin(self, candidate_backend: CordisBackend) -> CandidateEvaluationPlugin:
+        """Build the scenario's ``evolution.selection`` plugin; a recipe with its own selection overrides this."""
+        selection_class = SelectionPlugin.referenced_class(self.selection)
+        return selection_class.from_config(self.selection.config, candidate_backend=candidate_backend)
+
     def _build_trainer(
         self,
         scenario: str,
         records: RecordStore,
         candidate_backend: CordisBackend,
+        candidate_evaluator: CandidateEvaluationPlugin,
         *,
         algorithm_state: Mapping[str, Any] | None,
         experiment_logger: ExperimentLogger | None,
@@ -829,23 +816,16 @@ class CordisRecipe(Recipe):
         if self.training_mode != "auto" and not self.propose.reads_requests:
             raise RecipeConfigError(
                 f"harness evolution in training_mode={self.training_mode!r} requires a proposer "
-                "that accepts the 'requests' keyword"
+                "whose reads_requests is true"
             )
         return Trainer.build(
             scenario,
             records,
-            processor_factory=lambda context: (
-                RecordDrivenTraceProcessor if self.batch_policy == "records" else CordisProcessor
-            )(
-                context.with_config(
-                    {
-                        "batch_size": self.batch_size,
-                        "manual_enabled": self.propose.reads_requests,
-                    }
-                )
+            pipeline_factory=lambda context: self.build_pipeline(
+                replace(context, manual_enabled=self.propose.reads_requests)
             ),
             candidate_backend=candidate_backend,
-            candidate_evaluator=self.candidate_plugin.build(candidate_backend),
+            candidate_evaluator=candidate_evaluator,
             algorithm_state=algorithm_state,
             report_type=self.report_type,
             experiment_logger=experiment_logger,

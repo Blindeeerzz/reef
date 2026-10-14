@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from reef.core.evaluation import ServedComposition as ServedComposition
 from reef.harness.tree.mutations import Mutation
 from reef.train.cordis_backend.proposals import ProposalInbox
 
@@ -64,12 +65,6 @@ class StepProgressReader(ABC):
 
 # Compatibility for adapters that implement the earlier interface name.
 ProposalGate = ProposalValidator
-
-
-@dataclass(frozen=True)
-class ServedComposition:
-    release_id: str
-    entries: tuple[Mapping[str, object], ...]
 
 
 class ServedCompositionConsumer(ABC):

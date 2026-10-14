@@ -1,12 +1,6 @@
-"""Immutable step inputs and the optional served-composition capability."""
+"""Compatibility exports for the shared Reefine evaluation inputs."""
 
-from dataclasses import dataclass
+from reef.core.evaluation import ServedComposition
+from reef.evaluation.reefine import EvaluationContext
 
-from reef.core.training_request import TrainingRequest
-from reef.train.cordis_backend.contracts import ServedComposition
-
-
-@dataclass(frozen=True)
-class EvaluationContext:
-    request: TrainingRequest | None
-    current: ServedComposition
+__all__ = ["EvaluationContext", "ServedComposition"]

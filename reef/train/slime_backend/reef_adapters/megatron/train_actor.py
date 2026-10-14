@@ -10,14 +10,26 @@ from typing import Any
 import ray
 import torch
 import torch.distributed as dist
+from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
+
+# Megatron's gradient buffer binds ``torch.distributed.reduce_scatter_tensor``,
+# ``all_gather_into_tensor`` and ``_coalescing_manager`` when it is imported. Slime
+# applies this patch later, inside ``MegatronTrainRayActor.init``, so the bound
+# functions receive ``ReloadableProcessGroup`` objects and run through torch's
+# Python process-group trampoline, whose work handle crashes in ``wait`` on
+# torch 2.13. Patching before the Slime actor import makes Megatron bind the
+# wrappers, which unwrap the group first. Slime's later call is a per-process no-op.
+monkey_patch_torch_dist()
+
+# isort: split
 from slime.backends.megatron_utils.actor import MegatronTrainRayActor
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.misc import Box
-from slime.utils.reloadable_process_group import destroy_process_groups, reload_process_groups
 from slime.utils.timer import Timer, timer
 from torch_memory_saver import torch_memory_saver
 
+from reef.train.slime_backend.distill.teacher import TEACHER_TAG
 from reef.train.slime_backend.reef_adapters.megatron.adapter_slots import AdapterSlotSwitcher
 from reef.train.slime_backend.reef_adapters.megatron.lora import (
     collect_lora_train_metrics,
@@ -25,6 +37,7 @@ from reef.train.slime_backend.reef_adapters.megatron.lora import (
     zero_megatron_lora_adapters,
 )
 from reef.train.slime_backend.reef_adapters.megatron.lora_checkpoint import save_lora_adapter_to_path
+from reef.train.slime_backend.reef_adapters.megatron.scheduler_resume import restore_scheduler_progress
 from reef.train.slime_backend.reef_adapters.training_job.storage import ADAPTER_SLOTS_DIRNAME
 from reef.train.slime_backend.reef_adapters.worker_hooks import (
     _loss_family_spec,
@@ -57,6 +70,8 @@ class ReefMegatronTrainRayActor(MegatronTrainRayActor):
 
     def init(self, args, role, with_ref=False, with_opd_teacher=False):
         result = super().init(args, role, with_ref=with_ref, with_opd_teacher=with_opd_teacher)
+        if isinstance(result, int):
+            restore_scheduler_progress(args, result, getattr(self, "opt_param_scheduler", None))
         updater = getattr(self, "weight_updater", None)
         if updater is not None:
             updater.tie_word_embeddings = bool(getattr(self.hf_config, "tie_word_embeddings", False))
@@ -377,9 +392,9 @@ class ReefMegatronTrainRayActor(MegatronTrainRayActor):
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:
         super().load_other_checkpoint(model_tag, path)
-        if model_tag == "ref" and megatron_lora_enabled(self.args):
+        if model_tag in ("ref", TEACHER_TAG) and megatron_lora_enabled(self.args):
             zero_megatron_lora_adapters(self.model)
-            self.weights_backuper.backup("ref")
+            self.weights_backuper.backup(model_tag)
 
 
 __all__ = ["ReefMegatronTrainRayActor"]

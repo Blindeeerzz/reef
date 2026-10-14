@@ -35,6 +35,7 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from reef.core.prompts import untrusted_text
 from reef.harness.episodes.e2b import E2BExecutor, E2BSession
 from reef.harness.episodes.executor import EpisodeExecutor, EpisodeLaunchError, EpisodeTimeout, SandboxExecutor
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindings
@@ -44,7 +45,7 @@ from reef.harness.tree.mutations import Mutation, admit_mutations
 from reef.harness.tree.nodes import RESERVED_ENTRY_IDS
 from reef.harness.tree.render import render_composition
 from reef.train.cordis_backend.manifest import FailureManifest
-from reef.train.cordis_backend.strategies import AgentHost, Proposer, StepProposal, untrusted_text
+from reef.train.cordis_backend.strategies import AgentHost, Proposer, StepProposal
 from reef.train.reefine import proposer as evolution
 from reef.train.reefine.agent_gateway import AgentGateway, WorkspaceTools
 from reef.train.reefine.instructions import ProposalInstructions
@@ -193,7 +194,9 @@ def workspace_mutations(
             mutations.append(Mutation("update", entry_id, {"name": kind, "config": config}))
     mutations.extend(Mutation("remove", entry_id) for entry_id in current if entry_id not in seen)
     # A new id another kind of the tree holds (a config entry, say) is settled the text proposer's way.
-    mutations.extend(evolution.request_mutations(creates, nodes, entries))
+    created, refused = evolution.request_mutations(creates, nodes, entries)
+    mutations.extend(created)
+    problems.extend(refused)
     return mutations, problems
 
 
@@ -508,9 +511,13 @@ class AgentProposer(Proposer):
     @property
     def runs_agent(self) -> bool:
         """The agent runs for pi alone: off pi the step builds no host for it and notes nothing about one."""
-        return self.adapter == "pi" and super().runs_agent
+        return self.adapter == "pi"
 
-    def __call__(
+    @property
+    def reads_requests(self) -> bool:
+        return True
+
+    def propose(
         self,
         nodes: tuple[tuple[str, object], ...],
         samples: tuple[TrajectoryItem, ...],

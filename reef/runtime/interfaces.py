@@ -64,6 +64,17 @@ class RuntimeLoadId:
     def __str__(self) -> str:
         return f"{self.incarnation}:{self.sequence}"
 
+    def lag_behind(self, serving: RuntimeLoadId) -> int | None:
+        """Return how many versions this load is behind ``serving``.
+
+        The result is negative when this load is newer than ``serving``. None
+        means that the two loads belong to different incarnations, so their
+        sequences cannot be compared.
+        """
+        if self.incarnation != serving.incarnation:
+            return None
+        return serving.sequence - self.sequence
+
     @classmethod
     def parse(cls, value: str) -> RuntimeLoadId:
         if not isinstance(value, str):
@@ -877,6 +888,62 @@ class InferenceMemoryOperations(ABC):
 
     @abstractmethod
     def resume(self, regions: Sequence[str]) -> None: ...
+
+
+class InferenceEngine(ABC):
+    """One inference engine as its control actor, backend and weight updaters see it.
+
+    Each native integration implements this on the object its Ray engine actor
+    is built from (``ReefSGLangEngine``, ``ReefVLLMEngine``). The methods are
+    the vocabulary those callers already use by name; engine launch and the
+    engine's own transports stay on the implementation. Results that only
+    report the engine's answer are returned as ``object``. ``get_runtime_load_id``
+    returns ``None`` on a node that is not the engine's node zero.
+    """
+
+    @abstractmethod
+    def get_url(self) -> str: ...
+
+    @abstractmethod
+    def health_generate(self, timeout: float = 5) -> bool: ...
+
+    @abstractmethod
+    def shutdown(self) -> None: ...
+
+    @abstractmethod
+    def get_runtime_load_id(self) -> str | None: ...
+
+    @abstractmethod
+    def set_runtime_load_id(self, runtime_load_id: str) -> object: ...
+
+    @abstractmethod
+    def pause_generation(self, mode: str) -> object:
+        """Stop scheduling; ``in_place`` keeps in-flight requests' KV, ``retract`` frees it and resets the cache."""
+
+    @abstractmethod
+    def continue_generation(self) -> object: ...
+
+    @abstractmethod
+    def flush_cache(self) -> None:
+        """Reset the shared prefix cache; raise when requests still hold KV."""
+
+    @abstractmethod
+    def release_memory_occupation(self, tags: Sequence[str] | None = None) -> None:
+        """Release the named regions, or every region; repeating an acknowledged release is a no-op."""
+
+    @abstractmethod
+    def resume_memory_occupation(self, tags: Sequence[str] | None = None) -> None: ...
+
+    @abstractmethod
+    def update_weights_from_disk(self, model_path: str, *, runtime_load_id: str | None = None) -> object:
+        """Load the weights under ``model_path`` and, when given, serve them as ``runtime_load_id``."""
+
+    @abstractmethod
+    def load_lora_adapter_from_disk(self, lora_name: str, lora_path: str) -> object:
+        """Load a PEFT adapter directory the engine's host can read, under ``lora_name``."""
+
+    @abstractmethod
+    def unload_lora_adapter(self, lora_name: str) -> object: ...
 
 
 # -- Durable stores -----------------------------------------------------------

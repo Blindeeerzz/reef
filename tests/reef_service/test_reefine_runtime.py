@@ -3,21 +3,48 @@
 import asyncio
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-from reef_service.test_harness_proposals import _dispatcher
-from reef_service.test_harness_recipe import MODEL, make_binary, runtime
+from tests.support._strategies import resolve_episode_scorer, resolve_proposer
 
+from reef.artifact import InMemoryRepositoryBackend
 from reef.core.training_request import TrainingRequest
+from reef.dispatcher import Dispatcher
 from reef.harness.adapters import get_adapter
+from reef.harness.episodes.model_binding import ModelBinding
 from reef.harness.tree.mutations import Mutation
+from reef.inference.http import InferenceProxyRuntime
 from reef.recipe.reefine import ReefineRecipe
 from reef.service.app import create_app
+from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train.cordis_backend.contracts import ServedComposition
-from reef.train.cordis_backend.strategies import resolve_episode_scorer, resolve_proposer
 from reef.train.reefine.backend import ReefineBackend
 from reef.train.types import TrainingBatch
+
+PI_FAKE = """\
+#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+
+prompt = sys.argv[sys.argv.index("-p") + 1]
+agent_dir = Path(os.environ["PI_CODING_AGENT_DIR"])
+session_dir = Path(os.environ["PI_CODING_AGENT_SESSION_DIR"])
+session_dir.mkdir(parents=True, exist_ok=True)
+rules_path = agent_dir / "AGENTS.md"
+event = {"type": "agent_end", "rules": rules_path.read_text() if rules_path.exists() else ""}
+(session_dir / "session.jsonl").write_text(json.dumps(event) + "\\n")
+"""
+
+MODEL = ModelBinding(base_url="http://localhost:8000", model="qwen3-8b", api_key="dummy")
+
+
+def make_binary(tmp_path: Path) -> Path:
+    binary = tmp_path / "fake-pi"
+    binary.write_text(PI_FAKE)
+    binary.chmod(0o755)
+    return binary
 
 
 def propose(nodes, samples, model, *, requests=(), **kwargs):
@@ -62,12 +89,12 @@ def test_pending_algorithm_entries_are_not_the_current_serving_tree(tmp_path):
 def test_formal_checks_control_publication_and_progress_route(tmp_path, monkeypatch, case):
     recipe = ReefineRecipe.from_environment(
         {},
-        runtime=runtime(),
+        runtime=InferenceProxyRuntime(model_path=MODEL.model, base_url=MODEL.base_url, api_key=MODEL.api_key),
         config={
             "evolution": {
-                "propose": propose,
+                "propose": resolve_proposer(propose),
                 "proposer_agent": None,
-                "evaluate": score,
+                "evaluate": resolve_episode_scorer(score),
                 "tasks": ["health"],
                 "binary": str(make_binary(tmp_path)),
                 "proposals_dir": str(tmp_path / "proposals"),
@@ -91,7 +118,15 @@ def test_formal_checks_control_publication_and_progress_route(tmp_path, monkeypa
         return json.dumps(next(responses))
 
     monkeypatch.setattr(type(MODEL), "chat", chat)
-    dispatcher = _dispatcher(tmp_path, replace(recipe, training_mode="manual"))
+    initial = tmp_path / "initial"
+    initial.mkdir()
+    factory = InMemoryRepositoryBackend.factory(initial, root=tmp_path / "repository")
+    dispatcher = Dispatcher(
+        replace(recipe, training_mode="manual"),
+        factory,
+        agent_record_dir=tmp_path / "agent-record",
+        scenario_storage=SQLiteScenarioStorage(tmp_path / "agent-record"),
+    )
     scenario = dispatcher.get_or_create_scenario("agents")
     head = scenario.current_artifact_ref().release_id
     headers = {"x-reef-scenario": "agents"}

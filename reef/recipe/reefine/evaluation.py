@@ -4,19 +4,14 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
-from reef.recipe.cordis import _resolve_callable
+from reef.evaluation.reefine import EvaluationInstructions, ReefineEvaluationSettings, RequestContext, RequestVerifier
 from reef.recipe.errors import RecipeConfigError
 from reef.recipe.reefine.prompts import BEHAVIOR_REVIEW_PROMPT, CHANGE_REVIEW_PROMPT, EVALUATION_PLAN_PROMPT
-from reef.train.evaluation.reefine import (
-    EvaluationInstructions,
-    ReefineEvaluationSettings,
-    ReefinePluginFactory,
-    RequestContext,
-    RequestVerifier,
-)
 
 
-def evaluation_factory(config: object, tasks: tuple[str, ...]) -> ReefinePluginFactory:
+def evaluation_settings(
+    config: object, tasks: tuple[str, ...]
+) -> tuple[ReefineEvaluationSettings, EvaluationInstructions]:
     if config is None:
         config = {}
     if not isinstance(config, Mapping):
@@ -64,9 +59,10 @@ def evaluation_factory(config: object, tasks: tuple[str, ...]) -> ReefinePluginF
     verifier = None
     reference = context.get("verifier")
     if reference is not None:
-        verifier = _resolve_callable(reference, "request verifier")()
-        if not isinstance(verifier, RequestVerifier):
-            raise RecipeConfigError("request verifier must inherit RequestVerifier")
+        try:
+            verifier = RequestVerifier.from_setting(reference, setting="request verifier")
+        except ValueError as exc:
+            raise RecipeConfigError(str(exc)) from exc
     protected = config.get("protected_tasks", tasks)
     if not isinstance(protected, (list, tuple)) or any(
         not isinstance(task, str) or not task.strip() for task in protected
@@ -99,6 +95,4 @@ def evaluation_factory(config: object, tasks: tuple[str, ...]) -> ReefinePluginF
         )
     except ValueError as exc:
         raise RecipeConfigError(str(exc)) from exc
-    return ReefinePluginFactory(
-        settings, EvaluationInstructions(EVALUATION_PLAN_PROMPT, BEHAVIOR_REVIEW_PROMPT, CHANGE_REVIEW_PROMPT)
-    )
+    return settings, EvaluationInstructions(EVALUATION_PLAN_PROMPT, BEHAVIOR_REVIEW_PROMPT, CHANGE_REVIEW_PROMPT)

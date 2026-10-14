@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 from reef.core.requirements import parse_requires
+from reef.evaluation.harness import HarnessCandidate
+from reef.evaluation.reefine import EvaluationContext
+from reef.evaluation.reefine import ReefineCandidate as ReefineCandidate
+from reef.evaluation.reefine import ReefineEvaluationBackend
 from reef.harness.adapters.descriptor import AdapterDescriptor
 from reef.harness.episodes.executor import EpisodeExecutor
 from reef.harness.episodes.model_binding import ModelBindings
@@ -14,19 +18,12 @@ from reef.harness.episodes.run import EpisodeResult
 from reef.harness.tree.mutations import admit_mutations
 from reef.harness.tree.render import render_composition
 from reef.train.backend import PreparedStep
-from reef.train.cordis_backend.backend import CordisBackend, HarnessCandidate
+from reef.train.cordis_backend.backend import CordisBackend
 from reef.train.cordis_backend.contracts import ServedComposition, ServedCompositionConsumer
-from reef.train.reefine.context import EvaluationContext
 from reef.train.types import TrainingBatch
 
 
-@dataclass(frozen=True, kw_only=True)
-class ReefineCandidate(HarnessCandidate):
-    context: EvaluationContext
-    requires: tuple[Mapping[str, object], ...] = ()
-
-
-class ReefineBackend(CordisBackend, ServedCompositionConsumer):
+class ReefineBackend(CordisBackend, ServedCompositionConsumer, ReefineEvaluationBackend):
     """Use published entries as the base; pending entries are never the incumbent."""
 
     served_composition: ServedComposition | None = None
@@ -74,7 +71,7 @@ class ReefineBackend(CordisBackend, ServedCompositionConsumer):
         current = self.served_composition
         if self._model_resolver is not None:
             self._models = self._model_resolver.resolve()
-            self._binding_nodes = self._models.served.compose_nodes(self._descriptor)
+            self._episode_evaluator.use_models(self._models)
         entries, refusal = admit_mutations(current.entries, candidate.mutations, self._descriptor)
         if refusal is not None:
             raise ValueError(f"candidate no longer admitted against {current.release_id}: {refusal}")
@@ -104,15 +101,11 @@ class ReefineBackend(CordisBackend, ServedCompositionConsumer):
     def episode_executor(self) -> EpisodeExecutor:
         return self._executor
 
-    @property
-    def episode_timeout_seconds(self) -> float:
-        return self._episode_timeout_s
-
     def episode_files(self, entries: tuple[Mapping[str, object], ...]) -> dict[str, str]:
-        return self._render_for_episode(entries)
+        return self._episode_evaluator.render(entries)
 
     def score_health(self, task: str, result: EpisodeResult) -> float:
-        return self._score_episode.score_with_models(task, result, self._models)
+        return self.episode_scorer.score_with_models(task, result, self._models)
 
     def show_evaluation_checks(self, checks: tuple[Mapping[str, object], ...]) -> None:
         if self._step_progress is not None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import os
 import signal
 import subprocess
@@ -10,16 +11,18 @@ import time
 from pathlib import Path
 
 import pytest
-from reef_service.runtime_stubs import StubTrainingRuntime
+from tests.support.runtime_stubs import StubTrainingRuntime
 
 
 from reef.recipe.checkpoint_strategy import EveryNVersions
+from reef.recipe.errors import RecipeConfigError
 from reef.service import deploy
 from reef.service.assembly import _repository_location
 from reef.service.deploy.service_config import ServiceConfig
 
 OPENCLAWRL_RECIPE = "recipes.openclawrl.recipe:OpenClawRLRecipe"
 SAO_RECIPE = "recipes.sao.recipe:SAORecipe"
+GENERATED_TASK_RECIPE = "reef.recipe.generated_tasks:GeneratedTaskRecipe"
 
 
 def test_configured_handler_rejects_a_function() -> None:
@@ -72,7 +75,6 @@ def stub_runtimes(**kwargs):
 
 def _settings(**overrides) -> ServiceConfig:
     recipe_settings = {
-        "batch_size": 2,
         "checkpoint_every_n_versions": 3,
         **overrides.pop("recipe_settings", {}),
     }
@@ -151,6 +153,17 @@ def test_service_config_preserves_candidate_evaluation_section() -> None:
 
 
 @pytest.mark.unit
+def test_service_config_reads_the_pipeline_section() -> None:
+    section = {"record2task": {"module": "reef.recipe.generated_tasks:GeneratedTaskTasks", "config": {"rounds": 1}}}
+
+    args = deploy.service_config_from_mapping({"reef": {"recipe": SAO_RECIPE}, "pipeline": section})
+
+    assert args.pipeline_settings == section
+    with pytest.raises(ValueError, match="pipeline must be an object"):
+        deploy.service_config_from_mapping({"reef": {"recipe": SAO_RECIPE}, "pipeline": "generated"})
+
+
+@pytest.mark.unit
 def test_service_config_rejects_non_object_evaluation_section() -> None:
     with pytest.raises(ValueError, match="evaluation must be an object"):
         deploy.service_config_from_mapping({"reef": {"recipe": SAO_RECIPE}, "evaluation": "disabled"})
@@ -199,7 +212,7 @@ def test_cookbook_configs_launch_internal_service_from_reef_settings(
     if not config_path.exists():
         pytest.skip("repo-owned stack: shipped with the repo, not with the package")
     monkeypatch.delenv("REEF_TOKEN", raising=False)
-    from reef_service.config_helpers import load_deployment
+    from tests.support.config_helpers import load_deployment
 
     config = load_deployment(config_path)
     service = next(item for item in config["services"] if item["name"] == "reef")
@@ -221,7 +234,7 @@ def test_cookbook_configs_launch_internal_service_from_reef_settings(
     ],
 )
 def test_cookbook_training_configs_leave_max_staleness_unset(relative_path) -> None:
-    from reef_service.config_helpers import load_deployment
+    from tests.support.config_helpers import load_deployment
 
     config = load_deployment(deploy.PROJECT_ROOT / relative_path)
 
@@ -235,7 +248,7 @@ def test_cookbook_training_configs_leave_max_staleness_unset(relative_path) -> N
 )
 def test_training_configs_make_checkpoint_budget_mandatory(relative_path, monkeypatch) -> None:
     monkeypatch.delenv("REEF_TOKEN", raising=False)
-    from reef_service.config_helpers import load_deployment
+    from tests.support.config_helpers import load_deployment
 
     config = load_deployment(deploy.PROJECT_ROOT / relative_path)
     retention = config["training"]["checkpoint_retention"]
@@ -327,7 +340,12 @@ def test_build_dispatcher_uses_the_recipe_name_for_a_dotted_reference(monkeypatc
 def test_build_dispatcher_passes_recipe_settings_to_a_dotted_reference(monkeypatch, tmp_path) -> None:
     module = tmp_path / "demo_evolution.py"
     module.write_text(
-        "def propose(nodes, samples, model):\n    return None\n\ndef evaluate(task, result):\n    return 0.0\n"
+        "from reef.evaluation.harness import EpisodeScorer\n"
+        "from reef.train.cordis_backend.strategies import Proposer\n\n"
+        "class Propose(Proposer):\n"
+        "    def propose(self, nodes, samples, models, **keywords):\n        return None\n\n"
+        "class Evaluate(EpisodeScorer):\n"
+        "    def score(self, task, result):\n        return 0.0\n"
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setattr(
@@ -341,8 +359,8 @@ def test_build_dispatcher_passes_recipe_settings_to_a_dotted_reference(monkeypat
             recipe="reef.recipe.cordis:CordisRecipe",
             recipe_settings={
                 "evolution": {
-                    "propose": "demo_evolution:propose",
-                    "evaluate": "demo_evolution:evaluate",
+                    "propose": "demo_evolution:Propose",
+                    "evaluate": "demo_evolution:Evaluate",
                     "tasks": ["task one"],
                     "adapter": "pi",
                 }
@@ -368,14 +386,15 @@ def test_build_dispatcher_applies_common_recipe_controls(monkeypatch, tmp_path) 
     dispatcher = deploy.build_dispatcher(
         _settings(
             recipe=OPENCLAWRL_RECIPE,
-            recipe_settings={"batch_size": 4, "checkpoint_every_n_versions": 5},
+            recipe_settings={"checkpoint_every_n_versions": 5},
+            pipeline_settings={"task2batch": {"config": {"batch_size": 4}}},
             agent_record_dir=str(tmp_path / "agent-record"),
         ),
         environ={},
         connector=lambda **kwargs: stub_runtimes(),
     )
     recipe = dispatcher._recipe
-    captured["batch_size"] = recipe.batch_size
+    captured["batch_size"] = recipe.stages().task2batch.config["batch_size"]
     captured["checkpoint_strategy"] = recipe.checkpoint_strategy
 
     assert captured == {"batch_size": 4, "checkpoint_strategy": EveryNVersions(5)}
@@ -389,7 +408,7 @@ def test_build_dispatcher_injects_candidate_evaluation_into_weight_recipe(monkey
         lambda *args, **kwargs: lambda scenario: object(),
     )
     evaluation = {
-        "module": "reef_service._candidate_evaluation_plugin:CheckpointFactory",
+        "module": "tests.support._candidate_evaluation_plugin:CheckpointEvaluator",
         "config": {"score": 1.0, "threshold": 0.0},
     }
 
@@ -405,7 +424,7 @@ def test_build_dispatcher_injects_candidate_evaluation_into_weight_recipe(monkey
 
     recipe = dispatcher._recipe
     assert recipe.candidate_evaluation is not None
-    assert recipe.candidate_evaluation.module == evaluation["module"]
+    assert recipe.candidate_evaluation.plugin.plugin_class.__name__ == evaluation["module"].rpartition(":")[2]
 
 
 @pytest.mark.unit
@@ -423,6 +442,73 @@ def test_build_dispatcher_rejects_candidate_evaluation_for_non_weight_recipe(mon
                 evaluation_settings={"module": "cookbook.evaluation:CheckpointFactory"},
                 agent_record_dir=str(tmp_path / "agent-record"),
             )
+        )
+
+
+@pytest.mark.unit
+def test_build_dispatcher_hands_the_pipeline_section_to_the_recipe(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        deploy.GitLFSRepositoryBackend,
+        "factory",
+        lambda *args, **kwargs: lambda scenario: object(),
+    )
+    generator = {"module": "tests.reef_recipe.test_generated_tasks:ScriptedGenerator", "config": {"count": 1}}
+    pipeline = {
+        "record2record": {"module": "reef.recipe.generated_tasks:GeneratedTaskRecord2Record", "config": {}},
+        "record2task": {
+            "module": "reef.recipe.generated_tasks:GeneratedTaskTasks",
+            "config": {"generator": generator},
+        },
+    }
+
+    settings = _settings(
+        recipe=GENERATED_TASK_RECIPE, pipeline_settings=pipeline, agent_record_dir=str(tmp_path / "ar")
+    )
+    dispatcher = deploy.build_dispatcher(
+        dataclasses.replace(settings, recipe_settings={}), connector=lambda **kwargs: stub_runtimes()
+    )
+
+    stages = dispatcher._recipe.pipeline_stages
+    # A stage the section leaves out is the recipe's own, with no config.
+    assert stages is not None and stages.task2batch.plugin_class.__name__ == "GeneratedTaskBatches"
+    assert stages.task2batch.config == {}
+    assert (
+        stages.record2record is not None and stages.record2record.plugin_class.__name__ == "GeneratedTaskRecord2Record"
+    )
+    assert stages.record2task is not None and stages.record2task.plugin_class.__name__ == "GeneratedTaskTasks"
+    assert stages.record2task.config == {"generator": generator}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("recipe", "error", "message"),
+    [
+        (OPENCLAWRL_RECIPE, RecipeConfigError, "must name a class that inherits Record2Task"),
+        # A recipe that trains no weights reads the section too, and refuses the same mistake.
+        ("reef.recipe.base:Recipe", RecipeConfigError, "must name a class that inherits Record2Task"),
+        # A preset sets its pipeline section in its own file.
+        ("recipe", ValueError, "set its pipeline section in the preset file"),
+    ],
+)
+def test_build_dispatcher_rejects_a_pipeline_section_it_cannot_use(
+    monkeypatch, tmp_path, recipe, error, message
+) -> None:
+    monkeypatch.setattr(
+        deploy.GitLFSRepositoryBackend,
+        "factory",
+        lambda *args, **kwargs: lambda scenario: object(),
+    )
+
+    with pytest.raises(error, match=message):
+        deploy.build_dispatcher(
+            _settings(
+                recipe=recipe,
+                pipeline_settings={
+                    "record2task": {"module": "tests.reef_recipe.test_generated_tasks:ScriptedGenerator"}
+                },
+                agent_record_dir=str(tmp_path / "agent-record"),
+            ),
+            connector=lambda **kwargs: stub_runtimes(),
         )
 
 
@@ -449,8 +535,28 @@ def test_build_dispatcher_rejects_recipe_settings_nothing_consumes(monkeypatch, 
             connector=lambda **kwargs: stub_runtimes(),
         )
     # The error lists what the recipe would consume.
-    assert "reef.batch_size" in str(excinfo.value)
+    assert "reef.max_staleness" in str(excinfo.value)
     assert "reef.checkpoint_every_n_versions" in str(excinfo.value)
+
+
+@pytest.mark.unit
+def test_build_dispatcher_refuses_a_stage_setting_with_its_pipeline_key(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        deploy.GitLFSRepositoryBackend,
+        "factory",
+        lambda *args, **kwargs: lambda scenario: object(),
+    )
+
+    with pytest.raises(RecipeConfigError, match="does not consume"):
+        deploy.build_dispatcher(
+            _settings(
+                recipe=OPENCLAWRL_RECIPE,
+                recipe_settings={"batch_size": 4},
+                agent_record_dir=str(tmp_path / "agent-record"),
+            ),
+            environ={},
+            connector=lambda **kwargs: stub_runtimes(),
+        )
 
 
 @pytest.mark.unit

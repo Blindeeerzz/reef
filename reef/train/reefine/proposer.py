@@ -22,6 +22,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from reef.core.prompts import untrusted_text
 from reef.core.requirements import parse_requires
 from reef.core.trajectories import recorded_payload
 from reef.harness.adapters import get_adapter
@@ -31,7 +32,7 @@ from reef.harness.episodes.requests import REQUESTS_ENTRY_ID, ships_requests
 from reef.harness.episodes.version_check import VERSION_CHECK_ENTRY_ID, ships_version_check
 from reef.harness.tree.mutations import admit_mutations
 from reef.harness.tree.nodes import RESERVED_ENTRY_IDS
-from reef.train.cordis_backend import Mutation, StepProposal, untrusted_text
+from reef.train.cordis_backend import Mutation, StepProposal
 from reef.train.reefine.instructions import ProposalInstructions
 from reef.train.types import TrajectoryItem
 
@@ -564,10 +565,12 @@ def answer_once(
         if design is not None and adapter != EXTENSION_ADAPTER and harness_facts(adapter) is not None:
             return declined_answer(models, request, design, own, adapter, instructions=instructions)
         return nothing_to_apply(reply, "the reply holds no usable entry")
-    mutations = request_mutations(without_reefs_own(proposals), nodes, entries)
+    mutations, refused_entries = request_mutations(without_reefs_own(proposals), nodes, entries)
     if not mutations:
         return UnusableAnswer(
-            "every entry in the reply was dropped: a reserved id, or an id another kind holds", design
+            "every entry in the reply was dropped: a reserved id, or an id another kind holds",
+            design,
+            dropped=tuple(refused_entries),
         )
     written = entries_in_short(mutations)
     if entries:
@@ -588,8 +591,9 @@ def answer_once(
     if design is not None:
         notes["design"] = kept_design(design)
     misnamed = misnamed_entries(reply, kinds)
-    if misnamed:
-        notes["dropped"] = misnamed
+    dropped = [*misnamed, *refused_entries]
+    if dropped:
+        notes["dropped"] = dropped
     # The review reads the whole design; the step records it cut to the record's size.
     review, review_failure = review_answer(
         models,
@@ -649,7 +653,7 @@ def entries_in_short(mutations: Sequence[Mutation]) -> str:
         return value
 
     return "\n".join(
-        f"- {json.dumps(shortened({'id': mutation.id, **(mutation.options or {})}), ensure_ascii=False)}"
+        f"- {json.dumps(shortened({'op': mutation.op, 'id': mutation.id, **(mutation.options or {})}), ensure_ascii=False)}"
         for mutation in mutations
     )
 
@@ -853,13 +857,24 @@ def request_prompt(
 
 def request_mutations(
     proposals: Sequence[Proposal], nodes: Sequence[tuple[str, Any]], entries: Sequence[Mapping[str, Any]]
-) -> list[Mutation]:
-    """The proposals as mutations against the tree: an id the tree holds under the same kind is an update and a
-    new id a create; an id another kind holds would be refused at admission, so a rules entry takes one from
-    its text instead and a named kind is dropped."""
+) -> tuple[list[Mutation], list[str]]:
+    """The proposals as mutations against the tree, with one refusal line per proposal dropped: an id the tree
+    holds under the same kind is an update and a new id a create; a proposal with ``remove`` retires an entry the
+    tree holds and is refused otherwise, so a request that stops a behavior takes the old rule out instead of
+    piling a contradicting one beside it. An id another kind holds would be refused at admission, so a rules
+    entry takes one from its text instead and a named kind is dropped."""
     held, taken = tree_ids(nodes, entries)
-    mutations = []
+    mutations: list[Mutation] = []
+    refused: list[str] = []
     for entry_id, kind, config in proposals:
+        if config.get("remove") is True:
+            if (kind, entry_id) not in held:
+                line = f"{kind} {entry_id!r} was dropped: the tree holds no such entry to remove"
+                logging.getLogger(__name__).warning("propose: %s", line)
+                refused.append(line)
+                continue
+            mutations.append(Mutation("remove", entry_id))
+            continue
         op = "update" if (kind, entry_id) in held else "create"
         if op == "create" and entry_id in taken:
             if "name" in REQUEST_KINDS[kind]:
@@ -871,7 +886,7 @@ def request_mutations(
             entry_id = rules_id(text) if kind == "rules" else rules_id(text).replace("rules-", "config-")
             op = "update" if (kind, entry_id) in held else "create"
         mutations.append(Mutation(op, entry_id, {"name": kind, "config": config}))
-    return mutations
+    return mutations, refused
 
 
 def tree_ids(
@@ -1329,7 +1344,8 @@ def parse_config_entry(entry_id: Any, config: dict[str, Any], config_keys: Seque
 
 
 def parse_entry(item: Any, kinds: Sequence[str], config_keys: Sequence[str] = ()) -> Proposal | None:
-    """One proposal object as (entry id, kind, config), or ``None`` when its shape is not one of ``kinds``."""
+    """One proposal object as (entry id, kind, config), or ``None`` when its shape is not one of ``kinds``; a
+    retire (``remove`` true and no config) parses as (entry id, kind, ``{"remove": True}``) instead."""
     if not isinstance(item, dict):
         return None
     # The prompt calls the field "name" and the value a kind, so a model writes either key; with both
@@ -1338,6 +1354,11 @@ def parse_entry(item: Any, kinds: Sequence[str], config_keys: Sequence[str] = ()
     kind = item["kind"] if item.get("kind") in REQUEST_KINDS else item.get("name")
     if kind not in kinds or kind not in REQUEST_KINDS:
         return None
+    if item.get("remove") is True:
+        # A retire: the entry's id and kind, no config; `request_mutations` refuses one the tree does not hold.
+        if not isinstance(entry_id, str) or not ENTRY_NAME.fullmatch(entry_id):
+            return None
+        return entry_id, kind, {"remove": True}
     fields = REQUEST_KINDS[kind]
     if config is None:
         # A model also writes the config fields beside the id instead of under "config".
@@ -1387,6 +1408,8 @@ def dropped_entry_reasons(reply: str, kinds: Sequence[str], config_keys: Sequenc
             and config.get("name") not in (None, item.get("id"))
         ):
             lines.append(f"{label} was dropped: its id must equal its config name {config.get('name')!r}")
+        elif item.get("remove") is True:
+            lines.append(f"{label} was dropped: a remove names a held entry, by a lowercase id, with no config")
         else:
             lines.append(f"{label} was dropped: its body is empty or its id is not a lowercase entry name")
     return lines

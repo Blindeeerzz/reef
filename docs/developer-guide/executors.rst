@@ -359,19 +359,18 @@ guess GPU needs. Slime training/rollout still require specialized Ray launchers.
 Whole-stack deployment configuration
 ------------------------------------
 
-Version 2 has no public process list: Reef assembles native inference/training
+A configuration file has no process list: Reef assembles native inference/training
 and HTTP processes using the same Executor factory as the model workers.
 Method services such as a PRM are deployed independently and recipes consume
 their endpoints; the one auxiliary child Reef assembles is the generator
-service of a ``generator`` section, under the ``generator`` executor role. The explicit ``services`` and
-``execution.services`` examples below apply only to unversioned legacy stacks. The orchestrator only handles dependencies, readiness, endpoint
+service of a ``generator`` section, under the ``generator`` executor role.
+The orchestrator only handles dependencies, readiness, endpoint
 publication, log tailing, failure detection and reverse-order shutdown. It
 does not contain local process or Ray placement operations.
 
 Omitted selectors (or YAML ``null``) use ``auto``. Existing YAML without
 resource reservations or a Ray placement-group context continues to launch
-services locally and Slime workers through Ray. No ``execution.services``
-setting is needed for those defaults. Local-controller training stacks declare
+services locally and Slime workers through Ray. Local-controller training stacks declare
 the training/rollout roles so ``reef serve`` can prepare their shared runtime
 before launching the driver (see below).
 
@@ -400,8 +399,7 @@ specialized Ray requirement and service resource reservations remain
 component-specific, rather than pretending to implement vLLM's TP/PP launcher.
 
 Each selector accepts a built-in name, import path, inline ``backend/options``
-object, or a named profile under ``executors``. ``services[].executor``
-overrides ``execution.services`` for that service. Explicit Slime command-line
+object, or a named profile under ``executors``. Explicit Slime command-line
 flags override the corresponding role selection; they also accept profile
 names. Profiles for training and rollout carry domain-launcher options, not
 necessarily Ray actor options. The reserved Slime launch arguments (``args``,
@@ -510,10 +508,12 @@ Inference recovery and reconnect
 
 ``reef.runtime.recovery.InferenceControl`` owns pause intent and
 recovery/reconnect ordering through three backend contracts defined beside it
-in ``reef.runtime.recovery``: ``InferenceEngines`` for engine operations, ``WeightUpdateConnection`` for transport-lock inspection
+in ``reef.runtime.recovery``: ``InferenceEngineGroup`` for operations on the engine group, ``WeightUpdateConnection`` for transport-lock inspection
 and replacement, and ``InferenceMonitor`` for background recovery. The SGLang
 inference worker supplies these adapters; engine handles, GPU topology and Ray
-fan-out remain private to it. The existing training-side RPC vocabulary and
+fan-out remain private to it. Each engine actor implements
+``reef.runtime.interfaces.InferenceEngine``, the per-engine vocabulary the
+group, the backend and the weight updaters call by name. The existing training-side RPC vocabulary and
 six-field engine/lock attachment tuple are unchanged.
 
 Pause intent is recorded before the engine barrier, so a partial pause failure
@@ -759,7 +759,10 @@ do not publish inference weights.
 
 Preparation failure is retryable without a new job identity. Once ``RUNNING``
 is recorded, a training/save failure is ambiguous and requires operator
-recovery; automatic retry must not repeat a possible optimizer step. A
+recovery; automatic retry must not repeat a possible optimizer step. For
+Slime, the startup preflight's error lists what the job left on disk, and
+`Troubleshooting <../user-guide/troubleshooting.rst#reports-and-training>`__
+gives the recovery. A
 checkpointed or completed job replays without preparing or training again.
 Resource cleanup failure after ``CHECKPOINT`` also replays the recorded result.
 A job's identity is its batch and admission fence: the scenario step is not
@@ -907,7 +910,7 @@ server groups or actor handles directly.
 Verification
 ~~~~~~~~~~~~
 
-CPU tests cover legacy configs, custom service/rollout executors, resource
+CPU tests cover custom service/rollout executors, resource
 selection, dependency ordering, endpoint propagation, rollback, process-tree
 cleanup, bounded probes and owner-lease loss. To run the real Ray/HTTP tests:
 

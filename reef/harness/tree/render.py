@@ -5,17 +5,25 @@ descriptor, so a candidate tree can be rendered before and after a mutation
 and compared without touching disk. Config nodes deep-merge into their
 target in tree order over the descriptor's enforced defaults; rules nodes
 concatenate in tree order into the rules file; named kinds render one file
-per node through the descriptor's path templates. The descriptor's
-``finalize_render`` quirk gets the last word, so adapter traps (opencode's
-``autoupdate: false``) are enforced on every rendered tree, not just the
-default one.
+per node through the descriptor's path templates. The shared render refuses
+a tree that sets a locked key off its target's defaults (or sets one the
+defaults never name), then the descriptor's ``renderer`` processes the
+config, skill and command files, checks the model route, writes each config
+file in its harness's format, and gets the last word in ``finalize_render``,
+so what the descriptor declares and what its adapter enforces hold on every
+rendered tree, not just the default one.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+import re
+from collections.abc import Iterable, Mapping, Sequence
+from pathlib import PurePosixPath
 from typing import Any
+
+import tomli_w
+import yaml
 
 from reef.core.errors import ReefError
 from reef.harness.adapters.descriptor import AdapterDescriptor
@@ -192,8 +200,190 @@ def render_composition(nodes: Sequence[tuple[str, Any]], descriptor: AdapterDesc
     for path, text in files.items():
         if not text.endswith("\n"):
             files[path] = text + "\n"
-    if descriptor.finalize_render is not None:
-        files = descriptor.finalize_render(files)
-        if not isinstance(files, dict):
-            raise RenderError(f"adapter {descriptor.name!r} finalize_render must return the files mapping")
+    files = apply_adapter_renderer(descriptor, files)
+    if not isinstance(files, dict):
+        raise RenderError(f"adapter {descriptor.name!r} finalize_render must return the files mapping")
     return files
+
+
+def tree_files(descriptor: AdapterDescriptor, entries: Sequence[Mapping[str, Any]]) -> dict[str, str]:
+    """The entries list as the file ``files.tree`` names, verbatim; empty for an adapter that declares none."""
+    if descriptor.tree_path is None:
+        return {}
+    return {descriptor.tree_path: json.dumps([dict(entry) for entry in entries], indent=2, sort_keys=True) + "\n"}
+
+
+def apply_adapter_renderer(descriptor: AdapterDescriptor, files: dict[str, str]) -> dict[str, str]:
+    """Run the adapter's renderer steps over the engine's files, whose config files are JSON objects.
+
+    A path that both the ``skill`` and the ``agent_command`` template match is a skill.
+    """
+    renderer = descriptor.renderer
+    merged = {target.path: json.loads(files[target.path]) for target in descriptor.config_targets.values()}
+    check_model_route(descriptor, merged)
+    check_locked_keys(descriptor, merged)
+    configs = {path: renderer.process_config(path, config) for path, config in merged.items()}
+    skill_path = template_pattern(descriptor.node_paths["skill"])
+    command_template = descriptor.node_paths.get("agent_command")
+    command_path = None if command_template is None else template_pattern(command_template)
+    skills: dict[str, str] = {}
+    commands: dict[str, str] = {}
+    for path, text in files.items():
+        if path in configs:
+            continue
+        if skill_path.fullmatch(path):
+            skills[path] = renderer.process_skill(path, text)
+        elif command_path is not None and command_path.fullmatch(path):
+            commands[path] = renderer.process_command(path, text)
+    files.update(skills)
+    files.update(commands)
+    renderer.check_model_route(configs, skills, commands)
+    for path, config in configs.items():
+        files[path] = write_config(descriptor.name, path, config)
+    return renderer.finalize_render(files)
+
+
+def check_model_route(descriptor: AdapterDescriptor, configs: Mapping[str, Mapping[str, Any]]) -> None:
+    """Refuse a tree that sets a key Reef's model binding writes, unless the binding's credential is there too.
+
+    Every model call goes to Reef, through the endpoint, credential and model the binding writes. The binding renders
+    after the tree and wins every key it writes, so the tree can set one of those keys only where no binding is
+    applied, as when admission renders a proposal alone. The binding's credential tells the two apart: admission
+    refuses an inline credential, so only the binding can hold one. Each adapter refuses the other routes its harness
+    reads, such as a fallback model, in its renderer's ``check_model_route``.
+    """
+    keys = [
+        (descriptor.config_targets[node["target"]].path, segments, isinstance(value, str) and "{api_key}" in value)
+        for nodes in descriptor.model_binding.values()
+        for node in nodes
+        for segments, value in binding_leaves(node["data"], ())
+    ]
+    bound = any(
+        isinstance(value, str) and bool(value.strip())
+        for path, segments, is_credential in keys
+        if is_credential
+        for value in values_at(configs[path], segments)
+    )
+    if bound:
+        return
+    for path, segments, _ in keys:
+        if values_at(configs[path], segments):
+            raise RenderError(
+                f"{descriptor.name} composition must not set {'.'.join(segments)} in {path}: "
+                "Reef's model binding writes it"
+            )
+
+
+def check_locked_keys(descriptor: AdapterDescriptor, configs: Mapping[str, Mapping[str, Any]]) -> None:
+    """Refuse a tree that sets a locked key off its target's defaults, or sets one the defaults never name.
+
+    The descriptor's ``locked`` paths state what a composition must keep: after the merge, the value at each
+    locked path must equal the defaults' value there, and a path the defaults do not set must not appear at all -
+    an empty value is a set one. A section of the defaults the tree clobbers with a non object refuses too, since
+    it takes every locked key below it away. The check runs once for every adapter, after the binding check and
+    before the renderer's steps, so a declared lock holds on every rendered tree and no adapter can skip it.
+    """
+    for target in descriptor.config_targets.values():
+        config = configs[target.path]
+        for locked in target.locked:
+            segments = tuple(locked.split("."))
+            for found, value in _locked_matches(config, segments, ()):
+                named, expected = _value_at(target.defaults, found)
+                if not named:
+                    raise RenderError(
+                        f"{descriptor.name} composition must not set {'.'.join(found)} in {target.path}: "
+                        "the descriptor locks it, and its defaults do not set it"
+                    )
+                if isinstance(value, bool) != isinstance(expected, bool) or value != expected:
+                    raise RenderError(
+                        f"{descriptor.name} composition must keep {'.'.join(found)} {json.dumps(expected, default=repr)} "
+                        f"in {target.path}: the descriptor locks it"
+                    )
+            for kept, expected in _locked_matches(target.defaults, segments, ()):
+                if not _locked_matches(config, kept, ()):
+                    raise RenderError(
+                        f"{descriptor.name} composition must keep {'.'.join(kept)} {json.dumps(expected, default=repr)} "
+                        f"in {target.path}: the descriptor locks it, and the merged config does not have it"
+                    )
+
+
+def _locked_matches(data: Any, segments: tuple[str, ...], path: tuple[str, ...]) -> list[tuple[tuple[str, ...], Any]]:
+    """Each concrete key path ``segments`` matches in ``data``, with the value there.
+
+    A ``*`` segment matches every key of an object and every item of a list; a segment that would read through a
+    value that is neither matches nothing, so a pattern never crashes on a config of the wrong shape.
+    """
+    if not segments:
+        return [(path, data)]
+    first, rest = segments[0], segments[1:]
+    if first == "*":
+        found: Iterable[tuple[Any, Any]] = (
+            data.items() if isinstance(data, Mapping) else enumerate(data) if isinstance(data, list) else ()
+        )
+    elif isinstance(data, Mapping) and first in data:
+        found = ((first, data[first]),)
+    else:
+        found = ()
+    return [match for key, value in found for match in _locked_matches(value, rest, (*path, str(key)))]
+
+
+def _value_at(data: Any, segments: tuple[str, ...]) -> tuple[bool, Any]:
+    """Whether ``segments`` names a value in ``data``, and that value; a path through anything else is unnamed."""
+    for segment in segments:
+        if isinstance(data, Mapping):
+            if segment not in data:
+                return False, None
+            data = data[segment]
+        elif isinstance(data, list) and segment.isdigit() and int(segment) < len(data):
+            data = data[int(segment)]
+        else:
+            return False, None
+    return True, data
+
+
+def binding_leaves(data: Mapping[str, Any], segments: tuple[str, ...]) -> list[tuple[tuple[str, ...], Any]]:
+    """Each key path a binding template writes, with the template's value there."""
+    leaves: list[tuple[tuple[str, ...], Any]] = []
+    for key, value in data.items():
+        if isinstance(value, Mapping) and value:
+            leaves.extend(binding_leaves(value, (*segments, str(key))))
+        else:
+            leaves.append(((*segments, str(key)), value))
+    return leaves
+
+
+def values_at(data: Any, segments: tuple[str, ...]) -> list[Any]:
+    """The values at a binding key path in ``data``; a segment holding a placeholder such as ``{model}`` matches any
+    key."""
+    if not segments:
+        return [data]
+    if not isinstance(data, Mapping):
+        return []
+    first, rest = segments[0], segments[1:]
+    if "{" in first:
+        return [value for item in data.values() for value in values_at(item, rest)]
+    return values_at(data[first], rest) if first in data else []
+
+
+def write_config(adapter: str, path: str, config: Mapping[str, Any]) -> str:
+    """The text of one config file in the format its suffix names: TOML, YAML, ``KEY=value`` lines for ``.env``, and
+    JSON for ``.json`` or any other suffix, as every config file was written before formats followed suffixes."""
+    pure = PurePosixPath(path)
+    # A dotfile such as .env has no suffix, only a name.
+    suffix = pure.suffix or pure.name
+    if suffix == ".toml":
+        try:
+            return tomli_w.dumps(config)
+        except (TypeError, ValueError) as exc:
+            raise RenderError(f"{adapter} config cannot be represented as TOML: {exc}") from exc
+    if suffix in (".yaml", ".yml"):
+        return yaml.dump(dict(config), sort_keys=True, default_flow_style=False, allow_unicode=True)
+    if suffix == ".env":
+        return "".join(f"{key}={value}\n" for key, value in sorted(config.items()))
+    return json.dumps(config, indent=2, sort_keys=True) + "\n"
+
+
+def template_pattern(template: str) -> re.Pattern[str]:
+    """The paths a node path template renders: ``{name}`` is one path segment."""
+    before, _, after = template.partition("{name}")
+    return re.compile(re.escape(before) + r"[^/]+" + re.escape(after))

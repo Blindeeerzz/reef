@@ -50,6 +50,7 @@ Set `GUIDANCE_EXECUTOR_MAX_TOKENS=16384` to bound each executor response during 
 Otherwise, the provider selects its default output limit. Executor service errors stop the step; they are not candidate rewards.
 
 `serve.yaml` defaults to one update with two groups of four rollouts.
+The grid is `pipeline.record2record.config` in `serve.yaml`; the harness reads it there.
 Set the grid to 8 by 16, `global-batch-size` to 128, and `steps` to 30 for
 the paper's search budget. Set `GUIDANCE_MODEL=Qwen/Qwen3-14B` for the paper's
 AHC058 and TriMul configurations. Size the GPU allocation for that model.
@@ -81,20 +82,19 @@ is evaluation-only, because every training rollout already reports its own rewar
 
 ## Results
 
-The [paper records](results/paper/README.md) contain four main results:
-91.89 Polyomino, 0.1739 Lasso, 850,082,731 AHC058, and 1,129 microseconds TriMul.
-They include the models, evaluation protocols, all displayed baseline rows,
-and source checksums. These are historical paper results, not new runs of this port.
+The paper reports 91.89 for Polyomino, 0.1739 ms⁻¹ for Lasso,
+850,082,731 on AtCoder for AHC058, and 1,129 µs for TriMul.
 
-The older [Reef run records](results/README.md) remain separate. Their Polyomino
-14B and TriMul measurements describe earlier configurations and evaluations.
+- [Discovered solutions](solutions/README.md): complete programs, evaluation commands, and measurement settings.
+- [Paper results and search trajectories](results/paper/README.md): comparison data, model configurations, and progress during search.
+- [Earlier Reef runs](results/README.md): separate Polyomino and TriMul experiments with different configurations.
 
 ## Local checks
 
 From the repository root:
 
 ```bash
-python -m pytest tests/test_guidance_ttt.py tests/test_guidance_ttt_tasks.py -q -o addopts=
+python -m pytest tests/recipes/tttd/test_guidance_ttt.py tests/recipes/tttd/test_guidance_ttt_tasks.py -q -o addopts=
 cd docs/site
 npm ci
 npm run check:docs

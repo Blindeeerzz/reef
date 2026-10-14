@@ -51,6 +51,9 @@ REQUEST_PROMPT = (
     "Then one object per entry, each of the form:\n"
     '{{"id": "<entry id>", "name": "<kind>", "config": {{...}}}} (the kind goes under the key name)\n'
     "Reuse an existing entry's id to update it; use a new lowercase id to add one. "
+    "When the request asks to stop a behavior an entry carries, retire that entry instead of writing a rule "
+    "against it: its id and kind, no config, and remove set to true "
+    '- {{"id": "<entry id>", "name": "<kind>", "remove": true}}. '
     "The id of a named kind must equal its config name. Give every entry you write an id of its own, "
     "a lowercase name, a rules entry too.\n"
     "When the change needs something only the user can provide or set up on their machine, end the array "

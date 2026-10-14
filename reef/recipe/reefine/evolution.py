@@ -6,11 +6,15 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from reef.evaluation.harness import EpisodeScorer
+from reef.evaluation.reefine_health import evaluate, grade_text
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindings
+from reef.harness.episodes.run import EpisodeResult
 from reef.harness.episodes.trajectory import final_assistant_text
 from reef.recipe.reefine.prompts import INSTRUCTIONS
 from reef.train.cordis_backend import Mutation, StepProposal
-from reef.train.evaluation.reefine_health import evaluate, grade_text
+from reef.train.cordis_backend.manifest import FailureManifest
+from reef.train.cordis_backend.strategies import AgentHost, Proposer
 from reef.train.reefine import proposer as implementation
 from reef.train.types import TrajectoryItem
 
@@ -242,12 +246,51 @@ dropped_entry_reasons = implementation.dropped_entry_reasons
 
 misnamed_entries = implementation.misnamed_entries
 
+
+class TextProposer(Proposer):
+    """The text proposer as an ``evolution.propose`` plugin: :func:`propose` for the deployment's adapter."""
+
+    def __init__(self, adapter: str = EXTENSION_ADAPTER) -> None:
+        self.adapter = adapter
+
+    @property
+    def reads_requests(self) -> bool:
+        return True
+
+    def propose(
+        self,
+        nodes: tuple[tuple[str, object], ...],
+        samples: tuple[TrajectoryItem, ...],
+        models: ModelBindings,
+        *,
+        manifest: FailureManifest | None = None,
+        rejected: Sequence[Mapping[str, Any]] = (),
+        sources: Sequence[Mapping[str, Any]] = (),
+        requests: Sequence[Mapping[str, Any]] = (),
+        entries: Sequence[Mapping[str, Any]] = (),
+        agent_host: AgentHost | None = None,
+    ) -> Mutation | StepProposal | None:
+        # The text proposer reads none of manifest, rejected, sources or agent_host; they are the contract's.
+        return propose(
+            nodes, samples, models, requests=requests, entries=entries, adapter=self.adapter, rejected=rejected
+        )
+
+
+class AnswerScorer(EpisodeScorer):
+    """:func:`evaluate` as an ``evolution.evaluate`` plugin."""
+
+    def score(self, task: str, result: EpisodeResult) -> float:
+        return evaluate(task, result)
+
+
 __all__ = [
     "INSTRUCTIONS",
+    "AnswerScorer",
     "ModelBinding",
     "ModelBindings",
     "Mutation",
     "StepProposal",
+    "TextProposer",
     "TrajectoryItem",
     "evaluate",
     "final_assistant_text",

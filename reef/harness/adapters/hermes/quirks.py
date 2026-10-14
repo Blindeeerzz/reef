@@ -1,11 +1,9 @@
 """hermes adapter quirks: the config file, skill frontmatter, plugin manifests, and the boot scaffold.
 
-Config nodes write ``config.yaml`` as a JSON object and ``finalize_render``
-emits it as YAML, and the ``env`` target as ``.env`` lines, where hermes
+Config nodes write ``config.yaml`` as a JSON object and the render
+emits it as YAML by its suffix, and the ``env`` target as ``.env`` lines, where hermes
 reads a custom provider's key. It also writes the ``.no-bundled-skills`` marker, so an
-episode carries only the tree's skills instead of hermes's bundled catalog;
-synthesizes the ``name`` and ``description`` frontmatter hermes requires on a
-SKILL.md the node text left bare, under both skill roots; adds the commands
+episode carries only the tree's skills instead of hermes's bundled catalog; adds the commands
 root to ``skills.external_dirs`` after the tree's own entries, so a tree
 that sets the list still has its commands; and, for every rendered plugin,
 writes the ``plugin.yaml`` manifest and grants the plugin in
@@ -13,14 +11,18 @@ writes the ``plugin.yaml`` manifest and grants the plugin in
 capability), since hermes discovers plugins but loads none without consent.
 Rules render to ``SOUL.md``, which hermes reads as the agent's identity and
 seeds with its own only while the file is absent, so the rules follow that
-default identity instead of replacing it.
+default identity instead of replacing it. ``process_skill`` and
+``process_command`` give a SKILL.md the node text left bare the ``name`` and
+``description`` frontmatter hermes requires, under both skill roots.
 
 The traps a mutated config could reopen: the scanner download, the session
-title call, the background review and the curator that write skills into the
-tree, and the snapshot the reader parses. A composition that flips any of
-them, puts a value that is not an object where a section holding one
-belongs, or puts a value that is not a list of strings where Reef adds a
-name, is rejected at render, the same check that rejects an invalid node.
+title call, the background review and the curator that write skills into
+the tree, and the snapshot the reader parses, are declared in the
+descriptor and refused by the shared render before any quirks step runs.
+This step checks what the declaration cannot state: a section holding a
+value that is not an object where one belongs, and a value that is not a
+list of strings where Reef adds a name, are rejected at render, the same
+check that rejects an invalid node.
 
 Every model call stays on Reef's model binding. The binding writes the
 ``model`` section (a ``custom`` provider, the endpoint, the model and a
@@ -29,12 +31,13 @@ is a credential, which a tree cannot hold because admission refuses an
 inline credential, so those keys pass only beside the binding's key. The
 other names hermes reads for the model, the endpoint or the key (in
 ``model``, and at the top level, which hermes moves into ``model``), the
-model aliases, the sections that name other providers, their endpoints and
-credential commands (``providers``, ``custom_providers``), the fallback
-models (``fallback_model``, ``fallback_providers``) and the mixture of
-agents presets, and a provider, an endpoint, a credential, a model or a
-fallback chain set for an auxiliary task, for delegation, for cron or for
-the curator, are the tree choosing where calls go, and are refused. An
+sections that name other providers, their endpoints and credential commands
+(``providers``, ``custom_providers``) and the fallback models
+(``fallback_model``, ``fallback_providers``) are declared locks beside the
+descriptor's defaults. The model aliases, the mixture of agents presets,
+and a provider, an endpoint, a credential, a model or a fallback chain set
+for an auxiliary task, for delegation, for cron or for the curator, are the
+tree choosing where calls go, and are refused here. An
 auxiliary task may keep ``auto`` or ``main``, which run it on the main
 model. The binding sets no transport, so a tree's ``api_mode`` (in
 ``model`` or in any of those sections) and ``model.openai_runtime`` are
@@ -52,18 +55,19 @@ name another model.
 
 from __future__ import annotations
 
-import json
+from collections.abc import Mapping
 from typing import Any
 
 import yaml
 
+from reef.harness.adapters.common.frontmatter import with_skill_frontmatter
+from reef.harness.adapters.descriptor import AdapterRenderer
 from reef.harness.tree.render import RenderError
 
 _CONFIG = "hermes/config.yaml"
 ENV_PATH = "hermes/.env"
 _MARKER = "hermes/.no-bundled-skills"
 _PLUGINS = "hermes/plugins/"
-_SKILL_ROOTS = ("hermes/skills/", "hermes-commands/")
 # The commands root beside the home: HERMES_HOME/.. in an episode, and REEF_HARNESS_DEST, the install root, in a
 # reef-hermes session, whose home is a temp copy. hermes skips an entry that names no directory, such as the second
 # one where REEF_HARNESS_DEST is unset. A config node's list replaces the one below it, so both follow the tree's own
@@ -86,17 +90,10 @@ DEFAULT_IDENTITY = (
     "default."
 )
 
-#: The model keys Reef's binding writes, and among them its credential.
-BINDING_MODEL_KEYS = ("api_key", "base_url", "default", "provider")
-BINDING_CREDENTIAL = "api_key"
 #: Other ``model`` keys hermes reads for the model, the endpoint or the key, and the model aliases a switch resolves.
 MODEL_ALIAS_KEYS = ("aliases", "api_base", "api_key_env", "key_cmd", "key_env", "model", "name")
 #: The ``model`` keys hermes reads for the transport; the binding writes neither.
 TRANSPORT_KEYS = ("api_mode", "openai_runtime")
-#: Top-level keys hermes moves into ``model`` (the provider and the endpoint), and the model aliases with their routes.
-ROOT_ROUTE_KEYS = ("api_base", "base_url", "model_aliases", "provider")
-#: Sections that name other providers, their endpoints and credential commands, or the fallback models.
-PROVIDER_SECTIONS = ("custom_providers", "fallback_model", "fallback_providers", "providers")
 #: The mixture of agents keys that name its models: the presets, and the older flat form of one preset.
 MOA_KEYS = ("aggregator", "presets", "reference_models")
 #: The keys of an auxiliary task, of delegation, of cron and of the curator that choose its provider, endpoint,
@@ -136,15 +133,6 @@ cleanup_whitelist = (
     "hermes/bin/**",
     "hermes/models_dev_cache.json*",
 )
-
-
-def _with_frontmatter(path: str, text: str) -> str:
-    if text.startswith("---\n"):
-        return text
-    name = path.split("/")[-2]
-    first = next((line.strip().lstrip("#").strip() for line in text.splitlines() if line.strip()), "")
-    header = {"name": name, "description": first[:200] or name}
-    return "---\n" + yaml.dump(header, sort_keys=False, default_flow_style=False, allow_unicode=True) + "---\n" + text
 
 
 def nested_setting(config: dict[str, Any], *keys: str) -> object:
@@ -211,11 +199,6 @@ def check_model_route(config: dict[str, Any]) -> None:
     if model is not None and not isinstance(model, dict):
         raise RenderError(f"hermes composition must not set model: {refusal}")
     model = model or {}
-    credential = model.get(BINDING_CREDENTIAL)
-    bound = isinstance(credential, str) and bool(credential.strip())
-    for key in BINDING_MODEL_KEYS:
-        if key in model and not bound:
-            raise RenderError(f"hermes composition must not set model.{key}: {refusal}")
     # hermes reads model.model and model.name as the model (one reader prefers model.model to model.default),
     # model.api_base as the endpoint and the key names as the key; the binding writes none of them.
     for key in MODEL_ALIAS_KEYS:
@@ -227,9 +210,6 @@ def check_model_route(config: dict[str, Any]) -> None:
     for key in TRANSPORT_KEYS:
         if is_set(model.get(key)):
             raise RenderError(f"hermes composition must not set model.{key}: {refusal}")
-    for name in (*ROOT_ROUTE_KEYS, *PROVIDER_SECTIONS):
-        if is_set(config.get(name)):
-            raise RenderError(f"hermes composition must not set {name}: {refusal}")
     moa = section_of(config, "moa")
     for key in MOA_KEYS:
         if is_set(moa.get(key)):
@@ -272,49 +252,50 @@ def check_body(body: object, where: str, refusal: str) -> None:
             raise RenderError(f"hermes composition must not set {where}.{key}: {refusal}")
 
 
-def finalize_render(files: dict[str, str]) -> dict[str, str]:
-    config = json.loads(files[_CONFIG])
-    soul = files.get(SOUL_PATH)
-    if soul is not None and not soul.startswith(DEFAULT_IDENTITY):
-        # A rules entry adds to the agent's identity; written alone, it would be all of it.
-        files[SOUL_PATH] = f"{DEFAULT_IDENTITY}\n\n{soul}"
-    if nested_setting(config, "security", "tirith_enabled") is not False:
-        raise RenderError("hermes composition must keep security.tirith_enabled false for benchmark episodes")
-    if nested_setting(config, "auxiliary", "title_generation", "enabled") is not False:
-        raise RenderError(
-            "hermes composition must keep auxiliary.title_generation.enabled false for benchmark episodes"
+class HermesAdapterRenderer(AdapterRenderer):
+    @staticmethod
+    def process_config(path: str, config: dict[str, Any]) -> dict[str, Any]:
+        if path != _CONFIG:
+            return config
+        # skills is read as an object here; the locked keys above checked what a composition must keep.
+        tree_dirs = nested_setting(config, "skills", "external_dirs")
+        external_dirs = string_list([tree_dirs] if isinstance(tree_dirs, str) else tree_dirs, "skills.external_dirs")
+        config["skills"]["external_dirs"] = external_dirs + [
+            root for root in COMMAND_ROOTS if root not in external_dirs
+        ]
+        return config
+
+    @staticmethod
+    def process_skill(path: str, text: str) -> str:
+        return with_skill_frontmatter(path, text)
+
+    @staticmethod
+    def process_command(path: str, text: str) -> str:
+        # A command is a skill under the commands root, so it needs the same frontmatter.
+        return with_skill_frontmatter(path, text)
+
+    @staticmethod
+    def check_model_route(
+        configs: Mapping[str, Mapping[str, Any]], skills: Mapping[str, str], commands: Mapping[str, str]
+    ) -> None:
+        check_model_route(dict(configs[_CONFIG]))
+
+    @staticmethod
+    def finalize_render(files: dict[str, str]) -> dict[str, str]:
+        soul = files.get(SOUL_PATH)
+        if soul is not None and not soul.startswith(DEFAULT_IDENTITY):
+            # A rules entry adds to the agent's identity; written alone, it would be all of it.
+            files[SOUL_PATH] = f"{DEFAULT_IDENTITY}\n\n{soul}"
+        plugins = sorted(
+            path[len(_PLUGINS) :].split("/")[0]
+            for path in files
+            if path.startswith(_PLUGINS) and path.endswith("/__init__.py") and path.count("/") == 3
         )
-    memory_nudge_interval = nested_setting(config, "memory", "nudge_interval")
-    skill_nudge_interval = nested_setting(config, "skills", "creation_nudge_interval")
-    if memory_nudge_interval != 0 or skill_nudge_interval != 0:
-        raise RenderError(
-            "hermes composition must keep memory.nudge_interval and skills.creation_nudge_interval 0, "
-            "so no background review makes model calls or writes skills"
-        )
-    if nested_setting(config, "curator", "enabled") is not False:
-        raise RenderError("hermes composition must keep curator.enabled false, so the curator leaves the skills alone")
-    if nested_setting(config, "sessions", "write_json_snapshots") is not True:
-        raise RenderError(
-            "hermes composition must keep sessions.write_json_snapshots true so Reef can read the trajectory"
-        )
-    # skills is an object here: the nudge check above read skills.creation_nudge_interval from it.
-    tree_dirs = nested_setting(config, "skills", "external_dirs")
-    external_dirs = string_list([tree_dirs] if isinstance(tree_dirs, str) else tree_dirs, "skills.external_dirs")
-    config["skills"]["external_dirs"] = external_dirs + [root for root in COMMAND_ROOTS if root not in external_dirs]
-    check_model_route(config)
-    plugins = sorted(
-        path[len(_PLUGINS) :].split("/")[0]
-        for path in files
-        if path.startswith(_PLUGINS) and path.endswith("/__init__.py") and path.count("/") == 3
-    )
-    for name in plugins:
-        files.setdefault(f"{_PLUGINS}{name}/plugin.yaml", f"name: {name}\nversion: '0.1'\ndescription: {name}\n")
-    if plugins:
-        config = _granted(config, plugins)
-    files[_CONFIG] = yaml.dump(config, sort_keys=True, default_flow_style=False, allow_unicode=True)
-    files[ENV_PATH] = "".join(f"{key}={value}\n" for key, value in sorted(json.loads(files[ENV_PATH]).items()))
-    files[_MARKER] = ""
-    for path, text in list(files.items()):
-        if any(path.startswith(root) for root in _SKILL_ROOTS) and path.endswith("/SKILL.md"):
-            files[path] = _with_frontmatter(path, text)
-    return files
+        for name in plugins:
+            files.setdefault(f"{_PLUGINS}{name}/plugin.yaml", f"name: {name}\nversion: '0.1'\ndescription: {name}\n")
+        if plugins:
+            # hermes loads a rendered plugin only when config.yaml grants it.
+            config = _granted(yaml.safe_load(files[_CONFIG]), plugins)
+            files[_CONFIG] = yaml.dump(config, sort_keys=True, default_flow_style=False, allow_unicode=True)
+        files[_MARKER] = ""
+        return files

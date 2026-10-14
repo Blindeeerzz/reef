@@ -2,17 +2,30 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import random
 from dataclasses import dataclass, field
 from typing import Any
 
 import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
+from reef.inference.process import (
+    PORT_CONFLICT_ATTEMPTS,
+    PORT_CONFLICT_SPREAD,
+    EngineGroup,
+    EngineStartup,
+    PortConflictError,
+    check_server_owner,
+    ports_in_use,
+)
 from reef.inference.sglang.config import SGLangConfig, SGLangGroupConfig
 from reef.inference.sglang.engine import ReefSGLangEngine
 from reef.inference.sglang.plugin import REEF_SGLANG_PLUGIN_ENV
 from reef.inference.sglang.process import launch_router, node_address_and_port, wait_ready
+
+logger = logging.getLogger(__name__)
 
 SGLANG_PLUGIN_NAME = "reef"
 
@@ -38,7 +51,7 @@ def engine_environment(config: SGLangConfig) -> dict[str, str]:
     }
 
 
-class SGLangEngineGroup:
+class SGLangEngineGroup(EngineGroup):
     """Logical replicas, each backed by one actor per participating node."""
 
     def __init__(
@@ -61,6 +74,7 @@ class SGLangEngineGroup:
         count = 1 if external else group.num_gpus // local_width
         self.all_engines: list[Any] = [] if group.worker_type == "placeholder" else [None] * count
         self.num_new_engines = 0
+        self.port_ranges: dict[int, tuple[str, range]] = {}
         self.needs_offload = bool(config.offload and gpu_offset < config.shared_gpus and not external)
 
     @property
@@ -77,8 +91,8 @@ class SGLangEngineGroup:
             "moe_dp_size": int(options.get("moe_dp_size") or 1),
         }
 
-    def start_engines(self, cursors: dict[str, int]) -> list[Any]:
-        """Launch an actor for every empty slot; return the pending ``init`` calls.
+    def start_engines(self, cursors: dict[str, int]) -> dict[int, Any]:
+        """Launch an actor for every empty slot; return each new slot's pending ``init`` call.
 
         ``cursors`` tracks the next free port range per host across groups so
         engines on one node never race for the same ports.
@@ -87,13 +101,16 @@ class SGLangEngineGroup:
         for index in created:
             self.all_engines[index] = self._launch_actor(index)
         self.num_new_engines = len(created)
-        addresses = self._addresses(created, cursors)
-        return [
-            self.all_engines[index].init.remote(
+        return self.init_engines(created, cursors)
+
+    def init_engines(self, slots: list[int], cursors: dict[str, int]) -> dict[int, Any]:
+        addresses = self._addresses(slots, cursors)
+        return {
+            index: self.all_engines[index].init.remote(
                 **addresses[index], router_ip=self.router[0], router_port=self.router[1]
             )
-            for index in created
-        ]
+            for index in slots
+        }
 
     def _launch_actor(self, index: int) -> Any:
         options: dict[str, Any] = {
@@ -140,7 +157,7 @@ class SGLangEngineGroup:
         )
         return base_gpu, strategy
 
-    def _addresses(self, created: list[int], cursors: dict[str, int]) -> dict[int, dict[str, Any]]:
+    def _addresses(self, slots: list[int], cursors: dict[str, int]) -> dict[int, dict[str, Any]]:
         """Per-actor ``init`` addresses; every node of a multi-node engine meets at node zero's."""
         if self.external:
             host, port = self.external["host"], self.external["port"]
@@ -152,24 +169,25 @@ class SGLangEngineGroup:
                     "dist_init_addr": f"{host}:{port}",
                     "disaggregation_bootstrap_port": self.external.get("disaggregation_bootstrap_port"),
                 }
-                for index in created
+                for index in slots
             }
         addresses: dict[int, dict[str, Any]] = {}
         width = 34 + int(self.group.options.get("dp_size", self.config.options.get("dp_size")) or 1)
-        for index in created:
+        for index in slots:
             actor = self.all_engines[index]
             host, _ = ray.get(actor._get_current_node_ip_and_free_port.remote())
             _, port = ray.get(
                 actor._get_current_node_ip_and_free_port.remote(start_port=cursors.get(host, 15000), consecutive=width)
             )
             cursors[host] = port + width
+            self.port_ranges[index] = (host, range(port, port + width))
             addresses[index] = {
                 "host": host,
                 "port": port,
                 "nccl_port": port + 1,
                 "disaggregation_bootstrap_port": port + 2,
             }
-        for index in created:
+        for index in slots:
             root = addresses[index - index % self.nodes_per_engine]
             addresses[index]["dist_init_addr"] = f"{root['host']}:{root['port'] + 3}"
         return addresses
@@ -185,33 +203,43 @@ class SGLangModel:
         return [engine for group in self.server_groups for engine in group.all_engines]
 
     @property
+    def generation_groups(self) -> list[SGLangEngineGroup]:
+        """Groups whose engines receive engine control requests and weight transfers.
+
+        An encoder-only engine serves only ``/encode`` and health checks.
+        Engine control and weight transfer skip encoder groups, so encoder
+        engines keep the weights they started with.
+        """
+        return [group for group in self.server_groups if group.worker_type != "encoder"]
+
+    @property
     def engines(self) -> list[Any]:
-        return [engine for group in self.server_groups for engine in group.engines]
+        return [engine for group in self.generation_groups for engine in group.engines]
 
     @property
     def num_new_engines(self) -> int:
-        return sum(group.num_new_engines for group in self.server_groups)
+        return sum(group.num_new_engines for group in self.generation_groups)
 
     @num_new_engines.setter
     def num_new_engines(self, value: int) -> None:
-        for group in self.server_groups:
+        for group in self.generation_groups:
             group.num_new_engines = value
 
     @property
     def engine_gpu_counts(self) -> list[int]:
-        return [group.num_gpus_per_engine for group in self.server_groups for _ in group.engines]
+        return [group.num_gpus_per_engine for group in self.generation_groups for _ in group.engines]
 
     @property
     def engine_gpu_offsets(self) -> list[int]:
         return [
             group.gpu_offset + index * group.num_gpus_per_engine
-            for group in self.server_groups
+            for group in self.generation_groups
             for index in range(len(group.engines))
         ]
 
     @property
     def engine_parallel_configs(self) -> list[dict[str, int]]:
-        return [group.parallel_config() for group in self.server_groups for _ in group.engines]
+        return [group.parallel_config() for group in self.generation_groups for _ in group.engines]
 
     def offload(self):
         return ray.get(
@@ -242,14 +270,21 @@ class SGLangModel:
         return self.onload(["kv_cache", "cuda_graph"])
 
     def recover(self) -> None:
-        cursors: dict[str, int] = {}
         missing = [
             (group, [i for i, engine in enumerate(group.all_engines) if engine is None])
             for group in self.server_groups
         ]
-        pending = [ref for group in self.server_groups for ref in group.start_engines(cursors)]
-        if pending:
-            ray.get(pending)
+        startup = EngineStartup()
+        pending_without_retry: list[ray.ObjectRef] = []
+        for group in self.server_groups:
+            if group.worker_type == "encoder" or group.external:
+                # Encoder groups are not relaunched on a port conflict yet, and Reef does not launch external
+                # engines.
+                pending_without_retry.extend(group.start_engines(startup.cursors).values())
+            else:
+                startup.start(group)
+        ray.get(pending_without_retry)
+        startup.wait()
         engines = [
             group.all_engines[index]
             for group, indices in missing
@@ -280,32 +315,75 @@ class SGLangCluster:
 
         from sglang_router.launch_router import RouterArgs
 
-        host, port = node_address_and_port(start_port=3000)
-        if index == 0 and self.config.router_port is not None:
-            port = self.config.router_port
-        _, metrics = node_address_and_port(start_port=max(4000, port + 1))
+        configured_port = self.config.router_port if index == 0 else None
         names = {item.name for item in fields(RouterArgs)}
         options = {key: value for key, value in self.config.router_options.items() if key in names}
-        options.update(
-            host=host.strip("[]"),
-            port=port,
-            prometheus_port=metrics,
-            pd_disaggregation=pd,
-            disable_circuit_breaker=True,
-            disable_health_check=True,
-        )
-        process = launch_router(options)
-        self.routers.append(process)
-        wait_ready(f"http://{host}:{port}", process, self.config.startup_timeout, path="/health")
-        return host, port
+        start_port, metrics_start_port, attempt = 3000, 4000, 1
+        while True:
+            host, probed_port = node_address_and_port(start_port=start_port)
+            port = probed_port if configured_port is None else configured_port
+            # Metrics stay near 4000: the port above a configured router port can be another stack's router port.
+            _, probed_metrics_port = node_address_and_port(start_port=metrics_start_port)
+            if probed_metrics_port == port:
+                # The router has not bound its HTTP port yet, so the probe cannot see it.
+                _, metrics_port = node_address_and_port(start_port=port + 1)
+            else:
+                metrics_port = probed_metrics_port
+            options.update(
+                host=host.strip("[]"),
+                port=port,
+                # Without prometheus_host, the router serves metrics on loopback, where the probe cannot see it.
+                prometheus_host=host.strip("[]"),
+                prometheus_port=metrics_port,
+                pd_disaggregation=pd,
+                disable_circuit_breaker=True,
+                disable_health_check=True,
+            )
+            process = launch_router(options)
+            self.routers.append(process)
+            try:
+                wait_ready(f"http://{host}:{port}", process, self.config.startup_timeout, path="/health")
+                # Another stack's router can answer on a port that this router failed to bind.
+                check_server_owner(host, port, process.pid)
+                return host, port
+            except RuntimeError as error:
+                # Stop the router first: its own sockets must not count as held.
+                process.terminate()
+                process.join(timeout=5)
+                if process.is_alive():
+                    process.kill()
+                    process.join(timeout=5)
+                self.routers.remove(process)
+                if isinstance(error, PortConflictError):
+                    held_ports = [port]
+                else:
+                    held_ports = ports_in_use(host, [port, metrics_port])
+                if not held_ports or (configured_port is not None and port in held_ports):
+                    raise
+                held_addresses = ", ".join(f"{host}:{held_port}" for held_port in held_ports)
+                if attempt == PORT_CONFLICT_ATTEMPTS:
+                    raise RuntimeError(
+                        f"inference router ports {held_addresses} were held by other processes "
+                        f"after {attempt} startup attempts"
+                    ) from error
+                logger.warning(
+                    "inference router ports %s are held by other processes; starting attempt %d of %d on new ports",
+                    held_addresses,
+                    attempt + 1,
+                    PORT_CONFLICT_ATTEMPTS,
+                )
+                # Skip ports at random so two stacks that collided usually pick different ports.
+                # A fresh generator seeds from the OS; a trainer may seed the global one identically in every stack.
+                skipped_ports = random.Random().randrange(1, PORT_CONFLICT_SPREAD)
+                start_port, metrics_start_port = port + skipped_ports, metrics_port + skipped_ports
+                attempt += 1
 
     def start(self) -> None:
         if self.config.external_engines:
             self._attach_external()
             return
         gpu_offset = 0
-        cursors: dict[str, int] = {}
-        pending = []
+        startup = EngineStartup()
         for index, model_config in enumerate(self.config.resolved_models):
             router = self._router(
                 index, any(group.worker_type in {"prefill", "decode"} for group in model_config.groups)
@@ -322,7 +400,9 @@ class SGLangCluster:
             encoder_urls = []
             for group in model.server_groups:
                 if group.worker_type == "encoder":
-                    ray.get(group.start_engines(cursors))
+                    # The other groups need the encoder URLs, so encoder groups start first. They are not
+                    # relaunched on a port conflict yet.
+                    ray.get(list(group.start_engines(startup.cursors).values()))
                     encoder_urls.extend(ray.get([engine.get_url.remote() for engine in group.engines]))
             for group in model.server_groups:
                 if group.worker_type == "encoder":
@@ -330,9 +410,8 @@ class SGLangCluster:
                 if encoder_urls and group.worker_type in {"regular", "prefill"}:
                     group.group.options.setdefault("language_only", True)
                     group.group.options.setdefault("encoder_urls", encoder_urls)
-                pending.extend(group.start_engines(cursors))
-        if pending:
-            ray.get(pending)
+                startup.start(group)
+        startup.wait()
 
     def _attach_external(self) -> None:
         router = self._router(
@@ -342,13 +421,13 @@ class SGLangCluster:
         model = SGLangModel()
         self.servers["default"] = model
         offset = 0
-        pending = []
+        pending: list[ray.ObjectRef] = []
         for info in self.config.external_engines:
             group_config = SGLangGroupConfig(
                 info["worker_type"], info["num_gpus"], info["num_gpus"], info.get("server_info", {})
             )
             group = SGLangEngineGroup(self.config, group_config, None, offset, router, external=info)
             model.server_groups.append(group)
-            pending.extend(group.start_engines({}))
+            pending.extend(group.start_engines({}).values())
             offset += info["num_gpus"]
         ray.get(pending)

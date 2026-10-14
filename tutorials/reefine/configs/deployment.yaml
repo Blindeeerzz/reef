@@ -3,7 +3,6 @@
 # The built-in Reefine recipe with its state under tutorials/reefine/work/,
 # training_mode manual and independent Reefine evaluation. ./run.sh starts it,
 # installs the served tree and runs run.py <demo>.
-schema-version: 2
 reef:
   host: 127.0.0.1
   port: 8901
@@ -18,8 +17,8 @@ recipe:
     evolution:
       adapter: pi
       # The built-in proposer answers a request with any kind pi renders.
-      propose: reef.recipe.reefine.evolution:propose
-      evaluate: reef.recipe.reefine.evolution:evaluate
+      propose: reef.recipe.reefine.evolution:TextProposer
+      evaluate: reef.recipe.reefine.evolution:AnswerScorer
       # The seed carries the /reefine command and the pi extension API skill the proposer reads.
       requests: true
       # The notice at session start offers the update once the head moved.
@@ -59,9 +58,15 @@ recipe:
               concrete guidance learned from failing tasks.
 
               '
-    batch-size: 1
     # One step per instruction and no failure driven step between them: the measurement counts a step per request.
     training-mode: manual
+
+# The harness evolution pipeline with its default stages. A manual step runs one instruction alone;
+# batch_size 1 also keeps any automatic step to one report.
+pipeline:
+  task2batch:
+    config:
+      batch_size: 1
 
 inference:
   upstream-url: ${REEF_UPSTREAM_URL:?}

@@ -23,7 +23,7 @@ from reef.dispatcher import Dispatcher
 from reef.harness import render_composition, run_episode
 from reef.harness.adapters import get_adapter
 from reef.inference.http import InferenceProxyRuntime
-from reef.recipe.config import recipe_config_from_mapping
+from reef.recipe.config import recipe_config_from_file_layout
 from reef.recipe.registry import build_recipe
 from reef.scenario.scenario import Scenario
 from reef.service.deploy.config_utils import load_config
@@ -35,7 +35,7 @@ SCENARIO = "terminal-bench"
 
 def configuration(tasks: tuple[str, ...], iterations: int | None, repeats: int | None) -> dict[str, Any]:
     """Fill the stack's dataset and keep the gate budget consistent with it."""
-    sections = recipe_config_from_mapping(load_config(HERE / "terminal_bench.yaml"))
+    sections = recipe_config_from_file_layout(load_config(HERE / "terminal_bench.yaml"))
     evolution = sections["evolution"]
     evolution["tasks"] = list(tasks)
     if repeats is not None:
@@ -117,7 +117,7 @@ def record_rollout(scenario: Scenario, recipe: MetaHarnessRecipe) -> None:
             timeout=recipe.episode_timeout_s,
             executor=recipe.executor,
         )
-        score = 0.0 if recipe.forbid_residue and result.residue else float(recipe.score_episode(task, result))
+        score = 0.0 if recipe.forbid_residue and result.residue else float(recipe.score_episode.score(task, result))
         if not math.isfinite(score):
             raise ValueError("rollout scorer returned a non-finite score")
         inference = scenario.records.append(

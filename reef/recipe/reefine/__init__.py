@@ -16,6 +16,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from reef.core.plugins import PluginReference
+from reef.evaluation.reefine import ReefineEvaluation
 from reef.harness.adapters import get_adapter
 from reef.harness.adapters.descriptor import DescriptorError
 from reef.harness.episodes.requests import ships_requests
@@ -25,7 +27,7 @@ from reef.recipe.config_fields import config_field
 from reef.recipe.cordis import CordisRecipe, _ScenarioModels
 from reef.recipe.errors import RecipeConfigError
 from reef.recipe.reefine.agent import AgentProposer
-from reef.recipe.reefine.evaluation import evaluation_factory
+from reef.recipe.reefine.evaluation import evaluation_settings
 from reef.recipe.reefine.evolution import EXTENSION_ADAPTER, HEALTH_TASK_DIRECTORY
 from reef.recipe.reefine.multimodal import MultimodalProvider, MultimodalSettings, ProviderRelay
 from reef.runtime.interfaces import MultimodalRelay
@@ -87,9 +89,9 @@ class ReefineRecipe(CordisRecipe):
         adapter = str(evolution.get("adapter", "pi"))
         defaults = {
             # A request goes to the agent proposer where the host can jail it; otherwise to the text proposer.
-            "propose": "reef.recipe.reefine.agent:propose",
+            "propose": "reef.recipe.reefine.agent:AgentProposer",
             "proposer_agent": {},
-            "evaluate": "reef.recipe.reefine.evolution:evaluate",
+            "evaluate": "reef.recipe.reefine.evolution:AnswerScorer",
             "requests": True,
             "version_check": True,
             "review_kinds": ["code_extension"],
@@ -139,10 +141,15 @@ class ReefineRecipe(CordisRecipe):
             merged["selection"] = "floor"
         kwargs = super()._recipe_kwargs({**settings, "evolution": merged}, values)
         if selection == "reefine":
-            factory = evaluation_factory(evaluation, tuple(kwargs["tasks"]))
-            if factory.settings.reviewer_model != "served" and factory.settings.reviewer_model not in kwargs["models"]:
+            evaluation_config, evaluation_instructions = evaluation_settings(evaluation, tuple(kwargs["tasks"]))
+            if (
+                evaluation_config.reviewer_model != "served"
+                and evaluation_config.reviewer_model not in kwargs["models"]
+            ):
                 raise RecipeConfigError("evaluation.reviewer_model must name served or an evolution.models binding")
-            kwargs["candidate_plugin"] = factory
+            kwargs["selection"] = PluginReference(
+                ReefineEvaluation, {"settings": evaluation_config, "instructions": evaluation_instructions}
+            )
         try:
             kwargs["multimodal"] = MultimodalSettings.from_config(evolution.get("multimodal"), values)
         except ValueError as exc:
@@ -166,5 +173,10 @@ class ReefineRecipe(CordisRecipe):
             kwargs["step_record_dir"] = Path(kwargs["step_record_dir"]).expanduser().resolve() / scenario
         backend = ReefineBackend(**kwargs, proposals_dir=self.proposals_path(scenario))
         return self._build_trainer(
-            scenario, records, backend, algorithm_state=algorithm_state, experiment_logger=experiment_logger
+            scenario,
+            records,
+            backend,
+            self.selection_plugin(backend),
+            algorithm_state=algorithm_state,
+            experiment_logger=experiment_logger,
         )
