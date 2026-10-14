@@ -5,6 +5,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from reef.inference import engine_control
 from reef.inference.sglang import service as inference_service
 from reef.inference.sglang.config import SGLangConfig
 from reef.runtime.deployment import ModelDeploymentPlan
@@ -72,7 +73,7 @@ def resource_runtime(monkeypatch):
         def from_workers(cls, workers):
             return SimpleNamespace(workers=workers, owned=False, rpc=lambda rank, method, **kwargs: event(method))
 
-    monkeypatch.setattr(inference_service, "RayExecutor", Executor)
+    monkeypatch.setattr(engine_control, "RayExecutor", Executor)
     return state
 
 

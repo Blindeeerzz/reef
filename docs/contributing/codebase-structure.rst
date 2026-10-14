@@ -216,7 +216,9 @@ model operations, checkpoint and tensor I/O.
 over a token-native generate route: it renders the prompt, builds the training
 record from a ``CapturedGeneration`` and streams protocol frames. Each engine
 supplies a ``NativeGenerateClient`` that shapes its request, parses its response
-and builds its tool-call parser. ``inference/sglang/`` owns SGLang engine launch,
+and builds its tool-call parser. ``inference/engine_control.py`` holds the control classes that SGLang and vLLM
+share: the coordinator backend, the inference service, the control actor and its
+default serving executor. ``inference/sglang/`` owns SGLang engine launch,
 capture and control independently of training; ``inference/vllm/`` owns vLLM capture,
 the KV connector that stamps tokens with their weight version, and engine launch and
 control over vLLM's HTTP control routes. ``train/slime_backend/inference.py`` only

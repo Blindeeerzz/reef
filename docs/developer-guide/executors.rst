@@ -899,11 +899,10 @@ names to ``None`` while running or an exit code; a missing service is not alive.
 Custom rollout executors expose one control rank. Its RPC vocabulary is
 ``inference_url``, ``get_runtime_load_ids``, ``get_updatable_engines_and_lock``,
 ``pause_generation_for_update``, ``continue_generation_after_update``,
-``offload``, ``onload(tags)``, ``onload_weights``, ``onload_kv``,
+``offload``, ``onload_weights``, ``onload_kv``,
 ``terminate_updatable_engines``, ``prepare_training_connection``,
-``recover_updatable_engines``,
-``clear_updatable_num_new_engines``, ``health_monitoring_pause``,
-``health_monitoring_resume`` and ``check_weights(action)``. Executor shutdown
+``recover_updatable_engines``, ``clear_updatable_num_new_engines`` and
+``check_weights(action)``. Executor shutdown
 owns serving resource teardown; the manager does not manipulate backend
 server groups or actor handles directly.
 
