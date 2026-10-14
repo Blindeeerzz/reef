@@ -20,7 +20,6 @@ def _dispatcher(tmp_path, *, allow_implicit_creation: bool = True) -> Dispatcher
         Recipe(),
         InMemoryRepositoryBackend.factory(bootstrap, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "local",
-        agent_record_dir=None,
         allow_implicit_creation=allow_implicit_creation,
         scenario_storage=SQLiteScenarioStorage(None),
     )
@@ -118,7 +117,6 @@ def test_delete_scenario_archives_its_records_and_commit_log(tmp_path) -> None:
         Recipe(),
         InMemoryRepositoryBackend.factory(bootstrap, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "local",
-        agent_record_dir=record_dir,
         scenario_storage=SQLiteScenarioStorage(record_dir),
     )
     assert value.get_or_create_scenario("delivery") is not None

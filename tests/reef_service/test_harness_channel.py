@@ -193,7 +193,6 @@ def _dispatcher(
         InMemoryRepositoryBackend.factory(bootstrap, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "local",
         # The commit log is what puts gate metrics on the release catalog.
-        agent_record_dir=tmp_path / "agent-record",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "agent-record"),
     )
     dispatcher.get_or_create_scenario("delivery")
@@ -2580,7 +2579,6 @@ def test_install_route_without_scenario_returns_404_when_no_harness_recipe_exist
         Recipe(),
         InMemoryRepositoryBackend.factory(bootstrap, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "local",
-        agent_record_dir=None,
         scenario_storage=SQLiteScenarioStorage(None),
     )
     dispatcher.get_or_create_scenario("weights-only")
