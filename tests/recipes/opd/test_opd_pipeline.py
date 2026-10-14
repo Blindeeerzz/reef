@@ -13,7 +13,8 @@ from reef.core import AgentRecord, RequestType
 from reef.core.reports import TeacherContextReport
 from reef.pipeline_context import PipelineContext
 from reef.recipe.registry import build_recipe
-from reef.record2task.distill import DistillRecord2Record
+from reef.record2record import ExclusiveReportRecord2Record
+from reef.runtime.interfaces import TrainingMethod
 from reef.train.algos import StepScheduling
 from reef.train.pipeline import TrainingPipeline
 from reef.train.slime_backend.data_builder import to_slime_rollout_data
@@ -28,7 +29,7 @@ def opd_pipeline(max_teacher_tokens: int = 0) -> TrainingPipeline:
     context = PipelineContext("math", TeacherContextReport)
     return TrainingPipeline(
         context,
-        record2record=DistillRecord2Record(context),
+        record2record=ExclusiveReportRecord2Record(context),
         record2task=OPDTasks(OPDSettings(max_teacher_tokens=max_teacher_tokens)),
         task2batch=OPDBatches(context, 1),
     )
@@ -77,7 +78,7 @@ def test_exact_student_tokens_and_no_scalar_reward_reach_slime(processor: Traini
     batch = processor.build_batch()
     assert isinstance(batch, TrainingBatch)
     assert batch.batch_id == "math:opd:1"
-    prepared = prepare_slime_step(batch, "opd", {}, StepScheduling(unit="sample", batch_size="actual"))
+    prepared = prepare_slime_step(batch, TrainingMethod("opd"), {}, StepScheduling(unit="sample", batch_size="actual"))
     payload = prepared.payload
     assert payload is not None
     assert "advantages" not in payload
@@ -109,7 +110,7 @@ def test_recipe_resolves_and_rejects_multiple_epochs() -> None:
     spec = recipe.training_spec()
     assert (spec.objective, spec.loss_family) == ("opd", "opd")
     pipeline = recipe.build_pipeline(PipelineContext("math", TeacherContextReport))
-    assert isinstance(pipeline.record2record, DistillRecord2Record)
+    assert isinstance(pipeline.record2record, ExclusiveReportRecord2Record)
     assert isinstance(pipeline.record2task, OPDTasks)
     assert isinstance(pipeline.task2batch, OPDBatches)
     assert spec.scheduling == StepScheduling(unit="sample", batch_size="actual")

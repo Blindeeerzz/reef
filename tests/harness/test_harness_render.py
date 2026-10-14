@@ -1274,50 +1274,19 @@ def test_an_adapter_renderer_step_must_be_a_static_method() -> None:
                 return text
 
 
-def test_a_quirks_module_with_only_finalize_render_still_gets_the_last_word(tmp_path, monkeypatch) -> None:
-    """An external quirks module written before AdapterRenderer keeps working, with a deprecation warning."""
-    (tmp_path / "legacy_quirks.py").write_text(
-        "def finalize_render(files):\n    return {**files, 'native/LEGACY': 'seen ' + str(len(files)) + '\\n'}\n"
+def test_a_quirks_module_must_define_one_adapter_renderer(tmp_path, monkeypatch) -> None:
+    module_name = "two_renderer_quirks"
+    (tmp_path / f"{module_name}.py").write_text(
+        "from reef.harness.adapters.descriptor import AdapterRenderer\n"
+        "class FirstRenderer(AdapterRenderer):\n    pass\n"
+        "class SecondRenderer(AdapterRenderer):\n    pass\n"
     )
-    monkeypatch.syspath_prepend(str(tmp_path))
-    data = yaml.safe_load((Path(reef.harness.adapters.__file__).parent / "native" / "descriptor.yaml").read_text())
-    data["quirks"] = "legacy_quirks"
-    target = tmp_path / "descriptor.yaml"
-    target.write_text(yaml.safe_dump(data), encoding="utf-8")
-    with pytest.warns(DeprecationWarning, match="finalize_render, which is deprecated"):
-        descriptor = load_descriptor(target)
-    files = render_composition([], descriptor)
-    assert files["native/LEGACY"] == f"seen {len(files) - 1}\n"
-
-
-@pytest.mark.parametrize(
-    ("source", "message"),
-    [
-        (
-            "from reef.harness.adapters.descriptor import AdapterRenderer\n"
-            "class FirstRenderer(AdapterRenderer):\n    pass\n"
-            "class SecondRenderer(AdapterRenderer):\n    pass\n",
-            "more than one AdapterRenderer subclass: FirstRenderer, SecondRenderer",
-        ),
-        (
-            "from reef.harness.adapters.descriptor import AdapterRenderer\n"
-            "class Renderer(AdapterRenderer):\n    pass\n"
-            "def finalize_render(files):\n    return files\n",
-            "an AdapterRenderer subclass or finalize_render, not both",
-        ),
-    ],
-    ids=["two-renderers", "renderer-and-finalize-render"],
-)
-def test_a_quirks_module_must_define_one_adapter_renderer(tmp_path, monkeypatch, source: str, message: str) -> None:
-    # One module name per case, since Python caches an imported module by its name.
-    module_name = f"invalid_quirks_{tmp_path.name.replace('-', '_')}"
-    (tmp_path / f"{module_name}.py").write_text(source)
     monkeypatch.syspath_prepend(str(tmp_path))
     data = yaml.safe_load((Path(reef.harness.adapters.__file__).parent / "native" / "descriptor.yaml").read_text())
     data["quirks"] = module_name
     target = tmp_path / "descriptor.yaml"
     target.write_text(yaml.safe_dump(data), encoding="utf-8")
-    with pytest.raises(DescriptorError, match=message):
+    with pytest.raises(DescriptorError, match="more than one AdapterRenderer subclass: FirstRenderer, SecondRenderer"):
         load_descriptor(target)
 
 

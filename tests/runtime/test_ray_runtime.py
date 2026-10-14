@@ -14,16 +14,17 @@ from tests.support.runtime_stubs import ExecutorRuntimeFixture
 
 from reef.artifact import LiveWeightArtifactRef
 from reef.core import RuntimeLoadSpan
-from reef.evaluation import EvaluationResult, SelectionDecision
 from reef.observability.operations import OperationMetrics
 from reef.runtime.executor import ray as ray_executor
 from reef.runtime.executor.connection import RayCoordinatorClient, RayRuntimeError, RemoteRayCoordinatorClient
 from reef.runtime.interfaces import (
+    ActivatedModel,
     InferenceAdmissionController,
     InferenceHandler,
     InferenceStream,
     PreparedTrainingStep,
     TrainingJobResult,
+    TrainingMethod,
     TrainingRuntime,
 )
 from reef.service.app import RequestService
@@ -332,17 +333,14 @@ def test_runtime_rejects_invalid_handler_factory_result() -> None:
 @pytest.mark.unit
 def test_ray_runtime_prepares_and_executes_one_transaction() -> None:
     runtime = ExecutorRuntimeFixture(train_group_handle=FakeTrainGroupHandle(), inference_url="http://router")
-    prepared = runtime.prepare_training_step(policy_batch(), "sft", {}, StepScheduling(), 7)
+    prepared = runtime.prepare_training_step(policy_batch(), TrainingMethod("sft"), {}, StepScheduling(), 7)
 
     assert prepared.payload is not None
     payload = prepared.payload
     assert payload["scenario_step"] == 7 and payload["expected_runtime_load_id"] == "v0"
-    assert runtime.execute_training_job(payload) == TrainingJobResult(
-        outcome="complete",
-        runtime_load_id="v1",
-        checkpoint_path="/checkpoint",
-        training_job_id="job-0",
-    )
+    candidate = runtime.train_candidate(payload)
+    assert candidate.training_job_id == "job-0" and candidate.checkpoint_path == "/checkpoint"
+    assert runtime.activate_candidate(candidate) == ActivatedModel("job-0", "v1")
 
 
 @pytest.mark.unit
@@ -359,7 +357,9 @@ def test_ray_runtime_requires_deferred_weight_updates() -> None:
 def test_ray_runtime_prepares_sft_without_reef_advantages() -> None:
     runtime = ExecutorRuntimeFixture(train_group_handle=FakeTrainGroupHandle(), inference_url="http://router")
 
-    prepared = runtime.prepare_training_step(policy_batch(), _TEST_SFT_OBJECTIVE, {}, StepScheduling(), 3)
+    prepared = runtime.prepare_training_step(
+        policy_batch(), TrainingMethod(_TEST_SFT_OBJECTIVE), {}, StepScheduling(), 3
+    )
     assert prepared.payload is not None
     payload = prepared.payload
 
@@ -378,7 +378,7 @@ def test_ray_runtime_rejects_unstructured_training_results() -> None:
     runtime = ExecutorRuntimeFixture(train_group_handle=InvalidResultTrainGroup(), inference_url="http://router")
 
     with pytest.raises(RayRuntimeError, match="invalid training result: dict"):
-        runtime.execute_training_job({"scenario_step": 1})
+        runtime.train_candidate({"scenario_step": 1})
 
 
 @pytest.mark.unit
@@ -409,7 +409,7 @@ def test_training_job_results_round_trip_across_process_boundary(result: Trainin
 def test_ray_runtime_preserves_backend_prepared_policy_signals(batch, objective, state, advantages, loss) -> None:
     runtime = ExecutorRuntimeFixture(train_group_handle=FakeTrainGroupHandle(), inference_url="http://router")
 
-    prepared = runtime.prepare_training_step(batch, objective, state, StepScheduling(unit="sample"), 9)
+    prepared = runtime.prepare_training_step(batch, TrainingMethod(objective), state, StepScheduling(unit="sample"), 9)
     assert prepared.payload is not None
     payload = prepared.payload
 
@@ -437,7 +437,7 @@ def test_ray_runtime_rejects_unsupported_objective_batch_pairs(batch, objective,
     runtime = ExecutorRuntimeFixture(train_group_handle=FakeTrainGroupHandle(), inference_url="http://router")
 
     with pytest.raises(error, match=message):
-        runtime.prepare_training_step(batch, objective, {}, StepScheduling(), 0)
+        runtime.prepare_training_step(batch, TrainingMethod(objective), {}, StepScheduling(), 0)
 
 
 @pytest.mark.unit
@@ -449,7 +449,7 @@ def test_ray_runtime_sends_heterogeneous_samples_to_exact_staleness_admission() 
     runtime = ExecutorRuntimeFixture(train_group_handle=VersionedHandle(), inference_url="http://router")
     prepared = runtime.prepare_training_step(
         grouped_policy_batch(versions=("engine:0", "engine:1")),
-        _TEST_GROUPED_OBJECTIVE,
+        TrainingMethod(_TEST_GROUPED_OBJECTIVE),
         {},
         StepScheduling(),
         0,
@@ -473,7 +473,7 @@ def test_ray_runtime_rejects_empty_serving_runtime_load_id() -> None:
 
 @pytest.mark.unit
 def test_slime_backend_preparation_emits_framework_agnostic_rows() -> None:
-    prepared = slime_prepare_step(policy_batch(), "sft", {}, StepScheduling())
+    prepared = slime_prepare_step(policy_batch(), TrainingMethod("sft"), {}, StepScheduling())
     assert prepared.payload is not None
     payload = prepared.payload
 
@@ -508,7 +508,7 @@ def test_slime_backend_preparation_emits_sao_rows_with_action_mask_and_source_fi
         ),
     )
 
-    prepared = slime_prepare_step(batch, "sao", {}, StepScheduling(unit="sample"))
+    prepared = slime_prepare_step(batch, TrainingMethod("sao"), {}, StepScheduling(unit="sample"))
     assert prepared.payload is not None
     payload = prepared.payload
 
@@ -545,7 +545,7 @@ def test_slime_backend_preparation_sao_rows_tolerate_missing_source_fields() -> 
         ),
     )
 
-    prepared = slime_prepare_step(batch, "sao", {}, StepScheduling(unit="sample"))
+    prepared = slime_prepare_step(batch, TrainingMethod("sao"), {}, StepScheduling(unit="sample"))
     assert prepared.payload is not None
     payload = prepared.payload
 
@@ -584,7 +584,7 @@ def test_ray_runtime_prepares_a_sao_job_from_producing_runtime_load_id() -> None
     handle = NoProbeHandle()
     runtime = ExecutorRuntimeFixture(train_group_handle=handle, inference_url="http://router")
     initialization_probes = handle.probes
-    prepared = runtime.prepare_training_step(sao_batch(), "sao", {}, StepScheduling(unit="sample"), 4)
+    prepared = runtime.prepare_training_step(sao_batch(), TrainingMethod("sao"), {}, StepScheduling(unit="sample"), 4)
     assert prepared.payload is not None
     payload = prepared.payload
 
@@ -612,7 +612,9 @@ def test_ray_runtime_fences_enabled_sao_window_with_serving_version() -> None:
     )
     initialization_probes = handle.probes
 
-    prepared = runtime.prepare_training_step(sao_batch("engine:1"), "sao", {}, StepScheduling(unit="sample"), 4)
+    prepared = runtime.prepare_training_step(
+        sao_batch("engine:1"), TrainingMethod("sao"), {}, StepScheduling(unit="sample"), 4
+    )
 
     assert prepared.payload is not None
     assert prepared.payload["expected_runtime_load_id"] == "engine:3"
@@ -645,7 +647,7 @@ def test_ray_runtime_preserves_enabled_sao_mixed_producing_versions() -> None:
         max_staleness=2,
     )
 
-    prepared = runtime.prepare_training_step(batch, "sao", {}, StepScheduling(unit="sample"), 0)
+    prepared = runtime.prepare_training_step(batch, TrainingMethod("sao"), {}, StepScheduling(unit="sample"), 0)
 
     assert prepared.payload is not None
     assert prepared.payload["producing_runtime_load_ids"] == ["engine:1", "engine:2"]
@@ -666,7 +668,7 @@ def test_ray_runtime_preserves_enabled_grouped_mixed_producing_versions() -> Non
 
     prepared = runtime.prepare_training_step(
         grouped_policy_batch(versions=("engine:1", "engine:2")),
-        _TEST_GROUPED_OBJECTIVE,
+        TrainingMethod(_TEST_GROUPED_OBJECTIVE),
         {},
         StepScheduling(),
         0,
@@ -686,7 +688,9 @@ def test_ray_runtime_preserves_sao_batch_when_serving_version_is_unverified() ->
     )
 
     with pytest.raises(RayRuntimeError, match="verified serving runtime load ID"):
-        runtime.prepare_training_step(sao_batch("engine:1"), "sao", {}, StepScheduling(unit="sample"), 0)
+        runtime.prepare_training_step(
+            sao_batch("engine:1"), TrainingMethod("sao"), {}, StepScheduling(unit="sample"), 0
+        )
 
 
 @pytest.mark.unit
@@ -701,7 +705,7 @@ def test_ray_runtime_carries_shared_source_fields_for_other_losses() -> None:
         max_staleness=2,
     )
 
-    prepared = runtime.prepare_training_step(policy_batch(), "sft", {}, StepScheduling(), 0)
+    prepared = runtime.prepare_training_step(policy_batch(), TrainingMethod("sft"), {}, StepScheduling(), 0)
 
     assert prepared.payload is not None
     assert prepared.payload["expected_runtime_load_id"] == "engine:3"
@@ -733,7 +737,9 @@ def test_ray_runtime_carries_mixed_token_runtime_load_ids_to_bounded_admission()
         max_staleness=2,
     )
 
-    prepared = runtime.prepare_training_step(TrainingBatch("batch", (sample,)), "sft", {}, StepScheduling(), 0)
+    prepared = runtime.prepare_training_step(
+        TrainingBatch("batch", (sample,)), TrainingMethod("sft"), {}, StepScheduling(), 0
+    )
 
     assert prepared.payload is not None
     assert prepared.payload["producing_runtime_load_ids"] == [None]
@@ -764,7 +770,9 @@ def test_ray_runtime_sends_mixed_spans_to_exact_admission_instead_of_poisoning_t
     )
     runtime = ExecutorRuntimeFixture(train_group_handle=VersionedHandle(), inference_url="http://router")
 
-    prepared = runtime.prepare_training_step(TrainingBatch("batch", (sample,)), "sft", {}, StepScheduling(), 0)
+    prepared = runtime.prepare_training_step(
+        TrainingBatch("batch", (sample,)), TrainingMethod("sft"), {}, StepScheduling(), 0
+    )
 
     assert prepared.payload is not None
     assert prepared.payload["expected_runtime_load_id"] == "engine:7"
@@ -790,7 +798,7 @@ def test_ray_runtime_rejects_a_sao_batch_missing_source_fields() -> None:
     )
 
     with pytest.raises(RayRuntimeError, match="recorded producing runtime load ID"):
-        runtime.prepare_training_step(batch, "sao", {}, StepScheduling(unit="sample"), 0)
+        runtime.prepare_training_step(batch, TrainingMethod("sao"), {}, StepScheduling(unit="sample"), 0)
 
 
 @pytest.mark.unit
@@ -805,7 +813,9 @@ def test_enabled_sao_window_sends_missing_source_fields_to_bridge_admission() ->
         max_staleness=2,
     )
 
-    prepared = runtime.prepare_training_step(sao_batch(None), "sao", {}, StepScheduling(unit="sample"), 0)
+    prepared = runtime.prepare_training_step(
+        sao_batch(None), TrainingMethod("sao"), {}, StepScheduling(unit="sample"), 0
+    )
 
     assert prepared.payload is not None
     assert prepared.payload["producing_runtime_load_ids"] == [None]
@@ -841,11 +851,13 @@ def test_remote_handle_delegates_step_preparation_to_the_backend_actor(monkeypat
     actor = Bridge()
     handle = RemoteRayCoordinatorClient(train_group_actor=actor)
 
-    prepared = handle.prepare_training_step(policy_batch(), "openclawrl", {"steps": 2}, StepScheduling(unit="sample"))
+    prepared = handle.prepare_training_step(
+        policy_batch(), TrainingMethod("openclawrl"), {"steps": 2}, StepScheduling(unit="sample")
+    )
 
     assert prepared is expected
     assert actor.prepare_training_step.calls == [
-        (policy_batch(), "openclawrl", {"steps": 2}, StepScheduling(unit="sample"))
+        (policy_batch(), TrainingMethod("openclawrl"), {"steps": 2}, StepScheduling(unit="sample"))
     ]
 
 
@@ -958,7 +970,8 @@ def test_noncolocated_weight_update_preserves_inflight_and_queues_new_requests_u
     inflight = asyncio.run(runtime.acquire_inference())
     assert runtime.current_runtime_load_id() == "engine:0"
 
-    result = runtime.execute_training_job({"scenario_step": 0})
+    result = runtime.train_candidate({"scenario_step": 0})
+    runtime.activate_candidate(result)
 
     assert result.training_job_id == "job-0"
     assert handle.calls == ["execute", "update_weights"]
@@ -990,11 +1003,7 @@ def test_candidate_rejection_leaves_serving_weights_unchanged() -> None:
     runtime = ExecutorRuntimeFixture(train_group_handle=handle, inference_url="http://router")
 
     candidate = runtime.train_candidate({"scenario_step": 0})
-    evaluation = EvaluationResult("test", "1", {})
-    runtime.reject_candidate(
-        candidate,
-        SelectionDecision("reject", "test", "1", "rejected by test", evaluation),
-    )
+    runtime.reject_candidate(candidate)
 
     assert handle.calls == ["execute", "reject"]
     assert runtime.serving_runtime_load_id() == "engine:0"
@@ -1009,7 +1018,8 @@ def test_colocated_weight_update_retracts_without_draining_inflight() -> None:
     inflight = asyncio.run(runtime.acquire_inference())
     assert runtime.current_runtime_load_id() == "engine:0"
 
-    result = runtime.execute_training_job({"scenario_step": 0})
+    result = runtime.train_candidate({"scenario_step": 0})
+    runtime.activate_candidate(result)
 
     assert handle.calls == ["execute", "update_weights"]
     assert runtime.inference_admission_status == {"open": False, "active": 1}
@@ -1032,7 +1042,8 @@ def test_colocated_weight_update_does_not_wait_for_inference_timeout() -> None:
     )
     inflight = asyncio.run(runtime.acquire_inference())
 
-    result = runtime.execute_training_job({"scenario_step": 0})
+    result = runtime.train_candidate({"scenario_step": 0})
+    runtime.activate_candidate(result)
 
     assert result.training_job_id == handle.training_job_id
     assert handle.calls == ["execute", "update_weights"]
@@ -1053,7 +1064,7 @@ def test_colocated_checkpoint_rejection_reopens_admission_when_backend_stayed_id
     runtime = ExecutorRuntimeFixture(train_group_handle=handle, inference_url="http://router")
 
     with pytest.raises(RuntimeError, match="checkpoint rejected"):
-        runtime.execute_training_job({"scenario_step": 0})
+        runtime.train_candidate({"scenario_step": 0})
 
     assert handle.calls == ["execute"]
     assert runtime.inference_admission_status == {"open": True, "active": 0}
@@ -1125,29 +1136,6 @@ def test_a_failure_the_group_does_not_call_recoverable_is_still_unhealthy() -> N
         ExecutorRuntimeFixture(
             train_group_handle=DeadPublicationHandle(status="COMPLETE"), inference_url="http://router"
         )
-
-
-@pytest.mark.unit
-def test_colocated_completed_checkpoint_replay_reopens_admission() -> None:
-    class CompletedReplay(DeferredWeightUpdateTrainGroupHandle):
-        def execute_training_job(self, payload: Mapping[str, Any]) -> TrainingJobResult:
-            del payload
-            self.calls.append("execute")
-            self.status = "COMPLETE"
-            return TrainingJobResult(
-                outcome="complete",
-                runtime_load_id="engine:1",
-                checkpoint_path="/checkpoint",
-            )
-
-    handle = CompletedReplay(colocate=True)
-    runtime = ExecutorRuntimeFixture(train_group_handle=handle, inference_url="http://router")
-
-    result = runtime.execute_training_job({"scenario_step": 0})
-
-    assert result.outcome == "complete"
-    assert handle.calls == ["execute"]
-    assert runtime.inference_admission_status == {"open": True, "active": 0}
 
 
 @pytest.mark.unit
@@ -1245,7 +1233,8 @@ def test_queued_tttd_fanout_freezes_the_head_that_reopens_admission(monkeypatch)
     monkeypatch.setattr(asyncio, "to_thread", call_inline)
     handle = DeferredWeightUpdateTrainGroupHandle()
     runtime = ExecutorRuntimeFixture(train_group_handle=handle, inference_url="http://router")
-    updated = runtime.execute_training_job({"scenario_step": 0})
+    updated = runtime.train_candidate({"scenario_step": 0})
+    runtime.activate_candidate(updated)
 
     class Scenario:
         operations = OperationMetrics(("serve/request", "serve/admission"))
@@ -1296,7 +1285,7 @@ def test_queued_tttd_fanout_freezes_the_head_that_reopens_admission(monkeypatch)
     async def run() -> None:
         queued = [
             asyncio.create_task(
-                service.infer(
+                service.infer_with_data(
                     {"x-reef-scenario": "math"},
                     {"messages": [{"role": "user", "content": f"rollout {rollout}"}]},
                     "/v1/chat/completions",
@@ -1321,7 +1310,7 @@ def test_queued_tttd_fanout_freezes_the_head_that_reopens_admission(monkeypatch)
             committed_training_job_id=updated.training_job_id,
         )
         responses = await asyncio.wait_for(asyncio.gather(*queued), 5)
-        assert {response["metadata"]["runtime_load_id"] for response in responses} == {"engine:1"}
+        assert {response["metadata"]["runtime_load_id"] for response, _ in responses} == {"engine:1"}
 
     asyncio.run(run())
     assert backend.versions == ["engine:1"] * (8 * 64)
@@ -1491,7 +1480,7 @@ def test_stream_and_failure_release_their_inference_admission_handles() -> None:
         assert runtime.inference_admission_status == {"open": True, "active": 0}
 
         with pytest.raises(RuntimeError, match="backend failed"):
-            await service.infer(
+            await service.infer_with_data(
                 {"x-reef-scenario": "math"},
                 {},
                 "/v1/chat/completions",
@@ -1525,7 +1514,7 @@ def test_ray_runtime_producing_versions_follow_the_step_schedule() -> None:
     runtime = ExecutorRuntimeFixture(train_group_handle=VersionedHandle(), inference_url="http://router")
     prepared = runtime.prepare_training_step(
         grouped_policy_batch(versions=("engine:0", "engine:1")),
-        "tests.runtime.test_ray_runtime:TwoEpochObjective",
+        TrainingMethod("tests.runtime.test_ray_runtime:TwoEpochObjective"),
         {},
         StepScheduling(unit="sample", batch_size="actual", epochs=2),
         0,

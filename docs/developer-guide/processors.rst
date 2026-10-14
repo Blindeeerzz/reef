@@ -87,7 +87,7 @@ The trainer calls it on its own thread, under its lock; no call may block:
   them again. ``trained=False`` says the backend dropped the batch as stale,
   for a record stage that paces work on what trained.
 
-The pipeline also merges the three stages' ``status()``, metrics, background
+The pipeline also merges the record and task stages' ``status()``, metrics, background
 work (``background_jobs_running()``), and ``close()``. ``releasable_record_ids()``
 returns the completed records that no held set references, and
 ``release_records(ids)`` frees their memory after a successful commit. New
@@ -131,6 +131,8 @@ names it, so the record never trains after a restart.
      - nothing; the default of a pipeline that trains no weights
    * - ``ReportRecord2Record``
      - report validation, groups and slots, the manual-mode limit, source release
+   * - ``ExclusiveReportRecord2Record``
+     - a ``ReportRecord2Record`` that trains every report by itself; a report that ends owns its inference records
    * - ``JudgingRecord2Record``
      - correlation, the judging worker, and the ``max_staleness`` check
    * - ``InferenceRecord2Record``

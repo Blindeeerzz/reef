@@ -420,7 +420,7 @@ def test_composite_recipe_refuses_a_checkpoint_cadence() -> None:
             {},
             config={**base, "artifact": {"checkpoint_every_n_versions": 5}, "components": components},
         )
-    with pytest.raises(RecipeConfigError, match=r"components\.harness\.config\.checkpoint_every_n_versions"):
+    with pytest.raises(RecipeConfigError, match=r"does not consume config key\(s\) 'checkpoint_every_n_versions'"):
         build_recipe(
             base["implementation"],
             {},
@@ -437,7 +437,7 @@ def test_composite_recipe_refuses_a_checkpoint_cadence() -> None:
         build_recipe(
             base["implementation"], {}, config={**base, "checkpoint_every_n_versions": 5, "components": components}
         )
-    with pytest.raises(RecipeConfigError, match=r"components\.harness\.config\.artifact\.checkpoint_every_n_versions"):
+    with pytest.raises(RecipeConfigError, match=r"does not consume config key\(s\) 'artifact'"):
         build_recipe(
             base["implementation"],
             {},
@@ -483,7 +483,6 @@ def test_composite_scenario_serves_config_defaults_and_reports_components(tmp_pa
         recipe,
         InMemoryRepositoryBackend.factory(initial, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "staged",
-        agent_record_dir=tmp_path / "records",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "records"),
     )
     try:
@@ -543,7 +542,6 @@ def _serve(recipe: CompositeRecipe, tmp_path: Path) -> Dispatcher:
         recipe,
         InMemoryRepositoryBackend.factory(initial, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "staged",
-        agent_record_dir=tmp_path / "records",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "records"),
     )
 

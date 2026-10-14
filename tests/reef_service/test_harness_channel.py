@@ -193,7 +193,6 @@ def _dispatcher(
         InMemoryRepositoryBackend.factory(bootstrap, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "local",
         # The commit log is what puts gate metrics on the release catalog.
-        agent_record_dir=tmp_path / "agent-record",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "agent-record"),
     )
     dispatcher.get_or_create_scenario("delivery")
@@ -351,7 +350,7 @@ def test_status_reports_a_committed_gate_rejection(tmp_path) -> None:
             assert scenario["scenario_step"] == committed["step"] == 1
             assert committed["metrics"]["published"] is False
             assert committed["metrics"]["selected"] is False
-            assert committed["metrics"]["selection"]["outcome"] == "reject"
+            assert committed["metrics"]["selection"]["selected"] is False
             response = await client.get("/reef/harness", headers={"x-reef-scenario": "delivery"})
             assert response.status == 404
         finally:
@@ -998,7 +997,7 @@ if mode == "static":
     # The record without the check offs is what RELEASE_FILE_CHECKSUM was baked from.
     record.pop("setup", None)
     print(hashlib.sha256((json.dumps(record, indent=2) + "\n").encode("utf-8")).hexdigest())
-elif mode in ("check", "gate"):
+elif mode == "check":
     checked = {item["name"]: item for item in setup}
     def met(item):
         # A check off records the check it stood for; one without it (an older release file) counts by name.
@@ -2580,7 +2579,6 @@ def test_install_route_without_scenario_returns_404_when_no_harness_recipe_exist
         Recipe(),
         InMemoryRepositoryBackend.factory(bootstrap, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "local",
-        agent_record_dir=None,
         scenario_storage=SQLiteScenarioStorage(None),
     )
     dispatcher.get_or_create_scenario("weights-only")

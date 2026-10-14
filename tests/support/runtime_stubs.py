@@ -5,16 +5,17 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from reef.core.evaluation import SelectionDecision
 from reef.inference.http import InferenceProxyRuntime
 from reef.runtime.interfaces import (
     ActivatedModel,
     InferenceHandler,
     ModelCandidate,
     PreparedTrainingStep,
+    TrainingMethod,
     TrainingRuntime,
 )
 from reef.train.algos import StepScheduling
+from reef.train.runtime_backend import FixedTrainingMethodSelector
 from reef.train.types import TrainingBatch
 
 
@@ -47,7 +48,7 @@ class StubTrainingRuntime(TrainingRuntime):
     def prepare_training_step(
         self,
         batch: TrainingBatch,
-        objective: str,
+        method: TrainingMethod,
         algorithm_state: Mapping[str, Any],
         scheduling: StepScheduling,
         scenario_step: int,
@@ -62,7 +63,7 @@ class StubTrainingRuntime(TrainingRuntime):
     def activate_candidate(self, candidate: ModelCandidate) -> ActivatedModel:
         raise NotImplementedError("StubTrainingRuntime does not activate candidates")
 
-    def reject_candidate(self, candidate: ModelCandidate, decision: SelectionDecision) -> None:
+    def reject_candidate(self, candidate: ModelCandidate) -> None:
         raise NotImplementedError("StubTrainingRuntime does not reject candidates")
 
     @property
@@ -133,12 +134,13 @@ def runtime_bindings(value):
 
 
 def candidate_backend(value, objective, scheduling, **kwargs):
+    """A runtime backend that trains every job with the objective named ``objective``."""
     from reef.train.runtime_backend import RuntimeCandidateBackend
 
     bindings = runtime_bindings(value)
     return RuntimeCandidateBackend(
         bindings["training_runtime"],
-        objective,
+        FixedTrainingMethodSelector(TrainingMethod(objective)),
         scheduling,
         inference_runtime=bindings["runtime"],
         **kwargs,
@@ -155,7 +157,9 @@ class ExecutorRuntimeFixture(RuntimeCandidateBackend):
         from reef.service.runtime import connect_executor_runtimes
 
         training, inference = components if components is not None else connect_executor_runtimes(**kwargs)
-        super().__init__(training, "sft", StepScheduling(), inference_runtime=inference)
+        super().__init__(
+            training, FixedTrainingMethodSelector(TrainingMethod("sft")), StepScheduling(), inference_runtime=inference
+        )
 
     @property
     def inference(self):

@@ -12,7 +12,6 @@ from tests.support.runtime_stubs import ExecutorRuntimeFixture, runtime_bindings
 
 from reef.artifact import InMemoryRepositoryBackend
 from reef.dispatcher import Dispatcher
-from reef.evaluation import EvaluationResult, SelectionDecision
 from reef.inference.runtime import ExecutorInferenceRuntime
 from reef.recipe import Recipe
 from reef.recipe.errors import RecipeConfigError
@@ -28,7 +27,7 @@ from reef.runtime.executor.connection import (
     RayRuntimeError,
 )
 from reef.runtime.executor.uniproc import UniProcExecutor
-from reef.runtime.interfaces import PreparedTrainingStep
+from reef.runtime.interfaces import PreparedTrainingStep, TrainingMethod
 from reef.runtime.interfaces import TrainingRuntimeError
 from reef.runtime.interfaces import TrainingRuntimeError as ContractTrainingRuntimeError
 from reef.service import assembly
@@ -81,7 +80,9 @@ def test_local_executor_runs_candidate_activation_and_durable_commit(backend):
     try:
         assert runtime.model_path == "model-path"
         assert runtime.base_url == "http://router"
-        prepared = runtime.prepare_training_step(policy_batch(), "custom-objective", {}, StepScheduling(), 0)
+        prepared = runtime.prepare_training_step(
+            policy_batch(), TrainingMethod("custom-objective"), {}, StepScheduling(), 0
+        )
         assert prepared.payload["expected_runtime_load_id"] == "v0"
         candidate = runtime.train_candidate(prepared.payload)
         assert worker.calls == ["prepare", "execute"]
@@ -122,8 +123,7 @@ def test_mapping_config_resolves_worker_import_and_constructor_arguments():
         assert runtime.base_url == "http://custom-router"
         candidate = runtime.train_candidate({})
         assert runtime.inference_admission_status["open"] is False
-        decision = SelectionDecision("reject", "test", "1", "test rejection", EvaluationResult("test", "1", {}))
-        runtime.reject_candidate(candidate, decision)
+        runtime.reject_candidate(candidate)
         assert runtime.inference_admission_status["open"] is True
         assert runtime.serving_runtime_load_id() == "engine:0"
     finally:
@@ -142,8 +142,7 @@ def test_training_operations_target_only_the_selected_coordinator():
         )
     )
     try:
-        result = runtime.execute_training_job({"job": "test"})
-        assert result.outcome == "complete"
+        runtime.activate_candidate(runtime.train_candidate({"job": "test"}))
         assert worker0.calls == []
         assert worker1.calls == ["execute", "update_weights"]
     finally:
@@ -321,7 +320,6 @@ def test_dispatcher_closes_runtime_after_all_scenarios_but_not_on_reload(tmp_pat
     dispatcher = Dispatcher(
         Recipe(**runtime_bindings(runtime)),
         InMemoryRepositoryBackend.factory(initial),
-        agent_record_dir=tmp_path / "records",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "records"),
     )
     dispatcher.get_or_create_scenario("math")
@@ -378,7 +376,6 @@ def test_dispatcher_releases_runtime_when_scenario_teardown_fails(tmp_path, monk
     dispatcher = Dispatcher(
         Recipe(**runtime_bindings(runtime)),
         InMemoryRepositoryBackend.factory(initial),
-        agent_record_dir=tmp_path / "records",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "records"),
     )
     scenario = dispatcher.get_or_create_scenario("math")

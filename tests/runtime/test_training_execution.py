@@ -381,9 +381,6 @@ def test_training_and_publication_share_progress_and_keep_serving_unchanged_unti
         def recover(self, marker):
             raise AssertionError("fresh publication must not recover engines")
 
-        def republish(self, runtime_load_id, marker):
-            raise AssertionError("fresh publication must not republish weights")
-
         def restore_incumbent(self):
             raise AssertionError("candidate was not rejected")
 

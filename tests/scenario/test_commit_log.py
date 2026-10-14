@@ -35,7 +35,7 @@ from reef.recipe.base import Recipe
 from reef.recipe.checkpoint_strategy import CheckpointStrategy, EveryNVersions
 from reef.record2record import ReportGrouping, ReportRecord2Record
 from reef.runtime.interfaces import ActivatedModel, ModelCandidate, PreparedTrainingStep
-from reef.storage.commit_log import RECORD_KIND, CommitLog, CommitLogError, CommitLogScenarioStore
+from reef.storage.commit_log import RECORD_KIND, CommitHistoryScenarioStore, CommitLog, CommitLogError
 from reef.storage.commits import CommitRecord
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.surface import Surface
@@ -43,7 +43,7 @@ from reef.surface.harnesses import create_harness_surface
 from reef.train import CandidateBackend, PreparedStep, Trainer, TrainStepResult
 from reef.train.algos import StepScheduling
 from reef.train.cordis_backend import CordisBackend
-from reef.train.cordis_backend.processor import TraceBatches, TraceRecord2Record, TraceTasks
+from reef.train.cordis_backend.processor import TraceBatches, TraceTasks
 from reef.train.pipeline import TrainingPipeline
 
 
@@ -111,14 +111,14 @@ def test_commit_record_round_trips_gate_metrics(tmp_path) -> None:
 
 @pytest.mark.unit
 def test_commit_record_detaches_nested_metrics() -> None:
-    metrics = {"selection": {"outcome": "select"}}
+    metrics = {"selection": {"selected": True}}
     record = sample_record(metrics=metrics)
 
-    metrics["selection"]["outcome"] = "mutated source"
+    metrics["selection"]["selected"] = False
     encoded = record.to_dict()
-    encoded["metrics"]["selection"]["outcome"] = "mutated encoding"
+    encoded["metrics"]["selection"]["selected"] = False
 
-    assert record.metrics == {"selection": {"outcome": "select"}}
+    assert record.metrics == {"selection": {"selected": True}}
 
 
 @pytest.mark.unit
@@ -388,8 +388,7 @@ class RecordingRuntime(StubTrainingRuntime):
         self._served_version = runtime_load_id
         return ActivatedModel(candidate.candidate_id, runtime_load_id)
 
-    def reject_candidate(self, candidate, decision):
-        del decision
+    def reject_candidate(self, candidate):
         self._candidate_versions.pop(candidate.candidate_id, None)
 
     def serving_runtime_load_id(self):
@@ -431,7 +430,6 @@ def build_training_dispatcher(
         ),
         backend_factory,
         local_artifact_dir=tmp_path / "staged",
-        agent_record_dir=agent_record_dir,
         scenario_storage=SQLiteScenarioStorage(agent_record_dir),
     )
 
@@ -503,7 +501,6 @@ def _build_saved_artifact_dispatcher(tmp_path, *, agent_record_dir=None):
         _SavedArtifactRecipe(backend=backend),
         InMemoryRepositoryBackend.factory(initial, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "staged",
-        agent_record_dir=agent_record_dir,
         scenario_storage=SQLiteScenarioStorage(agent_record_dir),
     )
     return dispatcher, backend
@@ -656,7 +653,6 @@ def test_recovery_resumes_record_progress_without_retraining(tmp_path) -> None:
             recipe(runtime),
             backend_factory,
             local_artifact_dir=tmp_path / "staged",
-            agent_record_dir=agent_record_dir,
             scenario_storage=SQLiteScenarioStorage(agent_record_dir),
         )
 
@@ -997,7 +993,7 @@ class _HarnessEvolveTestRecipe(Recipe):
             records,
             pipeline_factory=lambda context: TrainingPipeline(
                 context,
-                record2record=TraceRecord2Record(context),
+                record2record=ReportRecord2Record(context, ReportGrouping()),
                 record2task=TraceTasks(),
                 task2batch=TraceBatches(context, self.batch_size),
             ),
@@ -1023,7 +1019,6 @@ def build_harness_evolve_dispatcher(
         recipe,
         backend_factory,
         local_artifact_dir=tmp_path / "staged",
-        agent_record_dir=agent_record_dir,
         scenario_storage=SQLiteScenarioStorage(agent_record_dir),
     )
 
@@ -1184,8 +1179,8 @@ def test_artifact_commit_failure_keeps_the_pending_batch_retryable(tmp_path, mon
     committer = scenario._committer
 
     if failure_point == "commit_log":
-        assert isinstance(scenario.store, CommitLogScenarioStore)
-        target = scenario.store.commit_log
+        assert isinstance(scenario.store, CommitHistoryScenarioStore)
+        target = scenario.store.commit_history
         method_name = "append"
         assert target is not None
     elif failure_point == "activation":
@@ -1308,8 +1303,8 @@ def test_live_commit_failure_keeps_one_retryable_batch_and_one_record(tmp_path, 
         target = scenario._committer._artifacts
         method_name = "advance"
     else:
-        assert isinstance(scenario.store, CommitLogScenarioStore)
-        target = scenario.store.commit_log
+        assert isinstance(scenario.store, CommitHistoryScenarioStore)
+        target = scenario.store.commit_history
         method_name = "append"
         assert target is not None
     original = getattr(target, method_name)

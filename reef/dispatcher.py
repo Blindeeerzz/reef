@@ -54,24 +54,6 @@ class LocalBackendWorker:
     thread: Thread
 
 
-@dataclass
-class _PublicationState:
-    lock: Lock = field(default_factory=Lock)
-    values: dict[str, Any] = field(default_factory=dict)
-
-    def snapshot(self) -> Mapping[str, Any]:
-        with self.lock:
-            return dict(self.values)
-
-    def record(self, scenario: str, value: Any) -> None:
-        with self.lock:
-            self.values[scenario] = value
-
-    def forget(self, scenario: str) -> None:
-        with self.lock:
-            self.values.pop(scenario, None)
-
-
 class _ScenarioTrainingError(Exception):
     """One scenario's training turn failed; the others keep their state."""
 
@@ -338,7 +320,7 @@ class WorkerCoordination(ReplacedScenarioCloser):
             if state is not None:
                 state.reload_pending = False
         failures = (
-            {bound.component: bound.trainer.instruction_failures() for bound in current.component_trainers}
+            {bound.component: bound.trainer.instruction_failures() for bound in current.trainers}
             if current is not None
             else {}
         )
@@ -384,7 +366,6 @@ class Dispatcher:
         backend_factory: RepositoryBackendFactory,
         *,
         local_artifact_dir: Path | None = None,
-        agent_record_dir: Path | None = None,
         allow_implicit_creation: bool = True,
         experiment_tracker: ExperimentTracker | None = None,
         scenario_storage: ScenarioStorage,
@@ -400,13 +381,11 @@ class Dispatcher:
             recipe,
             backend_factory,
             local_artifact_dir=local_artifact_dir,
-            agent_record_dir=agent_record_dir,
             scenario_storage=scenario_storage,
             allow_implicit_creation=allow_implicit_creation,
             experiment_tracker=self._experiment_tracker,
         )
         self._registry.set_training_scenario_callback(self._start_training)
-        self._publication = _PublicationState()
         self._training = _TrainingState()
         self._lifecycle = _LifecycleState()
         self.workers = WorkerCoordination(self._registry, self._training.lock, held=hold_local_cycles)
@@ -428,10 +407,6 @@ class Dispatcher:
             self._lifecycle.metrics_thread.start()
 
     @property
-    def published(self) -> Mapping[str, Any]:
-        return self._publication.snapshot()
-
-    @property
     def recipe(self) -> Recipe:
         """The deployment's recipe, before any scenario's own model settings."""
         return self._recipe
@@ -440,9 +415,6 @@ class Dispatcher:
 
     def has_scenario(self, scenario: str) -> bool:
         return self._registry.has(scenario)
-
-    def has_loaded(self, scenario: str) -> bool:
-        return self._registry.has_loaded(scenario)
 
     def get_or_create_scenario(
         self,
@@ -475,7 +447,7 @@ class Dispatcher:
     def _wake_training(self, current: Scenario) -> None:
         if current.training_runtime is not None:
             self._training.ready.set()
-        for bound in current.component_trainers:
+        for bound in current.trainers:
             backend = bound.trainer.candidate_backend
             if backend is not None and not backend.dispatched:
                 self._start_local_backend_worker(current.name, bound.component)
@@ -486,15 +458,15 @@ class Dispatcher:
     def prune_record_archives(self, retention: RecordRetention) -> int:
         """Apply deployment-wide retention without racing scenario file moves."""
         with self._record_retention_lock:
-            return self._storage.prune(days=retention.days, max_bytes=retention.max_bytes)
+            return self._storage.prune(max_bytes=retention.max_bytes)
 
     def delete_scenario(self, scenario: str) -> dict[str, Any]:
         """Remove a scenario from this deployment and move its own state aside.
 
         Under the scenario's lock, so no accept or commit interleaves: the
         training thread and the local worker lose the name, the loaded
-        instance closes, the records and commit log move under
-        ``agent_record_dir/archived``, the recipe's own directories move
+        instance closes, the storage archives the records, commits and
+        settings, the recipe's own directories move
         beside themselves, and the repository registration is archived so
         the name is free. Artifacts other scenarios share stay.
         """
@@ -513,12 +485,11 @@ class Dispatcher:
                 )
             dropped = self._registry.remove(scenario)
             self._stop_local_backend_worker(scenario)
-            self._publication.forget(scenario)
             self._record_training_error(scenario, None, source=None)
             with self._training.lock:
                 self._training.failure_counts.pop(scenario, None)
             if dropped is not None:
-                for bound in dropped.component_trainers:
+                for bound in dropped.trainers:
                     backend = bound.trainer.candidate_backend
                     if backend is not None:
                         backend.retire_scenario(scenario)
@@ -715,7 +686,7 @@ class Dispatcher:
                     return existing
                 if current.training_mode == "auto":
                     raise ValueError("explicit training requests require training_mode='manual' or 'hybrid'")
-                if all(bound.trainer.candidate_backend is None for bound in current.component_trainers):
+                if all(bound.trainer.candidate_backend is None for bound in current.trainers):
                     raise ValueError("explicit training requests require a training backend")
                 request = TrainingRequest.from_dict(item.payload)
                 if item.references:
@@ -784,7 +755,7 @@ class Dispatcher:
         self._wake_training(current)
         if current.training_runtime is not None:
             return
-        for bound in current.component_trainers:
+        for bound in current.trainers:
             if bound.trainer.candidate_backend is not None:
                 continue
             result = current.prepare_training_step(bound.component)
@@ -809,8 +780,7 @@ class Dispatcher:
         except Exception:
             logger.exception("experiment tracker failed to prepare correlation metadata")
 
-        value = current.commit(tracked_result, component=component)
-        self._publication.record(scenario, value)
+        current.commit(tracked_result, component=component)
         settled = current.settled_sibling_record
         if settled is not None:
             # The commit first put a sibling's durable record on record: that step is the sibling's and gets its
@@ -883,7 +853,7 @@ class Dispatcher:
             backend=None if backend is None else type(backend).__name__,
             backend_config=backend_config,
             # One trainer's events need no name; several trainers' events say whose they are.
-            component=component if len(current.component_trainers) > 1 else None,
+            component=component if len(current.trainers) > 1 else None,
         )
 
     # -- Preload ---------------------------------------------------------
@@ -1161,7 +1131,7 @@ class Dispatcher:
         for name in self._training_scenario_names():
             current = self._registry.get_optional(name)
             if current is not None and any(
-                bound.trainer.pipeline.background_jobs_running() for bound in current.component_trainers
+                bound.trainer.pipeline.background_jobs_running() for bound in current.trainers
             ):
                 timeout = (
                     self.background_job_poll_seconds
@@ -1359,12 +1329,6 @@ class Dispatcher:
         elif value is None and was_blocked:
             logger.info("checkpoint storage block cleared; training resumes")
 
-    @property
-    def storage_status(self) -> Mapping[str, Any] | None:
-        """The training thread's last checkpoint-storage block, if any."""
-        with self._training.lock:
-            return self._training.storage_status
-
     def build_training_status(self) -> Mapping[str, Any]:
         """Assemble the training status block, checking training health as it goes.
 
@@ -1459,10 +1423,10 @@ class Dispatcher:
             and current.training_runtime.concurrent_training_scenarios
         ):
             block["adapter_runtime_load_id"] = runtime.serving_adapter_runtime_load_id(scenario_name)
-        if len(current.component_trainers) > 1:
+        if len(current.trainers) > 1:
             # Each component's trainer commits on its own; report each one beside the scenario-wide step.
             components: dict[str, Any] = {}
-            for bound in current.component_trainers:
+            for bound in current.trainers:
                 last = current.last_commit_for(bound.component)
                 components[str(bound.component)] = {
                     "batch_ready": bound.trainer.batch_ready(),
@@ -1584,7 +1548,6 @@ def build_default_dispatcher(
     backend_factory: RepositoryBackendFactory | None = None,
     checkpoint_strategy: CheckpointStrategy | None = None,
     local_artifact_dir: Path | None = None,
-    agent_record_dir: Path | None = None,
     scenario_storage: ScenarioStorage,
 ) -> Dispatcher:
     """Build a Dispatcher serving the core record-only ``recipe``.
@@ -1608,6 +1571,5 @@ def build_default_dispatcher(
         recipe,
         backend_factory,
         local_artifact_dir=local_artifact_dir,
-        agent_record_dir=agent_record_dir,
         scenario_storage=scenario_storage,
     )

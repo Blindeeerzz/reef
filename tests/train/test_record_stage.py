@@ -74,22 +74,15 @@ class RecordingTasks(Record2Task):
 
 
 class RecordingBatches(Task2Batch):
-    """Takes instructions in every mode, adds its own status, and notes when it closes."""
+    """Takes instructions in every mode."""
 
     supported_training_modes = frozenset({"auto", "manual", "hybrid"})
 
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(context, 1)
-        self.closed = False
 
     def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
         return TrainingBatch(f"recording:{batch_number}", tasks)
-
-    def status(self) -> Mapping[str, Any]:
-        return {"batch_label": "recording"}
-
-    def close(self) -> None:
-        self.closed = True
 
 
 class RecordingPipeline(TrainingPipeline):
@@ -198,10 +191,9 @@ def test_the_pipeline_adds_its_stages_background_work_and_status_and_closes_them
         "batch_size": 1,
         "buffered_requests": 0,
         "ended_records": 0,
-        "batch_label": "recording",
     }
     processor.close()
-    assert processor.stage.closed and processor.batches.closed
+    assert processor.stage.closed
 
 
 @pytest.mark.unit
