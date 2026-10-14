@@ -391,12 +391,10 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         publish: str = "auto",
         review_kinds: tuple[str, ...] = (),
         seed: tuple[Mapping[str, Any], ...] = (),
-        episode_workers: int | None = None,
         proposals_dir: str | Path | None = None,
         max_pending_proposals: int = 8,
         step_record_dir: str | Path | None = None,
         worker_executor: ExecutorSettings | None = None,
-        worker_gpus: float | None = None,
         agent_executor: EpisodeExecutor | None = None,
         agent_timeout_s: float = 1800.0,
         agent_trial_timeout_s: float = 300.0,
@@ -437,7 +435,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{label} must be an integer of at least 0 (0 disables the limit)")
         worker_selection, worker_requirements = evaluation_selection(
-            score_episode, episode_workers, worker_executor or ExecutorSettings(), worker_gpus
+            score_episode, worker_executor or ExecutorSettings()
         )
         Executor.get_class(worker_selection.settings.backend)
         if on_stale not in STALE_RESULT_POLICIES:

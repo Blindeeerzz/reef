@@ -986,7 +986,6 @@ Reef refuses ``batch_size`` and ``batch_policy`` under ``recipe.config``.
    execution.evolution.workers | 1 | fixed worker-group size; CPU auto selects ``uni`` for one and ``mp`` for multiple
    execution.evolution.backend | auto | worker placement, independent of the ``local/sandbox`` episode isolation policy; ``local`` retains shared-memory callbacks
    execution.evolution.resources | | ``cpus_per_worker`` and ``gpus_per_worker``; omitted values retain component defaults; GPUs select Ray under ``auto`` and cannot reduce declared GPU needs
-   evolution.episode_workers / worker_executor / worker_resources | | deprecated compatibility aliases; conflicting resource values are rejected; legacy worker_executor cannot accompany role-level workers/resources
    evolution.sandbox | | for ``sandbox``: ``egress_hosts`` and ``limits`` (``cpu_seconds``, ``memory_bytes``, ``processes``, ``file_bytes``); for ``e2b``: ``e2b_api_key_env`` (default ``E2B_API_KEY``), optional ``e2b_api_key``, ``e2b_template`` and ``forward_ports`` (explicit worker-loopback TCP ports). E2B rejects nonempty ``egress_hosts``/``limits``; template resources and outbound internet apply. Both accept ``env_from``
    evolution.promote_failures | false | when true, a failing trace's prompt becomes a permanent evaluation task, so no later candidate can win while bringing the failure back; the seed tasks stay the floor
    evolution.max_promoted_tasks | 50 | the cap on promoted tasks; admission stops there so the suite is bounded
