@@ -14,18 +14,24 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.support._trajectories import policy_trajectory
 
-from reef.core.evaluation import EvaluationResult, SelectionDecision
+from reef.core.batches import StepScheduling
 from reef.core.trajectories import trajectory_reward
 from reef.runtime.deployment import RuntimeRegistry
-from reef.runtime.interfaces import ModelCandidate, RuntimeContractError
-from reef.train.algos.base import StepPreparer, register_step_preparer
-from reef.train.algos.signals import StepScheduling, StepSignal
+from reef.runtime.interfaces import (
+    LearningRateSchedule,
+    ModelCandidate,
+    PreparedTrainingStep,
+    RuntimeContractError,
+    TrainingMethod,
+)
+from reef.train.algos.objective import TrainingObjective
+from reef.train.algos.registry import register_objective
+from reef.train.algos.signals import StepSignal
 from reef.train.mlx_backend.runtime import MLXRuntime
 from reef.train.mlx_backend.serving import MLXServingRuntime
 from reef.train.types import TrainingBatch, TrajectoryItem, trajectories
-
-from ._trajectories import policy_trajectory
 
 
 class FakeEngineConfig:
@@ -102,49 +108,37 @@ def sample(reward: float) -> TrajectoryItem:
     )
 
 
-@register_step_preparer
-class _TwoAdvantagePreparer(StepPreparer):
+@register_objective
+class TwoAdvantageObjective(TrainingObjective):
     name = "mlx-test-preparer"
+    loss_family = "fake-family"
 
-    def __call__(self, batch, state):
-        return StepSignal(
-            "train",
-            "fake-family",
-            {"steps": int(state.get("steps", 0)) + 1},
-            {"prepared": True},
-            (1.0, -1.0),
-            StepScheduling(unit="sample", batch_size="actual"),
-        )
+    def prepare(self, batch, state):
+        return StepSignal("train", {"steps": int(state.get("steps", 0)) + 1}, {"prepared": True}, (1.0, -1.0))
 
 
-@register_step_preparer
-class _TttdFamilyPreparer(StepPreparer):
+@register_objective
+class TttdFamilyObjective(TrainingObjective):
     name = "mlx-test-tttd"
+    loss_family = "tttd"
 
-    def __call__(self, batch, state):
-        return StepSignal(
-            "train",
-            "tttd",
-            {"steps": int(state.get("steps", 0)) + 1},
-            {"prepared": True},
-            (1.0, -1.0),
-            StepScheduling(unit="sample", batch_size="actual"),
-        )
+    def prepare(self, batch, state):
+        return StepSignal("train", {"steps": int(state.get("steps", 0)) + 1}, {"prepared": True}, (1.0, -1.0))
 
 
-@register_step_preparer
-class _MultiEpochPreparer(StepPreparer):
-    name = "mlx-test-multi-epoch"
+#: The recipe's step schedule for one batch; this runtime trains it as one step.
+ONE_STEP = StepScheduling(unit="sample", batch_size="actual")
 
-    def __call__(self, batch, state):
-        return StepSignal(
-            "train",
-            "tttd",
-            {},
-            {},
-            (1.0, -1.0),
-            StepScheduling(unit="sample", batch_size="actual", epochs=3),
-        )
+
+def prepare(
+    runtime: MLXRuntime,
+    training_batch: TrainingBatch,
+    objective: str,
+    state: dict[str, Any],
+    scenario_step: int,
+    scheduling: StepScheduling = ONE_STEP,
+) -> PreparedTrainingStep:
+    return runtime.prepare_training_step(training_batch, TrainingMethod(objective), state, scheduling, scenario_step)
 
 
 def build_runtime(tmp_path: Path, *, moved: bool = True, kl_coef: float = 0.0) -> MLXRuntime:
@@ -166,7 +160,7 @@ def test_boot_names_the_weights_that_answer_the_first_request(tmp_path: Path) ->
 @pytest.mark.unit
 def test_preparation_runs_the_recipe_preparer_in_process(tmp_path: Path) -> None:
     runtime = build_runtime(tmp_path)
-    prepared = runtime.prepare_training_step(batch(), "mlx-test-tttd", {"steps": 4}, 7)
+    prepared = prepare(runtime, batch(), "mlx-test-tttd", {"steps": 4}, 7)
 
     assert prepared.action == "train"
     assert prepared.next_algorithm_state == {"steps": 5}
@@ -182,7 +176,7 @@ def test_unsupported_scheduling_fails_before_training(tmp_path: Path) -> None:
     # objective without saying so.
     runtime = build_runtime(tmp_path)
     with pytest.raises(RuntimeContractError, match="epochs=3"):
-        runtime.prepare_training_step(batch(), "mlx-test-multi-epoch", {}, 0)
+        prepare(runtime, batch(), "mlx-test-tttd", {}, 0, StepScheduling(unit="sample", batch_size="actual", epochs=3))
 
 
 @pytest.mark.unit
@@ -190,7 +184,7 @@ def test_a_candidate_exports_without_changing_serving(tmp_path: Path) -> None:
     runtime = build_runtime(tmp_path)
     engine = runtime.engine
     before = engine.adapter_snapshot()
-    prepared = runtime.prepare_training_step(batch(), "mlx-test-tttd", {}, 3)
+    prepared = prepare(runtime, batch(), "mlx-test-tttd", {}, 3)
 
     candidate = runtime.train_candidate(prepared.payload)
 
@@ -207,7 +201,7 @@ def test_a_candidate_exports_without_changing_serving(tmp_path: Path) -> None:
 def test_activation_moves_serving_to_the_selected_candidate(tmp_path: Path) -> None:
     runtime = build_runtime(tmp_path)
     engine = runtime.engine
-    prepared = runtime.prepare_training_step(batch(), "mlx-test-tttd", {}, 0)
+    prepared = prepare(runtime, batch(), "mlx-test-tttd", {}, 0)
     candidate = runtime.train_candidate(prepared.payload)
 
     activated = runtime.serving.activate_candidate(candidate)
@@ -223,13 +217,10 @@ def test_a_rejected_candidate_never_reaches_serving(tmp_path: Path) -> None:
     runtime = build_runtime(tmp_path)
     engine = runtime.engine
     before = engine.adapter_snapshot()
-    prepared = runtime.prepare_training_step(batch(), "mlx-test-tttd", {}, 0)
+    prepared = prepare(runtime, batch(), "mlx-test-tttd", {}, 0)
     candidate = runtime.train_candidate(prepared.payload)
 
-    runtime.reject_candidate(
-        candidate,
-        SelectionDecision("reject", "test", "1", "not better", EvaluationResult("test", "1", {})),
-    )
+    runtime.reject_candidate(candidate)
 
     assert engine.adapter_snapshot() == before
     assert runtime.serving.serving_runtime_load_id() == "fake-1"
@@ -245,7 +236,7 @@ def test_a_step_that_moves_nothing_is_refused(tmp_path: Path) -> None:
     # an adapter identical to the base, and Reef publishes it as a trained
     # update. The step must fail instead.
     runtime = build_runtime(tmp_path, moved=False)
-    prepared = runtime.prepare_training_step(batch(), "mlx-test-tttd", {}, 0)
+    prepared = prepare(runtime, batch(), "mlx-test-tttd", {}, 0)
 
     with pytest.raises(RuntimeContractError, match="left every adapter tensor unchanged"):
         runtime.train_candidate(prepared.payload)
@@ -256,7 +247,7 @@ def test_a_step_that_moves_nothing_is_refused(tmp_path: Path) -> None:
 @pytest.mark.unit
 def test_the_frozen_base_kl_term_shifts_advantages_per_token(tmp_path: Path) -> None:
     runtime = build_runtime(tmp_path, kl_coef=0.5)
-    prepared = runtime.prepare_training_step(batch(), "mlx-test-tttd", {}, 0)
+    prepared = prepare(runtime, batch(), "mlx-test-tttd", {}, 0)
 
     runtime.train_candidate(prepared.payload)
 
@@ -320,7 +311,16 @@ def test_an_unsupported_loss_family_is_refused(tmp_path: Path) -> None:
     # different loss than it asked for would be a silent substitution.
     runtime = build_runtime(tmp_path)
     with pytest.raises(RuntimeContractError, match="loss family 'fake-family'"):
-        runtime.prepare_training_step(batch(), "mlx-test-preparer", {}, 0)
+        prepare(runtime, batch(), "mlx-test-preparer", {}, 0)
+
+
+@pytest.mark.unit
+def test_a_learning_rate_schedule_is_refused(tmp_path: Path) -> None:
+    # The engine trains at its configured rate; ignoring a schedule would train the job at another one.
+    runtime = build_runtime(tmp_path)
+    method = TrainingMethod("mlx-test-tttd", LearningRateSchedule(name="warmup", peak_learning_rate=1e-4))
+    with pytest.raises(RuntimeContractError, match="learning-rate schedule"):
+        runtime.prepare_training_step(batch(), method, {}, ONE_STEP, 0)
 
 
 @pytest.mark.unit
@@ -328,7 +328,7 @@ def test_inference_stays_closed_between_activation_and_the_durable_commit(tmp_pa
     # Reopening at activation would let a request freeze the old artifact head
     # and then be answered by the new weights — a runtime-load mismatch.
     runtime = build_runtime(tmp_path)
-    prepared = runtime.prepare_training_step(batch(), "mlx-test-tttd", {}, 0)
+    prepared = prepare(runtime, batch(), "mlx-test-tttd", {}, 0)
     candidate = runtime.train_candidate(prepared.payload)
 
     runtime.serving.activate_candidate(candidate)
@@ -338,7 +338,7 @@ def test_inference_stays_closed_between_activation_and_the_durable_commit(tmp_pa
     assert runtime.serving.serving_runtime_load_id() == "fake-2"
     assert runtime.serving.current_runtime_load_id() == "fake-1"
 
-    runtime.reconcile_training_job(0, committed_training_job_id=candidate.training_job_id)
+    runtime.commit_candidate(candidate.training_job_id)
 
     assert runtime.serving.inference_admission_status["open"] is True
     assert runtime.serving.current_runtime_load_id() == "fake-2"
@@ -349,7 +349,7 @@ def test_a_failed_step_restores_the_weights_that_were_serving(tmp_path: Path) ->
     runtime = build_runtime(tmp_path)
     engine = runtime.engine
     before = engine.adapter_snapshot()
-    prepared = runtime.prepare_training_step(batch(), "mlx-test-tttd", {}, 0)
+    prepared = prepare(runtime, batch(), "mlx-test-tttd", {}, 0)
 
     def explode(rows):
         # Mutate first, then fail: the shape of a step that dies after the
@@ -378,7 +378,7 @@ def test_the_frozen_base_pass_runs_with_inference_closed(tmp_path: Path) -> None
         return [[-1.0] * len(row.loss_mask) for row in rows]
 
     engine.base_log_probs = watching_base_log_probs
-    prepared = runtime.prepare_training_step(batch(), "mlx-test-tttd", {}, 0)
+    prepared = prepare(runtime, batch(), "mlx-test-tttd", {}, 0)
     runtime.train_candidate(prepared.payload)
 
     assert observed == [False]
@@ -740,29 +740,17 @@ def test_an_empty_completion_is_refused_so_a_grid_cannot_stall() -> None:
         asyncio.run(backend.inference(Artifact.local(Path("/tmp")), "/v1/chat/completions", {"messages": [{}]}))
 
 
-@register_step_preparer
-class _OpenClawRLPreparer(StepPreparer):
+@register_objective
+class OpenClawRLTestObjective(TrainingObjective):
     name = "mlx-test-openclawrl"
+    loss_family = "openclawrl"
 
-    def __call__(self, batch, state):
-        return StepSignal(
-            "train",
-            "openclawrl",
-            {},
-            {},
-            tuple(trajectory_reward(item) for item in trajectories(batch)),
-            # The real preparer leaves scheduling at its default, which names
-            # the backend's own batch size.
-            StepScheduling(),
-        )
+    def prepare(self, batch, state):
+        return StepSignal("train", {}, {}, tuple(trajectory_reward(item) for item in trajectories(batch)))
 
 
-@register_step_preparer
-class _SubBatchedPreparer(StepPreparer):
-    name = "mlx-test-subbatched"
-
-    def __call__(self, batch, state):
-        return StepSignal("train", "tttd", {}, {}, (1.0, -1.0), StepScheduling(unit="sample", batch_size=4))
+#: The real recipe leaves the step size at its default, which names the backend's own batch size.
+OPENCLAWRL_SCHEDULING = StepScheduling(unit="sample")
 
 
 def _distillation_sample(*, topk=True, teacher=True) -> TrajectoryItem:
@@ -789,11 +777,11 @@ def test_a_configured_batch_size_is_accepted_but_sub_batching_is_not(tmp_path: P
     runtime = build_runtime(tmp_path)
     batch = TrainingBatch("b", (_distillation_sample(),))
 
-    prepared = runtime.prepare_training_step(batch, "mlx-test-openclawrl", {}, 0)
+    prepared = prepare(runtime, batch, "mlx-test-openclawrl", {}, 0, OPENCLAWRL_SCHEDULING)
     assert prepared.action == "train"
 
     with pytest.raises(RuntimeContractError, match="batch_size=4"):
-        runtime.prepare_training_step(batch, "mlx-test-subbatched", {}, 0)
+        prepare(runtime, batch, "mlx-test-tttd", {}, 0, StepScheduling(unit="sample", batch_size=4))
 
 
 @pytest.mark.unit
@@ -802,7 +790,7 @@ def test_the_distillation_objective_refuses_a_batch_with_no_captured_candidates(
     # set would silently optimise nothing; say which setting is missing.
     runtime = build_runtime(tmp_path)
     batch = TrainingBatch("b", (_distillation_sample(topk=False),))
-    prepared = runtime.prepare_training_step(batch, "mlx-test-openclawrl", {}, 0)
+    prepared = prepare(runtime, batch, "mlx-test-openclawrl", {}, 0, OPENCLAWRL_SCHEDULING)
 
     with pytest.raises(RuntimeContractError, match="capture_topk"):
         runtime.train_candidate(prepared.payload)
@@ -812,7 +800,7 @@ def test_the_distillation_objective_refuses_a_batch_with_no_captured_candidates(
 def test_the_distillation_objective_refuses_a_batch_with_no_teacher(tmp_path: Path) -> None:
     runtime = build_runtime(tmp_path)
     batch = TrainingBatch("b", (_distillation_sample(teacher=False),))
-    prepared = runtime.prepare_training_step(batch, "mlx-test-openclawrl", {}, 0)
+    prepared = prepare(runtime, batch, "mlx-test-openclawrl", {}, 0, OPENCLAWRL_SCHEDULING)
 
     with pytest.raises(RuntimeContractError, match="teacher_cands"):
         runtime.train_candidate(prepared.payload)
@@ -823,7 +811,7 @@ def test_the_openclawrl_family_reaches_the_distillation_step(tmp_path: Path) -> 
     runtime = build_runtime(tmp_path)
     engine = runtime.engine
     batch = TrainingBatch("b", (_distillation_sample(),))
-    prepared = runtime.prepare_training_step(batch, "mlx-test-openclawrl", {}, 0)
+    prepared = prepare(runtime, batch, "mlx-test-openclawrl", {}, 0, OPENCLAWRL_SCHEDULING)
 
     candidate = runtime.train_candidate(prepared.payload)
 
@@ -848,7 +836,7 @@ def test_the_deployments_kl_coef_prices_drift_on_the_openclawrl_path(tmp_path: P
     """
     runtime = build_runtime(tmp_path, kl_coef=0.05)
     batch = TrainingBatch("b", (_distillation_sample(),))
-    prepared = runtime.prepare_training_step(batch, "mlx-test-openclawrl", {}, 0)
+    prepared = prepare(runtime, batch, "mlx-test-openclawrl", {}, 0, OPENCLAWRL_SCHEDULING)
 
     candidate = runtime.train_candidate(prepared.payload)
 
@@ -865,7 +853,7 @@ def test_an_explicit_objective_kl_coef_overrides_the_deployments(tmp_path: Path)
         openclawrl={"kl_coef": 0.5},
     )
     batch = TrainingBatch("b", (_distillation_sample(),))
-    prepared = runtime.prepare_training_step(batch, "mlx-test-openclawrl", {}, 0)
+    prepared = prepare(runtime, batch, "mlx-test-openclawrl", {}, 0, OPENCLAWRL_SCHEDULING)
 
     candidate = runtime.train_candidate(prepared.payload)
 
@@ -1240,7 +1228,7 @@ def test_reef_activates_a_candidate_on_the_half_that_serves(tmp_path: Path) -> N
     assert not hasattr(training, "activate_candidate")
     assert callable(serving.activate_candidate)
 
-    prepared = training.prepare_training_step(batch(), "mlx-test-tttd", {}, 0)
+    prepared = prepare(training, batch(), "mlx-test-tttd", {}, 0)
     candidate = training.train_candidate({**prepared.payload, "rollout_id": 1})
     before = serving.serving_runtime_load_id()
 
@@ -1260,20 +1248,11 @@ def test_reef_activates_a_candidate_on_the_half_that_serves(tmp_path: Path) -> N
 def test_a_rejected_candidate_is_dropped_from_the_serving_half(tmp_path: Path) -> None:
     training = build_runtime(tmp_path)
     serving = training.serving
-    prepared = training.prepare_training_step(batch(), "mlx-test-tttd", {}, 0)
+    prepared = prepare(training, batch(), "mlx-test-tttd", {}, 0)
     candidate = training.train_candidate({**prepared.payload, "rollout_id": 1})
     assert serving.staged_candidate(candidate.candidate_id) is not None
 
-    training.reject_candidate(
-        candidate,
-        SelectionDecision(
-            outcome="reject",
-            policy="test",
-            policy_version="1",
-            reason="not selected",
-            evaluation=EvaluationResult(evaluator="test", evaluator_version="1", metrics={}),
-        ),
-    )
+    training.reject_candidate(candidate)
 
     assert serving.staged_candidate(candidate.candidate_id) is None
     with pytest.raises(RuntimeContractError, match="no pending mlx candidate"):

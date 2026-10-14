@@ -1,10 +1,10 @@
-"""OpenClaw-RL's candidate probe and its wiring to reef's RegressionGate.
+"""OpenClaw-RL's candidate probe and its wiring to reef's regression check.
 
 The probe is the OpenClaw-RL-specific half — it scores a candidate's replies
 with the benchmark's style criterion. The generic select/reject policy is
-reef's ``RegressionGate`` (covered in ``test_regression_gate``). These tests pin
-the probe's scoring and that the factory pairs it with the gate into a working
-evaluate-then-decide plugin, using a fake runtime so no model is needed.
+reef's ``RegressionCheckMixin``. These tests pin the probe's scoring and that
+the plugin pairs it with the check into a working evaluate-then-decide plugin,
+using a fake runtime so no model is needed.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ import pytest
 
 from recipes.openclawrl.candidate_evaluator import OpenClawRLCandidateEvaluation
 from reef.core.evaluation import UpdateCandidate
+from reef.core.plugins import PluginConfigError
+from reef.train.mlx_backend.runtime import MLXRuntime
 
 _CLEAN = (
     "She sold 48 clips in April. In May she sold half as many, so 48 divided by 2 "
@@ -29,11 +31,11 @@ class _FakeEngine:
         return tuple(messages[0]["content"])
 
 
-class _FakeRuntime:
+class _FakeRuntime(MLXRuntime):
     """A runtime whose candidate probe returns whatever the test scripts."""
 
     def __init__(self) -> None:
-        self.engine = _FakeEngine()
+        self._engine = _FakeEngine()
         self.replies: list[str] = []
 
     def probe_candidate(self, candidate_id, prompts, *, max_tokens):
@@ -42,7 +44,7 @@ class _FakeRuntime:
 
 def _plugin(margin: float = 0.17):
     runtime = _FakeRuntime()
-    plugin = OpenClawRLCandidateEvaluation().build(
+    plugin = OpenClawRLCandidateEvaluation.from_config(
         {"probe_size": 6, "max_tokens": 64, "regression_margin": margin},
         runtime=None,
         training_runtime=runtime,
@@ -77,7 +79,7 @@ def test_the_probe_reports_how_far_the_replies_are_from_the_criterion() -> None:
     It is all-or-nothing per reply, so a policy that violates some marker every
     time scores 0 for every candidate and the record shows a flat line whether
     the replies are improving or not. ``mean_violations`` is the distance, and
-    it is reported next to the rate rather than gated on.
+    it is reported next to the rate rather than checked.
     """
     plugin, runtime = _plugin()
     one_marker = "- April: 48 divided by 2 equals 24, and 48 plus 24 equals 72."
@@ -101,7 +103,7 @@ def test_the_probe_reports_how_far_the_replies_are_from_the_criterion() -> None:
 
 def test_the_wired_plugin_admits_the_climb_and_rejects_the_collapse() -> None:
     plugin, runtime = _plugin()
-    # Climb: the probe scores rising clean rates, the gate admits them.
+    # Climb: the probe scores rising clean rates, the check admits them.
     assert _decide(plugin, runtime, [_CLEAN] * 6)[0].selected  # best -> 1.0
     # Collapse: the policy stops answering; every probe is empty.
     collapse, _ = _decide(plugin, runtime, [_EMPTY] * 6)
@@ -115,7 +117,7 @@ def test_build_refuses_a_runtime_that_cannot_probe_a_candidate() -> None:
     class _NoProbe:
         engine = _FakeEngine()
 
-    with pytest.raises(ValueError, match="probe_candidate"):
-        OpenClawRLCandidateEvaluation().build(
+    with pytest.raises(PluginConfigError, match="mlx training runtime"):
+        OpenClawRLCandidateEvaluation.from_config(
             {}, runtime=None, training_runtime=_NoProbe(), scenario="gsm8k", environ={}
         )

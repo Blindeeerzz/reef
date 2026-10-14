@@ -3,7 +3,7 @@
 A port of ``recipes/openclawrl/slime/objective.py``'s ``_opd_one_sample``.
 The tensor-parallel machinery around the original disappears here — one
 process holds the whole vocabulary — but the arithmetic is the same, step for
-step, and ``tests/reef_service/test_mlx_openclawrl.py`` pins it against the
+step, and ``tests/mlx_backend/test_mlx_openclawrl.py`` pins it against the
 torch original rather than against expectations written by hand.
 
 The distillation term is what makes this recipe worth running on a laptop:

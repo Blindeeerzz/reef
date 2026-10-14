@@ -20,10 +20,16 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from reef.core.evaluation import SelectionDecision
+from reef.core.batches import StepScheduling
 from reef.runtime.deployment import RuntimeBuild, RuntimeFactory, register_runtime_kind
-from reef.runtime.interfaces import ModelCandidate, PreparedTrainingStep, RuntimeContractError, TrainingRuntime
-from reef.train.algos.registry import resolve_preparer
+from reef.runtime.interfaces import (
+    ModelCandidate,
+    PreparedTrainingStep,
+    RuntimeContractError,
+    TrainingMethod,
+    TrainingRuntime,
+)
+from reef.train.algos.registry import resolve_objective
 from reef.train.mlx_backend.rows import DistillationRow, TeacherCandidate, TrainingRow
 from reef.train.mlx_backend.serving import MLXServingRuntime
 from reef.train.types import TrainingBatch, TrajectoryItem, trajectories
@@ -116,28 +122,37 @@ class MLXRuntime(TrainingRuntime):
     def prepare_training_step(
         self,
         batch: TrainingBatch,
-        step_preparer: str,
+        method: TrainingMethod,
         algorithm_state: Mapping[str, Any],
+        scheduling: StepScheduling,
         scenario_step: int,
         *,
         serving_runtime_load_id: str | None = None,
     ) -> PreparedTrainingStep:
-        """Run the recipe's registered preparer in this process.
+        """Run the job's objective in this process.
 
-        The Ray path ships the preparer's *name* to a separate backend process
-        which resolves it there. Here there is no boundary to cross, so the
-        preparer runs directly against the reserved batch.
+        The Ray path ships the objective's *reference* to a separate backend
+        process which resolves it there. Here there is no boundary to cross, so
+        the objective prepares the reserved batch directly.
         """
-        preparer = resolve_preparer(step_preparer)
-        signal = preparer(batch, algorithm_state)
-        if signal.action == "train" and signal.loss_family not in SUPPORTED_LOSS_FAMILIES:
-            # The runtime implements one objective. Training a recipe's data
-            # under a different loss than it asked for is a silent
-            # substitution, so name the mismatch instead.
+        objective = resolve_objective(method.objective)
+        if objective.loss_family not in SUPPORTED_LOSS_FAMILIES:
+            # Training a recipe's data under a different loss than it asked
+            # for is a silent substitution, so name the mismatch instead.
             raise RuntimeContractError(
-                f"the mlx runtime implements {sorted(SUPPORTED_LOSS_FAMILIES)}, but {step_preparer!r} "
-                f"asks for loss family {signal.loss_family!r}"
+                f"the mlx runtime implements {sorted(SUPPORTED_LOSS_FAMILIES)}, but {method.objective!r} "
+                f"asks for loss family {objective.loss_family!r}"
             )
+        if method.learning_rate_schedule is not None:
+            # The engine's optimizer trains at the configured learning rate;
+            # ignoring a requested schedule would train the job at another rate.
+            raise RuntimeContractError(
+                f"the mlx runtime trains at training.options.learning_rate; {method.objective!r} "
+                "selects a learning-rate schedule it does not implement"
+            )
+        self._require_supported_scheduling(scheduling, method.objective)
+        objective.validate_scheduling(scheduling)
+        signal = objective.prepare(batch, algorithm_state)
         if signal.action == "skip":
             return PreparedTrainingStep(
                 action="skip",
@@ -145,11 +160,10 @@ class MLXRuntime(TrainingRuntime):
                 metrics=signal.metrics,
             )
         samples = trajectories(batch)
-        self._require_supported_scheduling(signal, step_preparer)
         advantages = signal.advantages
         if advantages is None or len(advantages) != len(samples):
             raise RuntimeContractError(
-                f"{step_preparer!r} must supply one advantage per sample; "
+                f"{method.objective!r} must supply one advantage per sample; "
                 f"got {0 if advantages is None else len(advantages)} for {len(samples)} samples"
             )
         return PreparedTrainingStep(
@@ -159,20 +173,20 @@ class MLXRuntime(TrainingRuntime):
             payload={
                 "samples": samples,
                 "advantages": tuple(advantages),
-                "loss_family": signal.loss_family,
+                "loss_family": objective.loss_family,
+                "method": method.to_dict(),
                 "rollout_id": scenario_step,
             },
         )
 
     @staticmethod
-    def _require_supported_scheduling(signal: Any, step_preparer: str) -> None:
+    def _require_supported_scheduling(scheduling: StepScheduling, objective: str) -> None:
         """Refuse a schedule this runtime would silently mistrain.
 
         A single-process runtime runs exactly one optimizer step over the
         reserved batch. Multi-epoch, shuffled or sub-batched schedules change
         the objective, so they fail here rather than being ignored.
         """
-        scheduling = signal.scheduling
         unsupported = []
         if scheduling.epochs != 1:
             unsupported.append(f"epochs={scheduling.epochs}")
@@ -186,7 +200,7 @@ class MLXRuntime(TrainingRuntime):
             unsupported.append(f"batch_size={scheduling.batch_size!r}")
         if unsupported:
             raise RuntimeContractError(
-                f"the mlx runtime trains one step per reserved batch; {step_preparer!r} asks for "
+                f"the mlx runtime trains one step per reserved batch; {objective!r} asks for "
                 f"{', '.join(unsupported)}. Supported: epochs=1, shuffle=False, batch_size='actual'."
             )
 
@@ -379,14 +393,7 @@ class MLXRuntime(TrainingRuntime):
             )
         return adjusted
 
-    def reconcile_training_job(
-        self,
-        scenario_step: int,
-        *,
-        committed_training_job_id: str | None = None,
-        committed_training_without_job_id: bool = False,
-        scenario: str | None = None,
-    ) -> None:
+    def commit_candidate(self, training_job_id: str) -> None:
         """Reopen inference once Reef's commit for this step is durable.
 
         The second half of the activation handshake. Reef calls this after the
@@ -395,10 +402,10 @@ class MLXRuntime(TrainingRuntime):
         """
         self._serving.commit_serving()
 
-    def reject_candidate(self, candidate: ModelCandidate, decision: SelectionDecision) -> None:
+    def reject_candidate(self, candidate: ModelCandidate) -> None:
         """Drop a rejected candidate's weights; serving already never saw them."""
         self._serving.discard_candidate(candidate.candidate_id)
-        logger.info("rejected mlx candidate %s: %s", candidate.candidate_id, decision.reason)
+        logger.info("rejected mlx candidate %s", candidate.candidate_id)
 
     def probe_candidate(
         self,

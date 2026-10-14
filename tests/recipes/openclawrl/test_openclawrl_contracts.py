@@ -714,18 +714,18 @@ class TestJudgeDialects:
         with pytest.raises(ValueError, match="requires prm_model"):
             self._judge(model="")
 
-    def test_build_clients_reads_the_credential_from_the_named_variable(self, monkeypatch):
-        from recipes.openclawrl.prm import build_clients
+    def test_prm_clients_reads_the_credential_from_the_named_variable(self, monkeypatch):
+        from recipes.openclawrl.judging import OpenClawRLJudgingSettings, prm_clients
 
         monkeypatch.setenv("TEST_JUDGE_KEY", "from-the-environment")
-        judge, _, _ = build_clients(
-            {
-                "prm_url": "https://provider.example/v1/chat/completions",
-                "prm_tokenizer_path": "some/tokenizer",
-                "prm_api": "openai",
-                "prm_model": "vendor/judge-1",
-                "prm_api_key_env": "TEST_JUDGE_KEY",
-            }
+        judge, _, _ = prm_clients(
+            OpenClawRLJudgingSettings(
+                prm_url="https://provider.example/v1/chat/completions",
+                prm_tokenizer_path="some/tokenizer",
+                prm_api="openai",
+                prm_model="vendor/judge-1",
+                prm_api_key_env="TEST_JUDGE_KEY",
+            )
         )
 
         assert judge.api == "openai"
@@ -736,24 +736,26 @@ class TestJudgeDialects:
     def test_an_unset_credential_variable_is_a_loud_failure(self, monkeypatch):
         import pytest
 
-        from recipes.openclawrl.prm import build_clients
+        from recipes.openclawrl.judging import OpenClawRLJudgingSettings, prm_clients
 
         monkeypatch.delenv("TEST_MISSING_KEY", raising=False)
         with pytest.raises(ValueError, match="TEST_MISSING_KEY"):
-            build_clients(
-                {
-                    "prm_url": "https://provider.example/v1/chat/completions",
-                    "prm_tokenizer_path": "some/tokenizer",
-                    "prm_api": "openai",
-                    "prm_model": "vendor/judge-1",
-                    "prm_api_key_env": "TEST_MISSING_KEY",
-                }
+            prm_clients(
+                OpenClawRLJudgingSettings(
+                    prm_url="https://provider.example/v1/chat/completions",
+                    prm_tokenizer_path="some/tokenizer",
+                    prm_api="openai",
+                    prm_model="vendor/judge-1",
+                    prm_api_key_env="TEST_MISSING_KEY",
+                )
             )
 
     def test_the_sglang_dialect_still_appends_its_native_path(self):
-        from recipes.openclawrl.prm import build_clients
+        from recipes.openclawrl.judging import OpenClawRLJudgingSettings, prm_clients
 
-        judge, _, _ = build_clients({"prm_url": "http://prm:23001", "prm_tokenizer_path": "some/tokenizer"})
+        judge, _, _ = prm_clients(
+            OpenClawRLJudgingSettings(prm_url="http://prm:23001", prm_tokenizer_path="some/tokenizer")
+        )
 
         assert judge.api == "sglang"
         assert judge.generate_url == "http://prm:23001/generate"

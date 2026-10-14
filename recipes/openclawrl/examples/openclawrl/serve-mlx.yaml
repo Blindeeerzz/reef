@@ -14,7 +14,6 @@
 # share one artifact repository, and the second is refused with "training is
 # already bound to scenario". Give each run its own `run-dir` and `storage`
 # paths, or launch it from its own directory.
-schema-version: 2
 
 reef:
   host: 0.0.0.0
@@ -69,43 +68,50 @@ training:
 recipe:
   implementation: recipes.openclawrl.recipe:OpenClawRLRecipe
   config:
-    # Judged turns per optimizer step; the reference uses 16. Halved so a
-    # 72-session stream still produces enough steps to see movement on one
-    # machine, at the cost of a noisier gradient.
-    batch-size: 8
-    # Idle window before a session is retired. This has to exceed the gap
-    # between a reply and the student reaction that judges it, because an
-    # expired session can never bind the two: the reply is dropped untrained.
-    # Hermes runs each turn as a fresh process, so the session tag is the only
-    # thing carrying that link -- nothing recovers it once the session is gone.
-    #
-    # 45 was set here on the reference's timing, where a reply comes back in
-    # seconds. On this runtime a single generation takes over two minutes and a
-    # training step blocks the engine for longer still: measured against a live
-    # run, 15 of 31 consecutive requests were further apart than 45s, and the
-    # processor reported more sessions expiring unbound than binding. Half the
-    # method's training pairs were being discarded before they were judged.
-    #
-    # 1800 covers a generation, the student's round trip, and a training step
-    # in between. The cost is that a finished session waits that long before
-    # its last turn retires, which only delays the step, where the short value
-    # silently dropped the data.
-    session-ttl-s: 1800
     checkpoint-every-n-versions: 1
-    prm-url: https://openrouter.ai/api/v1/chat/completions
-    prm-api: openai
-    prm-model: z-ai/glm-5.3
-    # The credential is read from this environment variable; the config never
-    # holds it.
-    prm-api-key-env: OPENROUTER_API_KEY
-    prm-m: 3
-    # GLM-5.3 cannot have reasoning disabled and bills it against this budget.
-    # Too small and the vote returns null content — a silent failure, not an
-    # error — so leave the judge room to think.
-    prm-max-tokens: 16384
-    # The policy's own tokenizer: the teacher renders hint-enhanced prompts
-    # with it whatever dialect the judge happens to speak.
-    prm-tokenizer-path: mlx-community/Qwen3.5-9B-MLX-4bit
+
+pipeline:
+  # The judging stage: sessions correlated, and each turn judged by the PRM.
+  record2record:
+    config:
+      # Idle window before a session is retired. This has to exceed the gap
+      # between a reply and the student reaction that judges it, because an
+      # expired session can never bind the two: the reply is dropped untrained.
+      # Hermes runs each turn as a fresh process, so the session tag is the only
+      # thing carrying that link -- nothing recovers it once the session is gone.
+      #
+      # 45 was set here on the reference's timing, where a reply comes back in
+      # seconds. On this runtime a single generation takes over two minutes and a
+      # training step blocks the engine for longer still: measured against a live
+      # run, 15 of 31 consecutive requests were further apart than 45s, and the
+      # processor reported more sessions expiring unbound than binding. Half the
+      # method's training pairs were being discarded before they were judged.
+      #
+      # 1800 covers a generation, the student's round trip, and a training step
+      # in between. The cost is that a finished session waits that long before
+      # its last turn retires, which only delays the step, where the short value
+      # silently dropped the data.
+      session_ttl_s: 1800
+      prm_url: https://openrouter.ai/api/v1/chat/completions
+      prm_api: openai
+      prm_model: z-ai/glm-5.3
+      # The credential is read from this environment variable; the config never
+      # holds it.
+      prm_api_key_env: OPENROUTER_API_KEY
+      prm_m: 3
+      # GLM-5.3 cannot have reasoning disabled and bills it against this budget.
+      # Too small and the vote returns null content — a silent failure, not an
+      # error — so leave the judge room to think.
+      prm_max_tokens: 16384
+      # The policy's own tokenizer: the teacher renders hint-enhanced prompts
+      # with it whatever dialect the judge happens to speak.
+      prm_tokenizer_path: mlx-community/Qwen3.5-9B-MLX-4bit
+  task2batch:
+    config:
+      # Judged turns per optimizer step; the reference uses 16. Halved so a
+      # 72-session stream still produces enough steps to see movement on one
+      # machine, at the cost of a noisier gradient.
+      batch_size: 8
 
 storage:
   agent-record-dir: work/mlx/agent-record
@@ -113,7 +119,7 @@ storage:
   artifact-work-dir: work/mlx/artifact-work
   artifact-cache-dir: work/mlx/artifact-cache
 
-# The candidate gate: every candidate runs a pinned style probe before it can
+# The candidate check: every candidate runs a pinned style probe before it can
 # reach serving, and a step whose clean rate regresses past the margin is held
 # out instead of published. Remove this section and the trainer falls back to
 # the `always` policy, which publishes every step.
@@ -134,8 +140,8 @@ evaluation:
     max_tokens: 320
     # Tolerated dip below the running best. Note the granularity this implies:
     # at probe_size 8 one probe item is worth 0.125, so a margin above that
-    # forgives any single-item regression and the gate acts only on a drop of
-    # two or more. That is deliberate on a probe this small — the gate is for
+    # forgives any single-item regression and the check acts only on a drop of
+    # two or more. That is deliberate on a probe this small — the check is for
     # collapse, not jitter — but it is the number to revisit before reading
-    # anything into a gate that held nothing out.
+    # anything into a check that held nothing out.
     regression_margin: 0.17

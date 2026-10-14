@@ -194,17 +194,19 @@ def test_a_materialized_artifact_carries_the_version_it_was_published_under(tmp_
     """
     import json
 
-    from reef.artifact.git_lfs import _cached_metadata
+    from reef.artifact.artifact import ArtifactMaterializationError
+    from reef.artifact.git_lfs import materialized_metadata
 
     destination = tmp_path / "cached"
     destination.mkdir()
     (destination / "reef-artifact.json").write_text(
         json.dumps({"content_id": "c", "metadata": {"runtime_load_id": "mlx-111-40"}})
     )
-    assert _cached_metadata(destination) == {"runtime_load_id": "mlx-111-40"}
+    assert materialized_metadata(destination) == {"runtime_load_id": "mlx-111-40"}
 
-    # A directory with no manifest, or an unreadable one, is not an error:
-    # older caches predate it and the caller treats absence as "unknown".
-    assert _cached_metadata(tmp_path / "missing") == {}
+    # A directory with no manifest is a bootstrap tree, which records nothing;
+    # an unreadable manifest is an error, not an unknown version.
+    assert materialized_metadata(tmp_path / "missing") == {}
     (destination / "reef-artifact.json").write_text("{not json")
-    assert _cached_metadata(destination) == {}
+    with pytest.raises(ArtifactMaterializationError, match="invalid artifact manifest"):
+        materialized_metadata(destination)
