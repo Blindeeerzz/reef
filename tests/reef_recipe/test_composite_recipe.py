@@ -420,7 +420,7 @@ def test_composite_recipe_refuses_a_checkpoint_cadence() -> None:
             {},
             config={**base, "artifact": {"checkpoint_every_n_versions": 5}, "components": components},
         )
-    with pytest.raises(RecipeConfigError, match=r"components\.harness\.config\.checkpoint_every_n_versions"):
+    with pytest.raises(RecipeConfigError, match=r"does not consume config key\(s\) 'checkpoint_every_n_versions'"):
         build_recipe(
             base["implementation"],
             {},
@@ -437,7 +437,7 @@ def test_composite_recipe_refuses_a_checkpoint_cadence() -> None:
         build_recipe(
             base["implementation"], {}, config={**base, "checkpoint_every_n_versions": 5, "components": components}
         )
-    with pytest.raises(RecipeConfigError, match=r"components\.harness\.config\.artifact\.checkpoint_every_n_versions"):
+    with pytest.raises(RecipeConfigError, match=r"does not consume config key\(s\) 'artifact'"):
         build_recipe(
             base["implementation"],
             {},

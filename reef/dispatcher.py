@@ -460,7 +460,7 @@ class Dispatcher:
     def prune_record_archives(self, retention: RecordRetention) -> int:
         """Apply deployment-wide retention without racing scenario file moves."""
         with self._record_retention_lock:
-            return self._storage.prune(days=retention.days, max_bytes=retention.max_bytes)
+            return self._storage.prune(max_bytes=retention.max_bytes)
 
     def delete_scenario(self, scenario: str) -> dict[str, Any]:
         """Remove a scenario from this deployment and move its own state aside.

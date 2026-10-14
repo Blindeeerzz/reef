@@ -2007,7 +2007,7 @@ def _task_order_score(task, result):
     return float(task == "task two")
 
 
-def test_episode_workers_run_both_sides_in_one_wave(tmp_path: Path) -> None:
+def test_evaluation_workers_run_both_sides_in_one_wave(tmp_path: Path) -> None:
     """With more than one worker, evaluation episodes of the candidate and
     the current composition run at once and still report in task order."""
     from reef.runtime.executor.config import ExecutorSettings
@@ -2049,25 +2049,6 @@ def test_episode_workers_run_both_sides_in_one_wave(tmp_path: Path) -> None:
         b.close()
 
 
-def test_episode_workers_config_is_a_positive_integer(tmp_path: Path) -> None:
-    def config(**evolution):
-        return {
-            "evolution": {
-                "propose": resolve_proposer(lambda n, s, m: None),
-                "evaluate": resolve_episode_scorer(evaluate),
-                "tasks": ["one"],
-                **evolution,
-            }
-        }
-
-    assert CordisRecipe.from_environment({}, config=config(episode_workers=3)).episode_workers == 3
-    assert CordisRecipe.from_environment({}, config=config(episode_workers="16")).episode_workers == 16  # ${VAR}
-    assert CordisRecipe.from_environment({}, config=config()).episode_workers == 1
-    for bad in (0, "many", True):
-        with pytest.raises(RecipeConfigError, match="episode_workers"):
-            CordisRecipe.from_environment({}, config=config(episode_workers=bad))
-
-
 @pytest.mark.parametrize("workers, expected", [(1, "uni"), (2, "mp")])
 def test_harness_evolve_auto_runs_real_episodes_on_selected_backend(tmp_path, workers, expected, caplog):
     from reef.runtime.executor.config import ExecutorSettings
@@ -2098,21 +2079,17 @@ def test_evolution_worker_selector_is_independent_of_sandbox_selector():
     from reef.runtime.executor.config import ExecutorSettings
 
     config = {
-        "execution": {"evolution": "mp"},
+        "execution": {"evolution": {"backend": "mp", "workers": 2}},
         "evolution": {
             "propose": resolve_proposer(lambda n, s, m: None),
             "evaluate": resolve_episode_scorer(evaluate),
             "tasks": ["one"],
-            "episode_workers": 2,
         },
     }
     recipe = CordisRecipe.from_environment({}, config=config)
     assert recipe.worker_executor == ExecutorSettings("mp", workers=2)
     assert type(recipe.executor).__name__ == "LocalExecutor"
-    config["evolution"]["worker_executor"] = "auto"
-    recipe = CordisRecipe.from_environment({}, config=config)
-    assert recipe.worker_executor.backend == "auto"
-    config["evolution"]["worker_executor"] = "uni"
+    config["execution"]["evolution"]["backend"] = "uni"
     with pytest.raises(RecipeConfigError, match="exactly one"):
         CordisRecipe.from_environment({}, config=config)
 
@@ -2120,21 +2097,20 @@ def test_evolution_worker_selector_is_independent_of_sandbox_selector():
 def test_evolution_explicit_ray_does_not_require_local_gpus(monkeypatch):
     monkeypatch.setattr("reef.runtime.executor.config.visible_cuda_devices", lambda: ())
     config = {
+        "execution": {"evolution": {"backend": "ray", "resources": {"gpus_per_worker": 1}}},
         "evolution": {
             "propose": resolve_proposer(lambda n, s, m: None),
             "evaluate": resolve_episode_scorer(evaluate),
             "tasks": ["one"],
-            "worker_resources": {"num_gpus": 1},
-            "worker_executor": "ray",
-        }
+        },
     }
     recipe = CordisRecipe.from_environment({}, config=config)
     from reef.evaluation.harness import evaluation_selection
 
-    selected, requirements = evaluation_selection(recipe.score_episode, 1, recipe.worker_executor, recipe.worker_gpus)
+    selected, requirements = evaluation_selection(recipe.score_episode, recipe.worker_executor)
     assert selected.settings.backend == "ray"
     assert requirements.gpus_per_worker == 1
-    config["evolution"]["worker_executor"] = "mp"
+    config["execution"]["evolution"]["backend"] = "mp"
     with pytest.raises(RecipeConfigError, match="visible on this host"):
         CordisRecipe.from_environment({}, config=config)
 

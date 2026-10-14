@@ -222,8 +222,7 @@ the KV connector that stamps tokens with their weight version, and engine launch
 control over vLLM's HTTP control routes. ``train/slime_backend/inference.py`` only
 translates Slime options into plain launch data; the selected inference factory
 constructs its own configuration.
-``train/slime_backend/driver.py`` supplies Slime component definitions;
-``service/slime_driver.py`` preserves the legacy explicit-process entrypoint.
+``train/slime_backend/driver.py`` supplies Slime component definitions.
 
 The extension points those packages expose are in `Python API
 <../reference/python-api.rst>`__.

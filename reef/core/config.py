@@ -287,13 +287,11 @@ class Settings:
     """Base of a settings dataclass: ``config_option`` fields that one config mapping parses into."""
 
     @classmethod
-    def from_config(cls, config: Mapping[str, Any], *, setting: str, strict: bool = True) -> Self:
+    def from_config(cls, config: Mapping[str, Any], *, setting: str) -> Self:
         """Read one config into this settings dataclass, in the hyphen or the field spelling.
 
         ``setting`` names the config in errors, for example
-        ``pipeline.record2record.config``. With ``strict`` an unknown field is
-        refused; without it, fields that the dataclass does not declare are
-        ignored, for a config that several stages share in a test or a recipe.
+        ``pipeline.record2record.config``. An unknown field is refused.
         """
         if not isinstance(config, Mapping):
             raise ValueError(f"{setting} must be an object")
@@ -301,9 +299,6 @@ class Settings:
         if len(folded) != len(config):
             raise ValueError(f"{setting} names a field twice, in both spellings")
         arguments = config_arguments(cls, prefix=tuple(setting.split(".")))
-        if not strict:
-            known = {argument.name for argument in arguments}
-            folded = {key: value for key, value in folded.items() if key in known}
         try:
             values = parse_config_values(arguments, folded)
         except ValueError as exc:

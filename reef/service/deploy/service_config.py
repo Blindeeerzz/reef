@@ -9,7 +9,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
@@ -177,11 +177,6 @@ class ServiceConfig:
     record_database_schema: str = config_option(
         "reef_records", public_path=("storage", "record_database_schema"), help="PostgreSQL schema."
     )
-    agent_record_retention_days: float = config_option(
-        7.0,
-        public_path=("storage", "agent_record_retention_days"),
-        help="Deprecated compatibility setting; records are evicted by capacity, not age.",
-    )
     agent_record_retention_max_bytes: int = config_option(
         20 * 1024**3,
         public_path=("storage", "agent_record_retention_max_bytes"),
@@ -234,7 +229,7 @@ class ServiceConfig:
     preset_config: Mapping[str, Any] | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        RecordRetention(self.agent_record_retention_days, self.agent_record_retention_max_bytes)
+        RecordRetention(max_bytes=self.agent_record_retention_max_bytes)
         if self.record_backend not in {"sqlite", "postgres"}:
             raise ValueError("reef.record_backend must be sqlite or postgres")
         if self.record_backend == "postgres":
@@ -251,15 +246,6 @@ def _config_service_value(config: Mapping[str, Any], *path: str, default: Any = 
     if isinstance(value, str):
         return interpolate_config(config, value)
     return value
-
-
-def _config_service_mapping(config: Mapping[str, Any], *path: str) -> Mapping[str, Any]:
-    value: Any = config
-    for key in path:
-        if not isinstance(value, Mapping):
-            return {}
-        value = value.get(key)
-    return {} if value is None else value
 
 
 def _reef_section(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -335,14 +321,11 @@ def _argument_value(config: Mapping[str, Any], argument: ConfigArgument) -> Any:
     return interpolate_config_values(config, node)
 
 
-def parse_service_arguments(
-    config: Mapping[str, Any], *, cli_paths: frozenset[tuple[str, ...]] = frozenset()
-) -> dict[str, Any]:
+def parse_service_arguments(config: Mapping[str, Any]) -> dict[str, Any]:
     """Parse the merged public values with the shared component parser.
 
-    The caller has already replaced overridden environment references and
-    expanded the effective config. ``cli_paths`` remains accepted for callers
-    of the earlier adapter; precedence is already present in the mapping.
+    The caller has already applied overrides and environment references, so
+    precedence is already present in the mapping.
     """
     arguments = service_config_arguments()
     supplied = {}
@@ -350,23 +333,19 @@ def parse_service_arguments(
         value = _argument_value(config, argument)
         if value is not None:
             supplied[argument.name] = value
-    # Precedence is already represented by the merged mapping. Keep cli_paths
-    # in this compatibility entrypoint; conversion is shared with components.
     return parse_config_values(
         tuple(dataclasses.replace(argument, required=False) for argument in arguments), supplied, environ=os.environ
     )
 
 
-def normalize_service_config(
-    config: Mapping[str, Any], *, cli_paths: frozenset[tuple[str, ...]] = frozenset()
-) -> dict[str, Any]:
+def normalize_service_config(config: Mapping[str, Any]) -> dict[str, Any]:
     """Validate explicit public settings and pass the same values to children.
 
     Do not add defaults to the deployment mapping: recipes must still know
     which of their fields the operator supplied, and custom stacks may have
     no Reef HTTP child at all.
     """
-    values = parse_service_arguments(config, cli_paths=cli_paths)
+    values = parse_service_arguments(config)
     normalized = copy.deepcopy(dict(config))
     for argument in service_config_arguments():
         if _argument_value(config, argument) is None:
@@ -378,36 +357,16 @@ def normalize_service_config(
     return normalized
 
 
-def _service_tokens(config: Mapping[str, Any]) -> tuple[str, ...]:
-    """Accepted Bearer tokens from ``reef.token`` (one) and ``reef.tokens`` (a list).
-
-    Every accepted token is equivalent; listing several lets a caller rotate
-    its credential without downtime. Empty entries are dropped so an unset
-    ``${REEF_TOKEN}`` does not become a credential.
-    """
-    tokens: list[str] = []
-    single = _config_service_value(config, "reef", "token")
-    if isinstance(single, str) and single:
-        tokens.append(single)
-    listed = _config_service_mapping(config, "reef").get("tokens")
-    if listed is not None:
-        if isinstance(listed, str) or not isinstance(listed, Sequence):
-            raise ValueError("reef.tokens must be a list of strings")
-        for item in listed:
-            if not isinstance(item, str):
-                raise ValueError("reef.tokens must be a list of strings")
-            value = interpolate_config(config, item).strip()
-            if value:
-                tokens.append(value)
-    return tuple(dict.fromkeys(tokens))
-
-
 def service_config_from_mapping(config: Mapping[str, Any]) -> ServiceConfig:
     """Read HTTP service settings from a resolved deployment's ``reef`` section."""
     values = parse_service_arguments(config)
     if not isinstance(values["recipe"], str) or not values["recipe"]:
         raise ValueError("config must declare a non-empty reef.recipe")
-    values["tokens"] = _service_tokens({"reef": {"token": values.pop("token"), "tokens": values["tokens"]}})
+    # ``reef.token`` (one) and ``reef.tokens`` (a list) are equivalent credentials;
+    # several let a caller rotate without downtime. An empty entry, such as an
+    # unset ``${REEF_TOKEN}``, is not a credential.
+    tokens = (token.strip() for token in (values.pop("token") or "", *values["tokens"]))
+    values["tokens"] = tuple(dict.fromkeys(token for token in tokens if token))
     values["console_origins"] = console_origins(values["console_origins"])
     # The legacy retry deadline follows the request timeout unless supplied.
     if _config_service_value(config, "reef", "inference_retry_timeout_s") is None:

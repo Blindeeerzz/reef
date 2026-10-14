@@ -94,8 +94,8 @@ class ScenarioStorage(ABC):
         """Archive a closed scenario's state and return archive locations."""
 
     @abstractmethod
-    def prune(self, *, days: float, max_bytes: int) -> int:
-        """Evict oldest bodies over max_bytes; days is a deprecated compatibility argument."""
+    def prune(self, *, max_bytes: int) -> int:
+        """Evict oldest bodies over max_bytes."""
 
     @abstractmethod
     def close(self) -> None:

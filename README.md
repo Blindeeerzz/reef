@@ -217,8 +217,7 @@ For another provider, change
 `REEF_UPSTREAM_API_KEY` if authentication is required. With this configuration, Reef
 listens on `127.0.0.1:8901` without authentication (set `REEF_TOKEN` before
 starting it to require that token) and keeps its state under
-`.reef/reefine/` (`--recipe harness-evolve`, the former name, starts the same
-configuration). To change anything else, copy
+`.reef/reefine/`. To change anything else, copy
 [the deployment configuration](reef/service/profiles/reefine.yaml) and pass
 your copy with `-c`.
 

@@ -287,12 +287,10 @@ not an episode count or a separate business-level concurrency limit. For
 enforce a CPU quota. Ray maps them to ``num_cpus``/``num_gpus`` per actor;
 these are scheduling reservations, not hard CPU limits.
 
-Legacy ``evolution.episode_workers`` and ``worker_resources.num_gpus`` remain
-deprecated aliases. Conflicting old/new resource values are rejected.
-``evolution.worker_executor`` still overrides a backend-only role selector,
-but cannot be combined with role-level workers/resources; migrate it into
-``execution.evolution.backend``. Legacy Python constructor arguments remain
-accepted; prefer ``worker_executor=ExecutorSettings(workers=..., resources=WorkerResources(...))``.
+The ``evolution`` section does not accept ``episode_workers``,
+``worker_executor`` or ``worker_resources``; set them under
+``execution.evolution``. In Python, pass
+``worker_executor=ExecutorSettings(workers=..., resources=WorkerResources(...))``.
 ``evolution.executor`` still means ``local`` or ``sandbox`` episode isolation;
 it is NOT renamed to ``uni``/``mp``. Sandbox preflight runs on the execution
 node too. A custom episode executor must preserve its own isolation and
@@ -492,11 +490,8 @@ integration, not universal tensor-format or backend capability negotiation.
 A rebuilt deployment creates a new session. The previous trainer must be
 retired before attachment; the session is not a multi-writer election protocol.
 
-``reef.service.slime_driver`` retains the legacy argument-file and healthcheck
-syntax and delegates to the same assembly and lifecycle. ``start_bridge`` and
-the Slime-owned coordinator actor are removed. Managed full-weight, LoRA,
-colocated and external-engine modes all use the separate service contracts.
-Configurations continue to use ``inference.num-gpus``,
+Managed full-weight, LoRA, colocated and external-engine modes all use the
+separate service contracts. Configurations continue to use ``inference.num-gpus``,
 ``inference.tensor-parallel-size`` and ``inference.options``.
 
 Transport compatibility and GPU acceptance remain specific to the selected

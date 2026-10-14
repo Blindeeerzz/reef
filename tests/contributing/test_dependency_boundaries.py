@@ -258,14 +258,7 @@ def test_backend_agnostic_core_never_imports_slime_backend_at_module_scope() -> 
         "reef/surface",
     )
     core_modules = ["reef/dispatcher.py"]
-    # The explicit Slime process entrypoint assembles that integration; it is
-    # never imported by the HTTP app or another backend-neutral package.
-    files = [
-        path
-        for package in core_packages
-        for path in sorted((REPO_ROOT / package).rglob("*.py"))
-        if path != REPO_ROOT / "reef/service/slime_driver.py"
-    ]
+    files = [path for package in core_packages for path in sorted((REPO_ROOT / package).rglob("*.py"))]
     files += [REPO_ROOT / module for module in core_modules]
     # A method package's public half too; its ``slime`` subpackage is the
     # backend half, imported by the training driver and workers only.

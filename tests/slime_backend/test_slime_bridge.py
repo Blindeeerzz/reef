@@ -1432,27 +1432,6 @@ def test_bridge_marker_rejects_unsafe_checkpoint_path(tmp_path, kind) -> None:
 
 
 @pytest.mark.unit
-def test_load_args_file_expands_variables_and_uses_shell_like_quotes(tmp_path: Path, monkeypatch) -> None:
-    from reef.train.slime_backend.driver import load_args_file
-
-    monkeypatch.setenv("BRIDGE_MODEL", "/models/demo model")
-    args_file = tmp_path / "args.txt"
-    args_file.write_text(
-        '--hf-checkpoint "$BRIDGE_MODEL"\n'
-        "--save-hf '/checkpoints/step-{rollout_id}'\n"
-        "# comments are ignored by shlex\n",
-        encoding="utf-8",
-    )
-
-    assert load_args_file(args_file) == [
-        "--hf-checkpoint",
-        "/models/demo model",
-        "--save-hf",
-        "/checkpoints/step-{rollout_id}",
-    ]
-
-
-@pytest.mark.unit
 def test_driver_ready_file_is_atomic_and_driver_option_is_not_forwarded(tmp_path: Path) -> None:
     from reef.service.training_driver import READY_MARKER, _driver_options, _write_ready_file
     from reef.train.slime_backend.driver import _retention_options

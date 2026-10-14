@@ -887,10 +887,9 @@ def test_a_row_without_a_design_or_a_review_has_no_such_section() -> None:
         assert _sections(page) == plain and "Design" not in page.partition("<script")[0]
 
 
-@pytest.mark.parametrize("sides_key", ["evaluation_sides", "gate_sides"])
 @pytest.mark.parametrize("legacy_policy_version", [False, True])
 def test_the_result_lists_the_floor_metrics_and_omits_the_current_score_when_no_current_side_ran(
-    sides_key: str, legacy_policy_version: bool
+    legacy_policy_version: bool,
 ) -> None:
     creation = {"release_id": "rel-0", "parent_release_id": None, "operation": "creation"}
     row = {
@@ -902,7 +901,7 @@ def test_the_result_lists_the_floor_metrics_and_omits_the_current_score_when_no_
             "passed": 1,
             "failed": 0,
             "floor_score": 1.0,
-            sides_key: ["candidate"],
+            "evaluation_sides": ["candidate"],
             "candidate_score": 1.0,
             "episode_failures": 0,
             "candidate_agents": {"root": {"turns": 1, "input_tokens": 300, "output_tokens": 20}},

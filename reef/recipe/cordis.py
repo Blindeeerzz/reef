@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import importlib
 import logging
-import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -29,13 +28,7 @@ from reef.core.plugins import PluginConfigError, PluginReference
 from reef.core.reports import ScoredRolloutReport
 from reef.core.tasks import TaskSplitError, manifest_task_paths
 from reef.evaluation.evaluators import BackendAlwaysSelectPlugin, SelectionPlugin
-from reef.evaluation.harness import (
-    EpisodeScorer,
-    FloorPlugin,
-    ScoreComparisonPlugin,
-    evaluation_selection,
-    legacy_worker_settings,
-)
+from reef.evaluation.harness import EpisodeScorer, FloorPlugin, ScoreComparisonPlugin, evaluation_selection
 from reef.harness.adapters import get_adapter
 from reef.harness.adapters.descriptor import DescriptorError
 from reef.harness.episodes.e2b import E2BExecutor, deployment_owner
@@ -56,7 +49,7 @@ from reef.observability import ExperimentLogger
 from reef.recipe.base import Recipe, ServedEndpoint
 from reef.recipe.errors import RecipeConfigError
 from reef.record2record import ReportRecord2Record
-from reef.runtime.executor.config import ExecutorSettings, WorkerResources, executor_settings, role_executor_settings
+from reef.runtime.executor.config import ExecutorSettings, role_executor_settings
 from reef.storage.records import RecordStore
 from reef.surface.base import Surface
 from reef.surface.harnesses import create_harness_surface
@@ -217,7 +210,7 @@ class CordisRecipe(Recipe):
     refuses more).
 
     Worker placement/count/resources live under ``execution.evolution``, not
-    the business configuration. Legacy ``episode_workers`` remains an alias.
+    the business configuration.
 
     The model under test is the recipe's inference runtime - the
     deployment's ``reef.upstream_url`` / ``reef.upstream_model`` (and
@@ -284,13 +277,11 @@ class CordisRecipe(Recipe):
     #: merged onto the release served now, evaluated again, or refused and proposed again.
     on_stale: StaleResultPolicy = "merge"
     selection: PluginReference = field(default_factory=lambda: PluginReference(ScoreComparisonPlugin), repr=False)
-    episode_workers: int | None = None  # Deprecated Python compatibility alias.
     #: Default proposal inbox root, with one directory per scenario.
     proposals_dir: str = ".reef/proposals"
     max_pending_proposals: int = 8
     step_record_dir: str | None = None
     worker_executor: ExecutorSettings = field(default_factory=ExecutorSettings)
-    worker_gpus: float | None = None
     #: The isolation an agent proposer runs under (``evolution.proposer_agent``); ``None`` runs no agent.
     agent_executor: EpisodeExecutor | None = None
     agent_timeout_s: float = 1800.0
@@ -324,10 +315,7 @@ class CordisRecipe(Recipe):
             raise ValueError("harness evolution requires an EpisodeScorer")
         if not self.tasks:
             raise ValueError("harness evolution requires tasks")
-        settings = legacy_worker_settings(self.worker_executor, self.episode_workers, self.worker_gpus)
-        _, requirements = evaluation_selection(self.score_episode, None, settings)
-        object.__setattr__(self, "worker_executor", settings)
-        object.__setattr__(self, "episode_workers", requirements.workers)
+        evaluation_selection(self.score_episode, self.worker_executor)
         if self.episode_timeout_s <= 0:
             raise ValueError("episode_timeout_s must be positive")
         if self.episode_repeats < 1:
@@ -543,15 +531,9 @@ class CordisRecipe(Recipe):
                 raise RecipeConfigError(str(exc)) from exc
         if "served" in models:
             raise RecipeConfigError("evolution.models may not name a model 'served'; that is the model under test")
-        # A ``${VAR}`` interpolation arrives as text, so a digit string counts.
-        raw_workers = evolution.get("episode_workers")
-        if isinstance(raw_workers, str) and raw_workers.strip().isdigit():
-            raw_workers = int(raw_workers)
-        if "episode_workers" in evolution and (
-            isinstance(raw_workers, bool) or not isinstance(raw_workers, int) or raw_workers < 1
-        ):
-            raise RecipeConfigError("evolution.episode_workers must be a positive integer")
-        episode_workers = raw_workers
+        removed = [key for key in ("episode_workers", "worker_executor", "worker_resources") if key in evolution]
+        if removed:
+            raise RecipeConfigError(f"evolution.{removed[0]} is not accepted; configure execution.evolution instead")
         proposals_dir = evolution.get("proposals_dir", cls.proposals_dir)
         if not isinstance(proposals_dir, str) or not proposals_dir.strip():
             raise RecipeConfigError("evolution.proposals_dir must be a non-empty path")
@@ -562,32 +544,8 @@ class CordisRecipe(Recipe):
         if step_record_dir is not None and (not isinstance(step_record_dir, str) or not step_record_dir.strip()):
             raise RecipeConfigError("evolution.step_record_dir must be a non-empty path when set")
         try:
-            role_settings = role_executor_settings(settings, "evolution")
-            if "worker_executor" in evolution and (
-                role_settings.workers is not None or role_settings.resources != WorkerResources()
-            ):
-                raise ValueError(
-                    "remove deprecated evolution.worker_executor when execution.evolution defines workers/resources"
-                )
-            worker_executor = (
-                executor_settings(settings, evolution["worker_executor"])
-                if "worker_executor" in evolution
-                else role_settings
-            )
-            resources = evolution.get("worker_resources", {})
-            if not isinstance(resources, Mapping) or set(resources) - {"num_gpus"}:
-                raise ValueError("evolution.worker_resources accepts only num_gpus")
-            worker_gpus = resources.get("num_gpus")
-            if any(key in evolution for key in ("episode_workers", "worker_executor", "worker_resources")):
-                warnings.warn(
-                    "evolution.episode_workers/worker_executor/worker_resources are deprecated; "
-                    "use execution.evolution.backend/workers/resources",
-                    DeprecationWarning,
-                    stacklevel=3,
-                )
-            worker_executor = legacy_worker_settings(worker_executor, episode_workers, worker_gpus)
+            worker_executor = role_executor_settings(settings, "evolution")
             scorer = EpisodeScorer.from_setting(evolution.get("evaluate"), setting="evolution.evaluate")
-            evaluation_selection(scorer, episode_workers, worker_executor, worker_gpus)
             propose = Proposer.from_setting(evolution.get("propose"), setting="evolution.propose")
             promote = (
                 Promoter.from_setting(evolution["promote"], setting="evolution.promote")
@@ -614,7 +572,6 @@ class CordisRecipe(Recipe):
             "promote": promote,
             "score_episode": scorer,
             "worker_executor": worker_executor,
-            "worker_gpus": worker_gpus,
             "tasks": tuple(str(task) for task in tasks),
             "adapter": adapter,
             "binary": binary,
@@ -636,7 +593,6 @@ class CordisRecipe(Recipe):
             "models": models,
             "model_metadata": model_metadata,
             "selection": selection,
-            "episode_workers": episode_workers,
             "step_record_dir": None if step_record_dir is None else step_record_dir.strip(),
         }
 
