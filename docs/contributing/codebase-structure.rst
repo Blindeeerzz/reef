@@ -113,6 +113,9 @@ import a concrete integration.
 | ``reef/harness/``       | harness descriptors, tree rendering,                     | recipe policy, the release chain           |
 |                         | episodes, trajectories                                   |                                            |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/sandbox/``       | process execution, isolation, file transfer              | harness rendering, evaluation, recipe      |
+|                         | and environment lifecycle through Harbor                 | policy                                     |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
 | ``recipes/``            | one method per package: recipe, processor, objective,    | shared machinery, or another method        |
 |                         | and its runnable examples                                |                                            |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
@@ -152,14 +155,16 @@ package's own submodules and third-party libraries):
      - ``surface``, ``artifact``, ``core``
    * - ``inference``
      - ``runtime``, ``artifact``, ``core``
+   * - ``sandbox``
+     - ``core``
    * - ``harness``
-     - ``runtime``, ``core``
+     - ``sandbox``, ``runtime``, ``core``
    * - ``evaluation``
      - ``harness``, ``runtime``, ``core``
    * - ``train``
      - ``evaluation``, ``harness``, ``inference``, ``runtime``, ``surface``, ``artifact``, ``storage``, ``observability``, ``core``
    * - ``recipe``
-     - ``train``, ``evaluation``, ``harness``, ``runtime``, ``surface``, ``storage``, ``observability``, ``core``
+     - ``train``, ``evaluation``, ``harness``, ``sandbox``, ``runtime``, ``surface``, ``storage``, ``observability``, ``core``
    * - ``scenario``
      - ``recipe``, ``train``, ``runtime``, ``surface``, ``artifact``, ``storage``, ``observability``, ``core``
    * - ``dispatcher``

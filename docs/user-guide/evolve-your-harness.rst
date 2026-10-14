@@ -312,6 +312,10 @@ with the better result is selected to become the next harness tree.
 Running episodes
 ^^^^^^^^^^^^^^^^
 
+Execution uses the shared ``reef.sandbox`` package and Harbor's environment
+interface. Developers can use its command, transfer and lifecycle operations;
+see `Sandbox environments <../developer-guide/sandboxes.rst>`__.
+
 Each episode runs through an executor. The default ``local`` executor runs the
 binary as a plain subprocess, which is right for development and the tests. A
 hosted service that evaluates model-proposed trees sets ``evolution.executor:

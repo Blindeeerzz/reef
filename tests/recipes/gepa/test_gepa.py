@@ -26,13 +26,13 @@ from reef.core.evaluation import EvaluationResult, UpdateCandidate
 from reef.core.trajectories import recorded_payload
 from reef.dispatcher import Dispatcher
 from reef.harness.adapters import get_adapter
-from reef.harness.episodes.executor import LocalExecutor
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindings
 from reef.harness.episodes.run import EpisodeError, EpisodeResult
 from reef.harness.tree.mutations import Mutation
 from reef.inference.http import InferenceProxyRuntime
 from reef.recipe import RecipeConfigError
 from reef.recipe.registry import build_recipe
+from reef.sandbox.process import LocalExecutor
 from reef.storage.commit_log import CommitLogScenarioStore
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
 from reef.train.trainer import Trainer

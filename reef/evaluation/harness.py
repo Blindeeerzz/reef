@@ -44,7 +44,6 @@ from reef.core.plugins import ConfiguredPlugin, PluginConfigError
 from reef.core.tasks import primary_reward
 from reef.evaluation.evaluators import BackendEvaluateMixin, SelectionPlugin
 from reef.harness.adapters.descriptor import AdapterDescriptor
-from reef.harness.episodes.executor import EPISODE_OWNER_LEASE, EpisodeExecutor
 from reef.harness.episodes.model_binding import ModelBindings
 from reef.harness.episodes.run import EpisodeError, EpisodeResult, TrajectoryKeepError, run_episode
 from reef.harness.episodes.trajectory import (
@@ -69,7 +68,7 @@ from reef.runtime.executor.config import (
 )
 from reef.runtime.executor.ray import RayExecutor
 from reef.runtime.executor.requirements import ExecutionRequirements
-
+from reef.sandbox.process import EPISODE_OWNER_LEASE, EpisodeExecutor
 
 #: The record file beside one evaluation episode's kept trajectory.
 RECORD_EPISODE_FILE = "episode.json"

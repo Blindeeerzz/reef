@@ -25,7 +25,6 @@ from reef.dispatcher import Dispatcher
 from reef.evaluation.evaluators import BackendAlwaysSelectPlugin
 from reef.evaluation.harness import EpisodeEvaluationWorker, ScoreComparisonPlugin
 from reef.harness.adapters import get_adapter
-from reef.harness.episodes.executor import LocalExecutor
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindingError, ModelBindings, ModelBindingsResolver
 from reef.harness.episodes.run import EpisodeResult
 from reef.harness.episodes.version_check import version_check_entry
@@ -35,6 +34,7 @@ from reef.recipe import RecipeConfigError
 from reef.recipe.checkpoint_strategy import EveryNVersions
 from reef.recipe.cordis import CordisRecipe
 from reef.recipe.registry import recipe_class_for
+from reef.sandbox.process import LocalExecutor
 from reef.service.app import create_app
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
 from reef.train.cordis_backend import CordisBackend, FailureManifest, Mutation, MutationError, Promoter
@@ -1599,7 +1599,7 @@ def test_recipe_selects_the_episode_executor(tmp_path: Path, monkeypatch) -> Non
     local = CordisRecipe.from_environment({}, config=config(executor="local"))
     assert type(local.executor).__name__ == "LocalExecutor"
 
-    monkeypatch.setattr("reef.harness.episodes.executor.shutil.which", lambda name: None)
+    monkeypatch.setattr("reef.sandbox.process.shutil.which", lambda name: None)
     with pytest.raises(RecipeConfigError, match="bubblewrap"):
         CordisRecipe.from_environment({}, config=config(executor="sandbox"))
 

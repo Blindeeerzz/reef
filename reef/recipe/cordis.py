@@ -31,14 +31,6 @@ from reef.evaluation.evaluators import BackendAlwaysSelectPlugin, SelectionPlugi
 from reef.evaluation.harness import EpisodeScorer, FloorPlugin, ScoreComparisonPlugin, evaluation_selection
 from reef.harness.adapters import get_adapter
 from reef.harness.adapters.descriptor import DescriptorError
-from reef.harness.episodes.e2b import E2BExecutor, deployment_owner
-from reef.harness.episodes.executor import (
-    EpisodeExecutor,
-    LocalExecutor,
-    SandboxExecutor,
-    SandboxUnavailable,
-    build_executor,
-)
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindings, ModelBindingsResolver
 from reef.harness.episodes.requests import request_entries
 from reef.harness.episodes.version_check import version_check_entry
@@ -50,6 +42,9 @@ from reef.recipe.base import Recipe, ServedEndpoint
 from reef.recipe.errors import RecipeConfigError
 from reef.record2record import ReportRecord2Record
 from reef.runtime.executor.config import ExecutorSettings, role_executor_settings
+from reef.sandbox.config import build_executor
+from reef.sandbox.e2b import E2BExecutor, deployment_owner
+from reef.sandbox.process import EpisodeExecutor, LocalExecutor, SandboxExecutor, SandboxUnavailable
 from reef.storage.records import RecordStore
 from reef.surface.base import Surface
 from reef.surface.harnesses import create_harness_surface
@@ -68,7 +63,9 @@ _SELECTION_PLUGINS: dict[str, type[SelectionPlugin]] = {
 }
 
 
-def proposer_agent_settings(section: Any, environ: Mapping[str, str]) -> tuple[EpisodeExecutor | None, float, float]:
+def proposer_agent_settings(
+    section: Any, environ: Mapping[str, str], *, proposals_dir: Path = Path(".reef/proposals")
+) -> tuple[EpisodeExecutor | None, float, float]:
     """``evolution.proposer_agent`` as the agent's executor and its two timeouts; no section runs no agent.
 
     ``sandbox: bwrap`` jails the agent and gives it the internet but no host port
@@ -76,10 +73,11 @@ def proposer_agent_settings(section: Any, environ: Mapping[str, str]) -> tuple[E
     ``sandbox: e2b`` runs it in an E2B cloud sandbox (``e2b_api_key``, else
     ``E2B_API_KEY``; ``e2b_template``, else the harness's pinned binary, built on
     first use) that reaches the gateway through a tunnel and nothing else of the
-    host; ``sandbox: none`` runs it unisolated with the service's privileges, and must
-    be chosen. Left empty (and ``REEF_PROPOSER_SANDBOX`` unset), the agent is
-    jailed where the host can, and off (the text proposer answers requests)
-    where it cannot.
+    host, and carries the deployment that ``proposals_dir`` names, so a later
+    start stops the sandboxes a stopped run left; ``sandbox: none`` runs it
+    unisolated with the service's privileges, and must be chosen. Left empty
+    (and ``REEF_PROPOSER_SANDBOX`` unset), the agent is jailed where the host
+    can, and off (the text proposer answers requests) where it cannot.
     """
     if section is None:
         return None, 1800.0, 300.0
@@ -104,7 +102,7 @@ def proposer_agent_settings(section: Any, environ: Mapping[str, str]) -> tuple[E
                 {key: section[key] for key in ("e2b_api_key", "e2b_api_key_env", "e2b_template") if key in section},
                 environ,
             )
-            remote = replace(remote, timeout_s=timeouts[0])
+            remote = replace(remote, timeout_s=timeouts[0], owner=deployment_owner(proposals_dir))
             remote.preflight()
         except SandboxUnavailable as exc:
             raise RecipeConfigError(f"evolution.proposer_agent.sandbox is e2b, but {exc}") from exc
@@ -550,12 +548,8 @@ class CordisRecipe(Recipe):
         except (TypeError, ValueError) as exc:
             raise RecipeConfigError(str(exc)) from exc
         agent_executor, agent_timeout_s, agent_trial_timeout_s = proposer_agent_settings(
-            evolution.get("proposer_agent"), values
+            evolution.get("proposer_agent"), values, proposals_dir=Path(proposals_dir.strip())
         )
-        if isinstance(agent_executor, E2BExecutor):
-            # The deployment's own state directory names its sandboxes, so its first sandbox can stop the ones a
-            # previous run left, which a stop mid run never closed.
-            agent_executor = replace(agent_executor, owner=deployment_owner(Path(proposals_dir.strip())))
         return {
             **super()._recipe_kwargs(settings, values),
             "agent_executor": agent_executor,
