@@ -47,6 +47,7 @@ from reef_client import ReefClient, ReefClientError
 
 from reef.harness.client.check_display import CheckDisplay
 from reef.harness.client.wrapper import wrapper_directory
+from reef.harness.step_result import evaluation_report
 
 SERVICE_URL = "http://127.0.0.1:8901"  # deployment.yaml's port
 SCENARIO = "reefine-demo"  # this workload's isolated lane; the install bakes it into reef-pi
@@ -201,7 +202,7 @@ def tally_parts(metrics):
     it, the score comparison selector recorded the three counts and
     ``selection: always`` only the per task scores of both sides, so on those
     rows the counts come from comparing the scores."""
-    report = metrics.get("reefine_evaluation")
+    report = evaluation_report(metrics)
     if isinstance(report, dict) and isinstance(report.get("checks"), list):
         checks = report["checks"]
         return sum(check.get("status") == "pass" for check in checks), sum(
@@ -362,9 +363,7 @@ def wait_with_display(client, request_id, before, deadline, display):
         shown = max(shown, len(steps))
         for row in steps[before:]:
             if ((row.get("metrics") or {}).get("training_request") or {}).get("id") == request_id:
-                display.update(
-                    result_of(row), ((row.get("metrics") or {}).get("reefine_evaluation") or {}).get("checks")
-                )
+                display.update(result_of(row), (evaluation_report(row.get("metrics") or {}) or {}).get("checks"))
                 return rows, row
         time.sleep(POLL_S)
     return rows, None

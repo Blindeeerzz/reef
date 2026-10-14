@@ -55,11 +55,19 @@ def unscored_failures(metrics: Mapping[str, Any]) -> list[str]:
     return causes
 
 
+def evaluation_report(metrics: Mapping[str, object]) -> Mapping[str, object] | None:
+    """Read the check report, including records written with the earlier method-specific key."""
+    report = metrics.get("evaluation_report", metrics.get("reefine_evaluation"))
+    if not isinstance(report, Mapping):
+        return None
+    return report
+
+
 def floor_tasks_note(metrics: Mapping[str, Any]) -> str | None:
     """For a step that answered a request under a floor: its floor tasks were set before the request and check that
     the changed harness still passes them, not what the request asks for, which only the review reads; ``None``
     for any other step."""
-    if metrics.get("reefine_evaluation"):
+    if evaluation_report(metrics) is not None:
         return None
     selection = metrics.get("selection")
     if not isinstance(metrics.get("training_request"), Mapping) or not isinstance(selection, Mapping):
@@ -224,6 +232,7 @@ __all__ = [
     "USAGE_HEADING",
     "NextAction",
     "design_sections",
+    "evaluation_report",
     "floor_tasks_note",
     "missed_episode_text",
     "missed_episodes",

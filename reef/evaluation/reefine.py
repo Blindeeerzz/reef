@@ -28,12 +28,13 @@ from reef.core.plugins import ConfiguredPlugin, PluginConfigError
 from reef.core.prompts import untrusted_text
 from reef.core.training_request import TrainingRequest
 from reef.evaluation.evaluators import SelectionPlugin
-from reef.evaluation.harness import HarnessCandidate
+from reef.evaluation.harness import HarnessCandidate, verifier_reward
 from reef.harness.adapters.descriptor import AdapterDescriptor
 from reef.harness.episodes.executor import EpisodeExecutor
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindingError, ModelBindings
 from reef.harness.episodes.run import EpisodeError, EpisodeResult, TrajectoryKeepError, run_episode
 from reef.harness.episodes.trajectory import TrajectoryError, final_assistant_text
+from reef.harness.step_result import evaluation_report
 
 
 @dataclass(frozen=True)
@@ -430,10 +431,10 @@ class ReefineEvaluation(SelectionPlugin):
             }
             if root is not None:
                 (records / "result.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        return EvaluationResult("reefine", "1", {"reefine_evaluation": report, "evaluation_sides": ["candidate"]})
+        return EvaluationResult("reefine", "1", {"evaluation_report": report, "evaluation_sides": ["candidate"]})
 
     def decide(self, candidate: UpdateCandidate, evaluation: EvaluationResult) -> SelectionDecision:
-        report = evaluation.metrics.get("reefine_evaluation")
+        report = evaluation_report(evaluation.metrics)
         checks = report.get("checks") if isinstance(report, Mapping) else None
         failures = []
         if not isinstance(checks, list) or not checks:
@@ -480,7 +481,11 @@ class ReefineEvaluation(SelectionPlugin):
                 if isinstance(check, Mapping) and check.get("group") == "request" and check.get("status") != "pass"
             ]
         return SelectionDecision(
-            "select" if selected else "reject", "reefine", "1", reason, evaluation, {"reefine_feedback": feedback}
+            selected=selected,
+            policy="reefine",
+            reason=reason,
+            evaluation=evaluation,
+            metrics={"request_feedback": feedback},
         )
 
     def begin(self, checks: list[CheckResult], index: int) -> None:
@@ -581,6 +586,24 @@ class ReefineEvaluation(SelectionPlugin):
             deadline,
         )
         return validate_review(review)
+
+
+HEALTH_TASK_DIRECTORY = str(Path(__file__).parents[1] / "recipe" / "reefine" / "health")
+
+
+def evaluate_health(task: str, result: EpisodeResult) -> float:
+    """Score the bundled health prompt or its Harbor task directory."""
+    if task == HEALTH_TASK_DIRECTORY:
+        return verifier_reward(task, result)
+    return grade_health_text(task, final_assistant_text(result.trajectory))
+
+
+def grade_health_text(task: str, text: str | None) -> float:
+    """Match reef-ok on the final nonempty line of a health-task response."""
+    if not task.startswith("[health]") or text is None:
+        return 0.0
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return 1.0 if lines and lines[-1] == "reef-ok" else 0.0
 
 
 def validate_plan(value: Mapping[str, object]) -> tuple[str, list[str]]:

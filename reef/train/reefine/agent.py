@@ -47,9 +47,8 @@ from reef.harness.tree.render import render_composition
 from reef.train.cordis_backend.manifest import FailureManifest
 from reef.train.cordis_backend.strategies import AgentHost, Proposer, StepProposal
 from reef.train.reefine import proposer as evolution
-from reef.train.reefine.agent_gateway import AgentGateway, WorkspaceTools
-from reef.train.reefine.instructions import ProposalInstructions
-from reef.train.reefine.multimodal import MultimodalProvider
+from reef.train.reefine.agent_gateway import AgentGateway, MultimodalProvider, WorkspaceTools
+from reef.train.reefine.proposer import ProposalInstructions
 from reef.train.types import TrajectoryItem
 
 logger = logging.getLogger(__name__)

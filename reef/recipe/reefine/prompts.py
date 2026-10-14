@@ -1,6 +1,6 @@
 """Recipe-owned instructions for Reefine proposal and independent evaluation."""
 
-from reef.train.reefine.instructions import ProposalInstructions
+from reef.train.reefine.proposer import ProposalInstructions
 
 HARNESS_SECTION = (
     "This harness is {title}, whose extension API this step does not know: write no code_extension. "

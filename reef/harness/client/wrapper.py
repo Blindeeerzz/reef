@@ -236,7 +236,7 @@ from reef.harness.adapters.descriptor import NO_TOKEN_API_KEY, AdapterDescriptor
 from reef.harness.client.check_display import CheckDisplay
 from reef.harness.episodes.vendor_install import version_probe_env
 from reef.harness.episodes.version_check import ships_version_check
-from reef.harness.step_result import design_sections, next_action, rejection_text
+from reef.harness.step_result import design_sections, evaluation_report, next_action, rejection_text
 
 
 def _captures_dir() -> Path:
@@ -1791,7 +1791,7 @@ def await_step_with_display(
             selection_result = (
                 "pending" if rows[step].get("pending") else "selected" if metrics.get("selected") else "rejected"
             )
-            display.update(selection_result, (metrics.get("reefine_evaluation") or {}).get("checks"))
+            display.update(selection_result, (evaluation_report(metrics) or {}).get("checks"))
             return step, rows
         if time.monotonic() >= deadline:
             later = (

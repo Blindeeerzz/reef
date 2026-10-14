@@ -24,6 +24,7 @@ from reef.core.training_request import TrainingRequest
 from reef.dispatcher import Dispatcher
 from reef.harness.adapters import available_adapters, get_adapter
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindingError
+from reef.harness.step_result import evaluation_report
 from reef.harness.tree.mutations import Mutation, MutationError
 from reef.harness.tree.render import RenderError, render_composition
 from reef.observability.operations import OperationMeasurement, OperationMetrics
@@ -998,6 +999,7 @@ class RequestService:
         rows = list(reversed(self.harness_rows(scenario)))
         step = settled_step(rows, record_id)
         if step is not None:
+            report = evaluation_report(rows[step].get("metrics") or {})
             return {
                 "request_id": record_id,
                 "settled": True,
@@ -1008,8 +1010,8 @@ class RequestService:
                 "episodes_total": None,
                 "step_record": None,
                 "activity": [],
-                "checks": ((rows[step].get("metrics") or {}).get("reefine_evaluation") or {}).get("checks", []),
-                "evaluation": (rows[step].get("metrics") or {}).get("reefine_evaluation"),
+                "checks": (report or {}).get("checks", []),
+                "evaluation": report,
             }
         backend = self.files_trainer(scenario).candidate_backend
         progress = backend.step_progress if isinstance(backend, StepProgressReader) else None

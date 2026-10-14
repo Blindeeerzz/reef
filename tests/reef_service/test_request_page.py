@@ -724,7 +724,7 @@ def test_live_and_settled_pages_show_independent_checks_and_escape_model_text() 
     assert "Independent evaluation" not in other
     checks[0].update(status="not_run", reason="request plan unavailable")
     report = {"checks": checks, "reviewer_model": "local-model", "same_model": True, "current_release_id": "rel-0"}
-    row = _row(_answered(selected=False, reefine_evaluation=report, selection={"reason": "request check failed"}))
+    row = _row(_answered(selected=False, evaluation_report=report, selection={"reason": "request check failed"}))
     for page in (build_request_page(_record(), [CREATION, row]), build_release_page(1, [CREATION, row])):
         assert "not_run" in page and "request plan unavailable" in page
         assert "same model ID, fresh context" in page and "request check failed" in page
@@ -736,7 +736,7 @@ def test_long_clarified_requests_keep_evaluation_before_the_full_request(settled
     request_text = "Add a capability.\nClarifications:\n" + "A detailed answer to an open question. " * 100
     checks = [{"id": "request-behavior", "group": "request", "status": "pass", "observed": "Task completed"}]
     if settled:
-        row = _row(_answered(selected=True, reefine_evaluation={"checks": checks}))
+        row = _row(_answered(selected=True, evaluation_report={"checks": checks}))
         page = build_request_page(_record(request_text), [CREATION, row])
     else:
         progress = StepProgress(RECORD_ID, "evaluating", 1_000.0, None, checks=tuple(checks))

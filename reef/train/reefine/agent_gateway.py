@@ -28,14 +28,13 @@ import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from reef.harness.episodes.model_binding import ModelBinding, usage_of
 from reef.runtime.interfaces import MULTIMODAL_ROUTES
 from reef.train.cordis_backend.strategies import ProposerCalls
-from reef.train.reefine.multimodal import MultimodalProvider
-from reef.train.reefine.trial import trial_script
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +44,35 @@ MAX_RECORDED_BYTES = 2 * 1024 * 1024
 #: How much of a provider's refusal a trial reports back to the agent.
 MAX_ERROR_CHARS = 600
 ANTHROPIC_VERSION = "2023-06-01"
+
+
+@dataclass(frozen=True)
+class ProviderPreset:
+    """A kind of multimodal gateway: its default address, its path for each Reef route it serves, and where its
+    models are listed (``{base_url}`` and ``{modality}`` are filled in)."""
+
+    name: str
+    base_url: str | None
+    paths: Mapping[str, str]
+    models_url: str
+
+
+@dataclass(frozen=True)
+class MultimodalProvider:
+    """One configured multimodal gateway: a preset, its address (no ``/v1`` suffix) and its key."""
+
+    preset: ProviderPreset
+    base_url: str
+    api_key: str = field(repr=False)
+
+    def upstream_path(self, route: str) -> str | None:
+        """The provider's path for one of Reef's multimodal routes, or ``None`` when it serves none."""
+        return self.preset.paths.get(route)
+
+    def models_url(self, modality: str) -> str:
+        """Where the provider lists its models of one output modality (``speech``, ``image``, ``embeddings``,
+        ``decisions``)."""
+        return self.preset.models_url.format(base_url=self.base_url, modality=modality)
 
 
 class WorkspaceTools(ABC):
@@ -472,12 +500,77 @@ def sse_usage(text: str) -> dict[str, int] | None:
     return {"input_tokens": input_tokens, "output_tokens": output_tokens} if seen else None
 
 
+def trial_script(value: object) -> dict[str, object]:
+    """Accept a bounded sequence of prompts, fresh sessions and observable assertions."""
+    if not isinstance(value, dict) or set(value) - {"steps", "fixture_tools"}:
+        raise ValueError("script must contain steps and optional fixture_tools")
+    fixtures = value.get("fixture_tools", [])
+    if not isinstance(fixtures, list) or any(not isinstance(name, str) or not name.strip() for name in fixtures):
+        raise ValueError("fixture_tools must be an array of tool names")
+    if len(fixtures) > 30 or len(set(fixtures)) != len(fixtures):
+        raise ValueError("fixture_tools must contain at most 30 distinct names")
+    if set(fixtures) & {"read", "write", "edit", "bash", "grep", "find", "ls"}:
+        raise ValueError("fixture_tools cannot replace built-in tools")
+    steps = value.get("steps")
+    if not isinstance(steps, list) or not 1 <= len(steps) <= 30:
+        raise ValueError("script needs between 1 and 30 steps")
+    assertions = 0
+    list_checks = {
+        "tools",
+        "forbidden_tools",
+        "system_contains",
+        "system_excludes",
+        "messages_contains",
+        "messages_excludes",
+        "executed_tools",
+        "tool_errors",
+    }
+    for step in steps:
+        if not isinstance(step, dict) or set(step) - {"prompt", "new_session", "tool_call", "expect"}:
+            raise ValueError("each step accepts prompt, new_session, tool_call and expect")
+        if step.get("new_session") is True:
+            if set(step) != {"new_session"}:
+                raise ValueError("a new_session step cannot contain other fields")
+            continue
+        prompt = step.get("prompt")
+        if "new_session" in step or not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("each prompt step needs nonempty prompt text")
+        call = step.get("tool_call")
+        if call is not None:
+            if not isinstance(call, dict) or set(call) != {"name", "arguments"}:
+                raise ValueError("tool_call needs name and arguments")
+            if (
+                not isinstance(call["name"], str)
+                or not call["name"].strip()
+                or not isinstance(call["arguments"], dict)
+            ):
+                raise ValueError("tool_call needs a nonempty name and an arguments object")
+        expect = step.get("expect", {})
+        if not isinstance(expect, dict) or set(expect) - (list_checks | {"model_called"}):
+            raise ValueError("unknown trial assertion")
+        for name, expected in expect.items():
+            if name == "model_called":
+                if not isinstance(expected, bool):
+                    raise ValueError("model_called must be boolean")
+            elif not isinstance(expected, list) or any(not isinstance(item, str) for item in expected):
+                raise ValueError(f"{name} must be an array of strings")
+            if name == "executed_tools" and not set(expected) <= set(fixtures):
+                raise ValueError("executed_tools can only assert fixture tool execution")
+            assertions += 1
+    if not assertions:
+        raise ValueError("a scripted trial needs at least one assertion")
+    return {"steps": steps, "fixture_tools": fixtures}
+
+
 __all__ = [
     "MODEL_PATHS",
     "AgentGateway",
+    "MultimodalProvider",
+    "ProviderPreset",
     "WorkspaceTools",
     "reply_text",
     "reply_tool_calls",
     "sse_usage",
     "tool_summary",
+    "trial_script",
 ]

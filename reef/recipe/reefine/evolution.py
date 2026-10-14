@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from typing import Any
 
 from reef.evaluation.harness import EpisodeScorer
-from reef.evaluation.reefine_health import evaluate, grade_text
+from reef.evaluation.reefine import HEALTH_TASK_DIRECTORY
+from reef.evaluation.reefine import evaluate_health as evaluate
+from reef.evaluation.reefine import grade_health_text as grade_text
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindings
 from reef.harness.episodes.run import EpisodeResult
 from reef.harness.episodes.trajectory import final_assistant_text
@@ -20,7 +21,6 @@ from reef.train.types import TrajectoryItem
 
 Proposal = implementation.Proposal
 ANSWERS = {"[health]": "reef-ok"}
-HEALTH_TASK_DIRECTORY = str(Path(__file__).with_name("health"))
 _ENTRY_NAME = implementation.ENTRY_NAME
 REQUEST_KINDS = implementation.REQUEST_KINDS
 EXTENSION_ADAPTER = implementation.EXTENSION_ADAPTER
@@ -284,6 +284,7 @@ class AnswerScorer(EpisodeScorer):
 
 
 __all__ = [
+    "HEALTH_TASK_DIRECTORY",
     "INSTRUCTIONS",
     "AnswerScorer",
     "ModelBinding",

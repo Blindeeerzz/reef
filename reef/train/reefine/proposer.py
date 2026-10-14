@@ -33,8 +33,13 @@ from reef.harness.episodes.version_check import VERSION_CHECK_ENTRY_ID, ships_ve
 from reef.harness.tree.mutations import admit_mutations
 from reef.harness.tree.nodes import RESERVED_ENTRY_IDS
 from reef.train.cordis_backend import Mutation, StepProposal
-from reef.train.reefine.instructions import ProposalInstructions
 from reef.train.types import TrajectoryItem
+
+
+@dataclass(frozen=True)
+class ProposalInstructions:
+    templates: Mapping[str, str]
+
 
 Proposal = tuple[str, str, dict[str, Any]]
 

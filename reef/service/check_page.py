@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 
+from reef.harness.step_result import evaluation_report
 from reef.service.page_chrome import escape
 
 STYLE = """
@@ -261,7 +262,7 @@ def checks_html(checks: object, report: object = None, reason: object = None, *,
 
 
 def evaluation_html(metrics: Mapping[str, object], *, result: str = "") -> str:
-    report = metrics.get("reefine_evaluation")
+    report = evaluation_report(metrics)
     if not isinstance(report, Mapping):
         return ""
     selection = metrics.get("selection")

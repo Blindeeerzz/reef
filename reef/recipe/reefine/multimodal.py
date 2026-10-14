@@ -18,7 +18,7 @@ from typing import Any
 
 from reef.inference.http import HOP_BY_HOP_HEADERS
 from reef.runtime.interfaces import InferenceStream, MultimodalRelay, UpstreamStatusError
-from reef.train.reefine.multimodal import MultimodalProvider, ProviderPreset
+from reef.train.reefine.agent_gateway import MultimodalProvider, ProviderPreset
 
 PRESETS = {
     "openrouter": ProviderPreset(

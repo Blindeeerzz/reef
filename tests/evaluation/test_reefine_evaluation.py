@@ -8,10 +8,11 @@ from dataclasses import replace
 import pytest
 from rich.console import Console
 
-from reef.core.evaluation import EvaluationResult
+from reef.core.evaluation import EvaluationResult, ServedComposition
 from reef.core.training_request import TrainingRequest
 from reef.evaluation.reefine import (
     CheckResult,
+    EvaluationContext,
     EvaluationInstructions,
     ReefineEvaluation,
     ReefineEvaluationSettings,
@@ -23,7 +24,6 @@ from reef.harness.episodes.run import EpisodeError, EpisodeResult
 from reef.recipe.errors import RecipeConfigError
 from reef.recipe.reefine.evaluation import evaluation_settings
 from reef.train.reefine.backend import ReefineBackend, ReefineCandidate
-from reef.train.reefine.context import EvaluationContext, ServedComposition
 from reef.train.reefine.proposer import request_with_feedback
 
 
@@ -56,9 +56,9 @@ class EvaluationBackend(ReefineBackend):
         self.progress.append(checks)
 
     def score_health(self, task, result):
-        from reef.evaluation.reefine_health import evaluate
+        from reef.evaluation.reefine import evaluate_health
 
-        return evaluate(task, result)
+        return evaluate_health(task, result)
 
 
 class ScriptedEvaluation(ReefineEvaluation):
@@ -114,15 +114,18 @@ def test_failed_required_check_rejects(tmp_path, field):
     measured = plugin.evaluate(item)
     decision = plugin.decide(item, measured)
     assert not decision.selected
-    assert any(check["status"] == "fail" for check in measured.metrics["reefine_evaluation"]["checks"])
-    assert measured.metrics["reefine_evaluation"]["current_release_id"] == "served-release"
+    assert any(check["status"] == "fail" for check in measured.metrics["evaluation_report"]["checks"])
+    assert measured.metrics["evaluation_report"]["current_release_id"] == "served-release"
 
 
-def test_success_uses_fresh_review_context_and_writes_progress_and_record(tmp_path):
+@pytest.mark.parametrize("report_key", ["evaluation_report", "reefine_evaluation"])
+def test_success_uses_fresh_review_context_and_writes_progress_and_record(tmp_path, report_key):
     plugin, model, backend = evaluation(tmp_path)
     item = candidate(tmp_path)
     measured = plugin.evaluate(item)
-    assert plugin.decide(item, measured).selected
+    assert "evaluation_report" in measured.metrics and "reefine_evaluation" not in measured.metrics
+    recorded = replace(measured, metrics={report_key: measured.metrics["evaluation_report"]})
+    assert plugin.decide(item, recorded).selected
     assert all(len(messages) == 1 and messages[0]["role"] == "user" for messages in model.messages_seen)
     assert all("proposal_notes" not in messages[0]["content"] for messages in model.messages_seen)
     assert '"harness": {"AGENTS.md": "new"}' in model.messages_seen[1][0]["content"]
@@ -134,10 +137,10 @@ def test_success_uses_fresh_review_context_and_writes_progress_and_record(tmp_pa
     assert '"requires"' not in model.messages_seen[0][0]["content"]
     assert any(check["status"] == "running" for checks in backend.progress for check in checks)
     assert (tmp_path / "reefine-evaluation" / "result.json").is_file()
-    assert measured.metrics["reefine_evaluation"]["same_model"] is True
-    assert measured.metrics["reefine_evaluation"]["requires"] == [{"name": "curl", "kind": "binary"}]
+    assert measured.metrics["evaluation_report"]["same_model"] is True
+    assert measured.metrics["evaluation_report"]["requires"] == [{"name": "curl", "kind": "binary"}]
     behavior = next(
-        check for check in measured.metrics["reefine_evaluation"]["checks"] if check["id"] == "request-behavior"
+        check for check in measured.metrics["evaluation_report"]["checks"] if check["id"] == "request-behavior"
     )
     assert behavior["expected"] == "command before output"
 
@@ -156,7 +159,7 @@ def test_invalid_plan_and_missing_request_never_approve(tmp_path):
         backend.results.pop(1)
         measured = plugin.evaluate(item)
         assert not plugin.decide(item, measured).selected
-        statuses = {check["id"]: check["status"] for check in measured.metrics["reefine_evaluation"]["checks"]}
+        statuses = {check["id"]: check["status"] for check in measured.metrics["evaluation_report"]["checks"]}
         assert statuses["request-plan"] == "invalid" and statuses["request-behavior"] == "not_run"
 
 
@@ -169,7 +172,7 @@ def test_valid_baseline_failure_can_improve(tmp_path):
 def test_empty_or_partial_evaluation_never_approves(tmp_path):
     plugin = evaluation(tmp_path)[0]
     for checks in ([], [CheckResult("only-health", "health", "candidate", "pass").to_dict()]):
-        measured = EvaluationResult("reefine", "1", {"reefine_evaluation": {"checks": checks}})
+        measured = EvaluationResult("reefine", "1", {"evaluation_report": {"checks": checks}})
         assert not plugin.decide(candidate(tmp_path), measured).selected
 
 
@@ -213,7 +216,7 @@ def test_named_reviewer_receives_all_fresh_checks_instead_of_served_model(tmp_pa
     assert plugin.decide(item, measured).selected
     assert len(reviewer.messages_seen) == 5 and not served.messages_seen
     assert all(len(messages) == 1 for messages in reviewer.messages_seen)
-    report = measured.metrics["reefine_evaluation"]
+    report = measured.metrics["evaluation_report"]
     assert report["reviewer_model"] == "independent-model"
     assert report["reviewer_binding"] == "reviewer" and report["same_model"] is False
 
@@ -291,14 +294,14 @@ def test_unavailable_episode_cannot_approve(tmp_path, monkeypatch):
     item = candidate(tmp_path)
     result = plugin.evaluate(item)
     assert not plugin.decide(item, result).selected
-    assert any(check["status"] == "invalid" for check in result.metrics["reefine_evaluation"]["checks"])
+    assert any(check["status"] == "invalid" for check in result.metrics["evaluation_report"]["checks"])
 
 
 def test_checks_from_another_release_or_duplicate_checks_cannot_approve(tmp_path):
     plugin = evaluation(tmp_path)[0]
     item = candidate(tmp_path)
     result = plugin.evaluate(item)
-    report = result.metrics["reefine_evaluation"]
+    report = result.metrics["evaluation_report"]
     report["current_release_id"] = "other-release"
     assert not plugin.decide(item, result).selected
     report["current_release_id"] = "served-release"

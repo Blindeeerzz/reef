@@ -318,7 +318,8 @@ is rendered into the delivered harness. MetaHarness and GEPA keep their own
 method policy in ``recipes/`` and continue to use their existing plugins.
 
 The evaluator implements the existing ``CandidateEvaluationPlugin`` contract:
-``evaluate`` returns measurements and ``decide`` returns select or reject.
+``evaluate`` returns measurements. ``decide`` returns a ``SelectionDecision``
+whose ``selected`` flag controls publication.
 ``ReefineCandidate`` adds the original ``TrainingRequest``, the admitted
 client requirements that will be delivered, and a snapshot of the current
 serving composition. Reviewers inspect those requirements as artifact
@@ -326,13 +327,15 @@ metadata, without the proposer's design notes or conversations. Scenario prepara
 from the published release, excluding pending candidates. Re-evaluation
 refreshes it and admits the same mutations against the new head.
 
-The report under ``EvaluationResult.metrics.reefine_evaluation`` has a version,
+The report under ``EvaluationResult.metrics.evaluation_report`` has a version,
 request and release IDs, model and scorer identity, task version, a protected
 suite checksum, the request plan and check rows. Each row records its group,
 target, status, expected and observed behavior, scores, reason, duration and
 optional record directory. Check statuses are ``pending``, ``running``,
-``pass``, ``fail``, ``invalid`` and ``not_run``; the selection contract remains
-select or reject. Every required group and row must pass.
+``pass``, ``fail``, ``invalid`` and ``not_run``. Every required group and row
+must pass before ``SelectionDecision.selected`` can be true.
+Report readers also accept the older ``reefine_evaluation`` key;
+``evaluation_report`` takes priority when both keys are present.
 
 ``RequestVerifier`` is an optional operator-owned ABC. Implement
 ``verify(result: EpisodeResult, workspace: Path) -> VerificationResult``.

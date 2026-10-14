@@ -9,7 +9,7 @@ from reef.train.reefine.agent import AgentProposer as Implementation
 from reef.train.reefine.agent import AgentRun, WorkspaceTools
 from reef.train.reefine.agent import agent_rules as render_agent_rules
 from reef.train.reefine.agent import launch_pi, rendered_files, workspace_mutations, write_workspace
-from reef.train.reefine.multimodal import MultimodalProvider
+from reef.train.reefine.agent_gateway import MultimodalProvider
 
 AGENT_RULES = Path(__file__).with_name("agent_rules.md")
 
