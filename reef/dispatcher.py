@@ -54,24 +54,6 @@ class LocalBackendWorker:
     thread: Thread
 
 
-@dataclass
-class _PublicationState:
-    lock: Lock = field(default_factory=Lock)
-    values: dict[str, Any] = field(default_factory=dict)
-
-    def snapshot(self) -> Mapping[str, Any]:
-        with self.lock:
-            return dict(self.values)
-
-    def record(self, scenario: str, value: Any) -> None:
-        with self.lock:
-            self.values[scenario] = value
-
-    def forget(self, scenario: str) -> None:
-        with self.lock:
-            self.values.pop(scenario, None)
-
-
 class _ScenarioTrainingError(Exception):
     """One scenario's training turn failed; the others keep their state."""
 
@@ -406,7 +388,6 @@ class Dispatcher:
             experiment_tracker=self._experiment_tracker,
         )
         self._registry.set_training_scenario_callback(self._start_training)
-        self._publication = _PublicationState()
         self._training = _TrainingState()
         self._lifecycle = _LifecycleState()
         self.workers = WorkerCoordination(self._registry, self._training.lock, held=hold_local_cycles)
@@ -428,10 +409,6 @@ class Dispatcher:
             self._lifecycle.metrics_thread.start()
 
     @property
-    def published(self) -> Mapping[str, Any]:
-        return self._publication.snapshot()
-
-    @property
     def recipe(self) -> Recipe:
         """The deployment's recipe, before any scenario's own model settings."""
         return self._recipe
@@ -440,9 +417,6 @@ class Dispatcher:
 
     def has_scenario(self, scenario: str) -> bool:
         return self._registry.has(scenario)
-
-    def has_loaded(self, scenario: str) -> bool:
-        return self._registry.has_loaded(scenario)
 
     def get_or_create_scenario(
         self,
@@ -513,7 +487,6 @@ class Dispatcher:
                 )
             dropped = self._registry.remove(scenario)
             self._stop_local_backend_worker(scenario)
-            self._publication.forget(scenario)
             self._record_training_error(scenario, None, source=None)
             with self._training.lock:
                 self._training.failure_counts.pop(scenario, None)
@@ -809,8 +782,7 @@ class Dispatcher:
         except Exception:
             logger.exception("experiment tracker failed to prepare correlation metadata")
 
-        value = current.commit(tracked_result, component=component)
-        self._publication.record(scenario, value)
+        current.commit(tracked_result, component=component)
         settled = current.settled_sibling_record
         if settled is not None:
             # The commit first put a sibling's durable record on record: that step is the sibling's and gets its
@@ -1358,12 +1330,6 @@ class Dispatcher:
             )
         elif value is None and was_blocked:
             logger.info("checkpoint storage block cleared; training resumes")
-
-    @property
-    def storage_status(self) -> Mapping[str, Any] | None:
-        """The training thread's last checkpoint-storage block, if any."""
-        with self._training.lock:
-            return self._training.storage_status
 
     def build_training_status(self) -> Mapping[str, Any]:
         """Assemble the training status block, checking training health as it goes.

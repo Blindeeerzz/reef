@@ -137,11 +137,6 @@ class ScenarioRegistry:
             loaded = scenario in self._scenarios
         return loaded or self._scenario_factory.has_registration(scenario)
 
-    def has_loaded(self, scenario: str) -> bool:
-        """True when the scenario is in the in-memory table (not just durable)."""
-        with self._lock:
-            return scenario in self._scenarios
-
     def get(self, scenario: str) -> Scenario:
         """Get a loaded scenario by name (must exist in memory)."""
         with self._lock:

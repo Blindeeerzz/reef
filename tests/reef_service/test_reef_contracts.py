@@ -242,7 +242,7 @@ def test_failed_artifact_fork_does_not_leave_runtime(tmp_path) -> None:
     with pytest.raises(ArtifactError, match="cannot fork math"):
         dispatcher.get_or_create_scenario("math")
 
-    assert not dispatcher.has_loaded("math")
+    assert dispatcher._registry.get_optional("math") is None
 
 
 @pytest.mark.unit
@@ -1060,7 +1060,6 @@ def test_release_ids_are_independent_and_ignore_results_without_candidates(tmp_p
     # strategy: there is no candidate to checkpoint.
     assert dispatcher.get_or_create_scenario("math").scenario_step == 1
     assert dispatcher.get_or_create_scenario("math").repository.require_current_artifact() == math_head
-    assert dispatcher.published["math"] == "no artifact"
     assert decisions == []
 
     for scenario in ("math", "code", "math", "code"):
@@ -1116,7 +1115,6 @@ def test_artifact_publication_failure_leaves_runtime_unchanged(tmp_path, failure
         runtime.repository.checkpoint_artifact,
         runtime.scenario_step,
     ) == previous
-    assert "chat" not in dispatcher.published
     assert list((tmp_path / "local").rglob("*")) == []
 
 

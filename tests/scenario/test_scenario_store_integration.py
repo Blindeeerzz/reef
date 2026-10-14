@@ -242,7 +242,7 @@ def test_failed_construction_closes_injected_store(tmp_path: Path, failure_point
     try:
         with pytest.raises(RuntimeError, match=f"injected {failure_point} failure"):
             dispatcher.get_or_create_scenario("math")
-        assert not dispatcher.has_loaded("math")
+        assert dispatcher._registry.get_optional("math") is None
         assert len(factory.sessions) == 1
         assert factory.sessions[0].close_count == 1
     finally:
