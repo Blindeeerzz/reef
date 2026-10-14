@@ -7,20 +7,20 @@ import time
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
+from tests.support._policy_recipe import TestPolicyRecipe
+from tests.support.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
 from reef.artifact import InMemoryRepositoryBackend
 from reef.core import AgentRecord, RequestType
 from reef.dispatcher import Dispatcher
-from reef.observability import NullExperimentLogger
-from reef.recipe.checkpoint_strategy import EveryNVersions
+from reef.observability import ExperimentTracker, NullExperimentLogger
+from reef.recipe.checkpoint_strategy import CheckpointStrategy, EveryNVersions
 from reef.runtime.interfaces import ActivatedModel, InferenceHandler, ModelCandidate, PreparedTrainingStep
 from reef.scenario import ReleaseNotRestorable
 from reef.service.app import RequestService, create_app
 from reef.storage.commit_log import CommitLogScenarioStore
 from reef.storage.sqlite import SQLiteScenarioStorage
-
-from ._policy_recipe import TestPolicyRecipe
+from reef.train.types import TrainStepResult
 
 
 class RollbackRuntime(StubTrainingRuntime):
@@ -37,12 +37,12 @@ class RollbackRuntime(StubTrainingRuntime):
         return None
 
     def prepare_training_step(
-        self, batch, step_preparer, algorithm_state, scenario_step, *, serving_runtime_load_id=None
+        self, batch, objective, algorithm_state, scheduling, scenario_step, *, serving_runtime_load_id=None
     ):
-        del batch, step_preparer
+        del batch, objective
         return PreparedTrainingStep(
             action="train",
-            payload={"rollout_id": scenario_step},
+            payload={"scenario_step": scenario_step},
             next_algorithm_state={"steps": int(algorithm_state.get("steps", 0)) + 1},
             metrics={},
         )
@@ -50,10 +50,10 @@ class RollbackRuntime(StubTrainingRuntime):
     def train_candidate(self, payload):
         self.trained += 1
         version = f"w{self.trained}"
-        checkpoint = self.checkpoint_dir / str(payload["rollout_id"])
+        checkpoint = self.checkpoint_dir / str(payload["scenario_step"])
         checkpoint.mkdir(parents=True)
         (checkpoint / "model.txt").write_text(version)
-        job_id = f"job-{payload['rollout_id']}"
+        job_id = f"job-{payload['scenario_step']}"
         self.candidate_versions[job_id] = version
         return ModelCandidate(
             candidate_id=job_id,
@@ -65,9 +65,12 @@ class RollbackRuntime(StubTrainingRuntime):
     def activate_candidate(self, candidate):
         return ActivatedModel(candidate.candidate_id, self.candidate_versions[candidate.candidate_id])
 
-    def reject_candidate(self, candidate, decision):
-        del decision
+    def reject_candidate(self, candidate):
         self.candidate_versions.pop(candidate.candidate_id, None)
+
+    @property
+    def supports_checkpoint_restore(self):
+        return True
 
     def restore_checkpoint(self, artifact):
         assert not self.inference.inference_admission_status["open"]
@@ -95,7 +98,7 @@ class BlockingBackend(InferenceHandler):
         return {"choices": [{"message": {"content": "ok"}}], "metadata": {"runtime_load_id": "w1"}}
 
 
-class RecordingExperimentTracker:
+class RecordingExperimentTracker(ExperimentTracker):
     def __init__(self) -> None:
         self.events = []
         self.rollbacks = []
@@ -249,6 +252,11 @@ def test_rollback_starts_a_new_experiment_run_segment(tmp_path) -> None:
 
     value.rollback("math", target_version)
     train(value, 4)
+    # The step is visible before the tracker hears about the commit; wait for the event rather than race it.
+    for _ in range(1000):
+        if len(tracker.events) == 3:
+            break
+        time.sleep(0.001)
 
     assert [(event.context.run_segment, event.context.run_step) for event in tracker.events] == [
         (0, 0),
@@ -419,3 +427,33 @@ def test_rollback_restore_failure_keeps_requests_closed_and_head_unchanged(tmp_p
         value.rollback("math", created)
     assert not training.inference.inference_admission_status["open"]
     assert scenario.current_artifact_ref() == head
+
+
+class CountingCheckpoints(CheckpointStrategy):
+    """Record each policy decision while selecting the configured cadence."""
+
+    def __init__(self, every: int) -> None:
+        self.every = every
+        self.versions: list[int] = []
+
+    def should_checkpoint(self, scenario: str, version: int, result: TrainStepResult) -> bool:
+        self.versions.append(version)
+        return version % self.every == 0
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("checkpoint_every", [1, 2])
+def test_exported_weights_use_one_checkpoint_decision_per_step(tmp_path, monkeypatch, checkpoint_every: int) -> None:
+    value, runtime, _ = dispatcher(tmp_path, checkpoint_every=checkpoint_every)
+    try:
+        scenario = value.get_or_create_scenario("math")
+        strategy = CountingCheckpoints(checkpoint_every)
+        monkeypatch.setattr(scenario._committer, "_checkpoint_strategy", strategy)
+        train(value, 1)
+        train(value, 2)
+        assert strategy.versions == [1, 2]
+        assert [record.checkpoint for record in scenario.store.history()] == [checkpoint_every == 1, True]
+        assert scenario.trainer.state["steps"] == 2
+        assert runtime.trained == 2
+    finally:
+        value.close()

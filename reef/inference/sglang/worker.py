@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from contextlib import suppress
 from typing import Any
 
 import ray
 
+from reef.inference.process import retire_engines
 from reef.inference.sglang.config import SGLangConfig
 from reef.inference.sglang.health import SGLangEngineHealthChecks
 from reef.inference.sglang.launch import SGLangCluster, engine_environment
@@ -16,7 +16,7 @@ from reef.runtime.recovery import (
     EngineHealthMonitor,
     HealthMonitorConfig,
     InferenceControl,
-    InferenceEngines,
+    InferenceEngineGroup,
     InferenceMonitor,
     WeightUpdateConnection,
 )
@@ -27,20 +27,6 @@ def recover_server(server) -> None:
     if not any(engine is None for group in server.server_groups for engine in group.all_engines):
         return
     server.recover()
-
-
-def retire_engines(engines: Sequence[Any], *, timeout: float = 30) -> None:
-    """Ask each engine actor to shut down, then kill it; failures never block retirement."""
-    pending = []
-    for engine in engines:
-        with suppress(Exception):
-            pending.append(engine.shutdown.remote())
-    if pending:
-        with suppress(Exception):
-            ray.get(pending, timeout=timeout)
-    for engine in engines:
-        with suppress(Exception):
-            ray.kill(engine, no_restart=True)
 
 
 class SGLangWorker:
@@ -128,7 +114,7 @@ class SGLangWorker:
 
     def _create_control(self) -> InferenceControl:
         return InferenceControl(
-            _SGLangInferenceEngines(self), _SGLangWeightUpdateConnection(self), _SGLangInferenceMonitor(self)
+            _SGLangEngineGroup(self), _SGLangWeightUpdateConnection(self), _SGLangInferenceMonitor(self)
         )
 
     def pause_generation_for_update(self):
@@ -267,7 +253,7 @@ class SGLangWorker:
         self._routers = []
 
 
-class _SGLangInferenceEngines(InferenceEngines):
+class _SGLangEngineGroup(InferenceEngineGroup):
     """Ray fan-out and SGLang engine replacement behind Reef's control contract."""
 
     def __init__(self, worker: SGLangWorker) -> None:
@@ -278,14 +264,22 @@ class _SGLangInferenceEngines(InferenceEngines):
         return not self._worker.config.external_engines
 
     def pause(self) -> Any:
+        """Stop generation for a publication, leaving no reusable cache entry.
+
+        A ``retract`` pause releases every in-flight request's KV, which is
+        what lets the shared prefix cache be cleared: an entry the previous
+        weights built must not be matchable by a request running under the
+        next ones. A colocated engine drops the cache with its KV allocation
+        anyway; clearing it here extends the same guarantee to a disjoint
+        engine that shares prefixes. A failed flush raises, and the
+        publication then retires the engines.
+        """
         mode = self._worker.config.pause_mode
-        return ray.get(
-            [
-                engine.pause_generation.remote(mode)
-                for engine in self._worker.updatable_rollout_engines
-                if engine is not None
-            ]
-        )
+        engines = [engine for engine in self._worker.updatable_rollout_engines if engine is not None]
+        result = ray.get([engine.pause_generation.remote(mode) for engine in engines])
+        if mode == "retract":
+            ray.get([engine.flush_cache.remote() for engine in engines])
+        return result
 
     def resume(self) -> Any:
         return ray.get([engine.continue_generation.remote() for engine in self._worker.updatable_rollout_engines])
@@ -297,7 +291,7 @@ class _SGLangInferenceEngines(InferenceEngines):
 
     def terminate(self) -> int:
         server = self._worker._get_updatable_server()
-        groups = [] if server is None else server.server_groups
+        groups = [] if server is None else server.generation_groups
         slots = [
             (group, index) for group in groups for index, engine in enumerate(group.all_engines) if engine is not None
         ]

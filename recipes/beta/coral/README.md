@@ -64,7 +64,7 @@ LiteLLM -> reef serve         stores INFERENCE records with tags,
 CORAL grader daemon finalizes the attempt (.coral/**/attempts/*.json)
    -> recipes.beta.coral.watcher: resolves the attempt's captured references,
       POST /reef/report {score, references, metadata.coral}, exactly once
-   -> CoralProcessor groups siblings of one parent commit -> Slime LoRA step
+   -> CoralGrouping groups siblings of one parent commit -> CoralBatches -> Slime LoRA step
    -> new revision served to the next attempts
 ```
 
@@ -106,15 +106,26 @@ and are grouped together: they all diverged from the task seed.
 
 From a report to a gradient:
 
-1. **Grouping.** `CoralProcessor` files each report under its `parent_hash`.
-   A group releases once `group_size` scored siblings accrue (`serve.yaml`
-   sets 2 for the demo; the default is 4). Parents that never accrue enough
-   scored children never train, the barrier is a recipe setting, not a CORAL
-   invariant.
+1. **Grouping.** The record stage, `CoralRecord2Record`, files each report
+   under its `parent_hash` with `CoralGrouping`. A group releases once
+   `group_size` scored siblings accrue. The default is 4; the demo's
+   `serve.yaml` sets 2:
+
+   ```yaml
+   pipeline:
+     record2record:
+       config:
+         group_size: 2
+   ```
+
+   Parents that never accrue enough scored children never train. The barrier
+   is a recipe setting, not a CORAL invariant. Reef refuses `group-size` in
+   `recipe.config` and names its new place.
 2. **Sample assembly.** The report's ordered inference references are
    materialized back into tokens, loss mask, and the rollout-time log
    probabilities reef stored with each INFERENCE record. An attempt is a
-   multi-call trajectory, so multi-turn assembly is on by default.
+   multi-call trajectory, so `CoralTasks` turns multi-turn assembly on by
+   default (`pipeline.record2task.config.accept_multi_turn_policy_samples`).
 3. **Version guards.** An attempt whose calls span a weight update is
    rejected: its rollout log probs belong to two policies and cannot support
    one importance ratio. A group whose members trained on different
@@ -122,7 +133,7 @@ From a report to a gradient:
    fairly within one policy version. A malformed attempt raises an explicit training data error; discarded
    groups are visible in the processor's `status()` (`discarded_groups`).
 4. **The step.** A released group becomes one training unit. The recipe
-   reuses the `tttd` step preparer (grouped leave-one-out advantages) and
+   reuses the `tttd` training objective (grouped leave-one-out advantages) and
    the `tttd` Slime loss family, CORAL sibling groups have the same shape
    as TTT-Discover steps, so the recipe adds only the group barrier. A group
    where every sibling scored the same still trains as a well-defined
@@ -134,7 +145,8 @@ From a report to a gradient:
    later attempts both run on it and are attributed to it.
 
 The design rationale lives next to the code: `processor.py` (grouping and
-guards), `recipe.py` (why `tttd` is reused), `serve.yaml` (deployment knobs).
+guards), `recipe.py` (the record stage, and why `tttd` is reused), `serve.yaml`
+(deployment knobs).
 
 ## The task
 

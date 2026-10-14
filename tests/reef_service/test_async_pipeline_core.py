@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from threading import Event
 
 import pytest
-from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
+from tests.support._policy_recipe import TestPolicyRecipe
+from tests.support.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
-from reef.artifact import ArtifactPublicationError, InMemoryRepositoryBackend
+from reef.artifact import Artifact, ArtifactPublicationError, InMemoryRepositoryBackend
 from reef.core import AgentRecord, ReefError, RequestType
 from reef.core.trajectories import source_record_id
 from reef.dispatcher import Dispatcher
+from reef.observability import ExperimentLogger, ExperimentTracker
+from reef.recipe import Recipe
 from reef.runtime.interfaces import (
     ActivatedModel,
     CandidateTrainingDeferred,
@@ -23,8 +27,6 @@ from reef.runtime.interfaces import (
 )
 from reef.service.app import RequestService
 from reef.storage.sqlite import SQLiteScenarioStorage
-
-from ._policy_recipe import TestPolicyRecipe
 
 _ASYNC_WAIT_TIMEOUT_S = 5.0
 _ASYNC_WAIT_POLL_S = 0.01
@@ -64,12 +66,12 @@ class DurableRuntime(StubTrainingRuntime):
         return self.serving_version
 
     def prepare_training_step(
-        self, batch, step_preparer, algorithm_state, scenario_step, *, serving_runtime_load_id=None
+        self, batch, objective, algorithm_state, scheduling, scenario_step, *, serving_runtime_load_id=None
     ):
         sample = batch.items[0]
         payload = {
-            "rollout_id": scenario_step,
-            "loss": step_preparer,
+            "scenario_step": scenario_step,
+            "loss": objective,
             "source": source_record_id(sample),
             "expected_runtime_load_id": sample.training.get("runtime_load_id", None),
         }
@@ -81,8 +83,8 @@ class DurableRuntime(StubTrainingRuntime):
         )
 
     def train_candidate(self, payload):
-        rollout_id = payload["rollout_id"]
-        existing = self.completed.get(rollout_id)
+        scenario_step = payload["scenario_step"]
+        existing = self.completed.get(scenario_step)
         if existing is not None:
             return existing
         if payload["expected_runtime_load_id"] != self.serving_version:
@@ -94,7 +96,7 @@ class DurableRuntime(StubTrainingRuntime):
         self.started.set()
         if self.block and not self.release.wait(5):
             raise TimeoutError("test did not release blocked training")
-        job_id = f"job-{rollout_id}"
+        job_id = f"job-{scenario_step}"
         checkpoint = self.checkpoint_root / job_id
         checkpoint.mkdir(parents=True)
         candidate = ModelCandidate(
@@ -104,7 +106,7 @@ class DurableRuntime(StubTrainingRuntime):
             current_runtime_load_id=self.serving_version,
             training_metrics=self.complete_metrics or {},
         )
-        self.completed[rollout_id] = candidate
+        self.completed[scenario_step] = candidate
         self.candidate_versions[job_id] = f"job:{job_id}"
         if self.fail_once:
             self.fail_once = False
@@ -116,8 +118,8 @@ class DurableRuntime(StubTrainingRuntime):
         self.serving_version = runtime_load_id
         return ActivatedModel(candidate.candidate_id, runtime_load_id)
 
-    def reject_candidate(self, candidate, decision):
-        del candidate, decision
+    def reject_candidate(self, candidate):
+        del candidate
 
 
 class BlockingLostAckBackend(InMemoryRepositoryBackend):
@@ -146,7 +148,7 @@ class ImmediateBackend(InferenceHandler):
         return {"metadata": {"runtime_load_id": "v0"}}
 
 
-class RecordingExperimentTracker:
+class RecordingExperimentTracker(ExperimentTracker):
     def __init__(self) -> None:
         self.contexts = []
         self.events = []
@@ -171,12 +173,30 @@ class RecordingExperimentTracker:
         self.closed = True
 
 
-class RecordingExperimentLogger:
+class RecordingExperimentLogger(ExperimentLogger):
     def __init__(self) -> None:
         self.logged = []
 
     def log(self, metrics, *, namespace):
         self.logged.append((namespace, dict(metrics)))
+
+
+class OperationalExperimentTracker(RecordingExperimentTracker):
+    @property
+    def operational_metrics_enabled(self) -> bool:
+        return True
+
+
+def wait_for_operational_sample(
+    tracker: RecordingExperimentTracker, expected: Mapping[str, int]
+) -> dict[str, float | int]:
+    deadline = time.monotonic() + _ASYNC_WAIT_TIMEOUT_S
+    while time.monotonic() < deadline:
+        for namespace, metrics in tracker.loggers["math"].logged:
+            if namespace == "operations" and all(metrics.get(key) == value for key, value in expected.items()):
+                return metrics
+        time.sleep(_ASYNC_WAIT_POLL_S)
+    pytest.fail(f"no operational sample matching {expected}")
 
 
 @pytest.fixture
@@ -316,8 +336,8 @@ def test_weight_inference_does_not_materialize_its_checkpoint(start_dispatcher, 
         lambda ref: pytest.fail(f"unexpected inference materialization: {ref.release_id}"),
     )
 
-    response = asyncio.run(
-        RequestService(dispatcher).infer(
+    response, _ = asyncio.run(
+        RequestService(dispatcher).infer_with_data(
             {"x-reef-scenario": "math"},
             {"messages": [{"role": "user", "content": "hi"}]},
             "/v1/chat/completions",
@@ -338,7 +358,7 @@ def test_two_jobs_form_one_deterministic_release_chain(start_dispatcher) -> None
     _submit_pair(dispatcher, "2", runtime.serving_version)
     _wait_for_step(dispatcher, 2)
 
-    assert [call["rollout_id"] for call in runtime.calls] == [0, 1]
+    assert [call["scenario_step"] for call in runtime.calls] == [0, 1]
     assert [call["source"] for call in runtime.calls] == ["inference-1", "inference-2"]
     assert scenario.current_artifact_ref().parent_release_id == first.release_id
     with pytest.raises(ReefError, match="already bound"):
@@ -357,17 +377,17 @@ def test_training_result_metrics_reach_the_durable_commit(start_dispatcher) -> N
     _wait_for_step(dispatcher, 1)
     scenario = dispatcher.get_or_create_scenario("math")
 
-    committed = scenario.metrics_for_version(scenario.current_artifact_ref().release_id)
+    _, committed = scenario.artifact_with_metrics()
     assert committed is not None
     assert {key: committed[key] for key in metrics} == metrics
-    assert committed["selection"]["outcome"] == "select"
+    assert committed["selection"]["selected"] is True
     status = dispatcher.build_training_status()["scenarios"]["math"]["last_committed_step"]
     assert status["step"] == 1
     assert isinstance(status["recorded_at"], float)
     assert status["metrics"] == committed
-    status["metrics"]["selection"]["outcome"] = "mutated by caller"
+    status["metrics"]["selection"]["selected"] = False
     refreshed = dispatcher.build_training_status()["scenarios"]["math"]["last_committed_step"]
-    assert refreshed["metrics"]["selection"]["outcome"] == "select"
+    assert refreshed["metrics"]["selection"]["selected"] is True
 
 
 @pytest.mark.unit
@@ -382,7 +402,7 @@ def test_experiment_provider_observes_the_generic_commit_boundary(start_dispatch
     _wait_for_step(dispatcher, 1)
     scenario = dispatcher.get_or_create_scenario("math")
     produced = scenario.current_artifact_ref()
-    committed = scenario.metrics_for_version(produced.release_id)
+    _, committed = scenario.artifact_with_metrics(produced.release_id)
 
     assert committed is not None
     assert committed["experiment/provider"] == "test"
@@ -392,15 +412,25 @@ def test_experiment_provider_observes_the_generic_commit_boundary(start_dispatch
     assert event.context.scenario == "math"
     assert event.context.recipe == "test_policy"
     assert event.context.backend == "RuntimeCandidateBackend"
-    assert event.context.backend_config == {"runtime": "DurableRuntime", "step_preparer": "sft"}
+    assert event.context.backend_config == {
+        "runtime": "DurableRuntime",
+        "objective": "sft",
+        "scheduling": {
+            "unit": "comparison_set",
+            "batch_size": "configured",
+            "epochs": 1,
+            "shuffle": False,
+            "remainder": "partial",
+        },
+    }
     assert event.context.source_artifact_ref.release_id == produced.parent_release_id
     assert event.produced_artifact_ref == produced
     assert event.metrics["train/loss"] == pytest.approx(0.25)
     assert event.training_job_id == "job-0"
     assert event.source_runtime_load_id == "v0"
     assert event.produced_runtime_load_id == "job:job-0"
-    assert scenario.trainer.processor.experiment_logger is tracker.loggers["math"]
-    scenario.trainer.processor.experiment_logger.log({"accepted": 1}, namespace="processor")
+    assert scenario.trainer.pipeline.experiment_logger is tracker.loggers["math"]
+    scenario.trainer.pipeline.experiment_logger.log({"accepted": 1}, namespace="processor")
     assert tracker.loggers["math"].logged == [
         ("recipe", {"batch_size": 1}),
         ("processor", {"accepted": 1}),
@@ -423,16 +453,21 @@ def test_stale_batch_is_discarded_and_next_valid_job_runs(start_dispatcher) -> N
     _wait_for_step(dispatcher, 1)
     scenario = dispatcher.get_or_create_scenario("math")
 
+    assert scenario.trainer.operational_metrics()["runtime/stale_batches_total"] == 1
     assert [call["source"] for call in runtime.calls] == ["inference-2"]
     # Rejecting the first batch consumes neither side's step counter, so the
-    # next valid batch reuses rollout 0 rather than wedging the bridge at 1.
-    assert runtime.calls[0]["rollout_id"] == 0
+    # next valid batch reuses scenario step 0 rather than wedging the bridge at 1.
+    assert runtime.calls[0]["scenario_step"] == 0
     assert scenario.scenario_step == 1
-    assert scenario.records.count("math") == 0
-    receipts = scenario.records.compaction_receipts("math")
+    assert scenario.records.count("math") == 4
+    receipts = scenario.records.consumption_receipts("math")
     assert len(receipts) == 1
-    assert receipts[0]["metadata"] == {"outcome": "stale", "metrics": stale_metrics}
-    assert set(receipts[0]["compacted_ids"]) == {"inference-1", "report-1"}
+    assert receipts[0]["metadata"] == {
+        "outcome": "stale",
+        # The receipt keeps the method the dropped batch was prepared with.
+        "metrics": {**stale_metrics, "training_method": {"objective": "sft", "learning_rate_schedule": None}},
+    }
+    assert receipts[0]["consumed_ids"] == ("inference-1", "report-1")
 
 
 @pytest.mark.unit
@@ -449,6 +484,172 @@ def test_storage_block_preserves_pending_batch_and_retries(start_dispatcher, mon
     assert dispatcher.build_training_status()["scenarios"]["math"]["checkpoint_storage"]["reasons"] == ["test cap"]
     runtime.block_storage = False
     _wait_for_step(dispatcher, 1)
-    assert runtime.calls[0]["rollout_id"] == 0
+    assert runtime.calls[0]["scenario_step"] == 0
     assert runtime.calls[0]["source"] == "inference-1"
     assert dispatcher.build_training_status()["scenarios"]["math"]["checkpoint_storage"] is None
+
+
+def test_operational_sample_wait_ignores_a_matching_backlog_before_training() -> None:
+    tracker = OperationalExperimentTracker()
+    logger = RecordingExperimentLogger()
+    tracker.loggers["math"] = logger
+    logger.log({"records/unread_count": 2, "training/execution/active": 0}, namespace="operations")
+    running = {"records/unread_count": 2, "training/execution/active": 1}
+    logger.log(running, namespace="operations")
+
+    assert wait_for_operational_sample(tracker, running) == running
+
+
+def test_periodic_metrics_report_backlog_during_training_without_status_reads(start_dispatcher, monkeypatch) -> None:
+    monkeypatch.setattr(Dispatcher, "operational_metrics_interval_seconds", 0.01)
+    tracker = OperationalExperimentTracker()
+    runtime, dispatcher = start_dispatcher(block=True, experiment_tracker=tracker)
+    _submit_pair(dispatcher)
+    assert runtime.started.wait(1)
+    _submit_pair(dispatcher, "2", "job:job-0")
+    # The first pair can also produce a backlog of two before training starts.
+    sample = wait_for_operational_sample(tracker, {"records/unread_count": 2, "training/execution/active": 1})
+    assert sample["training/execution/active"] == 1
+    assert sample["training/execution/elapsed_seconds"] >= 0
+    assert sample["records/oldest_unread_age_seconds"] >= 0
+    assert sample["training/reserved_batches"] == 1
+    assert sample["processor/unreserved_reports"] == 0
+    assert sample["processor/reserved_reports"] == 1
+    assert not tracker.events
+    runtime.release.set()
+    _wait_for_step(dispatcher, 2)
+    dispatcher.close()
+    final = [metrics for namespace, metrics in tracker.loggers["math"].logged if namespace == "operations"][-1]
+    assert final["records/unread_count"] == 0
+    assert final["training/execution/active"] == 0
+    assert final["runtime/weight_sync/completed_total"] == 2
+    assert final["training/failed_attempts_total"] == 0
+    assert tracker.closed
+    assert not dispatcher._lifecycle.metrics_thread.is_alive()
+
+
+def test_periodic_metrics_keep_failures_after_training_recovery(start_dispatcher, monkeypatch) -> None:
+    monkeypatch.setattr(Dispatcher, "operational_metrics_interval_seconds", 0.01)
+    tracker = OperationalExperimentTracker()
+    runtime, dispatcher = start_dispatcher(experiment_tracker=tracker)
+    train_candidate = runtime.train_candidate
+    failures: list[Mapping[str, object]] = []
+
+    def fail(payload: Mapping[str, object]) -> ModelCandidate:
+        failures.append(payload)
+        raise ConnectionError("training submission unavailable")
+
+    monkeypatch.setattr(runtime, "train_candidate", fail)
+    _submit_pair(dispatcher)
+    sample = wait_for_operational_sample(tracker, {"training/error": 1})
+    assert sample["training/error"] == 1
+    assert not tracker.events
+    monkeypatch.setattr(runtime, "train_candidate", train_candidate)
+    dispatcher._training.ready.set()
+    _wait_for_step(dispatcher, 1)
+    dispatcher.record_operational_metrics()
+    final = [metrics for namespace, metrics in tracker.loggers["math"].logged if namespace == "operations"][-1]
+    assert final["training/error"] == 0
+    assert final["training/failed_attempts_total"] == len(failures)
+    assert final["training/failed_attempts_total"] >= sample["training/failed_attempts_total"]
+
+
+def test_disabled_tracking_does_not_start_periodic_sampling(start_dispatcher) -> None:
+    _, dispatcher = start_dispatcher()
+    assert dispatcher._lifecycle.metrics_thread is None
+
+
+def test_periodic_metrics_observe_incomplete_weight_sync(start_dispatcher, monkeypatch) -> None:
+    monkeypatch.setattr(Dispatcher, "operational_metrics_interval_seconds", 0.01)
+    tracker = OperationalExperimentTracker()
+    runtime, dispatcher = start_dispatcher(experiment_tracker=tracker)
+    activate = runtime.activate_candidate
+    transferring = Event()
+    release = Event()
+
+    def block_transfer(candidate: ModelCandidate) -> ActivatedModel:
+        transferring.set()
+        if not release.wait(5):
+            raise TimeoutError("test did not release weight transfer")
+        return activate(candidate)
+
+    monkeypatch.setattr(runtime, "activate_candidate", block_transfer)
+    try:
+        _submit_pair(dispatcher)
+        assert transferring.wait(1)
+        sample = wait_for_operational_sample(tracker, {"runtime/weight_sync/active": 1})
+        assert sample["runtime/weight_sync/elapsed_seconds"] >= 0
+        assert sample["runtime/weight_sync/completed_total"] == 0
+        assert not tracker.events
+    finally:
+        release.set()
+    _wait_for_step(dispatcher, 1)
+
+
+def test_processor_lock_does_not_hide_execution_metrics(start_dispatcher) -> None:
+    runtime, dispatcher = start_dispatcher(block=True)
+    _submit_pair(dispatcher)
+    assert runtime.started.wait(1)
+    trainer = dispatcher.get_or_create_scenario("math").trainer
+    with trainer._lock:
+        sample = trainer.operational_metrics()
+    assert sample["training/execution/active"] == 1
+    assert "records/unread_count" not in sample
+
+
+def test_serving_only_scenarios_upload_requests_during_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Dispatcher, "operational_metrics_interval_seconds", 0.01)
+    tracker = OperationalExperimentTracker()
+    initial = tmp_path / "initial"
+    initial.mkdir()
+    dispatcher = Dispatcher(
+        Recipe(),
+        InMemoryRepositoryBackend.factory(initial),
+        scenario_storage=SQLiteScenarioStorage(),
+        experiment_tracker=tracker,
+    )
+
+    class BlockingHandler(InferenceHandler):
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def inference(self, artifact: Artifact, path: str, payload: dict[str, object]) -> dict[str, object]:
+            self.started.set()
+            await self.release.wait()
+            return {"choices": []}
+
+    async def run() -> None:
+        handler = BlockingHandler()
+        service = RequestService(dispatcher)
+        request = asyncio.create_task(
+            service.infer_with_data({"x-reef-scenario": "math"}, {}, "/v1/chat/completions", handler)
+        )
+        try:
+            await asyncio.wait_for(handler.started.wait(), 2)
+            sample = await asyncio.to_thread(wait_for_operational_sample, tracker, {"serve/request/active": 1})
+            assert sample["serve/request/completed_total"] == 0
+            assert sample["serve/request/elapsed_seconds"] >= 0
+            assert not tracker.events
+            request.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request
+            sample = await asyncio.to_thread(wait_for_operational_sample, tracker, {"serve/request/failed_total": 1})
+            assert sample["serve/request/active"] == 0
+            assert sample["ingest/accepted_total"] == 0
+            handler.release.set()
+            await service.infer_with_data({"x-reef-scenario": "math"}, {}, "/v1/chat/completions", handler)
+            sample = await asyncio.to_thread(
+                wait_for_operational_sample, tracker, {"serve/request/completed_total": 1}
+            )
+            assert sample["ingest/accepted_total"] == 1
+        finally:
+            request.cancel()
+            await asyncio.gather(request, return_exceptions=True)
+
+    try:
+        asyncio.run(run())
+    finally:
+        dispatcher.close()

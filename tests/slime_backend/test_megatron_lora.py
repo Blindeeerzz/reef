@@ -52,7 +52,7 @@ def test_lora_checkpoint_is_readable_by_peft_without_base_weights(tmp_path) -> N
         ("model.layers.0.self_attn.q_proj.lora_B.weight", torch.ones(4, 2)),
     ]
 
-    save_lora_adapter_to_path(_args(megatron_lora_alpha=32), output, tensors)
+    save_lora_adapter_to_path(_args(megatron_lora_alpha=32), output, tensors, scenario_step=0)
 
     config = json.loads((output / "adapter_config.json").read_text(encoding="utf-8"))
     assert config["base_model_name_or_path"] == "/models/Qwen3-8B"
@@ -136,6 +136,7 @@ def test_lora_checkpoint_records_no_dtype_for_a_mixed_export(tmp_path) -> None:
             ("model.layers.0.self_attn.q_proj.lora_A.weight", torch.ones(2, 4, dtype=torch.float32)),
             ("model.layers.0.self_attn.q_proj.lora_B.weight", torch.ones(4, 2, dtype=torch.bfloat16)),
         ],
+        scenario_step=0,
     )
 
     assert json.loads((output / "reef-adapter.json").read_text(encoding="utf-8"))["dtype"] is None
@@ -147,6 +148,7 @@ def test_lora_checkpoint_rejects_base_tensors(tmp_path) -> None:
             _args(megatron_lora_alpha=32),
             tmp_path / "checkpoint-0",
             [("model.embed_tokens.weight", torch.ones(2, 2))],
+            scenario_step=0,
         )
 
 
@@ -163,6 +165,7 @@ def test_lora_checkpoint_does_not_publish_a_partial_directory(tmp_path, monkeypa
             _args(megatron_lora_alpha=32),
             output,
             [("model.layers.0.self_attn.q_proj.lora_A.weight", torch.ones(2, 4))],
+            scenario_step=0,
         )
 
     assert not output.exists()
@@ -705,3 +708,18 @@ def test_adapter_merge_tasks_use_cpu_actor_backup_instead_of_paused_model() -> N
     assert replaced[0].linear_in_task.param_weight == "cuda:A"
     assert replaced[0].linear_out_task.param_weight == "cuda:B"
     assert adapter_tasks[0].linear_in_task.param_weight is paused_weight
+
+
+def test_distributed_lora_publication_rejects_a_missing_broadcast_handle(monkeypatch) -> None:
+    colocated = _load_colocated_module(monkeypatch)
+    monkeypatch.setattr(colocated.dist, "broadcast", lambda *args, **kwargs: None)
+
+    with pytest.raises(RuntimeError, match="asynchronous work handle"):
+        colocated.send_lora_to_distributed_engines(
+            [("layer.lora_A.weight", torch.ones(1))],
+            rollout_engines=(),
+            model_update_group="nccl-group",
+            group_name="update",
+            lora_config={"r": 1},
+            lora_name="reef_lora",
+        )

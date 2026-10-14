@@ -37,6 +37,33 @@ Use the structured template that matches the work:
   project work that a maintainer has created or approved.
 - **Roadmap** only for a maintainer-owned, time-bounded coordination issue.
 
+### Issue and RFC writing
+
+Write for a reviewer deciding what to do next. Ordinary issues usually need
+only a few paragraphs; aim for roughly 300–500 words for a focused RFC.
+These are defaults, not limits: include detail when it changes the decision.
+
+- Lead with the concrete problem and requested outcome or decision. Use one
+  short example when it makes the proposed behavior clearer.
+- Describe the smallest useful change and what existing mechanisms it reuses.
+  Do not add frameworks, configuration, or requirements without a concrete need.
+- State each point once. Cut repeated summaries, conversational history,
+  speculative edge cases, and lists of unrelated non-goals.
+- Use plain language and short paragraphs or bullets. Include implementation
+  details only when needed to assess feasibility, compatibility, or a trade-off.
+- Use the template to check coverage, not to generate length. Keep required
+  answers brief; use “Not applicable” where appropriate. When writing outside
+  the form, group related topics under a few headings while covering the
+  applicable questions.
+- Preserve material risks, compatibility constraints, and acceptance checks.
+  Separate verified behavior from proposals and untested assumptions. Link
+  supporting code, results, and related work instead of copying them into the body.
+
+Before submitting, remove any sentence that neither helps explain the problem
+nor affects the decision or its verification. The concise proposal in
+[#688](https://github.com/Human-Agent-Society/reef/issues/688) illustrates this
+style; it is not a required outline or an endorsement of its design.
+
 ### Issue titles and classification
 
 An issue title starts with exactly one controlled type prefix:
@@ -329,11 +356,38 @@ Use a draft pull request when the design or implementation is not ready for
 acceptance. Do not mix a functional change with drive-by formatting, generated
 rewrites, or unrelated cleanup.
 
+Draft pull requests run lint, type checks, and static Dockerfile checks only.
+Once ready, each update automatically runs the source, sandbox, and installed-
+wheel suites on Python 3.12, including the combined coverage check. Documentation
+builds and real-harness smoke tests run automatically when their files change.
+Run relevant checks locally and batch each round of review fixes before pushing.
+
+Before merging, run the complete Python 3.10/3.11/3.12 test and package matrices
+on the final revision. Any contributor with repository write access can request
+this by rerunning the entire latest `ci` workflow:
+
+```bash
+gh run rerun RUN_ID --repo Human-Agent-Society/reef
+```
+
+The Actions UI equivalent is **Re-run all jobs**. Rerunning the entire workflow
+recalculates the matrix for full validation; **Re-run failed jobs** may reuse the
+previous matrix and is intended for retrying failures, not expanding coverage.
+No separate maintainer approval is needed. Authors without repository write
+access can ask a collaborator to request the final full run.
+
+Routine runs leave the required Python 3.10/3.11 checks pending. These checks
+must pass on the latest revision before merging; the Python 3.12 routine run
+alone is insufficient. A new push cancels older runs and returns to the routine
+matrix. Full reruns reject closed, draft, or superseded PR revisions. Main-branch
+pushes and manual workflow dispatches run all supported Python versions;
+use the PR's `ci` rerun to satisfy its merge checks.
+
 ## Review and acceptance
 
-Maintainers route reviews according to the affected areas. The
-[maintenance model](.github/MAINTAINER.md) defines Maintainer, Merge Oncall,
-and Area Reviewer responsibilities and the merge process. Reviewers may ask for
+GitHub requests reviews from the code owners of the affected areas. The
+[maintenance model](.github/MAINTAINER.md) defines Maintainer, Code Owner, and
+Area Reviewer responsibilities and the merge process. Reviewers may ask for
 changes to correctness, interfaces, tests, documentation, compatibility,
 operability, or scope. Authors are expected to respond to substantive comments
 and to say when a request is unclear or when they disagree.

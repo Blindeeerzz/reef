@@ -251,9 +251,8 @@ that data plane. There is no built-in torchrun, Slurm or Kubernetes backend,
 and no online TP/PP resizing. ``uni/mp`` are rejected for Slime GPU worker roles;
 it remains valid for standalone inference and recipe-owned external processes.
 
-``ReefRayTrainGroup`` remains an import alias for ``SlimeTrainGroup``. Its
-``async_*`` methods now return executor futures (or an already available value)
-and should be consumed with ``resolve``; code using ``ray.get`` directly on
+The ``async_*`` methods of ``SlimeTrainGroup`` return executor futures (or an
+already available value) and should be consumed with ``resolve``; code using ``ray.get`` directly on
 these return values must migrate. The existing Slime algorithm ``resolve``
 callback already handles this conversion.
 
@@ -287,12 +286,8 @@ not an episode count or a separate business-level concurrency limit. For
 enforce a CPU quota. Ray maps them to ``num_cpus``/``num_gpus`` per actor;
 these are scheduling reservations, not hard CPU limits.
 
-Legacy ``evolution.episode_workers`` and ``worker_resources.num_gpus`` remain
-deprecated aliases. Conflicting old/new resource values are rejected.
-``evolution.worker_executor`` still overrides a backend-only role selector,
-but cannot be combined with role-level workers/resources; migrate it into
-``execution.evolution.backend``. Legacy Python constructor arguments remain
-accepted; prefer ``worker_executor=ExecutorSettings(workers=..., resources=WorkerResources(...))``.
+Set workers and resources under ``execution.evolution``. In Python, pass
+``worker_executor=ExecutorSettings(workers=..., resources=WorkerResources(...))``.
 ``evolution.executor`` still means ``local`` or ``sandbox`` episode isolation;
 it is NOT renamed to ``uni``/``mp``. Sandbox preflight runs on the execution
 node too. A custom episode executor must preserve its own isolation and
@@ -359,17 +354,18 @@ guess GPU needs. Slime training/rollout still require specialized Ray launchers.
 Whole-stack deployment configuration
 ------------------------------------
 
-Version 2 has no public process list: Reef assembles native inference/training
+A configuration file has no process list: Reef assembles native inference/training
 and HTTP processes using the same Executor factory as the model workers.
-Method services are deployed independently; recipes consume their endpoints. The explicit ``services`` and
-``execution.services`` examples below apply only to unversioned legacy stacks. The orchestrator only handles dependencies, readiness, endpoint
+Method services such as a PRM are deployed independently and recipes consume
+their endpoints; the one auxiliary child Reef assembles is the generator
+service of a ``generator`` section, under the ``generator`` executor role.
+The orchestrator only handles dependencies, readiness, endpoint
 publication, log tailing, failure detection and reverse-order shutdown. It
 does not contain local process or Ray placement operations.
 
 Omitted selectors (or YAML ``null``) use ``auto``. Existing YAML without
 resource reservations or a Ray placement-group context continues to launch
-services locally and Slime workers through Ray. No ``execution.services``
-setting is needed for those defaults. Local-controller training stacks declare
+services locally and Slime workers through Ray. Local-controller training stacks declare
 the training/rollout roles so ``reef serve`` can prepare their shared runtime
 before launching the driver (see below).
 
@@ -398,8 +394,7 @@ specialized Ray requirement and service resource reservations remain
 component-specific, rather than pretending to implement vLLM's TP/PP launcher.
 
 Each selector accepts a built-in name, import path, inline ``backend/options``
-object, or a named profile under ``executors``. ``services[].executor``
-overrides ``execution.services`` for that service. Explicit Slime command-line
+object, or a named profile under ``executors``. Explicit Slime command-line
 flags override the corresponding role selection; they also accept profile
 names. Profiles for training and rollout carry domain-launcher options, not
 necessarily Ray actor options. The reserved Slime launch arguments (``args``,
@@ -492,11 +487,8 @@ integration, not universal tensor-format or backend capability negotiation.
 A rebuilt deployment creates a new session. The previous trainer must be
 retired before attachment; the session is not a multi-writer election protocol.
 
-``reef.service.slime_driver`` retains the legacy argument-file and healthcheck
-syntax and delegates to the same assembly and lifecycle. ``start_bridge`` and
-the Slime-owned coordinator actor are removed. Managed full-weight, LoRA,
-colocated and external-engine modes all use the separate service contracts.
-Configurations continue to use ``inference.num-gpus``,
+Managed full-weight, LoRA, colocated and external-engine modes all use the
+separate service contracts. Configurations continue to use ``inference.num-gpus``,
 ``inference.tensor-parallel-size`` and ``inference.options``.
 
 Transport compatibility and GPU acceptance remain specific to the selected
@@ -508,10 +500,12 @@ Inference recovery and reconnect
 
 ``reef.runtime.recovery.InferenceControl`` owns pause intent and
 recovery/reconnect ordering through three backend contracts defined beside it
-in ``reef.runtime.recovery``: ``InferenceEngines`` for engine operations, ``WeightUpdateConnection`` for transport-lock inspection
+in ``reef.runtime.recovery``: ``InferenceEngineGroup`` for operations on the engine group, ``WeightUpdateConnection`` for transport-lock inspection
 and replacement, and ``InferenceMonitor`` for background recovery. The SGLang
 inference worker supplies these adapters; engine handles, GPU topology and Ray
-fan-out remain private to it. The existing training-side RPC vocabulary and
+fan-out remain private to it. Each engine actor implements
+``reef.runtime.interfaces.InferenceEngine``, the per-engine vocabulary the
+group, the backend and the weight updaters call by name. The existing training-side RPC vocabulary and
 six-field engine/lock attachment tuple are unchanged.
 
 Pause intent is recorded before the engine barrier, so a partial pause failure
@@ -530,8 +524,8 @@ external deployment with an uncertain lock requires operator restart, and the
 shared controller never terminates borrowed engines.
 
 ``reef.runtime.publication.WeightUpdateLock`` owns lock poisoning and transport
-phase-result bookkeeping without Slime or Ray imports. The legacy
-``ReefRolloutLock`` entrypoint wraps it as a serial Ray actor. Existing weight
+phase-result bookkeeping without Slime or Ray imports. Each inference worker
+runs it as a serial Ray actor with ``ray.remote(WeightUpdateLock)``. Existing weight
 updaters use the same lock methods and continue transferring directly between
 workers and engines. There is no tensor relay through the shared controller.
 
@@ -539,34 +533,6 @@ The native attachment tuple remains specific to the supported weight transport.
 The service contracts let Reef select and start backends independently; another
 pair still needs compatible tensor formats and sender/receiver implementations.
 A failed managed controller uses deployment reconstruction as described below.
-
-Standalone serving republication
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-``TrainingPublication.republish(runtime_load_id)`` restores unchanged weights to
-replaced inference engines through the same commit gate. The Reef coordinator's
-``republish_serving`` delegates to it. Reef reasserts the pause barrier,
-recovers engines and update connections, and requests a complete transfer under
-the original runtime load ID. A cached bridge pause never substitutes for the
-controller barrier. Known missing engine slots are skipped while pausing the
-surviving engines; recovery reapplies the pause to replacements.
-
-``READY_TO_COMMIT`` stays paused and awaits the scenario's acknowledgement.
-``HEAD_COMMITTED`` completes its durable acknowledgement before resumption;
-``COMPLETE`` and deployments without a training marker resume only after the
-transferred identity is verified. Resumption releases both generation and
-health monitoring. Failed recovery, transfer, identity verification or resume
-aborts serving; retry retains the original runtime load ID.
-
-``RUNNING``, ``CHECKPOINT``, ``UPDATING_WEIGHTS``, ``REJECTING`` and ``REJECTED``
-markers reject standalone republication before model operations. The trainer
-may contain a candidate rather than the incumbent, so those states must use
-their existing training-job recovery path. Republication never runs an optimizer
-step, increments training counters or creates a new publication version.
-Slime implements tensor sending; Reef schedules restoration of other scenarios'
-adapters through the receiver contract.
-This is in-process engine recovery. Controller-process failure uses the managed
-deployment recovery path below; GPU validation remains separate work.
 
 Training-coordinator restart attachment
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -738,6 +704,13 @@ storage-blocked result without starting a job. Reef applies shared
 scenario/staleness admission. Slime implements checkpoint capacity checks,
 teacher scoring, tensorization and DP packing in its preparation adapter.
 
+The training payload carries the Reef ``scenario_step`` the job trains; the
+backend picks the checkpoint index from its own sequence, which the
+``{rollout_id}`` checkpoint path template and the marker's ``rollout_id`` name.
+Every marker records both, and the coordinator's health reports the job's
+``scenario_step``. A marker of a job still out without ``scenario_step`` is
+invalid; a settled one an earlier release left behind is read as it is.
+
 Reef records ``RUNNING`` before calling ``train``, then invokes
 ``save_checkpoint`` and verifies the checkpoint directory. Training metrics and
 method telemetry are recorded together with ``CHECKPOINT`` in one durable write,
@@ -750,11 +723,23 @@ do not publish inference weights.
 
 Preparation failure is retryable without a new job identity. Once ``RUNNING``
 is recorded, a training/save failure is ambiguous and requires operator
-recovery; automatic retry must not repeat a possible optimizer step. A
+recovery; automatic retry must not repeat a possible optimizer step. For
+Slime, the startup preflight's error lists what the job left on disk, and
+`Troubleshooting <../user-guide/troubleshooting.rst#reports-and-training>`__
+gives the recovery. A
 checkpointed or completed job replays without preparing or training again.
 Resource cleanup failure after ``CHECKPOINT`` also replays the recorded result.
-Job hashing, scenario/global checkpoint indexes and persisted marker fields
-remain compatible with existing deployments.
+A job's identity is its batch and admission fence: the scenario step is not
+part of it, since the other components of a composite advance that step while
+the job is out, nor is the processor's batch number, which a reload starts
+again. Upgrade Reef while no job is out: ``GET /reef/status`` shows
+``training_job`` as ``null``. A marker an earlier release left for a job still
+out names it by that release's identity, so the job is refused with
+``operator recovery required``, and the error names the marker's job and this
+batch's job. Nothing trains. Finish the job with the earlier release, then
+start this one. Do not delete the marker to get past the refusal: from
+``CHECKPOINT`` on, the optimizer step is in the checkpoint, and a job trained
+again from the start would apply the batch twice.
 
 Commit-gated weight publication
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -878,18 +863,17 @@ names to ``None`` while running or an exit code; a missing service is not alive.
 Custom rollout executors expose one control rank. Its RPC vocabulary is
 ``inference_url``, ``get_runtime_load_ids``, ``get_updatable_engines_and_lock``,
 ``pause_generation_for_update``, ``continue_generation_after_update``,
-``offload``, ``onload(tags)``, ``onload_weights``, ``onload_kv``,
+``offload``, ``onload_weights``, ``onload_kv``,
 ``terminate_updatable_engines``, ``prepare_training_connection``,
-``recover_updatable_engines``,
-``clear_updatable_num_new_engines``, ``health_monitoring_pause``,
-``health_monitoring_resume`` and ``check_weights(action)``. Executor shutdown
+``recover_updatable_engines``, ``clear_updatable_num_new_engines`` and
+``check_weights(action)``. Executor shutdown
 owns serving resource teardown; the manager does not manipulate backend
 server groups or actor handles directly.
 
 Verification
 ~~~~~~~~~~~~
 
-CPU tests cover legacy configs, custom service/rollout executors, resource
+CPU tests cover custom service/rollout executors, resource
 selection, dependency ordering, endpoint propagation, rollback, process-tree
 cleanup, bounded probes and owner-lease loss. To run the real Ray/HTTP tests:
 

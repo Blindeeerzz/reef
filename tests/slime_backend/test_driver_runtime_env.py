@@ -26,7 +26,7 @@ def test_empty_or_missing_pythonpath_means_no_runtime_env():
 
 
 @pytest.mark.parametrize("managed", [False, True])
-def test_native_training_options_reach_slime_before_legacy_direct_flags(tmp_path, monkeypatch, managed):
+def test_native_training_options_reach_slime(tmp_path, monkeypatch, managed):
     import pytest
 
     from reef.train.slime_backend import driver as slime_driver
@@ -46,21 +46,20 @@ def test_native_training_options_reach_slime_before_legacy_direct_flags(tmp_path
 
     monkeypatch.setenv("RAY_ADDRESS", "auto")
     monkeypatch.setenv("REEF_CONFIG", "unused.yaml")
-    monkeypatch.delenv("SLIME_ARGS_FILE", raising=False)
     reef = {"training_backend_options": {"lr": 1e-6, "use-critic": True}}
     if managed:
         reef.update(inference_num_gpus=4, tensor_parallel_size=2, inference_options={"context-length": 8192})
     monkeypatch.setattr(slime_driver, "resolve_loss_family", lambda name: Algorithm())
     monkeypatch.setattr(slime_driver, "_parse_slime_args", parse)
     with pytest.raises(StopBeforeRuntime):
-        slime_driver.create_training_plan({"reef": reef}, [] if managed else ["--lr=2e-6"], loss_family="loss")
+        slime_driver.create_training_plan({"reef": reef}, loss_family="loss")
     assert captured == [
         "--lr=1e-06",
         "--use-critic",
         *(
             ["--rollout-num-gpus=4", "--rollout-num-gpus-per-engine=2", "--sglang-context-length=8192"]
             if managed
-            else ["--lr=2e-6"]
+            else []
         ),
     ]
 
@@ -68,7 +67,10 @@ def test_native_training_options_reach_slime_before_legacy_direct_flags(tmp_path
 @pytest.mark.parametrize(
     "mode", ["managed", "colocate", "lora", "lora-colocate", "lora-colocate-keep-base", "external"]
 )
-def test_plan_preflight_selects_components_without_allocating(monkeypatch, mode):
+@pytest.mark.parametrize(
+    "timeout_config", [{}, {"train_timeout_s": None}, {"train_timeout_s": 43200}, {"train_timeout_s": 0.5}]
+)
+def test_plan_preflight_selects_components_without_allocating(monkeypatch, mode, timeout_config):
     from types import SimpleNamespace
 
     from reef.service.training_driver import assemble_model_plan
@@ -77,6 +79,11 @@ def test_plan_preflight_selects_components_without_allocating(monkeypatch, mode)
 
     args = SimpleNamespace(
         hf_checkpoint="model",
+        seed=1,
+        offload_rollout=False,
+        fp16=False,
+        use_rollout_routing_replay=False,
+        megatron_lora_rank=0,
         rollout_num_gpus=4,
         rollout_num_gpus_per_engine=2,
         num_gpus_per_node=4,
@@ -85,6 +92,7 @@ def test_plan_preflight_selects_components_without_allocating(monkeypatch, mode)
         colocate="colocate" in mode,
         rollout_external=mode == "external",
         keep_lora_base_resident=mode == "lora-colocate-keep-base",
+        disjoint_prefix_sharing=False,
     )
 
     class Algorithm:
@@ -99,7 +107,6 @@ def test_plan_preflight_selects_components_without_allocating(monkeypatch, mode)
 
     monkeypatch.setenv("RAY_ADDRESS", "external")
     monkeypatch.setenv("PYTHONPATH", "/repo")
-    monkeypatch.delenv("SLIME_ARGS_FILE", raising=False)
     monkeypatch.setattr(driver, "resolve_loss_family", lambda name: Algorithm())
     monkeypatch.setattr(driver, "_parse_slime_args", lambda arguments: args)
     for name in (
@@ -116,7 +123,10 @@ def test_plan_preflight_selects_components_without_allocating(monkeypatch, mode)
         pytest.fail("plan construction must not connect or allocate resources")
 
     monkeypatch.setattr(ray, "init", unexpected)
-    training = driver.create_training_plan({}, loss_family="loss")
+    training = driver.create_training_plan({"reef": timeout_config}, loss_family="loss")
+    configured_timeout = timeout_config.get("train_timeout_s")
+    expected_timeout = 14400 if configured_timeout is None else configured_timeout
+    assert training.training.train_rpc_timeout_s == expected_timeout
     assert not hasattr(training, "inference")
     plan = assemble_model_plan({}, training)
     plan.validate()

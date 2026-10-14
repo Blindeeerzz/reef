@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 from reef.core.evaluation import CandidateEvaluator, EvaluationResult, SelectionDecision, UpdateCandidate
@@ -76,6 +77,12 @@ class PreparedStep:
         return cls("drop", state, metrics or {})
 
 
+#: What a backend's result becomes when another component's commit replaced the release it was prepared
+#: against: merged onto the release served now, evaluated again against it, or refused and prepared again.
+StaleResultPolicy = Literal["merge", "reevaluate", "refuse"]
+STALE_RESULT_POLICIES: tuple[StaleResultPolicy, ...] = ("merge", "reevaluate", "refuse")
+
+
 @dataclass(frozen=True)
 class StepExecution:
     """One backend attempt returned to the dispatcher."""
@@ -84,6 +91,8 @@ class StepExecution:
     result: TrainStepResult | None = None
     storage: Mapping[str, Any] | None = None
     metrics: Mapping[str, Any] = field(default_factory=dict)
+    #: The prepared step a committed result came from, kept so a stale result can be evaluated again.
+    prepared: PreparedStep | None = None
 
     def __post_init__(self) -> None:
         if self.outcome == "commit" and self.result is None:
@@ -101,8 +110,8 @@ class CandidateBackend(CandidateEvaluator, ABC):
 
     The backend owns method-specific candidate construction and settlement,
     and supplies the default evaluator. A recipe may inject a cohesive
-    :class:`reef.train.evaluation.CandidateEvaluationPlugin`; otherwise the trainer
-    wraps this evaluator in :class:`reef.train.evaluation.BackendAlwaysSelectPlugin`.
+    :class:`reef.evaluation.CandidateEvaluationPlugin`; otherwise the trainer
+    wraps this evaluator in :class:`reef.evaluation.BackendAlwaysSelectPlugin`.
     Every backend therefore follows the same evaluate-then-decide lifecycle
     between preparation and settlement.
     """
@@ -129,6 +138,33 @@ class CandidateBackend(CandidateEvaluator, ABC):
         """Whether the dispatcher must run this backend outside scenario locks."""
         return False
 
+    @property
+    def colocated(self) -> bool:
+        """Whether a dispatched job holds the served engine, so no other component can evaluate meanwhile."""
+        return False
+
+    @property
+    def harness_node_paths(self) -> Mapping[str, str] | None:
+        """Root-relative render paths of the harness node kinds; ``None`` for a backend that evolves no harness."""
+        return None
+
+    @property
+    def harness_adapter(self) -> str | None:
+        """The name of the harness adapter the backend evolves; ``None`` for a backend that evolves no harness."""
+        return None
+
+    @property
+    def stale_result_policy(self) -> StaleResultPolicy:
+        """What a result prepared against a release another trainer has since replaced becomes.
+
+        One of :data:`STALE_RESULT_POLICIES`. The default refuses it: the
+        batch is kept and prepared again. A backend whose evaluation compares
+        candidate and current under the same conditions may answer ``merge``
+        or ``reevaluate`` instead. A dispatched backend is merged whatever it
+        answers, since its result is published before it reaches the commit.
+        """
+        return "refuse"
+
     def recover_pending_step(
         self,
         scenario_step: int,
@@ -152,8 +188,24 @@ class CandidateBackend(CandidateEvaluator, ABC):
         """
         return
 
+    def shipped_content_update(self, state: Mapping[str, Any], published_tree: Path) -> TrainStepResult | None:
+        """A result that republishes the content this Reef ships, when the served tree no longer carries it.
+
+        Content a backend ships with Reef itself (the harness backend's reef-owned
+        entries) is fixed when a scenario is created and carried unchanged by every
+        later step, so a scenario opened by an upgraded Reef compares it against
+        ``published_tree``, the served release's files. The result carries the
+        refreshed ``state`` and a durable ``artifact``; it is committed without an
+        evaluation. The default ships nothing.
+        """
+        return None
+
     def experiment_config(self) -> Mapping[str, Any]:
         """Non-secret backend identity/config attached to experiment runs."""
+        return {}
+
+    def operational_metrics(self) -> Mapping[str, float | int]:
+        """Nonblocking process-local measurements, independent of successful commits."""
         return {}
 
     def failed_step_metrics(self) -> Mapping[str, Any]:
@@ -169,7 +221,22 @@ class CandidateBackend(CandidateEvaluator, ABC):
     ) -> PreparedStep: ...
 
     @abstractmethod
-    def evaluate(self, candidate: UpdateCandidate) -> EvaluationResult: ...
+    def evaluate(self, candidate: UpdateCandidate) -> EvaluationResult:
+        """Measure ``candidate``; the trainer's default plugin calls this with the candidate alone.
+
+        A backend may accept further keyword-only options with defaults (the
+        harness backend's ``sides``) for the plugins it ships; this contract
+        stays the one every plugin can rely on.
+        """
+
+    def prepare_reevaluation(self, prepared: PreparedStep) -> PreparedStep:
+        """The kept step, ready to be evaluated again after its result was refused as stale.
+
+        The default hands it back unchanged. A backend that keeps a record
+        per attempt claims a fresh one here, so the second evaluation lands
+        beside the first instead of failing on it.
+        """
+        return prepared
 
     @abstractmethod
     def settle_step(
@@ -183,4 +250,4 @@ class CandidateBackend(CandidateEvaluator, ABC):
         """Restore backend-local state after evaluation or settlement fails."""
 
 
-__all__ = ["CandidateBackend", "PreparedStep", "StepExecution"]
+__all__ = ["STALE_RESULT_POLICIES", "CandidateBackend", "PreparedStep", "StaleResultPolicy", "StepExecution"]

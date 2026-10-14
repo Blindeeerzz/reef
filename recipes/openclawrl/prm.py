@@ -9,7 +9,7 @@ a timeout, and failures degrade instead of blocking — a failed judge call is
 a failed vote feeding the same tie rules, a failed prefill returns ``None``
 and the turn trains RL-only.
 
-:mod:`recipes.openclawrl.processor` owns when these are called; this
+:mod:`recipes.openclawrl.judging` owns when these are called; this
 module owns what one call does.
 """
 
@@ -21,12 +21,13 @@ import copy
 import functools
 import json
 import logging
-import os
 import re
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+
+from reef.record2task.samples import flatten_content
 
 logger = logging.getLogger(__name__)
 
@@ -173,16 +174,6 @@ def collect_hint_candidates(votes: list[dict[str, Any]], max_cand: int = 3) -> l
     return hints[:max_cand]
 
 
-def flatten_content(content: Any) -> str:
-    """The plain text of an OpenAI-style message content field."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = [item.get("text", "") for item in content if isinstance(item, dict) and item.get("type") == "text"]
-        return " ".join(parts) if parts else ""
-    return str(content) if content is not None else ""
-
-
 def append_hint_to_messages(messages: list[dict], hint: str) -> list[dict]:
     """Upstream's hint injection: suffix the last user message."""
     cloned = copy.deepcopy(messages)
@@ -283,7 +274,7 @@ async def _post_json(
             if response.status >= 400:
                 return None
             return await response.json()
-    except (asyncio.TimeoutError, ClientError, OSError, ValueError):
+    except (TimeoutError, ClientError, OSError, ValueError):
         return None
 
 
@@ -292,17 +283,17 @@ class PRMJudge:
     """Run m independent PRM judgments per turn.
 
     Two dialects reach the same judgment. ``sglang`` posts upstream's verbatim
-        payload to the PRM server's native ``/generate``, applying the chat
-        template locally first. ``openai`` posts chat messages to any
-        OpenAI-compatible ``/chat/completions`` — a hosted provider, or another
-        Reef — and lets the provider own its own template, which is what makes a
-        judge runnable without serving a second model.
+    payload to the PRM server's native ``/generate``, applying the chat
+    template locally first. ``openai`` posts chat messages to any
+    OpenAI-compatible ``/chat/completions`` — a hosted provider, or another
+    Reef — and lets the provider own its own template, which is what makes a
+    judge runnable without serving a second model.
 
-        Everything downstream of the generated text is dialect-independent: the
-        prompts, the parser, the vote rule and the hint candidates are upstream's
-        either way. A failed or timed-out generation is a failed vote flowing into
-        the same tie rules, so a flaky judge degrades to neutral instead of
-        blocking.
+    Everything downstream of the generated text is dialect-independent: the
+    prompts, the parser, the vote rule and the hint candidates are upstream's
+    either way. A failed or timed-out generation is a failed vote flowing into
+    the same tie rules, so a flaky judge degrades to neutral instead of
+    blocking.
     """
 
     generate_url: str
@@ -316,7 +307,7 @@ class PRMJudge:
     #: The provider's model name. Required by, and only used by, ``openai``.
     model: str = ""
     #: Bearer credential for ``openai``. Resolved from the environment by
-    #: :func:`build_clients`; never read from a config file.
+    #: :func:`~recipes.openclawrl.judging.prm_clients`; never read from a config file.
     api_key: str = ""
 
     def __post_init__(self) -> None:
@@ -488,45 +479,3 @@ class DirectiveTeacher:
             logger.exception("teacher templating failed; the candidate drops")
             return None
         return [int(v) for v in prompt_ids] + [int(v) for v in native_tokens[-response_token_count:]]
-
-
-def build_clients(config: Mapping[str, Any]) -> tuple[Any, Any, Any]:
-    """The judge's PRM clients as the recipe config describes them; the
-    all-``None`` triple (no ``prm_url``) is correlate-only mode.
-
-    Defaults mirror ``OpenClawRLRecipe``'s config fields; the recipe always sends
-    every value; the fallbacks serve direct construction in tests.
-    """
-    url = str(config.get("prm_url", "") or "").strip()
-    if not url:
-        return None, None, None
-    tokenizer_path = str(config.get("prm_tokenizer_path", "") or "").strip()
-    if not tokenizer_path:
-        # The teacher and the turn renderer need the policy's tokenizer
-        # whichever dialect the judge speaks.
-        raise ValueError("OpenClaw-RL judging requires prm_tokenizer_path next to prm_url")
-    api = str(config.get("prm_api", "sglang") or "sglang").strip()
-    # An OpenAI-compatible base URL already names its own endpoint; only
-    # sglang's native transport appends a path.
-    generate_url = url.rstrip("/") if api == "openai" else url.rstrip("/") + "/generate"
-    api_key = ""
-    if api == "openai":
-        key_variable = str(config.get("prm_api_key_env", "") or "").strip()
-        if key_variable:
-            # The credential is named, never written: a config file records
-            # which variable holds it, not the secret itself.
-            api_key = os.environ.get(key_variable, "")
-            if not api_key:
-                raise ValueError(f"prm_api_key_env names {key_variable!r}, which is unset")
-    prm = PRMJudge(
-        generate_url=generate_url,
-        tokenizer_path=tokenizer_path,
-        m=int(config.get("prm_m", 3)),
-        temperature=float(config.get("prm_temperature", 0.6)),
-        max_tokens=int(config.get("prm_max_tokens", 8192)),
-        timeout_s=float(config.get("prm_timeout_s", 120.0)),
-        api=api,
-        model=str(config.get("prm_model", "") or "").strip(),
-        api_key=api_key,
-    )
-    return prm, DirectiveTeacher(tokenizer_path=tokenizer_path), ResponseRenderer(tokenizer_path)

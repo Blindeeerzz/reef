@@ -21,6 +21,8 @@ class TrainingExperimentContext:
     run_step: int = 0
     backend: str | None = None
     backend_config: Mapping[str, Any] | None = None
+    #: The release component whose trainer made the step, when the scenario runs several trainers.
+    component: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +75,11 @@ class ExperimentTracker:
     isolates provider failures so an observer can never become part of the
     durable update transaction.
     """
+
+    @property
+    def operational_metrics_enabled(self) -> bool:
+        """Whether the dispatcher should periodically sample operational metrics."""
+        return False
 
     def bind_scenario(
         self,

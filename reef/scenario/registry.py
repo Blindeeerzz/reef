@@ -9,6 +9,7 @@ resolution and uses the registry for lookups.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
 from threading import Lock, RLock
@@ -27,6 +28,20 @@ from reef.scenario.factory import ScenarioFactory
 from reef.scenario.scenario import Scenario
 from reef.storage.model_config import archive_model_config, read_model_config, write_model_config
 from reef.storage.scenario import ScenarioStorage
+
+
+class ReplacedScenarioCloser(ABC):
+    """Closes the instance a reload replaced, now or once nothing runs on it any more."""
+
+    @abstractmethod
+    def close_replaced(self, instance: Scenario) -> None: ...
+
+
+class CloseReplacedAtOnce(ReplacedScenarioCloser):
+    """The registry's own closer: the replaced instance closes as the reload returns."""
+
+    def close_replaced(self, instance: Scenario) -> None:
+        instance.close()
 
 
 class ScenarioRegistry:
@@ -65,11 +80,12 @@ class ScenarioRegistry:
         self._scenarios: dict[str, Scenario] = {}
         self._scenario_locks: dict[str, RLock] = {}
         self._lock = Lock()
-        self._training_scenario: str | None = None
+        #: Every training scenario in binding order; the first is the one a single-scenario runtime binds.
         self._training_scenarios: list[str] = []
         # The mode a person selected per scenario; a reload in this process applies it again, a restart does not.
         self._training_modes: dict[str, str] = {}
         self._preload_errors: dict[str, str] = {}
+        self.replaced_closer: ReplacedScenarioCloser = CloseReplacedAtOnce()
         self._allow_implicit_creation = allow_implicit_creation
         self._on_training_scenario_resolved: Callable[[Scenario], None] | None = None
 
@@ -77,7 +93,7 @@ class ScenarioRegistry:
     def training_scenario_name(self) -> str | None:
         """The first-bound training scenario (the only one on a single-scenario runtime)."""
         with self._lock:
-            return self._training_scenario
+            return self._training_scenarios[0] if self._training_scenarios else None
 
     @property
     def training_scenario_names(self) -> tuple[str, ...]:
@@ -94,7 +110,8 @@ class ScenarioRegistry:
         local = tuple(
             scenario.name
             for scenario in scenarios
-            if scenario.name not in dispatched and scenario.trainer.candidate_backend is not None
+            if scenario.name not in dispatched
+            and any(bound.trainer.candidate_backend is not None for bound in scenario.trainers)
         )
         return (*dispatched, *local)
 
@@ -110,16 +127,15 @@ class ScenarioRegistry:
     def set_training_scenario_callback(self, callback: Callable[[Scenario], None]) -> None:
         self._on_training_scenario_resolved = callback
 
+    def set_replaced_closer(self, closer: ReplacedScenarioCloser) -> None:
+        """Who closes the instance a reload replaced: a local cycle may still evaluate on it."""
+        self.replaced_closer = closer
+
     def has(self, scenario: str) -> bool:
         """True when the scenario exists in memory or in durable registration."""
         with self._lock:
             loaded = scenario in self._scenarios
         return loaded or self._scenario_factory.has_registration(scenario)
-
-    def has_loaded(self, scenario: str) -> bool:
-        """True when the scenario is in the in-memory table (not just durable)."""
-        with self._lock:
-            return scenario in self._scenarios
 
     def get(self, scenario: str) -> Scenario:
         """Get a loaded scenario by name (must exist in memory)."""
@@ -153,6 +169,19 @@ class ScenarioRegistry:
                 return None
             return self._resolve(scenario, release_id)
 
+    def get_loaded(self, scenario: str, release_id: str | None = None) -> Scenario | None:
+        """The loaded instance, or None: nothing is created or recovered, and the scenario's lock is not taken.
+
+        An evaluation episode's call resolves this way. A delete or a
+        reload holds the scenario's lock while it closes the instance, which
+        waits for the episode in flight, and an episode of a deleted
+        scenario must not bring the scenario back.
+        """
+        current = self.get_optional(scenario)
+        if current is not None:
+            self._scenario_factory.validate_existing(current, release_id)
+        return current
+
     def require(self, scenario: str) -> Scenario:
         """Resolve an existing scenario; raise UnknownScenario if not found."""
         if not self.has(scenario):
@@ -160,12 +189,17 @@ class ScenarioRegistry:
         return self._resolve(scenario, None)
 
     def list(self) -> tuple[dict[str, Any], ...]:
-        """Known scenarios: loaded ones with their binding, durable ones by name."""
+        """Known scenarios: loaded ones with their binding, durable ones by name, each with the harness adapter.
+
+        The adapter is the recipe's, so a scenario still loading or one whose
+        preload failed names it too; a recipe with no harness names none.
+        """
         registered: tuple[str, ...] = ()
         if isinstance(self._backend_factory, EnumerableRepositoryBackendFactory):
             registered = self._backend_factory.list_registrations()
         with self._lock:
             loaded = dict(self._scenarios)
+        adapter = self._recipe.harness_adapter
         rows = []
         for name in sorted(set(registered) | set(loaded)):
             current = loaded.get(name)
@@ -174,6 +208,8 @@ class ScenarioRegistry:
                 ref = current.repository.require_current_artifact()
                 row["release_id"] = ref.release_id
                 row["content_id"] = ref.content_id
+            if adapter is not None:
+                row["adapter"] = adapter
             rows.append(row)
         return tuple(rows)
 
@@ -211,14 +247,18 @@ class ScenarioRegistry:
             return self._resolve(scenario, release_id)
 
     def reload(self, scenario: str) -> Scenario:
-        """Rebuild a scenario from durable state after a training failure."""
+        """Rebuild a scenario from durable state after a training failure.
+
+        Accepts and inference reach the new instance at once; the replaced
+        instance goes to the registry's closer (see ``set_replaced_closer``).
+        """
         with self.lock_for(scenario):
             recovered = self._scenario_factory.load_or_create(
                 scenario, None, model_config=self._model_config(scenario)
             )
             with self._lock:
                 training_mode = self._training_modes.get(scenario)
-            if training_mode is not None and recovered.trainer.training_mode != training_mode:
+            if training_mode is not None and recovered.training_mode != training_mode:
                 try:
                     recovered.set_training_mode(training_mode)
                 except Exception:
@@ -229,9 +269,9 @@ class ScenarioRegistry:
                 self._scenarios[scenario] = recovered
             if dropped is not None:
                 # Close outside the state lock: teardown may join processor
-                # worker threads. The per-scenario lock still excludes accepts,
-                # so nothing observes the dropped instance mid-close.
-                dropped.close()
+                # worker threads. Accepts reach the recovered instance, so
+                # nothing observes the dropped instance mid-close.
+                self.replaced_closer.close_replaced(dropped)
             return recovered
 
     def remove(self, scenario: str) -> Scenario | None:
@@ -245,8 +285,6 @@ class ScenarioRegistry:
         with self._lock:
             dropped = self._scenarios.pop(scenario, None)
             self._training_scenarios = [name for name in self._training_scenarios if name != scenario]
-            if self._training_scenario == scenario:
-                self._training_scenario = self._training_scenarios[0] if self._training_scenarios else None
             self._model_configs.pop(scenario, None)
             self._training_modes.pop(scenario, None)
             self._preload_errors.pop(scenario, None)
@@ -294,18 +332,16 @@ class ScenarioRegistry:
         training_runtime = current.training_runtime
         with self._lock:
             shared_runtime = training_runtime is not None and training_runtime.concurrent_training_scenarios
-            if training_runtime is not None and not shared_runtime and self._training_scenario not in (None, scenario):
+            bound_scenario = self._training_scenarios[0] if self._training_scenarios else None
+            if training_runtime is not None and not shared_runtime and bound_scenario not in (None, scenario):
                 current.close()
                 raise ReefError(
-                    f"training is already bound to scenario {self._training_scenario!r}: a reef process "
+                    f"training is already bound to scenario {bound_scenario!r}: a reef process "
                     f"trains one scenario for its lifetime, so {scenario!r} needs its own stack "
                     f"(restart this one, or run a second stack on other ports)"
                 )
-            if training_runtime is not None:
-                if self._training_scenario is None:
-                    self._training_scenario = scenario
-                if scenario not in self._training_scenarios:
-                    self._training_scenarios.append(scenario)
+            if training_runtime is not None and scenario not in self._training_scenarios:
+                self._training_scenarios.append(scenario)
             self._scenarios[scenario] = current
         if training_runtime is not None and self._on_training_scenario_resolved is not None:
             self._on_training_scenario_resolved(current)

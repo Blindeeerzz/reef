@@ -13,7 +13,7 @@ from reef.inference.sglang.executor import SGLangExecutor
 
 @pytest.mark.parametrize("executor", [None, "auto", "ray"])
 def test_native_inference_factory_accepts_plain_input_without_starting_workers(monkeypatch, executor):
-    from reef.inference.sglang.service import RayExecutor
+    from reef.runtime.executor.ray import RayExecutor
 
     def fail_allocation(*args, **kwargs):
         raise AssertionError("factory must not allocate workers")
@@ -103,7 +103,7 @@ from types import SimpleNamespace
 sys.modules.update(dict.fromkeys(('reef.inference.sglang', 'sglang', 'torch', 'megatron')))
 from reef.train.slime_backend.inference import inference_config
 from reef.train.slime_backend.reef_adapters.preflight import validate_bridge_args
-values = inference_config(SimpleNamespace(hf_checkpoint='model', rollout_num_gpus=1, rollout_num_gpus_per_engine=1, num_gpus_per_node=1))
+values = inference_config(SimpleNamespace(hf_checkpoint='model', rollout_num_gpus=1, rollout_num_gpus_per_engine=1, num_gpus_per_node=1, seed=1, offload_rollout=False, fp16=False, use_rollout_routing_replay=False, megatron_lora_rank=0, disjoint_prefix_sharing=False))
 assert values['model_path'] == 'model'
 assert values['executor'] == 'auto'
 json.dumps(values)

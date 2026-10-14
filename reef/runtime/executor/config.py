@@ -82,7 +82,7 @@ def select_executor(
     Training/rollout are Slime roles, whose built-in distributed backend is
     currently Ray. A single GPU does not make UniProcExecutor a Slime launcher.
     """
-    if role not in ("services", "training", "rollout", "evolution"):
+    if role not in ("services", "training", "rollout", "evolution", "generator"):
         raise ValueError(f"unknown executor role: {role!r}")
     if role == "evolution":
         return select_worker_executor(settings, requirements or ExecutionRequirements())
@@ -90,8 +90,9 @@ def select_executor(
         raise ValueError(
             f"execution.{role}.workers/resources are not supported by Slime; use its model topology configuration"
         )
-    if role == "services" and settings.workers not in (None, 1):
-        raise ValueError("execution.services.workers must be 1; service replication is not supported")
+    # The generator is one service controller like the rest; its role only lets a deployment place it apart.
+    if role in ("services", "generator") and settings.workers not in (None, 1):
+        raise ValueError(f"execution.{role}.workers must be 1; service replication is not supported")
     requires_resources = requires_resources or settings.resources != WorkerResources()
     if settings.backend != "auto":
         return ExecutorSelection(settings, "explicit backend/profile selection")
@@ -221,7 +222,7 @@ def role_executor_settings(config: Mapping[str, Any], role: str, default: str = 
     execution = config.get("execution", {})
     if not isinstance(execution, Mapping):
         raise ValueError("execution must be an object")
-    unknown = set(execution) - {"services", "training", "rollout", "evolution"}
+    unknown = set(execution) - {"services", "training", "rollout", "evolution", "generator"}
     if unknown:
         raise ValueError(f"unknown execution roles: {sorted(unknown)}")
     return executor_settings(config, execution.get(role, default))

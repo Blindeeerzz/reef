@@ -6,7 +6,7 @@
 - ``reporter`` — finalized CORAL attempts posted to ``/reef/report``.
 - ``watcher`` — CORAL's on-disk attempt records, reported exactly once each.
 - ``processor``/``recipe`` — sibling groups as grouped relative-reward
-  training units, reusing the tttd preparer and loss family.
+  training units, reusing the tttd objective and loss family.
 - ``bundle`` — the run's result bundle, derived from journal + reports.
 - ``gateway_launcher`` — splices the middleware under CORAL's gateway (a
   ``GatewayManager`` the caller owns, or the one ``AgentManager`` builds).

@@ -8,8 +8,9 @@ from dataclasses import replace
 from typing import Any
 
 from reef.core.evaluation import SelectionDecision
+from reef.evaluation.harness import HarnessCandidate
 from reef.train.backend import PreparedStep
-from reef.train.cordis_backend import CordisBackend, HarnessCandidate
+from reef.train.cordis_backend import CordisBackend
 from reef.train.types import TrainingBatch, TrainStepResult
 
 from .population import Population, PopulationStore, content_id
@@ -123,7 +124,6 @@ class MetaHarnessBackend(CordisBackend):
     def commit_applied(self, state: Mapping[str, Any]) -> None:
         """Install committed population state, then refresh its derived mirror."""
         super().commit_applied(state)
-        self._loader.root.update([dict(entry) for entry in state.get("entries", ())])
         population_state = state.get(POPULATION_STATE_KEY)
         if not isinstance(population_state, Mapping):
             raise ValueError(f"{POPULATION_STATE_KEY} committed state must be a mapping")

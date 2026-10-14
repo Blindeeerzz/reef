@@ -156,14 +156,14 @@ def test_model_defaults_preserve_the_last_explicit_alias(captured_stack, field):
 @pytest.mark.usefixtures("provider_environment")
 def test_provider_temp_config_is_removed_if_stack_preparation_fails(tmp_path, monkeypatch):
     written = []
-    original_write = orchestrator._write_override_config
+    original_write = orchestrator._write_resolved_config
 
     def write(config):
         path = original_write(config)
         written.append(path)
         return path
 
-    monkeypatch.setattr(orchestrator, "_write_override_config", write)
+    monkeypatch.setattr(orchestrator, "_write_resolved_config", write)
     (tmp_path / ".reef").write_text("not a directory")
     with pytest.raises(OSError):
         orchestrator._run_orchestrator(None, {"upstream-url": "http://localhost:8000", "upstream-model": "demo"})
@@ -335,14 +335,13 @@ def test_provider_cli_serves_and_records_feedback_without_yaml_or_gpu_imports(tm
 
 @pytest.mark.usefixtures("provider_environment")
 @pytest.mark.parametrize("model_flag", ["--inference.upstream-model", "--upstream_model"])
-def test_profile_accepts_explicit_provider_fields_without_model_shorthand(monkeypatch, captured_stack, model_flag):
-    monkeypatch.setattr(orchestrator, "PROJECT_ROOT", Path(__file__).resolve().parents[2])
+def test_profile_accepts_explicit_provider_fields_without_model_shorthand(captured_stack, model_flag):
     with pytest.raises(SystemExit) as result:
         main(
             [
                 "serve",
                 "--recipe",
-                "harness-evolve",
+                "reefine",
                 "--inference.upstream-url",
                 "http://127.0.0.1:11434",
                 model_flag,
@@ -353,6 +352,6 @@ def test_profile_accepts_explicit_provider_fields_without_model_shorthand(monkey
     config = captured_stack["config"]["reef"]
     assert config["upstream_url"] == "http://127.0.0.1:11434"
     assert config["upstream_model"] == "gemma4:26b"
-    assert config["recipe"] == "reef.recipe.cordis:CordisRecipe"
-    assert config["data"]["training_mode"] == "hybrid"
+    assert config["recipe"] == "reef.recipe.reefine:ReefineRecipe"
+    assert config["data"]["training_mode"] == "manual"
     assert captured_stack["started"] and captured_stack["stopped"]

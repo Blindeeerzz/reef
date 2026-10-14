@@ -210,10 +210,12 @@ def _load_reef_train_actor_adapter(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "slime.backends.megatron_utils.actor", actor_module)
     memory_utils = types.ModuleType("slime.utils.memory_utils")
     memory_utils.print_memory = lambda *_args: None  # type: ignore[attr-defined]
+    memory_utils.clear_memory = lambda *_args, **_kwargs: None  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "slime.utils.memory_utils", memory_utils)
     reloadable = types.ModuleType("slime.utils.reloadable_process_group")
     reloadable.destroy_process_groups = lambda: None  # type: ignore[attr-defined]
     reloadable.reload_process_groups = lambda: None  # type: ignore[attr-defined]
+    reloadable.monkey_patch_torch_dist = lambda: None  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "slime.utils.reloadable_process_group", reloadable)
     timer = types.ModuleType("slime.utils.timer")
     timer.timer = _stub_timer_decorator  # type: ignore[attr-defined]
@@ -242,6 +244,7 @@ def _load_reef_train_actor_adapter(monkeypatch: pytest.MonkeyPatch):
     hooks.record_worker_metrics = lambda _metrics: None  # type: ignore[attr-defined]
     hooks.reef_node_ip_and_free_port = lambda: ("127.0.0.1", 1234)  # type: ignore[attr-defined]
     hooks._loss_family_spec = lambda _args: None  # type: ignore[attr-defined]
+    hooks.switch_loss_family = lambda _args: None  # type: ignore[attr-defined]
     hooks.resolve_tensor_dtype = lambda name: name  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "reef.train.slime_backend.reef_adapters.worker_hooks", hooks)
 
@@ -324,10 +327,38 @@ def test_full_weight_save_delegates_without_reopening_slimes_timer(
     actor = object.__new__(module.ReefMegatronTrainRayActor)
     actor.args = object()
 
-    actor.save_model(7, force_sync=True)
+    actor.save_model(7, force_sync=True, scenario_step=7)
 
     assert saved == [(7, True)]
     assert _StubTimer.started == ["save_model"]
+
+
+@pytest.mark.unit
+def test_resident_train_step_returns_cached_blocks_to_the_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Slime empties the caching allocator only when it offloads a model after
+    # its step. A resident model shares its GPUs with the colocated other one,
+    # so the adapter releases what the step reserved before returning; the
+    # offload path already does, so it is left to Slime.
+    module = _load_reef_train_actor_adapter(monkeypatch)
+    events: list[str] = []
+    base = module.ReefMegatronTrainRayActor.__mro__[1]
+
+    def base_train(self, rollout_id, rollout_data_ref, external_data=None):
+        events.append(f"train:{rollout_id}")
+        return "values"
+
+    monkeypatch.setattr(base, "train", base_train, raising=False)
+    monkeypatch.setattr(module, "clear_memory", lambda: events.append("clear_memory"))
+    actor = object.__new__(module.ReefMegatronTrainRayActor)
+
+    actor.args = types.SimpleNamespace(offload_train=False)
+    assert actor.train(3, "ref") == "values"
+    assert events == ["train:3", "clear_memory"]
+
+    events.clear()
+    actor.args = types.SimpleNamespace(offload_train=True)
+    assert actor.train(4, "ref") == "values"
+    assert events == ["train:4"]
 
 
 @pytest.mark.unit
@@ -349,11 +380,11 @@ def test_lora_save_times_the_branch_that_does_not_delegate(monkeypatch: pytest.M
     monkeypatch.setattr(
         actor,
         "_save_lora_model",
-        lambda rollout_id, force_sync=False: saved.append((rollout_id, force_sync)),
+        lambda rollout_id, force_sync=False, *, scenario_step: saved.append((rollout_id, force_sync)),
         raising=False,
     )
 
-    actor.save_model(3)
+    actor.save_model(3, scenario_step=3)
 
     assert saved == [(3, False)]
     assert _StubTimer.started == ["save_model"]
@@ -656,3 +687,51 @@ def test_lora_sender_does_not_recover_receiver_with_native_fault_tolerance_enabl
         get_updatable_engines_and_lock=types.SimpleNamespace(remote=lambda: ([], None, 0, [], [], [])),
     )
     actor._with_lora_engines(lambda: pytest.fail("no receiver is available"))
+
+
+@pytest.mark.unit
+def test_an_actor_switches_to_a_jobs_family_and_initializes_it_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_reef_train_actor_adapter(monkeypatch)
+    initialized: list[str] = []
+    misc = importlib.import_module("slime.utils.misc")
+    monkeypatch.setattr(misc, "load_function", lambda path: lambda actor: initialized.append(path))
+    actor = object.__new__(module.ReefMegatronTrainRayActor)
+    actor.args = types.SimpleNamespace(loss_family="sft", loss_type="sft_loss", reef_actor_init_hook_path=None)
+    actor.initialized_loss_families = {"sft"}
+    schedule_state = {"schedule": {"name": "rl"}, "completed_steps": 4}
+    worker_switch = {
+        "loss_family_args": {"loss_family": "pg", "loss_type": "policy_loss", "reef_actor_init_hook_path": "pg.init"},
+        "learning_rate_schedule_state": schedule_state,
+    }
+
+    actor.switch_training_method(worker_switch)
+    actor.switch_training_method(worker_switch)
+
+    assert (actor.args.loss_family, actor.args.loss_type) == ("pg", "policy_loss")
+    assert actor.args.reef_learning_rate_schedule_state == schedule_state
+    # A family's actor init hook runs when the actor first trains it, not on every switch.
+    assert initialized == ["pg.init"]
+    actor.switch_training_method({**worker_switch, "learning_rate_schedule_state": None})
+    assert actor.args.reef_learning_rate_schedule_state is None
+
+
+@pytest.mark.parametrize("tag", ["ref", "distill_teacher", "actor"])
+@pytest.mark.parametrize("enabled", [True, False])
+def test_external_checkpoint_clears_student_adapter_only_for_frozen_roles(monkeypatch, tag, enabled):
+    module = _load_reef_train_actor_adapter(monkeypatch)
+    actor = object.__new__(module.ReefMegatronTrainRayActor)
+    actor.args = types.SimpleNamespace()
+    actor.model = object()
+    calls = []
+    base = module.ReefMegatronTrainRayActor.__mro__[1]
+    monkeypatch.setattr(
+        base, "load_other_checkpoint", lambda self, role, path: calls.append(("load", role)), raising=False
+    )
+    monkeypatch.setattr(module, "megatron_lora_enabled", lambda args: enabled)
+    monkeypatch.setattr(module, "zero_megatron_lora_adapters", lambda model: calls.append(("zero", model)))
+    actor.weights_backuper = types.SimpleNamespace(backup=lambda role: calls.append(("backup", role)))
+    actor.load_other_checkpoint(tag, "/teacher")
+    expected = [("load", tag)]
+    if enabled and tag in ("ref", "distill_teacher"):
+        expected += [("zero", actor.model), ("backup", tag)]
+    assert calls == expected

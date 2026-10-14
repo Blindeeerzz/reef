@@ -20,7 +20,7 @@ serves.
 +-------------+--------------------------------------------------------------+
 | Package     | ``recipes/gepa/``                                            |
 +-------------+--------------------------------------------------------------+
-| Processor   | reported feedback, producing trace items                     |
+| Pipeline    | reported feedback, producing trace items                     |
 +-------------+--------------------------------------------------------------+
 | Needs       | a Reef process, the ``pi`` binary, and a reflection model.   |
 |             | Reef itself needs no GPU.                                    |
@@ -99,7 +99,7 @@ one block of its own under ``evolution``:
 .. code:: yaml
 
    evolution:
-     evaluate: harness.aime:evaluate
+     evaluate: harness.aime:AIMEAnswerScorer
      feedback: harness.aime:feedback     # optional; the score restated when absent
      tasks: [...]                        # the validation set
      models:

@@ -1,0 +1,12 @@
+{
+  "autoupdate": false,
+  "defaultModel": "qwen/qwen3-8b",
+  "defaultProvider": "qwen",
+  "enabled_providers": [
+    "reef"
+  ],
+  "permission": {
+    "*": "allow"
+  },
+  "share": "disabled"
+}

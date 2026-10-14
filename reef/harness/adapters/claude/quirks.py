@@ -6,18 +6,48 @@ feature-gate cache, per-session ``todos/`` lists, and ``shell-snapshots/``.
 The descriptor whitelists those so the episode inverse tolerates them and
 reports anything else as residue.
 
-``finalize_render`` enforces the traps a mutated ``settings.json`` could
-reopen. The descriptor keeps a benchmark episode hermetic through
-environment variables (auto-update, telemetry, and non-essential traffic all
-off); a composition that sets ``settings.env`` to turn any of them back on,
-or that flips ``includeCoAuthoredBy`` on, is rejected at render — the same
-gate that rejects an invalid node.
+``process_config`` enforces what the declaration cannot state. Claude Code
+copies ``settings.env`` over its own environment. The episode env turns
+telemetry and non-essential traffic off, so ``settings.env`` must not set
+either to ``0``, ``false``, ``off``, ``no`` or an empty value. The episode
+env and ``reef-claude`` set ``DISABLE_AUTOUPDATER`` and ``DISABLE_UPDATES``
+so that Claude Code's updater and its own ``update`` and ``install`` keep
+the pinned version; Claude Code reads them as on only for ``1``, ``true``,
+``yes`` or ``on``, so ``settings.env`` must not set either one at all, under
+any name Windows matches without case. The keys a settings.json must keep,
+and the settings keys that choose the model, a credential helper or a login
+method, are declared in the descriptor and refused by the shared render
+before this step runs.
+
+It also keeps every model call on Reef's model binding. The binding writes
+``ANTHROPIC_BASE_URL``, ``ANTHROPIC_AUTH_TOKEN`` and ``ANTHROPIC_MODEL`` into
+``settings.env``, renders after the tree and wins every name it writes. Its
+token is a credential, which a tree cannot hold because admission refuses an
+inline credential, so the three names pass only beside the binding's token.
+Any other env name Claude Code reads to choose the endpoint (another
+provider such as Bedrock or Vertex, a proxy), the credential or the model,
+and a ``model`` in the frontmatter of a command or a skill are the
+tree choosing where calls go, and are refused. Claude Code merges the JSON
+object in ``CLAUDE_CODE_EXTRA_BODY`` into every request body, over the bound
+model, so that object may not name a model (``model``, or OpenRouter's
+fallback ``models``).
+
+These checks cover the config the tree renders. Reef's proxy forwards the
+``model`` and ``models`` a request sends as they are, so a request that other
+code builds with the rendered key, such as a tool the model runs, can still
+name another model.
 """
 
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Mapping
+from typing import Any
 
+import yaml
+
+from reef.harness.adapters.descriptor import AdapterRenderer
 from reef.harness.tree.render import RenderError
 
 _CONFIG_PATH = "claude/settings.json"
@@ -25,8 +55,31 @@ _CONFIG_PATH = "claude/settings.json"
 # The env switches the descriptor relies on to keep episodes hermetic. A
 # rendered settings.env that sets any of these to a falsey value would undo
 # the descriptor's own env and let the binary phone home mid-campaign.
-_HERMETIC_ENV = ("DISABLE_AUTOUPDATER", "DISABLE_TELEMETRY", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")
+_HERMETIC_ENV = ("DISABLE_TELEMETRY", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")
 _FALSEY = {"0", "false", "off", "no", ""}
+
+#: The env names Reef's model binding writes.
+BINDING_ENV = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL")
+#: The env names Claude Code 2.1.257 reads to choose the endpoint, the provider, the credential or the model of a
+#: model call: every ANTHROPIC_ name, the cloud providers and their credentials, the provider switches, proxies,
+#: endpoints, sockets, credential helpers and files, and model names. Matched without case, as Windows reads env.
+MODEL_ROUTE_ENV = re.compile(
+    r"^(?:ANTHROPIC_|AWS_|AZURE_|GOOGLE_|GCLOUD_|GCE_|CLOUDSDK_|CLOUD_ML_|VERTEX_)"
+    r"|^CLAUDE_CODE_(?:USE_(?:ANTHROPIC_|BEDROCK|FOUNDRY|GATEWAY|MANTLE|VERTEX)|SKIP_\w*_AUTH$|PROVIDER_)"
+    r"|_MODEL$|_MODEL_(?:CATALOG|OPTION|FORCE)"
+    r"|PROXY|BASE_URL|ENDPOINT|SOCKET|API_KEY|AUTH_|CREDS|CREDENTIAL|HELPER|FILE_DESCRIPTOR",
+    re.IGNORECASE,
+)
+#: The env name whose JSON object Claude Code merges into every request body, after the bound model.
+EXTRA_BODY_ENV = "CLAUDE_CODE_EXTRA_BODY"
+#: Request body fields that name the model: ``model`` replaces the bound one, and OpenRouter reads ``models`` as
+#: fallback models.
+BODY_MODEL_KEYS = ("model", "models")
+#: Claude Code's frontmatter block: after a byte order mark, an opening --- line, then the text up to the next ---.
+FRONTMATTER_BLOCK = re.compile(r"---\s*\n([\s\S]*?)---\s*\n?")
+#: A plain ``key: value`` line and the value characters Claude Code quotes when its YAML reader refuses the block.
+PLAIN_LINE = re.compile(r"^([a-zA-Z_-]+):\s+(.+)$")
+YAML_SYNTAX = re.compile(r"[{}[\]*&#!|>%@`]|: ")
 
 cleanup_whitelist = (
     "claude/.claude.json",
@@ -36,13 +89,111 @@ cleanup_whitelist = (
 )
 
 
-def finalize_render(files: dict[str, str]) -> dict[str, str]:
-    config = json.loads(files[_CONFIG_PATH])
-    if config.get("includeCoAuthoredBy") is True:
-        raise RenderError("claude composition must keep includeCoAuthoredBy false for benchmark episodes")
-    env = config.get("env")
-    if isinstance(env, dict):
-        for key in _HERMETIC_ENV:
-            if key in env and str(env[key]).strip().lower() in _FALSEY:
-                raise RenderError(f"claude composition must not re-enable {key} for benchmark episodes")
-    return files
+def quoted_values(block: str) -> str:
+    """``block`` as Claude Code reads it again when its YAML reader refuses it: plain values holding YAML quoted."""
+    lines = []
+    for line in block.split("\n"):
+        match = PLAIN_LINE.match(line)
+        if match is None:
+            lines.append(line)
+            continue
+        value = match.group(2)
+        quoted = value[0] in "\"'" and value[-1] == value[0]
+        if not quoted and YAML_SYNTAX.search(value):
+            escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+            lines.append(f'{match.group(1)}: "{escaped}"')
+        else:
+            lines.append(line)
+    return re.sub(r"(?m)^\t+", lambda tabs: "  " * len(tabs.group(0)), "\n".join(lines))
+
+
+def top_level_keys(block: str) -> set[str] | None:
+    """The top-level keys of a YAML block, merged keys included; None when PyYAML cannot read it."""
+    loader = yaml.SafeLoader(block)
+    try:
+        node = loader.get_single_node()
+        if not isinstance(node, yaml.MappingNode):
+            return set()
+        loader.flatten_mapping(node)
+    except (yaml.YAMLError, RecursionError):
+        return None
+    finally:
+        loader.dispose()
+    return {key.value for key, _ in node.value if isinstance(key, yaml.ScalarNode)}
+
+
+def frontmatter_chooses_model(text: str) -> bool:
+    """Whether Claude Code can read a ``model`` key in the frontmatter of a command or a skill.
+
+    A block PyYAML cannot read as Claude Code does counts when it holds the word ``model`` or an escape that could
+    spell it, since Bun's YAML reader may still read it.
+    """
+    match = FRONTMATTER_BLOCK.match(text.removeprefix("\ufeff"))
+    if match is None:
+        return False
+    block = match.group(1)
+    for candidate in (block, quoted_values(block)):
+        keys = top_level_keys(candidate)
+        if keys is not None:
+            return "model" in keys
+    return "model" in block or "\\" in block
+
+
+def extra_body_names_model(value: object) -> bool:
+    """Whether a ``CLAUDE_CODE_EXTRA_BODY`` value can name a model; a value render cannot read as an object counts.
+
+    Claude Code strips a byte order mark and reads the value with JSON.parse.
+    """
+    if not isinstance(value, str):
+        return True
+    try:
+        body = json.loads(value.removeprefix("\ufeff"))
+    except (ValueError, RecursionError):
+        return True
+    return not isinstance(body, dict) or any(key in body for key in BODY_MODEL_KEYS)
+
+
+class ClaudeAdapterRenderer(AdapterRenderer):
+    @staticmethod
+    def process_config(path: str, config: dict[str, Any]) -> dict[str, Any]:
+        env = config.get("env")
+        if isinstance(env, dict):
+            # The episode env and reef-claude set the updater switches, and a tree value other than 1, true, yes or
+            # on would turn the updater back on. Windows matches env names in any case.
+            for key in env:
+                if key.upper() in ("DISABLE_AUTOUPDATER", "DISABLE_UPDATES"):
+                    raise RenderError(
+                        f"claude composition must not set {key} in settings.env: the episode env and reef-claude "
+                        "set it so Claude Code keeps the pinned version"
+                    )
+            for key in _HERMETIC_ENV:
+                if key in env and str(env[key]).strip().lower() in _FALSEY:
+                    raise RenderError(f"claude composition must not re-enable {key} for benchmark episodes")
+        return config
+
+    @staticmethod
+    def check_model_route(
+        configs: Mapping[str, Mapping[str, Any]], skills: Mapping[str, str], commands: Mapping[str, str]
+    ) -> None:
+        config = configs[_CONFIG_PATH]
+        env = config.get("env")
+        if isinstance(env, dict):
+            for name in env:
+                # The render refuses the binding's names from a tree without the binding's token.
+                if name in BINDING_ENV:
+                    continue
+                if MODEL_ROUTE_ENV.search(name):
+                    raise RenderError(
+                        f"claude composition must not set env {name}: Reef's model binding chooses the endpoint, "
+                        "the credential and the model"
+                    )
+                if name.upper() == EXTRA_BODY_ENV and extra_body_names_model(env[name]):
+                    raise RenderError(
+                        f"claude composition env {name} must be a JSON object without model or models: "
+                        "Reef's model binding chooses the model"
+                    )
+        for path, text in {**skills, **commands}.items():
+            if frontmatter_chooses_model(text):
+                raise RenderError(
+                    f"claude {path} must not set model in its frontmatter: Reef's model binding chooses the model"
+                )

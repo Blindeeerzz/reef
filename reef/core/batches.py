@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from reef.core.training_request import TrainingRequest
 
@@ -106,6 +106,67 @@ class TrainingBatch:
         for index, item in enumerate(self.items):
             if not isinstance(item, (TrajectoryItem, TaskItem)):
                 raise TypeError(f"TrainingBatch.items[{index}] must be a TrajectoryItem or TaskItem")
+
+
+@dataclass(frozen=True, slots=True)
+class StepScheduling:
+    """How the training runtime cuts one reserved batch into optimizer steps.
+
+    A recipe binds this next to its objective in ``WeightTrainingSpec``; the
+    runtime carries it to the backend with the objective reference. A
+    processor hands the objective one batch; the runtime may run several
+    optimizer steps over it. The *rollout* is the unit that is never split
+    across steps — a comparison set by default, or one sample with
+    ``unit="sample"``.
+
+    ``batch_size`` is rollouts per optimizer step:
+
+    * ``"configured"`` — the backend's own setting (Slime ``--global-batch-size``);
+    * ``"actual"`` — every rollout in the batch, i.e. one step per batch;
+    * an ``int`` — an explicit step size, so a batch of 1024 rollouts with
+      ``batch_size=64`` trains sixteen steps.
+
+    ``epochs`` repeats the whole batch that many passes; every pass is its own
+    run of steps, and the reference / old-policy log-probs are computed once
+    before the first, so multi-epoch training is PPO-style off-policy after
+    the first pass — only an objective declaring ``supports_multiple_epochs``
+    accepts it. ``shuffle`` reorders rollouts independently in every epoch,
+    deterministically from the batch id.
+
+    ``remainder`` decides what happens when an epoch's rollout count is not
+    a multiple of the step size: ``"partial"`` (default) trains the tail as
+    one smaller final step — what SFT trainers do with ``drop_last=False`` —
+    ``"drop"`` leaves the tail out, ``"error"`` refuses the batch. A partial
+    step needs at least one sample per data-parallel rank and, under static
+    micro-batching, a sample count divisible by ``dp_size * micro_batch_size``;
+    dynamic batching splits its bins to fit.
+    """
+
+    unit: Literal["comparison_set", "sample"] = "comparison_set"
+    batch_size: Literal["configured", "actual"] | int = "configured"
+    epochs: int = 1
+    shuffle: bool = False
+    remainder: Literal["partial", "drop", "error"] = "partial"
+
+    def __post_init__(self) -> None:
+        if self.unit not in ("comparison_set", "sample"):
+            raise ValueError(f"StepScheduling.unit must be 'comparison_set' or 'sample', got {self.unit!r}")
+        if isinstance(self.batch_size, bool) or (
+            not isinstance(self.batch_size, int) and self.batch_size not in ("configured", "actual")
+        ):
+            raise ValueError(
+                f"StepScheduling.batch_size must be 'configured', 'actual' or a positive int, got {self.batch_size!r}"
+            )
+        if isinstance(self.batch_size, int) and self.batch_size <= 0:
+            raise ValueError(f"StepScheduling.batch_size must be positive, got {self.batch_size}")
+        if isinstance(self.epochs, bool) or not isinstance(self.epochs, int) or self.epochs <= 0:
+            raise ValueError(f"StepScheduling.epochs must be a positive int, got {self.epochs!r}")
+        if not isinstance(self.shuffle, bool):
+            raise ValueError(f"StepScheduling.shuffle must be a bool, got {self.shuffle!r}")
+        if self.remainder not in ("partial", "drop", "error"):
+            raise ValueError(f"StepScheduling.remainder must be 'partial', 'drop' or 'error', got {self.remainder!r}")
+        if self.remainder == "drop" and not isinstance(self.batch_size, int):
+            raise ValueError("StepScheduling.remainder='drop' requires an explicit integer batch_size")
 
 
 def trajectories(batch: TrainingBatch) -> tuple[TrajectoryItem, ...]:

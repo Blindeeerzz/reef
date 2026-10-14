@@ -14,48 +14,47 @@ the population-aware proposal and selection policies.
 ## Configuration
 
 ```yaml
-implementation: recipes.meta_harness.recipe:MetaHarnessRecipe
+recipe:
+  implementation: recipes.meta_harness.recipe:MetaHarnessRecipe
+  config:
+    evolution:
+      adapter: pi
+      evaluate: my_harness.scoring:EpisodeScore
+      tasks:
+        - First validation task
+        - Second validation task
+      seed:
+        - id: rules
+          name: rules
+          config:
+            text: Work carefully and verify the result.
+      models:
+        proposer:
+          url: https://api.openai.com
+          model: gpt-5
+          api_key_env: OPENAI_API_KEY
+      meta_harness:
+        archive: ${REEF_WORK}/meta-harness
+        mode: full_history
+        max_candidates: 20
+        max_target_episodes: 200
+        max_nodes: 32
 
-model:
-  path: model-under-test
-
-evolution:
-  adapter: pi
-  evaluate: my_harness.scoring:score_episode
-  tasks:
-    - First validation task
-    - Second validation task
-  seed:
-    - id: rules
-      name: rules
-      config:
-        text: Work carefully and verify the result.
-  models:
-    proposer:
-      url: https://api.openai.com
-      model: gpt-5
-      api_key_env: OPENAI_API_KEY
-  meta_harness:
-    archive: ${REEF_WORK}/meta-harness
-    mode: full_history
-    max_candidates: 20
-    max_target_episodes: 200
-    max_nodes: 32
+inference:
+  upstream-model: model-under-test
 ```
 
-`evaluate` has the standard Reef episode-scorer signature:
+`evaluate` names a standard Reef episode scorer class:
 
 ```python
-def score_episode(task: str, result: EpisodeResult) -> float:
-    ...
+class EpisodeScore(EpisodeScorer):
+    def score(self, task: str, result: EpisodeResult) -> float:
+        ...
 ```
 
-The built-in proposal policy also has the standard Reef proposer signature:
-
-```python
-def propose(nodes, samples, models, *, manifest=None, rejected=()):
-    ...
-```
+The built-in proposal policy is a standard Reef `Proposer`: its
+`propose(nodes, samples, models, *, manifest, rejected, ...)` receives every
+proposer keyword.
 
 It calls `evolution.models.proposer`, and refuses to run when
 that name is not configured. The model sees all retained candidate
@@ -69,9 +68,9 @@ selected parent must remain byte-for-byte equivalent in the proposed
 composition:
 
 ```yaml
-  meta_harness:
-    archive: ${REEF_WORK}/meta-harness
-    components: [rules, skill]
+      meta_harness:
+        archive: ${REEF_WORK}/meta-harness
+        components: [rules, skill]
 ```
 
 With no `components` setting, every node kind the selected adapter exposes is
@@ -85,29 +84,31 @@ behavior. It accepts one self-contained module defining `Agent(Terminus2)`.
 Start from a no-op subclass so the proposer sees the adapter contract:
 
 ```yaml
-evolution:
-  adapter: terminus
-  executor: sandbox
-  sandbox:
-    egress_hosts: [api.e2b.dev, api.openai.com]
-    env_from: [REEF_TERMINUS_ENVIRONMENT, E2B_API_KEY]
-  seed:
-    - id: agent
-      name: code_extension
-      config:
-        name: agent
-        code: |
-          from harbor.agents.terminus_2 import Terminus2
-          class Agent(Terminus2):
-              pass
-  meta_harness:
-    archive: ./meta-harness
-    components: [code_extension]
+recipe:
+  config:
+    evolution:
+      adapter: terminus
+      executor: sandbox
+      sandbox:
+        egress_hosts: [api.e2b.dev, api.openai.com]
+        env_from: [REEF_TERMINUS_ENVIRONMENT, E2B_API_KEY]
+      seed:
+        - id: agent
+          name: code_extension
+          config:
+            name: agent
+            code: |
+              from harbor.agents.terminus_2 import Terminus2
+              class Agent(Terminus2):
+                  pass
+      meta_harness:
+        archive: ./meta-harness
+        components: [code_extension]
 ```
 
 Combine this with the tasks, scorer, model, and proposer settings above. Export
 `REEF_TERMINUS_ENVIRONMENT=e2b` and `E2B_API_KEY` in the deployment. Install
-`reef-infra[terminus]` and `harbor[e2b]` on Linux with Python 3.12+ and bubblewrap;
+`harbor[e2b]` on Linux with Python 3.12+ and bubblewrap;
 place the runtime and any local task directories under `/usr` or `/opt`, which
 the existing sandbox mounts read-only. Registry task ids also work.
 

@@ -43,16 +43,18 @@ def _service_resources(settings: ExecutorSettings, service: Mapping[str, Any]) -
 
 
 def service_executor_selection(config: Mapping[str, Any], service: Mapping[str, Any]) -> ExecutorSelection:
+    # A service's role names the execution.<role> selector it defaults to; only the generator has its own.
+    role = service.get("role", "services")
     settings = (
         executor_settings(config, service["executor"])
         if "executor" in service
-        else role_executor_settings(config, "services")
+        else role_executor_settings(config, role)
     )
     resources = _service_resources(settings, service)
     local_cuda = service.get("cuda") is not None or "CUDA_VISIBLE_DEVICES" in (service.get("env") or {})
     return select_executor(
         settings,
-        role="services",
+        role=role,
         requires_resources=bool(resources),
         local_cuda=local_cuda,
         in_ray_placement_group=settings.backend == "auto" and not local_cuda and in_ray_placement_group(),
@@ -154,6 +156,8 @@ def validate_services(config: Mapping[str, Any], config_path: str | Path) -> lis
         for field in ("cwd", "endpoint", "advertise_host"):
             if field in service and not isinstance(service[field], str):
                 raise DeployConfigError(f"service {service['name']!r}: {field} must be a string")
+        if service.get("role", "services") not in ("services", "generator"):
+            raise DeployConfigError(f"service {service['name']!r}: role must be services or generator")
         if not isinstance(service.get("env", {}), Mapping):
             raise DeployConfigError(f"service {service['name']!r}: env must be an object")
         try:

@@ -9,7 +9,6 @@
 
 # The method package: GEPA's archive, Pareto parent sampling, reflective
 # proposal, and strict aggregate promotion, under the evolution contract.
-schema-version: 2
 recipe:
   implementation: recipes.gepa.recipe:GEPARecipe
 
@@ -22,7 +21,7 @@ recipe:
       # containment score over one episode, feedback is the wording GEPA's own
       # default evaluator writes into the reflective records. run.py binds these
       # hooks to a serializable answer/context snapshot before building the recipe.
-      evaluate: harness.aime:evaluate
+      evaluate: harness.aime:AIMEAnswerScorer
       feedback: harness.aime:AIMEFeedback
       # The validation set, which is what the mechanism scores every candidate on.
       # Left empty here because it is data, not configuration: run.py fills it with
@@ -96,9 +95,12 @@ recipe:
                 });
               }
 
-    # The third report closes the minibatch. Both correct and incorrect
-    # transcripts contribute to reflection.
-    batch-size: 3
+# The third report closes the minibatch. Both correct and incorrect
+# transcripts contribute to reflection.
+pipeline:
+  task2batch:
+    config:
+      batch_size: 3
 inference:
   upstream-model: ${REEF_MODEL}
 

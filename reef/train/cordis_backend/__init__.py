@@ -1,16 +1,16 @@
 """Harness evolution backend: candidate selection scored by real episodes.
 
 Per training step, ``propose`` reads the current composition and the batched
-traces and returns one ``Mutation`` or a sequence of them; the backend
+traces and returns one ``Mutation``, a sequence of them, or a ``StepProposal``
+(the mutations plus notes the step records); the backend
 applies the proposal to the compose Entry tree under one snapshot; the
 candidate and current compositions render through the adapter descriptor and
-each run one headless episode per task; the method's ``EpisodeScorer`` scores
-individual results. The recipe picks the ``CandidateEvaluationPlugin`` class
-that pairs this measurement with a selection policy and hands it to ``Trainer``.
-A sequence is one
-composite proposal: it applies
-atomically and receives one selection decision, never one per mutation. The
-default policy selects a candidate with more task wins than losses.
+each run one headless episode per task in ``reef.evaluation.harness``, where
+the method's ``EpisodeScorer`` scores individual results. The recipe picks the
+``CandidateEvaluationPlugin`` class that pairs this measurement with a
+selection policy and hands it to ``Trainer``. A sequence is one composite
+proposal: it applies atomically and receives one selection decision, never one
+per mutation.
 
 Versioning goes through reef's native artifact stack: a selected mutation
 renders to a directory and returns a ``TrainStepResult`` with the artifact
@@ -24,31 +24,23 @@ of the training loop.
 """
 
 from reef.harness.tree.mutations import Mutation, MutationError
-from reef.train.cordis_backend.backend import (
-    CordisBackend,
-    HarnessCandidate,
-    ScoreComparisonMixin,
-    ScoreComparisonPlugin,
-    ScoreComparisonPluginFactory,
-)
-from reef.train.cordis_backend.manifest import FailureManifest, FailureObservation, FailureRecord
-from reef.train.cordis_backend.processor import CordisProcessor
-from reef.train.cordis_backend.strategies import EpisodeScorer, Promoter, Proposer, untrusted_text
+from reef.train.cordis_backend.backend import CordisBackend
+from reef.train.cordis_backend.contracts import StepProgress
+from reef.train.cordis_backend.manifest import FailureManifest, FailureRecord
+from reef.train.cordis_backend.processor import InferenceTasks, TraceBatches, TraceTasks
+from reef.train.cordis_backend.strategies import Promoter, Proposer, StepProposal
 
 __all__ = [
     "CordisBackend",
-    "CordisProcessor",
-    "EpisodeScorer",
     "FailureManifest",
-    "FailureObservation",
     "FailureRecord",
-    "HarnessCandidate",
+    "InferenceTasks",
     "Mutation",
     "MutationError",
     "Promoter",
     "Proposer",
-    "ScoreComparisonMixin",
-    "ScoreComparisonPlugin",
-    "ScoreComparisonPluginFactory",
-    "untrusted_text",
+    "StepProgress",
+    "StepProposal",
+    "TraceBatches",
+    "TraceTasks",
 ]

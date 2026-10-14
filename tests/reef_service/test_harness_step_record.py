@@ -12,19 +12,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
-
-from reef.harness.adapters import get_adapter
-from reef.harness.episodes.executor import LocalExecutor
-from reef.harness.episodes.model_binding import ModelBindings
-from reef.harness.episodes.run import EpisodeError, TrajectoryKeepError, run_episode
-from reef.harness.tree.render import render_composition
-from reef.recipe import RecipeConfigError
-from reef.recipe.cordis import CordisRecipe
-from reef.train.cordis_backend import CordisBackend, Mutation
-from reef.train.cordis_backend.backend import RECORD_TEXT_CAP, EpisodeEvaluationWorker
-from reef.train.cordis_backend.strategies import resolve_episode_scorer, resolve_proposer
-
-from .test_harness_recipe import (
+from tests.reef_service.test_harness_recipe import (
     MODEL,
     _ChatBinding,
     batch,
@@ -34,6 +22,18 @@ from .test_harness_recipe import (
     runtime,
     seeded_state,
 )
+from tests.support._strategies import resolve_episode_scorer, resolve_proposer
+
+from reef.evaluation.harness import EpisodeEvaluationWorker, ScoreComparisonPlugin
+from reef.harness.adapters import get_adapter
+from reef.harness.episodes.model_binding import ModelBindings
+from reef.harness.episodes.run import EpisodeError, TrajectoryKeepError, run_episode
+from reef.harness.tree.nodes import RECORD_TEXT_CAP
+from reef.harness.tree.render import render_composition
+from reef.recipe import RecipeConfigError
+from reef.recipe.cordis import CordisRecipe
+from reef.sandbox.process import LocalExecutor
+from reef.train.cordis_backend import CordisBackend, Mutation
 
 # A harness shaped like the native loop: the root session, one delegated checker
 # turn under agents/, and the rendered rules echoed into the header for the scorer.
@@ -312,6 +312,31 @@ def test_a_retried_step_claims_a_new_directory_and_a_record_file_is_never_replac
     assert read_json(first / "proposer.json") == []
 
 
+def test_a_kept_candidate_evaluated_again_lands_in_the_next_attempt_directory(tmp_path: Path) -> None:
+    """A result refused as stale keeps its candidate; its second evaluation writes beside the first, not over it."""
+    b = native_backend(tmp_path, step_record_dir=tmp_path / "record")
+    first = b.prepare_step(batch(), b.initial_state(), 0)
+    assert first.candidate is not None
+    evaluator = ScoreComparisonPlugin(b)
+    b.settle_step(first, evaluator.decide(first.candidate, evaluator.evaluate(first.candidate)))
+    first_dir = tmp_path / "record" / "1"
+    assert (first_dir / "episodes").is_dir() and (first_dir / "proposer.json").is_file()
+    assert b.step_progress is None
+
+    again = b.prepare_reevaluation(first)
+    second_dir = tmp_path / "record" / "1-2"
+    assert again.metrics["step_record"] == str(second_dir)
+    assert read_json(second_dir / "reevaluation.json") == {"first_attempt": str(first_dir)}
+    assert b.step_progress is not None and b.step_progress.phase == "evaluating"
+    assert b.step_progress.step_record == str(second_dir)
+    assert again.candidate is not None
+    result = b.settle_step(again, evaluator.decide(again.candidate, evaluator.evaluate(again.candidate)))
+    assert result.metrics["step_record"] == str(second_dir)
+    assert (second_dir / "episodes").is_dir()
+    assert not (second_dir / "proposer.json").exists()
+    assert sorted(path.name for path in (tmp_path / "record").iterdir()) == ["1", "1-2"]
+
+
 def test_a_recheck_step_writes_episodes_only_and_counts_no_proposer_calls(tmp_path: Path) -> None:
     b = native_backend(tmp_path, step_record_dir=tmp_path / "record", recheck_every=1)
     first = run_backend_step(b, batch(), b.initial_state())
@@ -426,7 +451,14 @@ def test_run_episode_keeps_the_trajectory_before_the_root_is_removed(tmp_path: P
 
 def test_recipe_parses_step_record_dir_and_the_backend_refuses_an_unwritable_one(tmp_path: Path) -> None:
     def config(**evolution):
-        return {"evolution": {"propose": lambda n, s, m: None, "evaluate": evaluate, "tasks": ["one"], **evolution}}
+        return {
+            "evolution": {
+                "propose": resolve_proposer(lambda n, s, m: None),
+                "evaluate": resolve_episode_scorer(evaluate),
+                "tasks": ["one"],
+                **evolution,
+            }
+        }
 
     on = CordisRecipe.from_environment({}, config=config(step_record_dir=str(tmp_path / "record")), runtime=runtime())
     assert on.step_record_dir == str(tmp_path / "record")
@@ -458,8 +490,8 @@ def test_a_relative_record_dir_is_made_absolute_at_build(tmp_path: Path, monkeyp
     monkeypatch.chdir(tmp_path)
     config = {
         "evolution": {
-            "propose": lambda n, s, m: None,
-            "evaluate": evaluate,
+            "propose": resolve_proposer(lambda n, s, m: None),
+            "evaluate": resolve_episode_scorer(evaluate),
             "tasks": ["one"],
             "step_record_dir": "rel",
         }
@@ -561,7 +593,7 @@ def test_agent_work_sums_the_tokens_each_agents_steps_reported() -> None:
     """Per agent, the usage on the assistant messages and compactions of a
     native trajectory adds up beside the turn and tool counters, and the
     side's sum keeps every counter."""
-    from reef.train.cordis_backend.backend import _agent_work, _sum_agents
+    from reef.harness.episodes.trajectory import agent_work, sum_agents
 
     trajectory = [
         {"type": "session", "data": {"agent": "root"}},
@@ -574,12 +606,12 @@ def test_agent_work_sums_the_tokens_each_agents_steps_reported() -> None:
         {"type": "step/start", "data": {"step": 1}},
         {"type": "assistant/message", "data": {"step": 1, "usage": {"input_tokens": 7, "output_tokens": 1}}},
     ]
-    work = _agent_work(trajectory)
+    work = agent_work(trajectory)
     assert work == {
         "root": {"turns": 1, "steps": 2, "tool_calls": 0, "tool_errors": 0, "input_tokens": 130, "output_tokens": 15},
         "checker": {"turns": 1, "steps": 1, "tool_calls": 0, "tool_errors": 0, "input_tokens": 7, "output_tokens": 1},
     }
-    assert _sum_agents([work, {"root": {"turns": 1, "steps": 1, "tool_calls": 2, "tool_errors": 0}}]) == {
+    assert sum_agents([work, {"root": {"turns": 1, "steps": 1, "tool_calls": 2, "tool_errors": 0}}]) == {
         "checker": work["checker"],
         "root": {"turns": 2, "steps": 3, "tool_calls": 2, "tool_errors": 0, "input_tokens": 130, "output_tokens": 15},
     }

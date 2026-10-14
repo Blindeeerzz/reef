@@ -36,9 +36,9 @@ def send_lora_to_colocated_engine(
         "flattened_tensor": bucket.get_flattened_tensor(),
         "metadata": bucket.get_metadata(),
     }
-    serialized = MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True)
+    serialized: str = MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True)
     is_source = dist.get_rank() == ipc_gather_src
-    gathered = [None] * dist.get_world_size(ipc_gather_group) if is_source else None
+    gathered: list[list[str] | None] | None = [None] * dist.get_world_size(ipc_gather_group) if is_source else None
     dist.gather_object([serialized], object_gather_list=gathered, dst=ipc_gather_src, group=ipc_gather_group)
     refs: list[ObjectRef] = []
     if is_source:
@@ -93,18 +93,10 @@ def send_lora_to_distributed_engines(
         dist.broadcast(tensor.data, 0, group=model_update_group, async_op=True) for _, tensor in hf_named_tensors
     ]
     for handle in handles:
+        if handle is None:
+            raise RuntimeError("LoRA broadcast did not return an asynchronous work handle")
         handle.wait()
     return refs
-
-
-def unload_lora_from_engines(engines: Sequence[Any], lora_name: str) -> None:
-    """Remove one adapter revision from every engine; raise if any keeps it.
-
-    The residency manager that asked for the eviction turns a failure into a
-    visibly ``leaked`` slot, so this does not swallow it.
-    """
-    refs = [engine.unload_lora_adapter.remote(lora_name=lora_name) for engine in engines if engine is not None]
-    validate_lora_update_results(ray.get(refs))
 
 
 def tensor_checksums(named_tensors: list[tuple[str, torch.Tensor]]) -> dict[str, str]:
@@ -125,7 +117,7 @@ def verify_replica_adapter_checksums(checksums: dict[str, str]) -> None:
         digest.update(name.encode())
         digest.update(checksums[name].encode())
     local_digest = digest.hexdigest()
-    replica_digests = [None] * dist.get_world_size()
+    replica_digests: list[str | None] = [None] * dist.get_world_size()
     dist.all_gather_object(replica_digests, local_digest, group=get_gloo_group())
     if len(set(replica_digests)) != 1:
         raise RuntimeError(f"LoRA adapter replicas disagree before SGLang publication: {replica_digests}")
@@ -143,7 +135,6 @@ __all__ = [
     "send_lora_to_colocated_engine",
     "send_lora_to_distributed_engines",
     "tensor_checksums",
-    "unload_lora_from_engines",
     "validate_lora_update_results",
     "verify_replica_adapter_checksums",
 ]

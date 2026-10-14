@@ -2,18 +2,70 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
+from tests.runtime.test_executor_runtime import Coordinator
 
 from reef.inference.http import InferenceProxyRuntime
 from reef.inference.sglang.chat import SGLangInferenceHandler
 from reef.inference.sglang.runtime import SGLangInferenceRuntime
+from reef.inference.vllm.chat import VLLMInferenceHandler
+from reef.inference.vllm.runtime import VLLMInferenceRuntime
 from reef.runtime.deployment import RuntimeConfigError, RuntimeFactory, RuntimeRegistry
 from reef.service.assembly import _connect_training_runtime
 from reef.service.deploy.service_config import ServiceConfig
 from reef.train.runtime import ExecutorTrainingRuntime
 from reef.train.slime_backend.runtime import SlimeTrainingRuntime
 
-from .test_executor_runtime import Coordinator
+
+@pytest.mark.parametrize("failure", [TimeoutError("outer wait expired"), ValueError("invalid job"), None])
+def test_slime_job_result_and_outer_timeout_keep_transport_semantics(monkeypatch, failure):
+    from reef.runtime.executor import connection
+    from reef.runtime.executor.ray import RayExecutor
+    from reef.runtime.interfaces import TrainingJobResult
+
+    actor = object()
+    monkeypatch.setattr(connection.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(
+        connection,
+        "_require_ray",
+        lambda: SimpleNamespace(
+            is_initialized=lambda: True,
+            get_actor=lambda *args, **kwargs: actor,
+            exceptions=SimpleNamespace(RayActorError=RuntimeError),
+        ),
+    )
+    calls = []
+    result = TrainingJobResult(
+        outcome="checkpoint", runtime_load_id="v1", training_job_id="job", checkpoint_path="checkpoint"
+    )
+
+    def rpc(self, rank, method, *, args, timeout):
+        calls.append((rank, method, args, timeout))
+        if failure is not None:
+            raise failure
+        return result
+
+    monkeypatch.setattr(RayExecutor, "rpc", rpc)
+    runtime = SlimeTrainingRuntime(train_timeout_s=43200)
+    try:
+        if failure is None:
+            assert runtime.execute_training_job({"job": "payload"}) is result
+        else:
+            with pytest.raises(type(failure)) as error:
+                runtime.execute_training_job({"job": "payload"})
+            if isinstance(failure, TimeoutError):
+                assert "training.timeout-s" in str(error.value)
+                assert str(failure) in str(error.value)
+                assert error.value.__cause__ is failure
+            else:
+                assert error.value is failure
+        assert len(calls) == 1
+        assert calls[0][:3] == (0, "execute_training_job", ({"job": "payload"},))
+        assert calls[0][3] == 43200
+    finally:
+        runtime.shutdown()
 
 
 def test_slime_runtime_uses_the_selected_inference_factory(monkeypatch):
@@ -87,6 +139,34 @@ def test_sglang_runtime_selects_its_native_request_handler(monkeypatch):
     assert isinstance(runtime, SGLangInferenceRuntime)
     assert runtime.inference_handler is handler
     assert requests == [("http://router", "selected-model", 42, {"trust_remote_code": True})]
+    assert not runtime.inference_admission_status["open"]
+    runtime.shutdown()
+    assert coordinator.shutdown_events == []
+
+
+def test_vllm_runtime_selects_its_native_request_handler(monkeypatch):
+    coordinator = Coordinator()
+    requests = []
+    handler = InferenceProxyRuntime(base_url="http://router").inference_handler
+
+    def from_config(cls, upstream_url, *, model_path, timeout_s, **config):
+        requests.append((upstream_url, model_path, timeout_s, config))
+        return handler
+
+    monkeypatch.setattr(VLLMInferenceHandler, "from_config", classmethod(from_config))
+    runtime = RuntimeRegistry().build(
+        {
+            "type": "vllm",
+            "control": coordinator,
+            "inference_timeout_s": 42,
+            "inference_handler_config": {"tool_call_parser": "hermes"},
+        },
+        model_path="selected-model",
+        environ={},
+    )
+    assert isinstance(runtime, VLLMInferenceRuntime)
+    assert runtime.inference_handler is handler
+    assert requests == [("http://router", "selected-model", 42, {"tool_call_parser": "hermes"})]
     assert not runtime.inference_admission_status["open"]
     runtime.shutdown()
     assert coordinator.shutdown_events == []

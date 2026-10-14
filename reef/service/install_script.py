@@ -8,7 +8,8 @@ against the descriptor's pinned version and, only on absence or mismatch,
 runs the vendor's own install command. Before writing, the script removes
 the files a previous install's release file recorded that the new composition
 lacks, exactly like the stdlib client pull, so installing an older version
-never leaves a newer version's files behind. After writing, the script
+never leaves a newer version's files behind; it removes nothing outside the
+destination or through a link. After writing, the script
 verifies a sha256 over the sorted relative paths, byte lengths, and file
 bytes against the value baked in at render time, and records the pulled
 version in the same release file the stdlib client pull writes, plus what the
@@ -17,12 +18,27 @@ release requires of the person (``requires``) and the check offs
 release file). A release with an item the release file on disk does not check off is
 refused first of all, before the binary is installed or a directory is
 made, with the setup list and the release that installs on a machine with
-nothing set up as the message; the refusal needs python3 only. Rerunning when everything already matches
-writes nothing at all, not even the release file, and says "already current".
-The interpreter is decided once: the python3 the installing shell resolves,
-followed through to the interpreter behind it and pinned by absolute path
-into the wrapper, so a later shell with another python3 on PATH runs the one
-that passed the import check here.
+nothing set up as the message; the refusal needs python3 only. Before the
+tree is written, a link at a path the script writes, or at a directory above
+one, is replaced with a regular file (or removed, for a directory) while it
+stays inside the install root, and refused, naming it, when it leads outside;
+anything else at such a path that is not a regular file, a FIFO for one, is
+refused too. Rerunning when everything already matches
+writes no composition file and no release file and says "already current"; the model binding files
+are written on every run, so the served files they replace are left out of that comparison.
+Last, the script records what it wrote in ``~/.reef/installs``, outside the
+install root: the sha256 of each composition and binding file, for a file the
+binary writes too (pi's ``settings.json``) the value of every key but the
+binary's own preferences, the release file's checksum without its check offs,
+and the address the script was served from. ``reef-<adapter>`` refuses to
+start a session while one of those differs from the record. The wrapper runs
+that check, so the script writes it beside the record, never into the install
+root, and links ``~/.local/bin/reef-<adapter>`` to it.
+The interpreter is decided once: ``REEF_PYTHON`` when the caller names one,
+else the python3 the installing shell resolves, followed through to the
+interpreter behind it and pinned by absolute path into the wrapper, so a
+later shell with another python3 on PATH runs the one that passed the import
+check here.
 """
 
 from __future__ import annotations
@@ -34,7 +50,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from reef.core.requirements import parse_requires
-from reef.harness.adapters.descriptor import AdapterDescriptor, DescriptorError, InstallSpec
+from reef.harness.adapters.descriptor import NO_TOKEN_API_KEY, AdapterDescriptor, DescriptorError, InstallSpec
 from reef.harness.episodes.vendor_install import DEFAULT_PREFIX_ROOT, PREFIX_ENV
 
 #: The script's install-prefix root in shell spelling, the same root reef's
@@ -103,6 +119,15 @@ def _wrapper_quoted(text: str) -> str:
     return quoted.replace("\\", "\\\\").replace("$", "\\$").replace("`", "\\`")
 
 
+def probe_quoted(value: str) -> str:
+    """A descriptor env value for the version probe in shell: ``{root}`` becomes the scratch ``$PROBE_ROOT``."""
+    head, *rest = value.split("{root}")
+    text = _single_quoted(head) if head else ""
+    for part in rest:
+        text += '"$PROBE_ROOT"' + (_single_quoted(part) if part else "")
+    return text
+
+
 def _single_quoted(text: str) -> str:
     return "'" + text.replace("'", "'\\''") + "'"
 
@@ -125,18 +150,14 @@ def _write_file_block(target: str, content: str) -> str:
     return f"printf '%s' \"$(cat {opener}\n{content}\n{delimiter}\n)\" > {redirect}\n"
 
 
-def _compose_env_var(descriptor: AdapterDescriptor) -> tuple[str, str]:
-    """The env var and compose subdirectory that point the binary at the composition.
-
-    The compose directory is the deepest directory above the primary config
-    target that an env entry relocates with a ``{root}/<dir>`` value: the
-    target's own parent for pi and opencode, the home two levels up for dsh,
-    whose config file sits inside a profile. That entry relocates the
-    binary's whole composition at the episode root, and it is the only env
-    entry the user-facing wrapper needs (session/state dirs use the binary's
-    own defaults outside episodes).
-    """
-    return descriptor.compose_relocation()
+#: How a person runs each binary for one task, where it is not pi's ``-p``: Codex refuses ``-p`` (its profile flag
+#: takes a name), and opencode, hermes and dsh each take the prompt their own way.
+ONE_SHOT_ARGS = {
+    "codex": 'exec "fix the bug"',
+    "opencode": 'run "fix the bug"',
+    "hermes": 'chat --oneshot -q "fix the bug"',
+    "dsh": '--profile headless -- -- "fix the bug"',
+}
 
 
 def _wrapper_lines(
@@ -155,23 +176,30 @@ def _wrapper_lines(
     writes nothing. The wrapper calls ``reef.harness.client.wrapper`` through
     ``$PYTHON``, the interpreter ``_python_lines`` resolved by absolute path
     (with ``-P`` where it exists), so the shell that runs it later needs
-    neither that interpreter nor the checkout on its PATH.
+    neither that interpreter nor the checkout on its PATH. The wrapper runs
+    the check on the tree, so it goes in ``$WRAPPER_DIR``, beside the record,
+    where a session that can write only its project cannot change it, and it
+    names the resolved install root, the one the record is kept for.
     """
     wrapper_name = f"reef-{descriptor.name}"
-    wrapper = f'"$DEST/{_double_quoted(wrapper_name)}"'
+    wrapper = f'"$WRAPPER_DIR/{_double_quoted(wrapper_name)}"'
+    tree_wrapper = f'"$DEST/{_double_quoted(wrapper_name)}"'
+    one_shot = ONE_SHOT_ARGS.get(descriptor.name, '-p "fix the bug"')
     return [
         f"# The {wrapper_name} wrapper: capture proxy + report command. Rewritten whenever its text",
-        "# differs: it depends on this machine (binary, interpreter), not on the composition.",
+        "# differs: it depends on this machine (binary, interpreter), not on the composition. It runs the",
+        "# check on the tree, so it lives outside the tree, beside the record.",
         'BINARY_ABS="$(cd "$(dirname "$BINARY")" && pwd)/$(basename "$BINARY")"',
-        f'COMPOSE_ABS="$(mkdir -p "$DEST/{_double_quoted(compose_dir)}" && cd "$DEST/{_double_quoted(compose_dir)}" && pwd)"',
+        f'mkdir -p "$DEST/{_double_quoted(compose_dir)}" "$WRAPPER_DIR"',
+        f'COMPOSE_ABS="$ROOT_ABS/{_double_quoted(compose_dir)}"',
         "wrapper_text() {",
         "    cat <<REEF_WRAPPER_EOF",
         "#!/bin/sh",
         f"# {wrapper_name}: run {descriptor.binary} with the reef-evolved composition.",
         f"# Generated by reef harness install (adapter {descriptor.name}, release {release_id}).",
-        f'# Usage: {wrapper_name} -p "fix the bug"     # run the agent (receipts captured)',
+        f"# Usage: {wrapper_name} {one_shot}     # run the agent (receipts captured)",
         f'#        {wrapper_name} report --score 0 --feedback "..."  # report last run\'s receipts',
-        f'#        {wrapper_name} harness "what the harness should do"  # ask reef for a change',
+        f'#        {wrapper_name} evolve "what the harness should do"  # ask reef for a change',
         f"#        {wrapper_name} doctor  # check the install: interpreter, service, binary, tools, release",
         "# Runs the python3 the install resolved; rerun the install from another shell to change it.",
         'export REEF_HARNESS_BINARY="$BINARY_ABS"',
@@ -186,14 +214,16 @@ def _wrapper_lines(
         f"    wrapper_text > {wrapper}",
         f"    chmod +x {wrapper}",
         "fi",
+        "# An earlier install wrote the wrapper into the tree, where a session could rewrite it; removing a link",
+        "# there leaves what it points at as it was.",
+        f"if [ -f {tree_wrapper} ] || [ -L {tree_wrapper} ]; then",
+        f"    rm -f {tree_wrapper}",
+        "fi",
         f"# Symlink into ~/.local/bin so {wrapper_name} is on PATH, on every run: the link may have been",
         "# pointed elsewhere since the wrapper was written (an install into another directory), and",
-        "# ln -sf costs nothing. The link target must be absolute: DEST defaults to the relative",
-        "# ./reef-harness, and a relative target resolves against the link's own directory, so the",
-        f"# link dangles and {wrapper_name} is not runnable from anywhere.",
-        'DEST_ABS="$(cd "$DEST" && pwd)"',
+        "# ln -sf costs nothing.",
         'mkdir -p "$HOME/.local/bin"',
-        f'ln -sf "$DEST_ABS/{_double_quoted(wrapper_name)}" "$HOME/.local/bin/{_double_quoted(wrapper_name)}"',
+        f'ln -sf {wrapper} "$HOME/.local/bin/{_double_quoted(wrapper_name)}"',
         'case ":$PATH:" in',
         '    *":$HOME/.local/bin:"*) ;;',
         f"    *) echo \"reef: add '$HOME/.local/bin' to your PATH to run {wrapper_name} from anywhere\" >&2 ;;",
@@ -224,8 +254,8 @@ def _import_check_lines(wrapper_name: str) -> list[str]:
 def _ensure_binary_lines(descriptor: AdapterDescriptor, install: InstallSpec) -> list[str]:
     """The vendor-delegating install step: check the pin, else install through the vendor's channel."""
     prelude: list[str] = []
-    # Extra condition the "already installed" gate ands onto the binary check.
-    gate = ""
+    # Extra condition the "already installed" condition adds to the binary check.
+    pin_check = ""
     if install.kind == "git":
         # A checkout installed editable into a venv; the checkout's .git goes so
         # the agent's own startup update check has nothing to fetch.
@@ -233,14 +263,14 @@ def _ensure_binary_lines(descriptor: AdapterDescriptor, install: InstallSpec) ->
         # ``--version`` reports the package version, which a git ref moves
         # independently of (hermes pins date tags but reports 0.21.0), so the
         # version match alone would leave a ref-only bump on the old checkout.
-        # The installed ref is recorded beside the prefix and gates too, and is
+        # The installed ref is recorded beside the prefix and must match too, and is
         # cleared before installing so an interrupted install never reads back
         # as current.
         prelude = [
             f"PIN={_single_quoted(f'{install.repository}@{install.ref}')}",
             'PIN_FILE="$PREFIX/.reef-install-pin"',
         ]
-        gate = ' && [ "$(cat "$PIN_FILE" 2>/dev/null || true)" = "$PIN" ]'
+        pin_check = ' && [ "$(cat "$PIN_FILE" 2>/dev/null || true)" = "$PIN" ]'
         steps = [
             '        rm -f "$PIN_FILE"',
             # git clone refuses a non-empty target, so the checkout (and the
@@ -261,10 +291,24 @@ def _ensure_binary_lines(descriptor: AdapterDescriptor, install: InstallSpec) ->
         pin = f"{install.package}@{install.version}"
         steps = [f'        npm install --prefix "$PREFIX" {_single_quoted(pin)}']
         pattern = f'    *" {install.version} "*)'
+    # The probe gets the descriptor's env, each directory it relocates made under a scratch root that is removed
+    # after, so a binary that writes its state on --version (hermes, opencode) leaves the person's home alone.
+    relocated = [value for value in descriptor.env.values() if "{root}" in value]
     probe_env = " ".join(
-        f"{key}={_single_quoted(value)}" for key, value in descriptor.env.items() if "{root}" not in value
+        f"{key}={probe_quoted(value)}" if "{root}" in value else f"{key}={_single_quoted(value)}"
+        for key, value in descriptor.env.items()
     )
     probe = f'{probe_env} "$BINARY"'.lstrip()
+    version_line = f'    installed="$({probe} --version 2>/dev/null || true)"'
+    if relocated:
+        probe_lines = [
+            '    PROBE_ROOT="$(mktemp -d)"',
+            "    mkdir -p " + " ".join(probe_quoted(value) for value in relocated),
+            version_line,
+            '    rm -rf "$PROBE_ROOT"',
+        ]
+    else:
+        probe_lines = [version_line]
     return [
         f"# Ensure the pinned binary ({pin}) via the vendor's channel.",
         *prelude,
@@ -272,8 +316,8 @@ def _ensure_binary_lines(descriptor: AdapterDescriptor, install: InstallSpec) ->
         *[line.replace("        ", "    ", 1) for line in steps],
         "}",
         'installed=""',
-        f'if [ -x "$BINARY" ]{gate}; then',
-        f'    installed="$({probe} --version 2>/dev/null || true)"',
+        f'if [ -x "$BINARY" ]{pin_check}; then',
+        *probe_lines,
         "fi",
         'case " $installed " in',
         pattern,
@@ -295,12 +339,33 @@ def _ensure_binary_lines(descriptor: AdapterDescriptor, install: InstallSpec) ->
     ]
 
 
-def _binding_lines(bindings: Mapping[str, str]) -> list[str]:
+def stream_lines(name: str, paths: Sequence[str]) -> list[str]:
+    """The shell function ``name``: the checksum stream of ``paths`` on disk, as ``composition_checksum`` hashes it."""
+    return [
+        f"{name}() {{",
+        "    :",
+        *(
+            line
+            for relative in paths
+            for line in (
+                f"    printf '%s\\n' {_single_quoted(relative)}",
+                f"    printf '%s\\n' $(wc -c < \"$DEST/{_double_quoted(relative)}\")",
+                f'    cat "$DEST/{_double_quoted(relative)}"',
+            )
+        ),
+        "}",
+    ]
+
+
+def _binding_lines(bindings: Mapping[str, str], is_token_expected: bool) -> list[str]:
     """Shell that writes the model binding files over the pulled tree, the token filled from the environment.
 
     The binding is written after the checksum and on every run, so a rerun
     re-points an installed tree at the Reef the script came from; the
-    checksum still covers the served composition alone."""
+    checksum still covers the served composition alone, and the current
+    check leaves out the served files the binding rewrites. Each binding
+    file is made readable by its owner alone before the token is written into
+    it (``chmod`` changes nothing on a native Windows file system)."""
     if not bindings:
         return []
     lines = [
@@ -308,19 +373,27 @@ def _binding_lines(bindings: Mapping[str, str]) -> list[str]:
         "# The model binding: the adapter's config pointed at the Reef this script was",
         "# fetched from, with the client's own token; written on every run, after the",
         "# checksum, so the served composition stays what the release file records.",
-        'if [ -z "${REEF_TOKEN:-}" ]; then',
-        '    echo "reef: REEF_TOKEN is not set; the harness will reach Reef without a token" >&2',
-        "fi",
     ]
+    if is_token_expected:
+        # The request for this script carried a token, so the service wants one on every call; a service with no
+        # token needs none and gets no warning.
+        lines += [
+            'if [ -z "${REEF_TOKEN:-}" ]; then',
+            '    echo "reef: REEF_TOKEN is not set; the harness will reach Reef without a token, and this service answers 401 to that: export REEF_TOKEN=<token> and run the install again" >&2',
+            "fi",
+        ]
     for relative in sorted(bindings):
         lines.append(_write_file_block(relative, bindings[relative]).rstrip("\n"))
         lines.extend(
             [
+                # Owner only before the token goes in, a file an earlier install left readable included: the
+                # token then never sits in a file another user on the machine can read.
+                f'chmod 600 "$DEST/{_double_quoted(relative)}"',
                 f'"$PYTHON" - "$DEST/{_double_quoted(relative)}" <<\'REEF_BIND_EOF\'',
                 "import os, sys",
                 "path = sys.argv[1]",
                 'text = open(path, encoding="utf-8").read()',
-                f'open(path, "w", encoding="utf-8").write(text.replace({TOKEN_PLACEHOLDER!r}, os.environ.get("REEF_TOKEN", "")))',
+                f'open(path, "w", encoding="utf-8").write(text.replace({TOKEN_PLACEHOLDER!r}, os.environ.get("REEF_TOKEN") or {NO_TOKEN_API_KEY!r}))',
                 "REEF_BIND_EOF",
             ]
         )
@@ -330,6 +403,167 @@ def _binding_lines(bindings: Mapping[str, str]) -> list[str]:
 #: The literal the model binding overlay carries where the client's own token goes; the script swaps in
 #: ``$REEF_TOKEN`` at install time, so the served script itself never holds a credential.
 TOKEN_PLACEHOLDER = "__REEF_TOKEN__"
+
+
+def written_path_lines(written: Sequence[str]) -> list[str]:
+    """Shell that makes the paths in ``written``, relative to ``$DEST``, safe to write before the tree is written.
+
+    ``cat >`` writes through a link, and a link that reads the same bytes
+    lets a tree pass as current, so a link a session put at a file the
+    install writes, or at a directory above one, would take the next write
+    wherever it points and keep every start refused. A link that stays
+    inside the install root is replaced: a link to a file, and a second hard
+    link to one, by a regular file with the same bytes and mode, which the
+    writes below then correct; a link to a directory, or to nothing, is
+    removed, and the writes below make it again. A link that leads outside
+    the install root is refused, naming it and its target, before anything
+    is written. So is anything else that is not a regular file at one of
+    these paths, a FIFO for one, which ``cat >`` would wait on forever."""
+    return [
+        "# A link at a path this install writes would take the write elsewhere and pass as current: one inside the",
+        "# install root is replaced with a regular file (or removed, for a directory); one leading outside is refused,",
+        "# and so is anything else there that is not a regular file (a FIFO would block the write).",
+        f'"$PYTHON" - "$DEST" {" ".join(_single_quoted(path) for path in written)} <<\'REEF_LINKS_EOF\'',
+        "import os, shutil, sys, tempfile",
+        "dest = sys.argv[1]",
+        "root = os.path.realpath(dest)",
+        "links, outside, special = {}, [], []",
+        "for relative in sys.argv[2:]:",
+        '    parts = relative.split("/")',
+        "    for depth in range(1, len(parts) + 1):",
+        '        shown = "/".join(parts[:depth])',
+        "        path = os.path.join(dest, shown)",
+        "        if os.path.islink(path):",
+        "            target = os.path.realpath(path)",
+        "            if os.path.commonpath([root, target]) == root:",
+        "                links[shown] = path",
+        "            else:",
+        '                outside.append("reef: " + shown + " in " + root + " is a link to " + target)',
+        "            break",
+        "        if depth == len(parts) and os.path.lexists(path) and not os.path.isfile(path):",
+        '            special.append("reef: " + shown + " in " + root + " is not a regular file")',
+        "        elif depth == len(parts) and os.path.isfile(path) and os.stat(path).st_nlink > 1:",
+        "            links[shown] = path",
+        "if outside:",
+        '    print("\\n".join(sorted(set(outside))), file=sys.stderr)',
+        '    sys.exit("reef: the install writes only inside the install root; remove the links named above, then install again")',
+        "if special:",
+        '    print("\\n".join(sorted(set(special))), file=sys.stderr)',
+        '    sys.exit("reef: the install writes only regular files; remove the paths named above, then install again")',
+        "for shown, path in sorted(links.items()):",
+        "    if os.path.isfile(path):",
+        "        # A copy renamed over the link: the file it pointed at, or shared with, stays as it is.",
+        "        handle, staging = tempfile.mkstemp(dir=os.path.dirname(path))",
+        "        os.close(handle)",
+        "        shutil.copy2(path, staging)",
+        "        os.replace(staging, path)",
+        '        print("reef: " + shown + " was a link; it is a regular file now")',
+        "    else:",
+        "        os.unlink(path)",
+        '        print("reef: " + shown + " was a link; removed it, and the install writes it again")',
+        "REEF_LINKS_EOF",
+    ]
+
+
+def prune_lines(kept: Sequence[str]) -> list[str]:
+    """Shell that removes the files the release file on disk lists and ``kept`` lacks, never through a link.
+
+    This is what the stdlib client pull does, so installing an older
+    version leaves none of a newer version's files behind. A session can
+    write the release file and the tree, so a listed path that is absolute or
+    has a ``..`` part is skipped, and each directory on the way to a listed
+    file is opened from the one above it without following a link: a link
+    at a directory of the path, whether it leads outside the install root or
+    stays inside, stops the removal there and is named on stderr, and the
+    file it would reach stays as it is."""
+    return [
+        "    # Prune the files a previous install's release file listed that this composition lacks, exactly like",
+        "    # the stdlib client pull. A session can write that file and the tree, so nothing is removed outside the",
+        "    # destination or through a link.",
+        f'    "$PYTHON" - "$DEST" {" ".join(_single_quoted(path) for path in kept)} <<\'REEF_PRUNE_EOF\'',
+        "import json, os, stat, sys",
+        "dest, kept = sys.argv[1], set(sys.argv[2:])",
+        "try:",
+        f'    with open(os.path.join(dest, "{HARNESS_RELEASE_FILE}"), encoding="utf-8") as handle:',
+        '        listed = json.load(handle).get("files")',
+        "except (OSError, ValueError, AttributeError):",
+        "    listed = None",
+        "for relative in listed if isinstance(listed, list) else []:",
+        '    if not isinstance(relative, str) or relative in kept or relative.startswith("/"):',
+        "        continue",
+        '    parts = relative.split("/")',
+        '    if ".." in parts:',
+        "        continue",
+        "    directory = os.open(dest, os.O_RDONLY | os.O_DIRECTORY)",
+        "    try:",
+        "        for depth, part in enumerate(parts[:-1], 1):",
+        "            if stat.S_ISLNK(os.stat(part, dir_fd=directory, follow_symlinks=False).st_mode):",
+        '                shown = "/".join(parts[:depth])',
+        '                print("reef: did not remove " + relative + ": " + shown + " is a link", file=sys.stderr)',
+        "                break",
+        "            # O_NOFOLLOW: a link made since the check above stops the walk as well.",
+        "            inner = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)",
+        "            os.close(directory)",
+        "            directory = inner",
+        "        else:",
+        "            os.unlink(parts[-1], dir_fd=directory)",
+        "    except OSError:",
+        "        pass  # gone already, or no directory of this tree on the way: nothing of the install's to remove",
+        "    finally:",
+        "        os.close(directory)",
+        "REEF_PRUNE_EOF",
+    ]
+
+
+def install_record_lines(
+    wrapper_name: str, written: Sequence[str], preference_keys_by_path: Mapping[str, Sequence[str]]
+) -> list[str]:
+    """Record what this install wrote in ``$WRAPPER_DIR.json``, where ``reef-<adapter>`` reads it before a session.
+
+    The record names the resolved install root (``$ROOT_ABS``), the address
+    the script was served from (``$SERVICE_URL``), the release file's
+    checksum without its check offs (``$RELEASE_FILE_CHECKSUM``) and the
+    sha256 of every file in ``written``, taken after the binding is on disk.
+    For each JSON file in ``preference_keys_by_path``, which the binary writes
+    too, it keeps under ``settings`` the preference keys the binary may change
+    and, as ``checked_values``, the value of every other key as the install
+    wrote it. It is kept outside the install root, which may sit in a project
+    a session can write, and rewritten only when it changed."""
+    return [
+        "",
+        f"# What this install wrote, recorded outside the install root: {wrapper_name} refuses to start a session once",
+        "# one of these files changed, and a session that can write only its project cannot change the record.",
+        f'"$PYTHON" - "$ROOT_ABS" "$WRAPPER_DIR.json" "$SERVICE_URL" "$RELEASE_FILE_CHECKSUM" {_single_quoted(json.dumps(dict(preference_keys_by_path)))} {" ".join(_single_quoted(path) for path in written)} <<\'REEF_INSTALL_RECORD_EOF\'',
+        "import hashlib, json, os, sys",
+        "root, record_path, service_url, release_file = sys.argv[1:5]",
+        "files = {}",
+        "for relative in sys.argv[6:]:",
+        '    with open(os.path.join(root, relative), "rb") as handle:',
+        "        files[relative] = hashlib.sha256(handle.read()).hexdigest()",
+        "# A file the binary writes too: the keys it may change, and the value of every other key as the install wrote it.",
+        "settings = {}",
+        "for relative, preference_keys in json.loads(sys.argv[5]).items():",
+        '    with open(os.path.join(root, relative), encoding="utf-8") as handle:',
+        "        installed_settings = json.load(handle)",
+        "    checked_values = {key: value for key, value in installed_settings.items() if key not in preference_keys}",
+        '    settings[relative] = {"preference_keys": preference_keys, "checked_values": checked_values}',
+        'record = {"install_root": root, "service_url": service_url or None, "release_file": release_file, "files": files, "settings": settings}',
+        'text = json.dumps(record, indent=2) + "\\n"',
+        "try:",
+        '    with open(record_path, encoding="utf-8") as handle:',
+        "        current = handle.read()",
+        "except OSError:",
+        "    current = None",
+        "if current != text:",
+        "    try:",
+        "        os.makedirs(os.path.dirname(record_path), exist_ok=True)",
+        '        with open(record_path + ".part", "w", encoding="utf-8") as handle:',
+        "            handle.write(text)",
+        '        os.replace(record_path + ".part", record_path)',
+        "    except OSError as exc:",
+        '        sys.exit("reef: cannot record what the install wrote in " + record_path + ": " + str(exc))',
+        "REEF_INSTALL_RECORD_EOF",
+    ]
 
 
 def _spinner_lines() -> list[str]:
@@ -375,7 +609,9 @@ def _spinner_lines() -> list[str]:
 def _python_lines() -> list[str]:
     """Resolve the interpreter once, for the script's own python steps and the wrapper it writes.
 
-    The python3 the installing shell resolves is followed through to the
+    ``REEF_PYTHON`` names the interpreter when the caller has one (the
+    wrapper's ``update`` runs the script with its own); else the python3 the
+    installing shell resolves is followed through to the
     interpreter behind it (``sys.executable``: a version manager's shim on
     PATH would otherwise re-decide the interpreter at every run, and a venv's
     python reports the venv's own path) and pinned by absolute path, so a
@@ -388,10 +624,11 @@ def _python_lines() -> list[str]:
     reach the agent's own ``python3`` runs through the wrapper's environment.
     """
     return [
-        "# One interpreter for the install and the wrapper it writes: the python3 this shell resolves,",
-        "# followed through to the interpreter behind it (a version manager's shim would re-decide it at",
-        "# every run), by absolute path. -P (Python 3.11 and newer) keeps the working directory off sys.path.",
-        'PYTHON="$(command -v python3 || true)"',
+        "# One interpreter for the install and the wrapper it writes: REEF_PYTHON when the caller names one (the",
+        "# wrapper's update names its own), else the python3 this shell resolves, followed through to the",
+        "# interpreter behind it (a version manager's shim would re-decide it at every run), by absolute path.",
+        "# -P (Python 3.11 and newer) keeps the working directory off sys.path.",
+        'PYTHON="${REEF_PYTHON:-$(command -v python3 || true)}"',
         'if [ -z "$PYTHON" ]; then',
         "    echo 'reef: python3 not found on PATH' >&2",
         "    exit 1",
@@ -413,7 +650,7 @@ def _release_info_tool_lines(wrapper_name: str) -> list[str]:
     """The ``release_info_tool`` shell function: the release file's ``requires`` bookkeeping in python.
 
     ``static`` hashes the release file on disk without its check offs, the text
-    ``RELEASE_FILE_CHECKSUM`` was baked from; ``gate`` refuses, naming the setup
+    ``RELEASE_FILE_CHECKSUM`` was baked from; ``check`` refuses, naming the setup
     list and ``FALLBACK``, the release that installs on a machine with
     nothing set up, when an item of ``REQUIRES`` is not checked off there (a
     check off meets an item when it names it and the check it recorded is
@@ -425,8 +662,11 @@ def _release_info_tool_lines(wrapper_name: str) -> list[str]:
         f"# The release file's requires bookkeeping ({wrapper_name} setup's check offs): JSON is no job for sed.",
         "release_info_tool() {",
         '    "$PYTHON" - "$@" <<\'REEF_RELEASE_INFO_TOOL_EOF\'',
-        "import hashlib, json, sys",
+        "import hashlib, json, os, sys",
         "mode, path = sys.argv[1], sys.argv[2]",
+        "# The setup check reads it first of all, and a FIFO there would block the read.",
+        "if os.path.lexists(path) and not os.path.isfile(path):",
+        '    sys.exit("reef: " + path + " is not a regular file; remove it, then install again")',
         "try:",
         '    with open(path, encoding="utf-8") as handle:',
         "        record = json.load(handle)",
@@ -439,7 +679,7 @@ def _release_info_tool_lines(wrapper_name: str) -> list[str]:
         "    # The record without the check offs is what RELEASE_FILE_CHECKSUM was baked from.",
         '    record.pop("setup", None)',
         '    print(hashlib.sha256((json.dumps(record, indent=2) + "\\n").encode("utf-8")).hexdigest())',
-        'elif mode == "gate":',
+        'elif mode == "check":',
         '    checked = {item["name"]: item for item in setup}',
         "    def met(item):",
         "        # A check off records the check it stood for; one without it (an older release file) counts by name.",
@@ -475,6 +715,8 @@ def render_install_script(
     binding_files: Mapping[str, str] | None = None,
     requires: Sequence[Mapping[str, Any]] = (),
     fallback_release_id: str | None = None,
+    service_url: str | None = None,
+    is_token_expected: bool = False,
 ) -> str:
     """The complete install script for one adapter and one served manifest.
 
@@ -485,13 +727,17 @@ def render_install_script(
     re-rendered with the model binding that points the harness at Reef; they
     carry ``TOKEN_PLACEHOLDER`` where the token goes, and the script writes
     them over the pulled files after the checksum, filling the placeholder
-    from ``$REEF_TOKEN``. ``requires`` is the manifest's list of what the
+    from ``$REEF_TOKEN``; ``is_token_expected`` says the request for the
+    script carried a token, and only then does the script warn when
+    ``$REEF_TOKEN`` is unset. ``requires`` is the manifest's list of what the
     release needs from the person over its chain: the script refuses,
     before it installs or writes anything, while one item is not checked
     off in the release file on disk, naming ``fallback_release_id`` (the newest
     release in the chain that requires nothing) as the one to install on a
     machine with nothing set up, and records the list in the release file it
-    writes. Raises ``DescriptorError`` when the descriptor declares no
+    writes. ``service_url`` is the address the script was served from; the
+    install record keeps it, so the wrapper reaches Reef there even after a
+    session changed the binding. Raises ``DescriptorError`` when the descriptor declares no
     install section and ``ValueError`` when a composition path is absolute
     or escapes the destination through a ``..`` part, the same rule the
     stdlib client pull applies to served paths, or when an item of
@@ -504,8 +750,11 @@ def render_install_script(
         raise ValueError("content_id must be a non-empty string")
     install = descriptor.install
     if install is None:
-        raise DescriptorError(f"adapter {descriptor.name!r} declares no install section")
-    env_var, compose_dir = _compose_env_var(descriptor)
+        raise DescriptorError(
+            f"adapter {descriptor.name!r} declares no install section, so there is no install script or client "
+            "wrapper for it; GET /reef/harness serves its tree and POST /reef/train takes a request"
+        )
+    env_var, compose_dir = descriptor.compose_relocation()
     wrapper_name = f"reef-{descriptor.name}"
     bindings = dict(binding_files or {})
     for relative in (*files, *bindings):
@@ -513,7 +762,28 @@ def render_install_script(
             raise ValueError(f"composition path {relative!r} escapes the destination")
     items = parse_requires(list(requires), limit=None)
     ordered = sorted(files)
+    # What this install writes into the tree, besides the release file: the composition and the binding.
+    recorded = sorted({*ordered, *bindings})
+    # A recorded file the binary writes too (pi's settings.json): the record keeps every key but the binary's own.
+    preference_keys_by_path = {
+        state.path: sorted(state.preference_keys)
+        for state in descriptor.client_state
+        if state.preference_keys and state.path in recorded
+    }
     checksum = composition_checksum(files)
+    # The binding rewrites its target files on every run, so a served file it targets never holds the served
+    # bytes on disk again: the current check hashes the other files, and the release file names the release.
+    unbound = [relative for relative in ordered if relative not in bindings]
+    if unbound == ordered:
+        current_stream_function, current_checksum_variable, current_stream_lines = "compose_stream", "CHECKSUM", []
+    else:
+        current_stream_function, current_checksum_variable = "current_stream", "CURRENT_CHECKSUM"
+        current_stream_lines = [
+            "# The current check's stream, as baked into CURRENT_CHECKSUM: the same stream without the",
+            "# served files the model binding below rewrites on every run.",
+            f'CURRENT_CHECKSUM="{composition_checksum({relative: files[relative] for relative in unbound})}"',
+            *stream_lines("current_stream", unbound),
+        ]
     release_info_text = (
         json.dumps(
             {
@@ -527,10 +797,6 @@ def render_install_script(
         + "\n"
     )
     release_info_checksum = hashlib.sha256(release_info_text.encode("utf-8")).hexdigest()
-    # The composition paths a prune run keeps, as one case alternation; the
-    # render charset contains no glob or quote characters, so each quoted
-    # path is a literal case pattern. An empty composition keeps nothing.
-    keep = "|".join(_single_quoted(relative) for relative in ordered) or "''"
     directories = sorted(
         {str(parent) for relative in ordered if (parent := PurePosixPath(relative).parent) != PurePosixPath(".")}
     )
@@ -543,13 +809,16 @@ def render_install_script(
         "#     sh install.sh [DEST] [PREFIX]",
         "set -eu",
         "",
-        'DEST="${1:-./reef-harness}"',
+        # With no install root named, the install goes under the home directory, outside the project the agent
+        # works in, which a session can write; named after the scenario, or the adapter when there is none.
+        f'DEST="${{1:-$HOME/reef-harness/{_double_quoted(scenario or descriptor.name)}}}"',
         f'PREFIX="${{2:-${{{PREFIX_ENV}:-{_SHELL_PREFIX_ROOT}}}/{descriptor.name}}}"',
         f'BINARY="$PREFIX/{_double_quoted(install.binary_path)}"',
         f'CHECKSUM="{checksum}"',
         f'RELEASE_FILE_CHECKSUM="{release_info_checksum}"',
         f"REQUIRES={_single_quoted(json.dumps(items))}",
         f"FALLBACK={_single_quoted(fallback_release_id or '')}",
+        f"SERVICE_URL={_single_quoted(service_url or '')}",
         "",
         "if command -v sha256sum >/dev/null 2>&1; then",
         "    sha256() { sha256sum | cut -d' ' -f1; }",
@@ -569,58 +838,43 @@ def render_install_script(
         *_spinner_lines(),
         "",
         f'echo "reef: harness release {release_id} for {descriptor.name}"',
-        f"# The gate runs first of all: nothing is installed or written while an item is not checked off ({wrapper_name} setup).",
-        f'[ "$REQUIRES" = "[]" ] || release_info_tool gate "$DEST/{HARNESS_RELEASE_FILE}" "$REQUIRES" "$FALLBACK" || exit 1',
+        f"# Setup is checked first: nothing is installed or written while an item is not checked off ({wrapper_name} setup).",
+        f'[ "$REQUIRES" = "[]" ] || release_info_tool check "$DEST/{HARNESS_RELEASE_FILE}" "$REQUIRES" "$FALLBACK" || exit 1',
         "",
         *_ensure_binary_lines(descriptor, install),
+        "",
+        *written_path_lines([HARNESS_RELEASE_FILE, *recorded]),
         "",
         "# The checksum stream, as baked into CHECKSUM: each sorted relative path,",
         "# its byte length, then its bytes, newline separated. The unquoted wc",
         "# substitution word-splits away the padding BSD wc prints.",
-        "compose_stream() {",
-        "    :",
-        *(
-            line
-            for relative in ordered
-            for line in (
-                f"    printf '%s\\n' {_single_quoted(relative)}",
-                f"    printf '%s\\n' $(wc -c < \"$DEST/{_double_quoted(relative)}\")",
-                f'    cat "$DEST/{_double_quoted(relative)}"',
-            )
-        ),
-        "}",
+        *stream_lines("compose_stream", ordered),
+        *current_stream_lines,
         "",
         'mkdir -p "$DEST"',
         *(f'mkdir -p "$DEST/{_double_quoted(directory)}"' for directory in directories),
+        "# The resolved install root, byte for byte as pwd -P prints it, and the wrapper's directory outside it, named",
+        "# by the root's sha256; the record sits beside it as WRAPPER_DIR.json, where a session that can write only its",
+        "# project cannot change either.",
+        'ROOT_ABS="$(CDPATH= cd -P -- "$DEST" && pwd -P)"',
+        'WRAPPER_DIR="$HOME/.reef/installs/$(printf \'%s\' "$ROOT_ABS" | sha256)"',
         "",
-        "# A rerun on a current machine writes nothing at all, not even the release file.",
+        "# A rerun of the same release on a current tree writes nothing here, not even the release file.",
         'current=""',
         'current_release_checksum=""',
         "if "
         + " && ".join(f'[ -f "$DEST/{_double_quoted(relative)}" ]' for relative in (HARNESS_RELEASE_FILE, *ordered))
         + "; then",
-        '    current="$(compose_stream | sha256)"',
+        f'    current="$({current_stream_function} | sha256)"',
         f'    current_release_checksum="$(release_info_tool static "$DEST/{HARNESS_RELEASE_FILE}")"',
         "fi",
-        'if [ "$current" = "$CHECKSUM" ] && [ "$current_release_checksum" = "$RELEASE_FILE_CHECKSUM" ]; then',
+        f'if [ "$current" = "${current_checksum_variable}" ] && [ "$current_release_checksum" = "$RELEASE_FILE_CHECKSUM" ]; then',
         '    echo "reef: composition already current"',
         "else",
         f'    echo "reef: writing the harness tree ({len(ordered)} file{"" if len(ordered) == 1 else "s"}) to $DEST"',
         "    # The check offs the release file on disk holds, carried into the new release file below.",
         f'    SETUP="$(release_info_tool carry "$DEST/{HARNESS_RELEASE_FILE}")"',
-        "    # Prune the files a previous install's release file recorded that this",
-        "    # composition lacks, exactly like the stdlib client pull. The release file",
-        "    # is json.dumps at indent 2, so every file entry is one four-space",
-        "    # indented quoted line.",
-        f'    if [ -f "$DEST/{HARNESS_RELEASE_FILE}" ]; then',
-        '        sed -n \'s/^    "\\(.*\\)",\\{0,1\\}$/\\1/p\' "$DEST/' + HARNESS_RELEASE_FILE + '" |',
-        "            while IFS= read -r old; do",
-        '                case "$old" in',
-        f"                    {keep}) ;;",
-        '                    *) rm -f "$DEST/$old" ;;',
-        "                esac",
-        "            done",
-        "    fi",
+        *prune_lines(ordered),
         *(_write_file_block(relative, files[relative]).rstrip("\n") for relative in ordered),
         '    written="$(compose_stream | sha256)"',
         '    if [ "$written" != "$CHECKSUM" ]; then',
@@ -633,12 +887,89 @@ def render_install_script(
         "fi",
         "",
         *_wrapper_lines(descriptor, env_var, compose_dir, release_id, scenario),
-        *_binding_lines(bindings),
+        *_binding_lines(bindings, is_token_expected),
+        *install_record_lines(wrapper_name, recorded, preference_keys_by_path),
         "",
         'echo "reef: done"',
-        f'echo "run:     $DEST/{wrapper_name}"',
+        f'echo "run:     $HOME/.local/bin/{_double_quoted(wrapper_name)}"',
+        f'echo "wrapper: $WRAPPER_DIR/{_double_quoted(wrapper_name)}"',
         'echo "binary:  $BINARY"',
         'echo "harness: $DEST"',
         "",
     ]
     return "\n".join(lines)
+
+
+#: The variable the streamed preamble keeps its spinner's process id in, for the rest of the script to stop it.
+PREPARE_SPINNER_VARIABLE = "REEF_PREPARE_SPINNER"
+#: The preamble's least size. curl buffers what it writes into a pipe and passes a short first chunk on only with
+#: the next one (16 KiB on macOS), so a smaller preamble reaches the shell together with the script it announces.
+PREAMBLE_MIN_BYTES = 64 * 1024
+
+
+def render_install_preamble() -> str:
+    """The lines the install route sends first when rendering is slow, so ``curl ... | bash`` shows progress.
+
+    A pipe runs each line as it arrives, so this starts a spinner (a static
+    line off a terminal) while the service still prepares the script. The
+    spinner watches the shell it belongs to, so it also ends when that shell
+    exits without the rest of the script, as it does on a dropped connection.
+    Comment lines pad it past ``PREAMBLE_MIN_BYTES``.
+    """
+    padding_line = "#" * 79
+    padding = [padding_line] * (PREAMBLE_MIN_BYTES // (len(padding_line) + 1) + 1)
+    return "\n".join(
+        [
+            "#!/bin/sh",
+            "# Reef is preparing this install; the script follows once it is ready.",
+            "if [ -t 1 ]; then",
+            "    (",
+            "        i=0",
+            '        while kill -0 "$$" 2>/dev/null; do',
+            "            case $i in 0) c='|' ;; 1) c='/' ;; 2) c='-' ;; *) c='\\' ;; esac",
+            "            i=$(( (i + 1) % 4 ))",
+            "            printf '\\r%s reef: preparing the harness install' \"$c\"",
+            "            sleep 0.2",
+            "        done",
+            "    ) &",
+            f"    {PREPARE_SPINNER_VARIABLE}=$!",
+            "else",
+            '    echo "reef: preparing the harness install"',
+            "fi",
+            # After the commands: curl holds back the last partial block of its buffer, which must be comments only.
+            "# The comment lines below only fill curl's output buffer, so the lines above reach the shell at once.",
+            *padding,
+            "",
+        ]
+    )
+
+
+def render_streamed_install(body: str) -> str:
+    """What follows the preamble: ``body`` (a script, or a failure) in one brace group that first stops the spinner.
+
+    The shell parses a group whole before running it, so a connection that
+    drops mid-script runs none of it.
+    """
+    return "\n".join(
+        [
+            "{",
+            f'if [ -n "${{{PREPARE_SPINNER_VARIABLE}:-}}" ]; then',
+            f'    kill "${PREPARE_SPINNER_VARIABLE}" 2>/dev/null',
+            f'    wait "${PREPARE_SPINNER_VARIABLE}" 2>/dev/null',
+            "    printf '\\r\\033[K'",
+            "fi",
+            body.rstrip("\n"),
+            "}",
+            "",
+        ]
+    )
+
+
+def render_install_failure(status: int, message: str) -> str:
+    """The script body for a render that failed after the preamble went out: the HTTP answer it would have had."""
+    return "\n".join(
+        [
+            f"echo {_single_quoted(f'reef: the harness install failed (HTTP {status}): {message}')} >&2",
+            "exit 1",
+        ]
+    )

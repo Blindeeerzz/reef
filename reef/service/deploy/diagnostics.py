@@ -18,7 +18,7 @@ from reef.service.deploy.deployment_config import component_config_arguments, pu
 from reef.service.deploy.service_config import service_config_arguments
 
 _MISSING = object()
-_SECRET_KEY = re.compile(r"token|api[_-]?key|secret|password|database[_-]?url", re.IGNORECASE)
+_SECRET_KEY = re.compile(r"token|api[_-]?key|secret|password|database[_-]?url|authorization", re.IGNORECASE)
 #: Settings reported even when they keep their defaults: the recipe and the HTTP bind.
 _ALWAYS_REPORTED = {("reef", "recipe"), ("reef", "host"), ("reef", "port")}
 
@@ -45,6 +45,10 @@ def mask_secrets(value: Any, name: str = "") -> Any:
             return value
         return ["****"] * len(value) if isinstance(value, (list, tuple)) else "****"
     if isinstance(value, Mapping):
+        if name.lower().endswith("headers"):
+            # An HTTP header map is where a backend credential travels under a name of the
+            # backend's choosing, so every value is hidden while the header names stay visible.
+            return {key: (item if item is None or item == "" else "****") for key, item in value.items()}
         return {key: mask_secrets(item, str(key)) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [mask_secrets(item, name) for item in value]
@@ -92,15 +96,16 @@ def startup_report(
 ) -> list[str]:
     """Lines describing each explicitly supplied, automatically chosen or key default setting.
 
-    ``base`` is the loaded file or the command-line seed config and ``resolved``
-    the normalized deployment config after component assembly. With
-    ``include_defaults`` every declared setting is listed, defaults included.
+    ``base`` is the public layout from the loaded file or the command-line
+    environment, and ``resolved`` the normalized deployment config after
+    component assembly. With ``include_defaults`` every declared setting is
+    listed, defaults included.
     """
     arguments = (*service_config_arguments(), *component_config_arguments(resolved))
-    supplied = translate_layout(base) if from_file else base
+    supplied = translate_layout(base)
     supplied_source = "file" if from_file else "environment"
-    # Version 2 and command-line startup seed the record-only recipe and a loopback bind.
-    seeds = translate_layout({"schema-version": 2}) if not from_file or "schema-version" in base else {}
+    # Layout translation seeds the record-only recipe and a loopback bind.
+    seeds = translate_layout({})
     overridden = _leaf_paths(_apply_overrides({}, dict(overrides), arguments=arguments))
     lines = ["resolved settings:"]
     for argument in arguments:

@@ -5,12 +5,14 @@
   <img src="docs/assets/reef-logo-light.svg" alt="Reef" width="220">
 </picture>
 
-<h3>面向自我进化 Agent 的持续学习基础设施</h3>
+<h3>面向持续自我进化 Agent 的基础设施</h3>
 
 [![CI](https://github.com/Human-Agent-Society/reef/actions/workflows/ci.yml/badge.svg)](https://github.com/Human-Agent-Society/reef/actions/workflows/ci.yml)
 [![PyPI package: reef-infra](https://img.shields.io/pypi/v/reef-infra?label=PyPI%3A%20reef-infra&logo=pypi&logoColor=white)](https://pypi.org/project/reef-infra/)
-[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
+
+<a href="https://trendshift.io/repositories/204783?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-204783" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/204783/daily?language=Python" alt="Human-Agent-Society%2Freef | Trendshift" width="250" height="55"/></a>
 
 [English](README.md) | 中文
 
@@ -68,9 +70,9 @@ Reef 的每个学习周期分为四步，下表同时列出各步骤对应的模
 | 步骤 | 说明 | 对应模块 |
 |---|---|---|
 | **1&nbsp;·&nbsp;Serve** | 响应 Agent 请求，记录每次交互。 | [`service/`](reef/service) — Agent 请求与交互记录<br>[`runtime/`](reef/runtime) — 推理与 artifact 更新 |
-| **2&nbsp;·&nbsp;Observe** | 将反馈匹配到已记录的交互。 | [`storage/records.py`](reef/storage/records.py) — 已存储的交互与反馈<br>[`train/processors/`](reef/train/processors) — 反馈匹配与条件判定 |
-| **3&nbsp;·&nbsp;Grow** | 从符合条件的记录中产出一次更新。 | [`recipe/`](reef/recipe) — recipe 接入<br>[`train/`](reef/train) — 批次与更新任务 |
-| **4&nbsp;·&nbsp;Commit** | 应用配置的选择策略并发布通过的更新。 | [`train/evaluation/`](reef/train/evaluation) — 候选评估<br>[`artifact/`](reef/artifact) — 版本历史<br>[`surface/`](reef/surface) — artifact 分发 |
+| **2&nbsp;·&nbsp;Observe** | 将反馈匹配到已记录的交互。 | [`storage/records.py`](reef/storage/records.py) — 已存储的交互与反馈<br>[`record2record/`](reef/record2record) — 反馈匹配与条件判定 |
+| **3&nbsp;·&nbsp;Grow** | 从符合条件的记录中产出一次更新。 | [`recipe/`](reef/recipe) — recipe 接入<br>[`train/`](reef/train) — 训练管线、批次与更新任务 |
+| **4&nbsp;·&nbsp;Commit** | 应用配置的选择策略并发布通过的更新。 | [`evaluation/`](reef/evaluation) — 候选评估<br>[`artifact/`](reef/artifact) — 版本历史<br>[`surface/`](reef/surface) — artifact 分发 |
 
 
 ## 📦 安装
@@ -128,7 +130,7 @@ uv pip install -e ".[slime]" && uv pip install --no-deps --group runtime
 export MODEL_PATH="Qwen/Qwen2.5-1.5B-Instruct"
 export REEF_TOKEN="reef-local"
 
-reef serve -c recipes/sao/examples/sao/serve.yaml \
+reef serve -c recipes/sao/examples/imo_answerbench/serve.yaml \
   --inference.model-path "$MODEL_PATH" \
   --reef.port "8900"
 
@@ -140,7 +142,7 @@ curl -f http://127.0.0.1:8900/healthz          # ready to serve
 将推理请求发送至 Reef，并为每个响应上报分数。SAO recipe 使用每条符合条件的带分
 rollout 执行一次训练。
 
-Reef 的推理端点兼容 OpenAI 和 Anthropic：`/v1/chat/completions` 与 `/v1/messages`
+Reef 的推理端点兼容 OpenAI 和 Anthropic：`/v1/chat/completions`、`/v1/responses` 与 `/v1/messages`
 直接接收相应模型提供商的请求体。请求需包含 `x-reef-scenario` 请求头；新的名称会使用
 部署配置的 recipe 创建 scenario。请求本身不选择 recipe。
 
@@ -191,43 +193,35 @@ reef.post(
 
 ### Harness 进化部署
 
-使用模型 API 改进 harness 技能，无需 GPU。
+用模型 API（而非 GPU）根据自然语言请求改进编码 harness。
 
-harness 进化 recipe 自带 profile，只需指定 provider URL 和模型。在 Reef checkout 和已激活的 Python 环境中：
+Reefine 是内置的 harness 改进 recipe，自带部署配置；只需指定 provider URL 和模型。在 Reef checkout 和已激活的 Python 环境中：
 
 ```bash
-reef serve --recipe harness-evolve \
+reef serve --recipe reefine \
   --inference.upstream-url http://127.0.0.1:11434 \
   --inference.upstream-model gemma4:26b
 ```
-
-该示例连接本地 Ollama 服务。使用其他 provider 时，修改
+使用其他 provider 时，修改
 `--inference.upstream-url` 和 `--inference.upstream-model`；需要认证时设置
-`REEF_UPSTREAM_API_KEY`。
-该 profile 监听 `127.0.0.1:8900`，不设 token，状态保存在 `.reef/harness-evolve/`。
-需要修改其他内容时，复制[该 profile](reef/service/profiles/harness-evolve.yaml) 并用 `-c` 传入你的副本。
+`REEF_UPSTREAM_API_KEY`。使用此配置时，Reef 监听 `127.0.0.1:8901`，不启用认证（启动前设置 `REEF_TOKEN` 即要求该 token），状态保存在
+`.reef/reefine/`。
+需要修改其他内容时，复制[该部署配置](reef/service/profiles/reefine.yaml) 并用 `-c` 传入你的副本。
 
-在另一个已激活同一 Python 环境的终端中（安装会把该终端的 `python3` 写入 `reef-pi`）安装 harness 并运行任务：
+在另一个已激活同一 Python 环境的终端中（安装会把该终端的 `python3` 写入 `reef-pi`），创建 scenario、安装 harness 并提出修改请求：
 
 ```bash
-curl -fsS 'http://127.0.0.1:8900/reef/harness/install?adapter=pi' | bash
-reef-pi -p "fix the failing test in auth.py"
+curl -fsS -H "Content-Type: application/json" \
+  -d '{"name": "my-harness"}' http://127.0.0.1:8901/reef/scenarios
+curl -fsS -H "x-reef-scenario: my-harness" \
+  'http://127.0.0.1:8901/reef/harness/install?adapter=pi' | bash
 
-# After running your tests, report the actual result:
-reef-pi report --score 0 --feedback "missed the empty-token case"
+reef-pi evolve "when I ask you to fix a bug, reproduce it with a failing test first"
 ```
 
-要更换模型，用另一个 `--inference.upstream-model` 重启 `reef serve`，并在 `reef-pi` 之前重新执行安装命令：
-安装过程会将模型 ID 写入本地 harness 配置。
+脚本安装到 `~/reef-harness/<scenario>`（这里是 `~/reef-harness/my-harness`）；用 `bash -s -- <dir>` 可以指定其他安装根目录。无论装在哪里，都请放在 agent 工作的项目之外：会话可以写入其项目中的文件，安装根目录若在项目内，会话就可能改变下一个会话运行的内容。安装写入 `reef-pi` 的 Python 环境和它导入的 Reef checkout 也一样：`reef-pi` 启动时，那里的代码以你的身份运行。对 codex 和 dsh，也不要把它们放在 `/tmp` 或 `$TMPDIR` 下：它们的沙箱同样允许命令写入这些目录。`reef-pi` 在会话开始前做的检查，只对只能写入其项目、`/tmp` 和 `$TMPDIR` 的会话有效；pi 运行命令时没有沙箱（见 [Recover a changed installation](https://reefinfra.ai/docs/user-guide/evolve-your-harness/#recover-a-changed-installation)）。
 
-失败报告会触发候选技能更新。Reef 会在教程的三个编程任务上对候选技能和当前 harness
-进行评估，仅在候选胜出时才发布。如何自定义任务和评估方式，请参阅
-[教程](tutorials/evolve-your-harness/README.md)。
-
-要用一句话向 harness 提出修改需求，并看到从提出到安装的完整流程，请运行 [Reefine 教程](tutorials/reefine/README.md)。
-
-Reefine 随 `reef-infra` 内置提供：运行 `reef serve --recipe reefine --model ollama/gemma4:26b` 即可启动。
-
+在 `reef-pi` 会话内，`/reefine <text>` 提交同样的请求。所服务的模型把修改写成一个 skill、一条 rules 条目、一个 agent 命令或一个 pi extension。主机能隔离它时（Linux，装有 `bwrap` 和 `pasta`，以非 root 用户运行），或在你信任的机器上设置 `REEF_PROPOSER_SANDBOX=none` 时，它以 coding agent 的方式工作，先真实运行改过的 harness 再交回修改。下一个会话启动时的更新提示会提供安装；若某个步骤在你两轮对话之间完成，会立即询问是否安装。用 `/versions` 查看各版本（会打开该步骤的页面），用 `/versions <version> install` 安装。要更换模型，用另一个 `--inference.upstream-model` 重启 `reef serve` 并重新执行安装命令：安装过程会将模型 ID 写入本地 harness 配置。脚本化的 bug 修复与研究演示见 [Reefine 教程](tutorials/reefine/README.md)，配置说明见 [Reefine 指南](docs/user-guide/recipes/reefine.rst)。
 
 ## 📚 Recipes 与示例
 
@@ -240,7 +234,7 @@ recipe 链接到其指南，每个已测 benchmark 链接到其结果页，[Reci
 | 任务类型 | 任务形状 | 进化模型 | 进化 harness | 标准 benchmark |
 |---|---|---|---|---|
 | 科学发现 | 对一个有可度量目标的难题反复尝试 | [TTT-Discover](https://reefinfra.ai/docs/user-guide/recipes/tttd/)、[Guidance-TTT](recipes/tttd/examples/guidance_ttt/README.md) | 暂无 | 已测：[TriMul](recipes/tttd/examples/guidance_ttt/results/README.md)、[圆填充](recipes/tttd/examples/tttd/README.md#formal-8x64-results)、[Erdős 最小重叠](recipes/tttd/examples/tttd/README.md#formal-8x64-results)。 |
-| 任务流上的持续学习 | 由校验器逐个打分的独立任务流 | [SAO](https://reefinfra.ai/docs/user-guide/recipes/sao/) | [Meta-Harness](recipes/meta_harness/README.md)、[GEPA](https://reefinfra.ai/docs/user-guide/recipes/gepa/) | 已测：[AIME 2025](recipes/gepa/examples/aime/README.md)、[IMOAnswerBench](recipes/sao/examples/sao/README.md#results)、Terminal-Bench（[示例](recipes/meta_harness/examples/terminal_bench/README.md)、[结果](recipes/meta_harness/RESULTS.md)）。 |
+| 任务流上的持续学习 | 由校验器逐个打分的独立任务流 | [SAO](https://reefinfra.ai/docs/user-guide/recipes/sao/) | [Meta-Harness](recipes/meta_harness/README.md)、[GEPA](https://reefinfra.ai/docs/user-guide/recipes/gepa/) | 已测：[AIME 2025](recipes/gepa/examples/aime/README.md#the-validation-contract)、[IMOAnswerBench](recipes/sao/examples/imo_answerbench/README.md#results)、[CEO-Bench](recipes/sao/examples/ceobench/README.md#results)、[Terminal-Bench](recipes/meta_harness/examples/terminal_bench/README.md#results)。 |
 | 从使用中学习 | 没有人上报分数或反馈延迟到达的真实交互 | [OpenClaw-RL](https://reefinfra.ai/docs/user-guide/recipes/openclawrl/) | [SkillClaw](https://reefinfra.ai/docs/user-guide/recipes/skillclaw/)、[Reefine](docs/user-guide/recipes/reefine.rst) | 已测：[GSM8K 任务流上的模拟学生](recipes/openclawrl/examples/openclawrl/README.md#results)、[WildClawBench](recipes/skillclaw/README.md#the-2026-08-29-results-glm-53-flash-preliminary)。 |
 
 [`recipes/basic/`](recipes/basic/) 是只记录、不学习的起始栈，不在目录之内。如果想快速了解
@@ -284,6 +278,22 @@ recipe 链接到其指南，每个已测 benchmark 链接到其结果页，[Reci
 如果 Reef 对你有帮助，欢迎点个 Star ⭐，让更多人发现并参与进来。
 
 
+## 📚 引用
+
+如果你在研究中使用 Reef，请引用：
+
+```bibtex
+@misc{reef2026,
+  title  = {Reef: Infrastructure for Continually Self-Improving Agents},
+  author = {{Reef Contributors}},
+  year   = {2026},
+  url    = {https://github.com/Human-Agent-Society/reef}
+}
+```
+
+引用元数据也可在 [CITATION.cff](CITATION.cff) 中获取。
+
+
 ## 👥 团队
 
 Reef 汇聚了一群探索 Agent 如何从经验中学习、持续进化的人。以下成员共同将这一想法
@@ -293,6 +303,7 @@ Reef 汇聚了一群探索 Agent 如何从经验中学习、持续进化的人�
 
 [Wenhao Chai](https://github.com/wenhaochai),
 [Shuangrui Ding](https://github.com/Mark12Ding),
+[Shiyi Zoe Du](https://github.com/zoedsy),
 [Hao He](https://github.com/hehaodele),
 [Haoze He](https://github.com/HectorHHZ),
 [Chonghe Jiang](https://github.com/Chonghe-Jiang),
@@ -306,6 +317,7 @@ Reef 汇聚了一群探索 Agent 如何从经验中学习、持续进化的人�
 [Zhenting Qi](https://github.com/zhentingqi),
 [Ao Qu](https://github.com/quao627),
 [Mingruo Qu](https://github.com/workhardforcoding),
+[Yihong Tang](https://github.com/YihongT),
 [Zhaokai Wang](https://github.com/wzk1015),
 [Xuezhi Yan](https://github.com/yanxz),
 [Hanfei Yu](https://github.com/hanfeiyu),
@@ -315,7 +327,8 @@ Reef 汇聚了一群探索 Agent 如何从经验中学习、持续进化的人�
 [Kaichen Zhou](https://github.com/kaichen-z),
 [Zijian Zhou](https://github.com/BobbyZhouZijian),
 [Jiacheng Zhu](https://github.com/Jiacheng-Zhu-AIML),
-[Dingyi Zhuang](https://github.com/ZhuangDingyi).
+[Dingyi Zhuang](https://github.com/ZhuangDingyi),
+[Xinkai Zou](https://github.com/jayzou3773).
 
 
 ## ⭐ Star History

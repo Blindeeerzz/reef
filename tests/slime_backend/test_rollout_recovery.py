@@ -184,15 +184,13 @@ def test_rollout_manager_routes_entire_serving_lifecycle_through_custom_executor
         "prepare_training_connection",
         "recover_updatable_engines",
         "clear_updatable_num_new_engines",
-        "health_monitoring_pause",
-        "health_monitoring_resume",
     ]
     for method in methods:
         result = getattr(manager, method)()
         assert result == (None if method == "prepare_training_connection" else method)
-    assert manager.onload(["weights"]) == "onload"
+    assert manager.offload(["weights"]) == "offload"
     assert manager.check_weights("snapshot") == "check_weights"
-    assert executor.calls[-2:] == [("onload", (["weights"],), {}), ("check_weights", ("snapshot",), {})]
+    assert executor.calls[-2:] == [("offload", (["weights"],), {}), ("check_weights", ("snapshot",), {})]
     manager.shutdown()
     assert executor.closed
 
@@ -335,13 +333,15 @@ def test_reef_external_fields_are_tensorized_without_patching_slime(monkeypatch:
 def test_uncertain_weight_update_synchronously_retires_managed_engine_handles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    raw_rollout, module = _load_manager_module(monkeypatch, serving=True)
+    from reef.inference.sglang.launch import SGLangModel
+
+    _, module = _load_manager_module(monkeypatch, serving=True)
     engines = [
         types.SimpleNamespace(shutdown=_RemoteMethod("shutdown-0")),
         types.SimpleNamespace(shutdown=_RemoteMethod("shutdown-1")),
     ]
     group = _ServerGroup(list(engines), num_new_engines=0)
-    server = raw_rollout.RolloutServer(server_groups=[group])
+    server = SGLangModel(server_groups=[group])
     pauses: list[str] = []
     manager = object.__new__(module.SGLangWorker)
     manager._control = manager._create_control()
@@ -415,6 +415,42 @@ def test_recovered_engine_is_paused_before_an_in_place_update_continues(
     manager.recover_updatable_engines()
 
     assert lifecycle == ["monitor_pause", "pause:in_place"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("pause_mode", ["retract", "in_place"])
+def test_retracting_pause_clears_the_shared_cache_before_a_publication(
+    monkeypatch: pytest.MonkeyPatch, pause_mode: str
+) -> None:
+    """Nothing the previous weights built may survive into the next ones."""
+    raw_rollout, module = _load_manager_module(monkeypatch, serving=True)
+    calls: list[str] = []
+
+    class RecordingRemote:
+        def __init__(self, event: str) -> None:
+            self.event = event
+
+        def remote(self, *args):
+            calls.append(":".join((self.event, *map(str, args))))
+            return self.event
+
+    engines = [
+        types.SimpleNamespace(pause_generation=RecordingRemote("pause"), flush_cache=RecordingRemote("flush"))
+        for _ in range(2)
+    ]
+    group = _ServerGroup([*engines, None], num_new_engines=0)
+    manager = object.__new__(module.SGLangWorker)
+    manager._control = manager._create_control()
+    manager.config = SGLangConfig("model", 1, 1, 1, pause_mode=pause_mode)
+    manager.servers = {"actor": raw_rollout.RolloutServer(server_groups=[group])}
+    manager._health_monitors = []
+
+    manager.pause_generation_for_update()
+
+    if pause_mode == "retract":
+        assert calls == ["pause:retract", "pause:retract", "flush", "flush"]
+    else:
+        assert calls == ["pause:in_place", "pause:in_place"], "an engine that keeps in-flight KV keeps its cache"
 
 
 @pytest.mark.unit
@@ -703,12 +739,15 @@ def test_serving_worker_installs_reef_monitor_with_native_timings(monkeypatch):
 def test_publication_pause_fences_surviving_engines_before_dead_slots_recover(monkeypatch):
     _, module = _load_manager_module(monkeypatch, serving=True)
     paused = []
-    engine = types.SimpleNamespace(pause_generation=types.SimpleNamespace(remote=lambda mode: paused.append(mode)))
+    engine = types.SimpleNamespace(
+        pause_generation=types.SimpleNamespace(remote=lambda mode: paused.append(mode)),
+        flush_cache=types.SimpleNamespace(remote=lambda: paused.append("flush")),
+    )
     worker = types.SimpleNamespace(
         config=SGLangConfig("model", 1, 1, 1, pause_mode="retract"), updatable_rollout_engines=[None, engine]
     )
-    module._SGLangInferenceEngines(worker).pause()
-    assert paused == ["retract"]
+    module._SGLangEngineGroup(worker).pause()
+    assert paused == ["retract", "flush"]
 
 
 @pytest.mark.parametrize("offload", [False, True])

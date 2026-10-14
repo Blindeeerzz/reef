@@ -11,8 +11,8 @@ Accepting records, replaying them after a restart, holding a batch until it is
 acknowledged, committing algorithm state, running the backend, and publishing
 the next version are Reef's job, not the method's.
 
-This page covers a **weight** recipe. For a harness-evolution method with
-``propose``, ``evaluate``, and a selection policy against a fixed model, see
+This page covers a **weight** recipe. For a harness-evolution method with a
+proposer, an episode scorer, and a selection policy against a fixed model, see
 `Evolve your harness <../user-guide/evolve-your-harness.rst#write-a-method>`__.
 
 .. code:: mermaid
@@ -60,7 +60,7 @@ the evaluator measures the candidate and the selector decides whether to publish
 Before you write one
 --------------------
 
-If an existing recipe's processor, preparer, loss family, gate, and surface
+If an existing recipe's processor, objective, gate, and surface
 already match your method, change its config instead. Re-read `Choosing a recipe
 <../user-guide/recipes.rst>`__.
 
@@ -71,16 +71,17 @@ A weight recipe is four pieces plus the class that binds them.
 
 .. config::
 
-   step preparer | a plain function turning a typed batch into a ``StepSignal``: the loss family, the per-sample advantages, and the next algorithm state. No torch, Ray, or Slime import.
-   processor | assembles valid reports and referenced records into samples and typed batches
-   report type | the ``ReportBase`` subclass Reef validates at ingress, so a malformed report is HTTP 400 rather than a training-time surprise
+   training objective | a ``TrainingObjective`` declaring a loss family and implementing ``prepare(batch, state)`` to return advantages, metrics, and proposed state in a ``StepSignal``. No torch, Ray, or Slime import.
+   step schedule | a ``StepScheduling`` the recipe binds beside its objective: rollout unit, optimizer step size, epochs, shuffle, and remainder handling. The objective declares only whether its loss tolerates more than one pass.
+   pipeline stages | the record stage, the record-to-task stage, and the task-to-batch stage that turn valid reports and referenced records into samples and typed batches; ``pipeline_spec()`` names them
+   report type | the ``ReportBase`` subclass Reef validates at ingress, so a malformed report is HTTP 400 rather than a training-time surprise; a scenario of several components admits a report any of them accepts, and a trainer releases one shaped for another component
    candidate evaluation | measures the checkpoint the backend exported and decides select or reject. Every recipe carries one; the default, ``BackendAlwaysSelectPlugin``, selects whatever the backend produced
-   recipe class | a frozen dataclass whose ``training_spec()`` names the processor, the preparer (by dotted path), and the loss family
+   recipe class | a frozen dataclass whose ``pipeline_spec()`` names the stage classes and whose ``training_spec()`` names the objective (by registered name or dotted class/instance path) and the step schedule; ``training_method_selector()`` optionally picks another objective or a learning-rate schedule for each job
 
 `Python API <../reference/python-api.rst>`__ is the contract for each.
 ``recipes/sao/`` is the smallest cookbook implementation and the one to read
 alongside this page. Its four files total fewer than 200 lines: ``recipe.py``,
-``processor.py``, ``preparer.py``, and the ``slime/`` loss family.
+``processor.py``, ``objective.py``, and the ``slime/`` loss family.
 
 Configure it
 ~~~~~~~~~~~~
@@ -97,11 +98,12 @@ Copy a weight-training config as described in `Evolve your model
 
 .. code:: yaml
 
-   schema-version: 2
    recipe:
      implementation: "my_pkg.my_method:MyMethodRecipe"
-     config:
-       batch-size: 4
+   pipeline:
+     task2batch:
+       config:
+         batch_size: 4
 
 This fragment shows only the new keys; keep the inference, storage and training
 settings from the config you copied. Reef assembles the driver and HTTP process. Set
@@ -144,49 +146,97 @@ resolves those fields before connecting the runtime and passes them to
 for standalone recipe construction. Custom construction hooks should consume
 the resolved values; ``_recipe_kwargs`` continues to own non-field sections.
 
+Switch methods within a run
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+By default every job trains ``training_spec().objective`` at the backend's
+configured learning rate. To train several phases in one run, override
+``training_method_selector``. Reef calls the selector's
+``select(batch, algorithm_state)`` once for each job and trains the job with the
+``TrainingMethod`` that it returns:
+
+.. code:: python
+
+   from reef.recipe import WeightTrainingRecipe
+   from reef.runtime.interfaces import LearningRateSchedule, TrainingMethod
+   from reef.train.runtime_backend import TrainingMethodSelector
+
+   POLICY = LearningRateSchedule("policy", 1e-6, warmup_steps=10)
+
+
+   class SupervisedThenPolicy(TrainingMethodSelector):
+       def select(self, batch, algorithm_state):
+           if algorithm_state.get("steps", 0) < 200:
+               return TrainingMethod("my_pkg.objectives:SupervisedObjective")
+           return TrainingMethod("my_pkg.objectives:PolicyObjective", POLICY)
+
+
+   class MyMethodRecipe(WeightTrainingRecipe):
+       def training_method_selector(self):
+           return SupervisedThenPolicy()
+
+- ``select`` must depend only on its arguments. A retry calls it again, and
+  the method is part of the job's identity.
+- The backend resolves the objective in its own process. Use a dotted
+  reference for an objective from another package.
+- The backend refuses a method that it cannot train before the job starts.
+  `Per-job families <loss-families.rst#per-job-families>`__ and `Train with
+  Tinker <../user-guide/tinker.rst>`__ list what each backend supports.
+
+A ``LearningRateSchedule`` counts optimizer steps. A job that selects the
+active schedule continues it, also on a retry or after a restart. A job that
+selects another schedule starts that schedule at step 0. A job that selects no
+schedule keeps the active one. Starting a schedule does not reset the optimizer
+state. Job metrics include ``training_method``. While a schedule is active,
+they also include ``learning_rate`` and ``learning_rate_schedule``.
+
 Gate a candidate
 ~~~~~~~~~~~~~~~~
 
 A runtime finishes training by exporting a candidate. The recipe's
 ``candidate_evaluation`` decides what happens to it. A weight recipe declares
-its evaluator in the deployment config; the top-level ``evaluation`` section
-serves weight recipes only, and a harness recipe builds its evaluator in code
-instead:
+its evaluator in the deployment config. The top-level ``evaluation`` section
+serves weight recipes only. A harness recipe names its plugin in
+``evolution.selection`` instead (see `Write a harness method
+<write-a-harness-method.rst#selection-policies>`__):
 
 .. code:: yaml
 
    evaluation:
-     module: my_pkg.evaluation:EvaluationFactory
+     module: my_pkg.evaluation:BenchmarkEvaluator
      config:
        benchmark: gsm8k
        threshold: 0.8
 
-The reference names a ``CandidateEvaluationPluginFactory`` subclass with a
-no-argument constructor, or an instance of that class. Its constructor must
-not allocate model resources: Reef validates it when loading recipe config.
-Reef calls ``build`` once per scenario with the opaque ``config``,
-``runtime``, ``training_runtime``, ``scenario``, and ``environ``:
+The reference names a ``ConfiguredEvaluationPlugin`` subclass. Reef imports
+and checks the class when it loads the recipe config. It then calls the class
+method ``from_config`` once per scenario with the opaque ``config``,
+``runtime``, ``training_runtime``, ``scenario``, and ``environ``. Allocate
+model resources in ``from_config``, not when the module is imported:
 
 .. code:: python
 
-   from reef import CandidateEvaluationPluginFactory
-   from my_pkg.benchmarks import BenchmarkGate
+   from reef import ConfiguredEvaluationPlugin
 
 
-   class EvaluationFactory(CandidateEvaluationPluginFactory):
-       def build(self, config, *, runtime, training_runtime, scenario, environ):
-           return BenchmarkGate(
-               benchmark=config["benchmark"], threshold=config["threshold"],
-               runtime=runtime, scenario=scenario,
-           )
+   class BenchmarkEvaluator(ConfiguredEvaluationPlugin):
+       def __init__(self, benchmark, threshold, runtime, scenario):
+           ...
 
-``BenchmarkGate`` must inherit ``CandidateEvaluationPlugin`` and implement
-both ``evaluate`` and ``decide``. Plain factory functions and objects that only
-have matching method names are rejected. The trainer runs the plugin between the backend
-step and publication, calling ``evaluate`` before ``decide``. A rejection
-leaves the previous version serving. `Python API
-<../reference/python-api.rst#candidate-evaluation>`__ documents the plugin
-contract: ``evaluate``, ``decide``, the fail-closed rule,
+       @classmethod
+       def from_config(cls, config, *, runtime, training_runtime, scenario, environ):
+           return cls(config["benchmark"], config["threshold"], runtime, scenario)
+
+       def evaluate(self, candidate): ...
+
+       def decide(self, candidate, evaluation): ...
+
+The class must implement both ``evaluate`` and ``decide``. Reef rejects
+functions, abstract classes, and objects that only have matching method names.
+The trainer runs the plugin between the backend step and publication, calling
+``evaluate`` before ``decide``. A rejection leaves the previous version
+serving. `Python API <../reference/python-api.rst#candidate-evaluation>`__
+documents the plugin contract: ``evaluate``, ``decide``, the fail-closed rule,
 and idempotency by ``candidate.candidate_id``. The section fields are in
 `Configuration <../reference/configuration.rst#the-evaluation-section>`__.
 
@@ -201,7 +251,7 @@ none.
 External method services
 ------------------------
 
-Version 2 configuration describes components and their parameters. It does not
+A configuration file describes components and their parameters. It does not
 accept ``service``, ``services`` or ``execution.services``. HTTP settings belong
 in ``reef``. Reef assembles its HTTP process and supported inference/training
 backends. Additional method services run independently of Reef's orchestrator.

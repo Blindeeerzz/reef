@@ -9,7 +9,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
@@ -39,6 +39,11 @@ class ServiceConfig:
     port: int = config_option(8900, public_path=("reef", "port"), help="HTTP bind port.")
     tokens: tuple[str, ...] = config_option(
         (), public_path=("reef", "tokens"), help="Accepted bearer tokens as a JSON/YAML list."
+    )
+    served_url: str | None = config_option(
+        None,
+        public_path=("reef", "served_url"),
+        help="URL the recipe's own evaluation calls reach this service at (default: loopback on the bind port).",
     )
     console_origins: tuple[str, ...] = config_option(
         (), public_path=("reef", "console_origins"), help="Allowed console origins as a JSON/YAML list."
@@ -70,6 +75,22 @@ class ServiceConfig:
     inference_options: Mapping[str, Any] = field(
         default_factory=dict,
         metadata=config_metadata("Native inference engine options.", public_path=("inference", "options")),
+    )
+    teacher_model_path: str | None = config_option(
+        None, public_path=("teacher", "model_path"), help="Teacher engine HF model or directory; frozen SGLang."
+    )
+    teacher_num_gpus: int = config_option(
+        1, public_path=("teacher", "num_gpus"), help="Teacher engine GPUs, also its tensor parallel size."
+    )
+    teacher_port: int = config_option(
+        30001, public_path=("teacher", "port"), help="Teacher engine's internal HTTP port."
+    )
+    teacher_timeout: float = config_option(
+        300.0, public_path=("teacher", "timeout"), help="Deadline of one teacher engine scoring request in seconds."
+    )
+    teacher_options: Mapping[str, Any] = field(
+        default_factory=dict,
+        metadata=config_metadata("Native SGLang teacher options.", public_path=("teacher", "options")),
     )
     training_backend: str | None = config_option(
         None, public_path=("training", "backend"), help="Managed weight-training backend (default: slime)."
@@ -156,9 +177,6 @@ class ServiceConfig:
     record_database_schema: str = config_option(
         "reef_records", public_path=("storage", "record_database_schema"), help="PostgreSQL schema."
     )
-    agent_record_retention_days: float = config_option(
-        7.0, public_path=("storage", "agent_record_retention_days"), help="Record retention in days."
-    )
     agent_record_retention_max_bytes: int = config_option(
         20 * 1024**3,
         public_path=("storage", "agent_record_retention_max_bytes"),
@@ -175,6 +193,11 @@ class ServiceConfig:
         default_factory=dict,
         metadata=config_metadata("W&B settings as a JSON/YAML object.", path=("observability", "wandb")),
     )
+    #: OpenTelemetry record tracing settings, sourced from ``observability.tracing``.
+    tracing_config: Mapping[str, Any] = field(
+        default_factory=dict,
+        metadata=config_metadata("Record tracing settings as a JSON/YAML object.", path=("observability", "tracing")),
+    )
     training_settings: Mapping[str, Any] = field(
         default_factory=dict,
         metadata=config_metadata(
@@ -186,13 +209,27 @@ class ServiceConfig:
         default=None,
         metadata=config_metadata("Candidate evaluation settings as a JSON/YAML object.", path=("evaluation",)),
     )
+    #: The stage classes that replace a weight-training recipe's own: ``record2record``, ``record2task``, ``task2batch``.
+    pipeline_settings: Mapping[str, Any] | None = field(
+        default=None,
+        metadata=config_metadata(
+            "Pipeline stages as a JSON/YAML object: record2record, record2task and task2batch, each with module and "
+            "config.",
+            path=("pipeline",),
+        ),
+    )
+    #: The generator service ``reef serve`` starts beside the HTTP service; ``reef.service.deploy.generator`` parses it.
+    generator_settings: Mapping[str, Any] | None = field(
+        default=None,
+        metadata=config_metadata("Generator service settings as a JSON/YAML object.", path=("generator",)),
+    )
     #: The flat ``reef`` config section, interpolated; recipes read their own
     #: config fields from it (see the class docstring).
     recipe_settings: Mapping[str, Any] = field(default_factory=dict, repr=False)
     preset_config: Mapping[str, Any] | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        RecordRetention(self.agent_record_retention_days, self.agent_record_retention_max_bytes)
+        RecordRetention(max_bytes=self.agent_record_retention_max_bytes)
         if self.record_backend not in {"sqlite", "postgres"}:
             raise ValueError("reef.record_backend must be sqlite or postgres")
         if self.record_backend == "postgres":
@@ -209,15 +246,6 @@ def _config_service_value(config: Mapping[str, Any], *path: str, default: Any = 
     if isinstance(value, str):
         return interpolate_config(config, value)
     return value
-
-
-def _config_service_mapping(config: Mapping[str, Any], *path: str) -> Mapping[str, Any]:
-    value: Any = config
-    for key in path:
-        if not isinstance(value, Mapping):
-            return {}
-        value = value.get(key)
-    return {} if value is None else value
 
 
 def _reef_section(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -237,7 +265,14 @@ SERVICE_CONFIG_ALIASES: Mapping[str, str] = {"token": "tokens"}
 
 def service_owned_keys() -> frozenset[str]:
     """Every ``reef.*`` key the service layer consumes."""
-    non_reef_fields = {"evaluation_settings", "training_settings", "wandb_config"}
+    non_reef_fields = {
+        "evaluation_settings",
+        "generator_settings",
+        "pipeline_settings",
+        "tracing_config",
+        "training_settings",
+        "wandb_config",
+    }
     return frozenset(
         settings_field.name
         for settings_field in dataclasses.fields(ServiceConfig)
@@ -286,46 +321,31 @@ def _argument_value(config: Mapping[str, Any], argument: ConfigArgument) -> Any:
     return interpolate_config_values(config, node)
 
 
-def parse_service_arguments(
-    config: Mapping[str, Any], *, cli_paths: frozenset[tuple[str, ...]] = frozenset()
-) -> dict[str, Any]:
+def parse_service_arguments(config: Mapping[str, Any]) -> dict[str, Any]:
     """Parse the merged public values with the shared component parser.
 
-    The caller has already replaced overridden environment references and
-    expanded the effective config. ``cli_paths`` remains accepted for callers
-    of the earlier adapter; precedence is already present in the mapping.
+    The caller has already applied overrides and environment references, so
+    precedence is already present in the mapping.
     """
-    if "schema-version" in config:
-        from reef.service.deploy.deployment_config import translate_layout
-
-        config = translate_layout(config)
     arguments = service_config_arguments()
     supplied = {}
     for argument in arguments:
         value = _argument_value(config, argument)
         if value is not None:
             supplied[argument.name] = value
-    # Precedence is already represented by the merged mapping. Keep cli_paths
-    # in this compatibility entrypoint; conversion is shared with components.
     return parse_config_values(
         tuple(dataclasses.replace(argument, required=False) for argument in arguments), supplied, environ=os.environ
     )
 
 
-def normalize_service_config(
-    config: Mapping[str, Any], *, cli_paths: frozenset[tuple[str, ...]] = frozenset()
-) -> dict[str, Any]:
+def normalize_service_config(config: Mapping[str, Any]) -> dict[str, Any]:
     """Validate explicit public settings and pass the same values to children.
 
     Do not add defaults to the deployment mapping: recipes must still know
     which of their fields the operator supplied, and custom stacks may have
     no Reef HTTP child at all.
     """
-    if "schema-version" in config:
-        from reef.service.deploy.deployment_config import translate_layout
-
-        config = translate_layout(config)
-    values = parse_service_arguments(config, cli_paths=cli_paths)
+    values = parse_service_arguments(config)
     normalized = copy.deepcopy(dict(config))
     for argument in service_config_arguments():
         if _argument_value(config, argument) is None:
@@ -337,49 +357,20 @@ def normalize_service_config(
     return normalized
 
 
-def _service_tokens(config: Mapping[str, Any]) -> tuple[str, ...]:
-    """Accepted Bearer tokens from ``reef.token`` (one) and ``reef.tokens`` (a list).
-
-    Every accepted token is equivalent; listing several lets a caller rotate
-    its credential without downtime. Empty entries are dropped so an unset
-    ``${REEF_TOKEN}`` does not become a credential.
-    """
-    tokens: list[str] = []
-    single = _config_service_value(config, "reef", "token")
-    if isinstance(single, str) and single:
-        tokens.append(single)
-    listed = _config_service_mapping(config, "reef").get("tokens")
-    if listed is not None:
-        if isinstance(listed, str) or not isinstance(listed, Sequence):
-            raise ValueError("reef.tokens must be a list of strings")
-        for item in listed:
-            if not isinstance(item, str):
-                raise ValueError("reef.tokens must be a list of strings")
-            value = interpolate_config(config, item).strip()
-            if value:
-                tokens.append(value)
-    return tuple(dict.fromkeys(tokens))
-
-
 def service_config_from_mapping(config: Mapping[str, Any]) -> ServiceConfig:
-    """Translate the config's ``reef`` section into HTTP service settings."""
-    if "schema-version" in config:
-        from reef.service.deploy.deployment_config import (
-            component_config_arguments,
-            normalize_component_layout,
-            translate_layout,
-        )
-
-        config = translate_layout(config)
-        config = normalize_component_layout(config, component_config_arguments(config))
+    """Read HTTP service settings from a resolved deployment's ``reef`` section."""
     values = parse_service_arguments(config)
     if not isinstance(values["recipe"], str) or not values["recipe"]:
         raise ValueError("config must declare a non-empty reef.recipe")
-    values["tokens"] = _service_tokens({"reef": {"token": values.pop("token"), "tokens": values["tokens"]}})
+    # ``reef.token`` (one) and ``reef.tokens`` (a list) are equivalent credentials;
+    # several let a caller rotate without downtime. An empty entry, such as an
+    # unset ``${REEF_TOKEN}``, is not a credential.
+    tokens = (token.strip() for token in (values.pop("token") or "", *values["tokens"]))
+    values["tokens"] = tuple(dict.fromkeys(token for token in tokens if token))
     values["console_origins"] = console_origins(values["console_origins"])
     # The legacy retry deadline follows the request timeout unless supplied.
     if _config_service_value(config, "reef", "inference_retry_timeout_s") is None:
         values["inference_retry_timeout_s"] = values["inference_timeout_s"]
-    # Preserve shared execution settings for presets and directly selected recipes.
-    preset = dict(config) if "implementation" in config or ":" in values["recipe"] else None
+    # Preserve shared execution settings for directly selected recipes.
+    preset = dict(config) if ":" in values["recipe"] else None
     return ServiceConfig(**values, recipe_settings=_reef_section(config), preset_config=preset)

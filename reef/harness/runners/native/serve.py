@@ -30,7 +30,7 @@ import traceback
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -726,7 +726,7 @@ class Server(ServeState, ReleaseUpdateListener):
             "content_id": manifest.get("content_id"),
             "files": sorted(files) if isinstance(files, Mapping) else [],
             "parent_release_id": manifest.get("parent_release_id"),
-            "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "installed_at": datetime.now(UTC).isoformat(timespec="seconds"),
         }
         (self.dest / HARNESS_RELEASE_FILE).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
 

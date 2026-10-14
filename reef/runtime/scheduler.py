@@ -29,8 +29,8 @@ from threading import Lock, RLock
 from typing import Any, Literal
 
 from reef.core.artifact_ref import parse_runtime_load_spans
-from reef.core.batches import TrainingBatch
-from reef.core.evaluation import SelectionDecision
+from reef.core.batches import StepScheduling, TrainingBatch
+from reef.observability.operations import OperationMetrics
 from reef.runtime.interfaces import (
     ActivatedModel,
     CandidateTrainingDeferred,
@@ -49,21 +49,26 @@ from reef.runtime.interfaces import (
     TrainingJobResult,
     TrainingJobState,
     TrainingJobStore,
+    TrainingMethod,
     TrainingRuntime,
     TrainingRuntimeError,
 )
 from reef.runtime.publication import PUBLISHED_STATES, BackendWeightPublisher, TrainingPublication
 from reef.runtime.recovery import (
+    COMMITTED_MARKER_KEY,
     FileTrainingJobStore,
     TrainingRecovery,
     marker_checkpoint_result,
+    marker_committed,
     marker_disposition,
+    marker_in_flight,
     marker_path,
     marker_result,
 )
 
 #: Job states that hold an activated candidate Reef still has to commit or finish.
 COMMIT_PENDING_STATES = frozenset({"UPDATING_WEIGHTS", *PUBLISHED_STATES})
+
 
 # -- Staleness admission ------------------------------------------------------
 
@@ -236,16 +241,17 @@ def _staleness_admission(
             if drop_reason is not None:
                 break
             producing = RuntimeLoadId.parse(value)
+            lag = producing.lag_behind(serving)
             if str(producing) != value:
                 drop_reason = "malformed_producing_runtime_load_id"
-            elif producing.incarnation != serving.incarnation:
+                break
+            if lag is None:
                 drop_reason = "cross_incarnation"
-            elif previous_sequence is not None and producing.sequence <= previous_sequence:
+                break
+            if previous_sequence is not None and producing.sequence <= previous_sequence:
                 drop_reason = "non_monotonic_producing_runtime_load_ids"
-            if drop_reason is not None:
                 break
             previous_sequence = producing.sequence
-            lag = serving.sequence - producing.sequence
             lags.append(lag)
             group_lags.append(lag)
             if lag < 0:
@@ -406,10 +412,20 @@ class InferenceMemory:
 # -- Durable job execution ----------------------------------------------------
 
 
+#: The payload key naming the scenario that owns a job. The marker records it; the job identity leaves it out, since
+#: a job is its batch whichever scenario asked for it.
+JOB_OWNER_KEY = "owner"
+
+
 def training_job_id(payload: Mapping[str, Any]) -> str:
-    """Preserve the retry-stable identity of the shared training payload."""
+    """Preserve the retry-stable identity of the shared training payload: its batch and admission fence."""
     identity = dict(payload)
     identity.pop("max_staleness", None)
+    identity.pop(JOB_OWNER_KEY, None)
+    # The other components of a composite advance the scenario step while a job is out; its retry must replay.
+    identity.pop("scenario_step", None)
+    # The processor numbers batches per process; a reload numbers the same rows again.
+    identity.pop("batch_id", None)
     if uses_staleness_admission(payload):
         # A newer admission fence on retry must not repeat an optimizer step.
         identity.pop("expected_runtime_load_id", None)
@@ -417,11 +433,12 @@ def training_job_id(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _rollout_id(payload: Mapping[str, Any]) -> int:
-    rollout_id = payload.get("rollout_id")
-    if not isinstance(rollout_id, int) or isinstance(rollout_id, bool) or rollout_id < 0:
-        raise ValueError("training job rollout_id must be non-negative")
-    return rollout_id
+def job_scenario_step(payload: Mapping[str, Any]) -> int:
+    """The scenario step a training payload trains, validated as a non-negative integer."""
+    scenario_step = payload.get("scenario_step")
+    if not isinstance(scenario_step, int) or isinstance(scenario_step, bool) or scenario_step < 0:
+        raise ValueError("training job scenario_step must be non-negative")
+    return scenario_step
 
 
 class TrainingExecution:
@@ -460,18 +477,17 @@ class TrainingExecution:
 
     def execute(self, payload: Mapping[str, Any]) -> TrainingJobResult:
         job_id = training_job_id(payload)
-        rollout_id = _rollout_id(payload)
+        scenario_step = job_scenario_step(payload)
         if self._store is None:
             raise RuntimeError("training job checkpoint path is not configured")
         marker = self._store.read()
         disposition = marker_disposition(marker, job_id)
-        if disposition == "conflict":
-            if marker is None:
-                raise RuntimeError("conflicting training disposition has no marker")
-            raise RuntimeError(f"training marker is {marker['status']}; operator recovery required")
-        if disposition != "fresh":
-            if marker is None:
-                raise RuntimeError("replayed training disposition has no marker")
+        if marker is not None and disposition == "conflict":
+            raise RuntimeError(
+                f"training marker is {marker['status']} for job {marker['job_id']}, not this batch's job "
+                f"{job_id}; operator recovery required (see Training-step coordination in the executors guide)"
+            )
+        if marker is not None and disposition != "fresh":
             return marker_result(marker) if marker["status"] == "COMPLETE" else marker_checkpoint_result(marker)
         admission_metrics: Mapping[str, Any] = {}
         if self._context is not None:
@@ -482,12 +498,14 @@ class TrainingExecution:
                 )
             if decision is not None:
                 admission_metrics = decision.metrics
-        with self._backend.prepare(payload, job_id=job_id, rollout_id=rollout_id, prior_marker=marker) as prepared:
+        with self._backend.prepare(
+            payload, job_id=job_id, scenario_step=scenario_step, prior_marker=marker
+        ) as prepared:
             if isinstance(prepared, TrainingJobResult):
                 if prepared.outcome not in {"stale", "storage_blocked"}:
                     raise RuntimeError("training preparation may only return stale or storage_blocked")
                 return prepared
-            return self._run(prepared, self._store, job_id, payload, admission_metrics)
+            return self._run(prepared, self._store, job_id, payload, admission_metrics, marker)
         raise RuntimeError("training preparation suppressed an execution failure")
 
     def _run(
@@ -497,15 +515,30 @@ class TrainingExecution:
         job_id: str,
         payload: Mapping[str, Any],
         admission_metrics: Mapping[str, Any],
+        prior_marker: Mapping[str, Any] | None,
     ) -> TrainingJobResult:
         """Train and checkpoint one admitted job, recording RUNNING then CHECKPOINT."""
         checkpoint = prepared.checkpoint
-        running: dict[str, Any] = {"status": "RUNNING", "job_id": job_id, "rollout_id": checkpoint.rollout_id}
+        # Reef reasons in scenario steps; the marker's rollout_id is the backend's own checkpoint index.
+        running: dict[str, Any] = {
+            "status": "RUNNING",
+            "job_id": job_id,
+            "rollout_id": checkpoint.rollout_id,
+            "scenario_step": checkpoint.scenario_step,
+        }
+        if prior_marker is not None and marker_committed(prior_marker):
+            # RUNNING overwrites the settled marker, so keep a copy: the
+            # Slime preflight restores it when a kill leaves nothing saved.
+            running[COMMITTED_MARKER_KEY] = {
+                key: value for key, value in prior_marker.items() if key != COMMITTED_MARKER_KEY
+            }
         parent_runtime_load_id = payload.get("expected_runtime_load_id")
         if isinstance(parent_runtime_load_id, str) and parent_runtime_load_id:
             running["parent_runtime_load_id"] = parent_runtime_load_id
-        if checkpoint.scenario is not None:
-            running.update(scenario=checkpoint.scenario, scenario_step=checkpoint.scenario_step)
+        # The owner: the adapter's scenario on a runtime training several, else the scenario the payload names.
+        owner = checkpoint.scenario if checkpoint.scenario is not None else payload.get(JOB_OWNER_KEY)
+        if isinstance(owner, str) and owner:
+            running["scenario"] = owner
         store.write(running)
         self._state.phase = "training"
         try:
@@ -548,6 +581,7 @@ class RuntimeScheduler:
     """
 
     def __init__(self, training_runtime: TrainingRuntime, inference_runtime: InferenceRuntime) -> None:
+        self.operations = OperationMetrics(("weight_sync",), counters=("stale_batches_total",))
         self.training_runtime = training_runtime
         self.inference_runtime = inference_runtime
         status = training_runtime.training_job_status()
@@ -562,14 +596,16 @@ class RuntimeScheduler:
     def prepare_training_step(
         self,
         batch: TrainingBatch,
-        step_preparer: str,
+        method: TrainingMethod,
         algorithm_state: Mapping[str, Any],
+        scheduling: StepScheduling,
         scenario_step: int,
     ) -> PreparedTrainingStep:
         return self.training_runtime.prepare_training_step(
             batch,
-            step_preparer,
+            method,
             algorithm_state,
+            scheduling,
             scenario_step,
             serving_runtime_load_id=(
                 self.inference_runtime.serving_runtime_load_id()
@@ -578,51 +614,33 @@ class RuntimeScheduler:
             ),
         )
 
-    def execute_training_job(self, payload: Mapping[str, Any]) -> TrainingJobResult:
-        """Execute a native checkpoint job and stage its uncommitted weights."""
-        with self._colocated_pause():
-            checkpoint = self._validated_result(self.training_runtime.execute_training_job(payload))
-        if checkpoint.outcome in {"stale", "storage_blocked"}:
-            self._resume_if_colocated()
-            return checkpoint
-        if checkpoint.outcome == "complete":
-            if (self.training_runtime.training_job_status() or {}).get("commit_acknowledged") is True:
-                self.inference_runtime.resume_admission()
-            else:
-                self.inference_runtime.pause_admission()
-            return checkpoint
-        if checkpoint.outcome != "checkpoint" or checkpoint.training_job_id is None:
-            raise TrainingRuntimeError("deferred weight updates require a checkpoint with a training_job_id")
-        if not self._colocated:
-            # Training and checkpointing may overlap inference on disjoint
-            # GPUs. Close admission only for the short serving-weight update.
-            self.inference_runtime.pause_admission()
-        updated = self.inference_runtime.resume_weight_update(checkpoint.training_job_id)
-        return TrainingJobResult(
-            "complete",
-            updated.runtime_load_id,
-            checkpoint.checkpoint_path,
-            metrics=checkpoint.metrics,
-            training_job_id=checkpoint.training_job_id,
-        )
-
     def train_candidate(self, payload: Mapping[str, Any]) -> ModelCandidate:
         """Train a checkpoint, preserving the currently published source version."""
         current = self.inference_runtime.current_runtime_load_id()
-        with self._colocated_pause():
-            candidate = self.training_runtime.train_candidate(payload)
+        try:
+            with self._colocated_pause():
+                candidate = self.training_runtime.train_candidate(payload)
+        except StaleCandidate:
+            self.operations.increment("stale_batches_total")
+            raise
         if not isinstance(candidate, ModelCandidate):
             raise RuntimeContractError("training runtime must return ModelCandidate")
         return replace(candidate, current_runtime_load_id=current)
 
+    @property
+    def colocated(self) -> bool:
+        """Whether the backend hands the engine's devices to training for the whole job."""
+        return self._colocated
+
     def activate_candidate(self, candidate: ModelCandidate) -> ActivatedModel:
         """Stage selected weights behind closed inference admission."""
         self.inference_runtime.pause_admission()
-        return self.inference_runtime.activate_candidate(candidate)
+        with self.operations.measure("weight_sync"):
+            return self.inference_runtime.activate_candidate(candidate)
 
-    def reject_candidate(self, candidate: ModelCandidate, decision: SelectionDecision) -> None:
+    def reject_candidate(self, candidate: ModelCandidate) -> None:
         """Discard a candidate before reopening the unchanged serving version."""
-        self.training_runtime.reject_candidate(candidate, decision)
+        self.training_runtime.reject_candidate(candidate)
         self.inference_runtime.resume_admission()
 
     @contextmanager
@@ -677,7 +695,7 @@ class RuntimeScheduler:
         training_job = self.training_runtime.training_job_status()
         if training_job is None:
             if committed_training_job_id is not None:
-                self._finish_committed_training_job(committed_training_job_id)
+                self.finish_committed_training_job(committed_training_job_id)
             return
         status = training_job["status"]
         if self._sync_inference_admission(training_job):
@@ -697,30 +715,36 @@ class RuntimeScheduler:
             return
         if status not in COMMIT_PENDING_STATES:
             return
-        rollout_id, training_job_id = _pending_job_identity(training_job)
-        if status == "UPDATING_WEIGHTS":
-            self.inference_runtime.resume_weight_update(training_job_id)
-        if (
-            status == "COMPLETE"
-            and training_job.get("commit_acknowledged") is not True
-            and scenario_step == rollout_id + 1
-            and committed_training_job_id is None
-            and committed_training_without_job_id
-        ):
-            # Older bridges resumed before Reef committed and could not write
-            # their job identity into the old commit schema. The exact
-            # next-step training record is the strongest durable migration
-            # proof available; rollback/non-training commits are excluded.
-            self._finish_committed_training_job(training_job_id)
+        if "scenario_step" not in training_job and not marker_in_flight(training_job):
+            # A settled job an earlier release recorded without its scenario step has nothing left to finish.
             return
-        if scenario_step > rollout_id and committed_training_job_id == training_job_id:
-            self._finish_committed_training_job(training_job_id)
+        job_scenario_step, training_job_id = pending_job_identity(training_job)
+        if status == "UPDATING_WEIGHTS":
+            with self.operations.measure("weight_sync"):
+                self.inference_runtime.resume_weight_update(training_job_id)
+        # Other components can advance the scenario; only this job's commit can finish it.
+        if committed_training_job_id is not None:
+            committed = scenario_step > job_scenario_step and committed_training_job_id == training_job_id
+        else:
+            # Older bridges lack job IDs and require an unacknowledged COMPLETE marker at the exact next step.
+            committed = (
+                committed_training_without_job_id
+                and status == "COMPLETE"
+                and training_job.get("commit_acknowledged") is not True
+                and scenario_step == job_scenario_step + 1
+            )
+        if committed:
+            self.finish_committed_training_job(training_job_id)
 
     def acknowledge_commit(self, scenario_step: int, training_job_id: str, *, scenario: str | None = None) -> None:
         """Release a selected update only after its matching durable commit."""
         self.recover_pending_step(scenario_step, scenario=scenario, committed_training_job_id=training_job_id)
 
-    def _finish_committed_training_job(self, training_job_id: str) -> None:
+    def finish_committed_training_job(self, training_job_id: str) -> None:
+        """Acknowledge the matched job before publishing its identity and reopening admission.
+
+        If either acknowledgement fails, admission stays closed; retry completes the same job.
+        """
         self.inference_runtime.acknowledge_publication(training_job_id)
         self.training_runtime.commit_candidate(training_job_id)
         self.inference_runtime.mark_published()
@@ -746,24 +770,18 @@ class RuntimeScheduler:
         self.inference_runtime.pause_admission()
         return False
 
-    @staticmethod
-    def _validated_result(result: Any) -> TrainingJobResult:
-        if not isinstance(result, TrainingJobResult):
-            raise TrainingRuntimeError(f"train group handle returned invalid training result: {type(result).__name__}")
-        return result
 
-
-def _pending_job_identity(training_job: Mapping[str, Any]) -> tuple[int, str]:
-    rollout_id = training_job.get("rollout_id")
+def pending_job_identity(training_job: Mapping[str, Any]) -> tuple[int, str]:
+    job_scenario_step = training_job.get("scenario_step")
     training_job_id = training_job.get("training_job_id")
     if (
-        not isinstance(rollout_id, int)
-        or isinstance(rollout_id, bool)
+        not isinstance(job_scenario_step, int)
+        or isinstance(job_scenario_step, bool)
         or not isinstance(training_job_id, str)
         or not training_job_id
     ):
         raise TrainingRuntimeError("training-job status is missing its durable identity")
-    return rollout_id, training_job_id
+    return job_scenario_step, training_job_id
 
 
 # -- Worker-side coordination -------------------------------------------------
@@ -794,14 +812,17 @@ class TrainingCoordinator:
         self._last_train_metrics: dict[str, Any] = {}
         self._operation_lock = Lock()
         self._training.start()
-        self._inference_url = TrainingRecovery(self._publication, self._weight_publisher).restore(
-            self._execution.recover()
-        )
+        recovered = self._execution.recover()
+        self._inference_url = TrainingRecovery(self._publication, self._weight_publisher).restore(recovered)
 
     def prepare_training_step(
-        self, batch: Any, step_preparer: str, algorithm_state: Mapping[str, Any]
+        self,
+        batch: TrainingBatch,
+        method: TrainingMethod,
+        algorithm_state: Mapping[str, Any],
+        scheduling: StepScheduling,
     ) -> PreparedTrainingStep:
-        return self._training.prepare_training_step(batch, step_preparer, algorithm_state)
+        return self._training.prepare_training_step(batch, method, algorithm_state, scheduling)
 
     def shutdown(self) -> None:
         """Close training workers; deployment ownership closes inference separately."""
@@ -858,14 +879,15 @@ class TrainingCoordinator:
         training_job.update(
             status=marker["status"],
             training_job_id=marker["job_id"],
-            # Reef reasons in scenario steps; in per-scenario mode the
-            # marker's rollout id is the bridge-global checkpoint index.
-            rollout_id=marker.get("scenario_step", marker["rollout_id"]),
             runtime_load_id=marker.get("runtime_load_id"),
             commit_acknowledged=marker.get("commit_acknowledged", False),
         )
         if "scenario" in marker:
             training_job["scenario"] = marker["scenario"]
+        if "scenario_step" in marker:
+            # Reef reasons in scenario steps; the marker's rollout_id is the backend's own checkpoint index. Every
+            # job still out names its step; only a settled marker an earlier release wrote has none.
+            training_job["scenario_step"] = marker["scenario_step"]
         return training_job
 
     def start_rollout_id(self) -> int:
@@ -879,16 +901,6 @@ class TrainingCoordinator:
         reconcile the serving engine with its recovered head.
         """
         return self._context.runtime_load_id
-
-    def republish_serving(self) -> str:
-        """Recover serving actors and republish unchanged weights in place.
-
-        This path is for an inference-engine replacement, not a training step.
-        Keep the current token because the checkpoint/model tensors have not
-        changed; the next optimizer-backed publication advances it normally.
-        """
-        with self._operation_lock:
-            return self._publication.republish(self._context.runtime_load_id)
 
     def execute_training_job(self, payload: Mapping[str, Any]) -> TrainingJobResult:
         """Delegate job replay, train ordering and checkpoint recording to Reef."""

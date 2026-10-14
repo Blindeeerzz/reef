@@ -24,7 +24,7 @@ from reef.recipe.checkpoint_strategy import EveryNVersions
 from reef.runtime.interfaces import InferenceHandler
 from reef.service.app import InferenceRetryPolicy, RequestService, create_app
 from reef.storage.sqlite import SQLiteScenarioStorage
-from reef.surface import Surface, create_weight_surface
+from reef.surface import Surface, create_harness_surface, create_weight_surface
 from reef.train import TrainStepResult
 from reef.train.types import TrainingBatch
 
@@ -90,7 +90,7 @@ def test_provider_native_generation_stays_behind_inference_backend() -> None:
     with closing(build_default_dispatcher(scenario_storage=SQLiteScenarioStorage())) as dispatcher:
         routes = {route.resource.canonical for route in create_app(dispatcher).router.routes()}
 
-    assert "/v1/chat/completions" in routes
+    assert {"/v1/chat/completions", "/v1/responses", "/v1/messages"} <= routes
     assert "/generate" not in routes
 
 
@@ -242,7 +242,7 @@ def test_failed_artifact_fork_does_not_leave_runtime(tmp_path) -> None:
     with pytest.raises(ArtifactError, match="cannot fork math"):
         dispatcher.get_or_create_scenario("math")
 
-    assert not dispatcher.has_loaded("math")
+    assert dispatcher._registry.get_optional("math") is None
 
 
 @pytest.mark.unit
@@ -283,7 +283,7 @@ def test_http_artifact_failure_returns_service_unavailable(tmp_path) -> None:
 def test_recipe_pipeline_has_no_update_algorithm() -> None:
     runtime = build_default_dispatcher(scenario_storage=SQLiteScenarioStorage()).get_or_create_scenario("math")
 
-    assert runtime.trainer.processor.output_schema is TrainingBatch
+    assert runtime.trainer.pipeline.output_schema is TrainingBatch
     assert runtime.trainer.candidate_backend is None
 
 
@@ -299,7 +299,7 @@ def test_inference_payload_is_recorded_without_reef_body_fields() -> None:
             assert request_payload == payload
             return {"provider": "ok"}
 
-        await service.infer(
+        await service.infer_with_data(
             {"x-reef-scenario": "chat"},
             payload,
             "/v1/chat/completions",
@@ -461,6 +461,9 @@ def test_http_app_forwards_inference_stream_before_upstream_finishes(tmp_path) -
             assert first == first_chunk
             assert dispatcher.get_or_create_scenario("chat").records.replay("chat") == ()
 
+            metrics = dispatcher.get_or_create_scenario("chat").operations.snapshot()
+            assert metrics["serve/request/active"] == 1
+            assert metrics["serve/request/completed_total"] == 0
             finish_upstream.set()
             metadata_frame = await asyncio.wait_for(response.content.readuntil(b"\n\n"), timeout=1)
             metadata = json.loads(metadata_frame.removeprefix(b"data: "))
@@ -470,6 +473,10 @@ def test_http_app_forwards_inference_stream_before_upstream_finishes(tmp_path) -
             assert len(records) == 1
             assert records[0].agent_record_id == agent_record_id
             assert await asyncio.wait_for(response.read(), timeout=1) == final_chunk
+            metrics = dispatcher.get_or_create_scenario("chat").operations.snapshot()
+            assert metrics["serve/request/active"] == 0
+            assert metrics["serve/request/completed_total"] == 1
+            assert metrics["ingest/accepted_total"] == 1
             assert records[0].payload["response"]["stream"] is True
             assert records[0].payload["response"]["complete"] is True
             assert records[0].payload["response"]["status"] == 200
@@ -549,6 +556,57 @@ def test_anthropic_stream_attaches_receipt_only_after_record_is_stored(tmp_path)
 
 
 @pytest.mark.unit
+def test_responses_stream_is_forwarded_and_attaches_its_receipt_to_response_completed(tmp_path) -> None:
+    async def run() -> None:
+        from aiohttp import web
+
+        delta = b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hi"}\n\n'
+        completed = b'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_1"}}\n\n'
+        received = {}
+
+        async def upstream(request):
+            received["payload"] = await request.json()
+            response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+            await response.prepare(request)
+            await response.write(delta)
+            await response.write(completed)
+            return response
+
+        upstream_app = web.Application()
+        upstream_app.router.add_post("/v1/responses", upstream)
+        upstream_server = TestServer(upstream_app)
+        await upstream_server.start_server()
+        dispatcher = build_default_dispatcher(
+            local_artifact_dir=tmp_path / "local", scenario_storage=SQLiteScenarioStorage()
+        )
+        backend = HttpInferenceHandler(str(upstream_server.make_url("")).rstrip("/"))
+        client = TestClient(TestServer(create_app(dispatcher, inference_handler=backend)))
+        await client.start_server()
+        try:
+            payload = {"model": "gpt-4o", "input": [{"role": "user", "content": "hi"}], "stream": True}
+            response = await client.post("/v1/responses", headers={"x-reef-scenario": "chat"}, json=payload)
+            assert response.status == 200
+            body = await response.read()
+            assert body.startswith(delta)
+            terminal = body[len(delta) :].decode()
+            assert terminal.startswith("event: response.completed\n")
+            metadata = json.loads(terminal.split("data: ", 1)[1])
+            assert metadata["response"] == {"id": "resp_1"}
+            [record] = dispatcher.get_or_create_scenario("chat").records.replay("chat")
+            assert metadata["reef"]["agent_record_id"] == record.agent_record_id
+            assert record.payload["response"]["complete"] is True
+            assert record.payload["response"]["message"] == {"role": "assistant", "content": "hi"}
+            assert received["payload"] == payload
+        finally:
+            await client.close()
+            await upstream_server.close()
+
+    import asyncio
+
+    asyncio.run(run())
+
+
+@pytest.mark.unit
 def test_sse_without_terminal_event_has_no_receipt_and_is_recorded_incomplete(tmp_path) -> None:
     async def run() -> None:
         from aiohttp import web
@@ -582,6 +640,11 @@ def test_sse_without_terminal_event_has_no_receipt_and_is_recorded_incomplete(tm
             [record] = dispatcher.get_or_create_scenario("chat").records.replay("chat")
             assert record.payload["response"]["complete"] is False
             assert record.payload["response"]["error"] == "upstream SSE ended without a terminal event"
+            metrics = dispatcher.get_or_create_scenario("chat").operations.snapshot()
+            assert metrics["serve/request/failed_total"] == 1
+            assert metrics["serve/request/completed_total"] == 0
+            assert metrics["serve/request/active"] == 0
+            assert metrics["ingest/accepted_total"] == 1
         finally:
             await client.close()
             await upstream_server.close()
@@ -774,6 +837,11 @@ def test_aborted_inference_restarts_before_recording(tmp_path) -> None:
         finally:
             await client.close()
 
+        metrics = dispatcher.get_or_create_scenario("chat").operations.snapshot()
+        assert metrics["serve/request/started_total"] == 1
+        assert metrics["serve/request/completed_total"] == 1
+        assert metrics["serve/retries_total"] == 1
+        assert metrics["serve/version_mismatch_total"] == 0
         assert [ref.runtime_load_id for ref in calls] == ["sglang-v1", "sglang-v1"]
         recorded = dispatcher.get_or_create_scenario("chat").records.replay("chat")
         assert len(recorded) == 1
@@ -824,6 +892,11 @@ def test_completed_inference_with_mismatched_runtime_load_id_fails_loudly(tmp_pa
         finally:
             await client.close()
 
+        metrics = dispatcher.get_or_create_scenario("chat").operations.snapshot()
+        assert metrics["serve/request/failed_total"] == 1
+        assert metrics["serve/version_mismatch_total"] == 1
+        assert metrics["serve/retries_total"] == 0
+        assert metrics["ingest/accepted_total"] == 0
         assert [ref.runtime_load_id for ref in calls] == ["sglang-v1"]
         assert dispatcher.get_or_create_scenario("chat").records.replay("chat") == ()
 
@@ -858,6 +931,9 @@ def test_interrupted_inference_stops_at_the_configured_retry_deadline() -> None:
             )
             assert response.status == 503
             assert "retry deadline exceeded" in await response.text()
+            metrics = dispatcher.get_or_create_scenario("chat").operations.snapshot()
+            assert metrics["serve/request/failed_total"] == 1
+            assert metrics["serve/timeouts_total"] == 1
             assert not dispatcher.get_or_create_scenario("chat").records.replay("chat")
         finally:
             await client.close()
@@ -984,7 +1060,6 @@ def test_release_ids_are_independent_and_ignore_results_without_candidates(tmp_p
     # strategy: there is no candidate to checkpoint.
     assert dispatcher.get_or_create_scenario("math").scenario_step == 1
     assert dispatcher.get_or_create_scenario("math").repository.require_current_artifact() == math_head
-    assert dispatcher.published["math"] == "no artifact"
     assert decisions == []
 
     for scenario in ("math", "code", "math", "code"):
@@ -1040,7 +1115,6 @@ def test_artifact_publication_failure_leaves_runtime_unchanged(tmp_path, failure
         runtime.repository.checkpoint_artifact,
         runtime.scenario_step,
     ) == previous
-    assert "chat" not in dispatcher.published
     assert list((tmp_path / "local").rglob("*")) == []
 
 
@@ -1142,7 +1216,7 @@ def test_any_accepted_token_authenticates_and_rotation_keeps_scenarios_reachable
 
 @pytest.mark.unit
 def test_tag_headers_ride_the_inference_record_and_nothing_else() -> None:
-    """``x-reef-tag-*`` reaches a processor; the service never reads a value."""
+    """``x-reef-tag-*`` reaches a processor; the service reads no value but ``release`` (see the record test)."""
     from reef.service.request_service import _with_tags
     from reef.service.wire import parse_request_headers
 
@@ -1176,6 +1250,66 @@ def test_tags_ride_the_streaming_record_too() -> None:
     assert streamed["metadata"]["tags"] == {"session": "hw-3"}
 
 
+class HarnessRecipe(Recipe):
+    """A recipe whose clients pull a file tree: the served exchange is the same on every release."""
+
+    def build_surface(self, scenario: str) -> Surface:
+        return create_harness_surface()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "recipe", [HarnessRecipe(), WeightRecipe(checkpoint_strategy=EveryNVersions(3))], ids=["harness", "weights"]
+)
+def test_a_record_names_the_release_the_client_runs_only_where_the_client_pulls_it(tmp_path, recipe) -> None:
+    """A session still on an older release records against it, from its x-reef-tag-release; a tag the catalog does not
+    have, and every call on a scenario that serves weights, records against the served release."""
+
+    async def run() -> tuple[list[str], list[str]]:
+        async def backend(artifact: Artifact, path: str, payload: dict) -> dict:
+            live = isinstance(artifact.ref, LiveWeightArtifactRef)
+            return {"meta_info": {"runtime_load_id": artifact.ref.runtime_load_id}} if live else {"ok": True}
+
+        initial = tmp_path / "initial"
+        initial.mkdir()
+        (initial / "AGENTS.md").write_text("first")
+        dispatcher = Dispatcher(
+            recipe,
+            InMemoryRepositoryBackend.factory(initial, root=tmp_path / "repository"),
+            local_artifact_dir=tmp_path / "local",
+            scenario_storage=SQLiteScenarioStorage(tmp_path / "agent-record"),
+        )
+        releases = [dispatcher.get_or_create_scenario("chat").current_artifact_ref().release_id]
+        for version in (1, 2):
+            if isinstance(recipe, WeightRecipe):
+                result = TrainStepResult(state=None, runtime_load_id=f"sglang-v{version}")
+            else:
+                candidate = tmp_path / f"candidate-{version}"
+                candidate.mkdir()
+                (candidate / "AGENTS.md").write_text(f"v{version}")
+                result = TrainStepResult(state=None, artifact=Artifact.local(candidate))
+            dispatcher._commit_result("chat", result)
+            releases.append(dispatcher.get_or_create_scenario("chat").current_artifact_ref().release_id)
+        assert len(set(releases)) == 3
+        client = TestClient(TestServer(create_app(dispatcher, inference_handler=ContractInferenceHandler(backend))))
+        await client.start_server()
+        try:
+            for tag in (releases[1], releases[0], "no-such-release", None):
+                headers = {"x-reef-scenario": "chat", **({"x-reef-tag-release": tag} if tag else {})}
+                response = await client.post("/v1/chat/completions", headers=headers, json={"messages": []})
+                assert response.status == 200
+            rows = (await (await client.get("/reef/scenarios/chat/records")).json())["records"]
+        finally:
+            await client.close()
+        return releases, [row["artifact_ref"]["release_id"] for row in rows]
+
+    import asyncio
+
+    (first, middle, served), recorded = asyncio.run(run())
+    pulled = isinstance(recipe, HarnessRecipe)
+    assert recorded == [middle if pulled else served, first if pulled else served, served, served]
+
+
 @pytest.mark.parametrize("close_dispatcher", [False, True])
 def test_http_app_closes_dispatcher_only_when_requested(monkeypatch, close_dispatcher) -> None:
     import asyncio
@@ -1199,3 +1333,56 @@ def test_http_app_closes_dispatcher_only_when_requested(monkeypatch, close_dispa
 
         asyncio.run(run())
         assert calls == (["close"] if close_dispatcher else [])
+
+
+def test_ingest_metrics_distinguish_new_records_retries_rejections_and_write_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    from reef.core import AgentRecord
+    from reef.core.reports import ReportValidationError
+    from reef.storage.records import RecordConflict
+
+    with closing(build_default_dispatcher(scenario_storage=SQLiteScenarioStorage())) as dispatcher:
+        item = AgentRecord.create(scenario="math", request_type=RequestType.INFERENCE, payload={})
+        dispatcher.accept_record(item)
+        dispatcher.accept_record(item)
+        with pytest.raises(RecordConflict):
+            dispatcher.accept_record(replace(item, payload={"different": True}))
+        with pytest.raises(ReportValidationError):
+            dispatcher.accept_record(
+                AgentRecord.create(
+                    scenario="math",
+                    request_type=RequestType.REPORT,
+                    payload={"score": 1},
+                    references=("missing",),
+                )
+            )
+        with pytest.raises(ValueError, match="training_mode"):
+            dispatcher.accept_record(
+                AgentRecord.create(
+                    scenario="math",
+                    request_type=RequestType.TRAIN,
+                    payload={"text": "train"},
+                )
+            )
+        scenario = dispatcher.get_or_create_scenario("math")
+
+        def fail_write(item: AgentRecord) -> None:
+            raise OSError("storage unavailable")
+
+        monkeypatch.setattr(scenario.records, "append_result", fail_write)
+        with pytest.raises(OSError):
+            dispatcher.accept_record(replace(item, agent_record_id="another"))
+        metrics = scenario.operations.snapshot()
+        assert metrics["ingest/accepted_total"] == 1
+        assert metrics["ingest/duplicates_total"] == 1
+        assert metrics["ingest/rejected_conflict_total"] == 1
+        assert metrics["ingest/rejected_report_total"] == 1
+        assert metrics["ingest/rejected_request_total"] == 1
+        assert metrics["ingest/write/failed_total"] == 2
+        assert metrics["ingest/write/completed_total"] == 2
+        assert metrics["ingest/write/active"] == 0
+        assert metrics["ingest/write/duration_seconds_total"] > 0
+        assert dispatcher.get_or_create_scenario("code").operations.snapshot()["ingest/accepted_total"] == 0

@@ -1,4 +1,4 @@
-"""Slime-owned step preparation: resolve a preparer signal and build the payload.
+"""Slime-owned step preparation: resolve an objective signal and build the payload.
 
 Backend-agnostic step signals (which loss family, what advantages) live in
 ``reef.train.algos`` and are reusable by any training backend.
@@ -11,29 +11,43 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from reef.runtime.interfaces import PreparedTrainingStep
+from reef.runtime.interfaces import PreparedTrainingStep, TrainingMethod
 from reef.train.algos import StepScheduling
-from reef.train.algos.registry import resolve_preparer
-from reef.train.algos.schedule import MaterializedSchedule, materialize_schedule, schedule_seed
+from reef.train.algos.registry import resolve_objective
+from reef.train.algos.schedule import MaterializedSchedule, batch_schedule_seed, materialize_schedule
 from reef.train.slime_backend.loss_families import resolve_loss_family
+from reef.train.slime_backend.score_centering import sampler_topk_columns
 from reef.train.types import TrainingBatch, TrajectoryItem, trajectories
 
 
 def prepare_slime_step(
     batch: TrainingBatch,
-    preparer_id: str,
+    method: TrainingMethod,
     algorithm_state: Mapping[str, Any],
+    scheduling: StepScheduling,
+    *,
+    sampler_topk: bool = False,
 ) -> PreparedTrainingStep:
-    """Resolve a step preparer and produce its complete Slime training payload."""
-    signal = resolve_preparer(preparer_id)(batch, algorithm_state)
+    """Resolve the job's training objective and produce its complete Slime training payload.
+
+    ``method`` is the objective and learning-rate schedule the recipe selected;
+    the payload records it, so it is part of the job's identity.
+    ``scheduling`` is the recipe's step schedule; the objective rejects one its
+    loss cannot train before any payload is built. ``sampler_topk`` adds each
+    row's recorded sampler top-K, which score centering reads.
+    """
+    objective = resolve_objective(method.objective)
+    objective.validate_scheduling(scheduling)
+    signal = objective.prepare(batch, algorithm_state)
     if signal.action == "skip":
         return PreparedTrainingStep(
             action="skip",
             next_algorithm_state=signal.next_algorithm_state,
             metrics=signal.metrics,
         )
-    schedule = _materialize(batch, signal.scheduling)
-    payload = _build_payload(batch, signal.loss_family, signal.advantages, signal.scheduling)
+    schedule = _materialize(batch, scheduling)
+    payload = _build_payload(batch, objective.loss_family, signal.advantages, scheduling, sampler_topk=sampler_topk)
+    payload["method"] = method.to_dict()
     metrics = dict(signal.metrics)
     if schedule.epochs > 1:
         metrics.setdefault("epochs", schedule.epochs)
@@ -66,7 +80,7 @@ def _materialize(batch: TrainingBatch, scheduling: StepScheduling) -> Materializ
                 else ("sample", index)
             )
             source_rollout_ids.append(group_ids.setdefault(key, len(group_ids)))
-    return materialize_schedule(source_rollout_ids, scheduling, seed=schedule_seed(batch.batch_id))
+    return materialize_schedule(source_rollout_ids, scheduling, seed=batch_schedule_seed(batch))
 
 
 def _build_payload(
@@ -74,6 +88,8 @@ def _build_payload(
     loss_family: str,
     advantages: tuple[float, ...] | None,
     scheduling: StepScheduling,
+    *,
+    sampler_topk: bool = False,
 ) -> dict[str, Any]:
     """Materialize Slime's wire rows in the order ``scheduling`` trains them.
 
@@ -100,6 +116,8 @@ def _build_payload(
     }
     if advantages is not None:
         payload["advantages"] = [advantages[row] for row in schedule.row_indices]
+    if sampler_topk:
+        payload.update(sampler_topk_columns(samples, schedule.row_indices))
     if schedule.step_sizes is not None:
         payload["external_step_sizes"] = list(schedule.step_sizes)
     else:

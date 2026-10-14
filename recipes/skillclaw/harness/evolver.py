@@ -83,7 +83,7 @@ def chat_client(model: ModelBinding) -> ChatFn:
         for attempt in range(MAX_RETRIES):
             try:
                 return model.chat(messages, timeout_s=600, **params)
-            except Exception as exc:  # noqa: PERF203 - their retry loop semantics
+            except Exception as exc:
                 status = getattr(exc, "status", None)
                 detail = str(getattr(exc, "detail", "") or "")
                 if status == 400 and "'temperature' is not supported" in detail:

@@ -52,8 +52,8 @@ the recipe decides what they mean.
 Recipe
 ------
 
-The method a deployment runs. It binds a processor, a step preparer, a loss
-family, a runtime, and a surface. The core ``recipe`` records without
+The method a deployment runs. It binds a processor, a training objective, a
+runtime, and a surface. The core ``recipe`` records without
 producing updates.
 
 Recipe reference
@@ -92,6 +92,15 @@ Release chain
 A scenario's history of accepted updates, each release carrying its parent. A
 durable release can be restored when its surface and runtime support rollback.
 
+Component
+---------
+
+One named part of a release's content, such as ``weights``, ``harness``, or
+``skills``. A recipe's surface declares the components its releases bind and
+how each is admitted, loaded, injected, and read. A one-component release is
+flat; a release with several keeps one directory per component and a manifest
+naming each component's ``content_id``.
+
 Candidate selection
 -------------------
 
@@ -109,28 +118,35 @@ How a published artifact reaches whoever uses it: runtime loading, inference
 hooks, and an optional client-pulled file tree, composed as fields on one
 ``Surface`` value.
 
-Processor
----------
+Training pipeline
+-----------------
 
-The method's data-side component. It assembles records and feedback into a
-typed training batch. Reported feedback uses valid reports with existing
-inference references; computed feedback derives its signal from traffic.
-The engines share batching, consumption, and retention contracts.
+The method's data side. Three stages turn records into a typed training
+batch: the record-to-record stage decides which records train, the
+record-to-task stage turns each record set into tasks, and the task-to-batch
+stage shapes the tasks into a batch. Reported feedback uses valid reports with
+existing inference references; computed feedback derives its signal from
+traffic. Reef's ``TrainingPipeline`` drives the stages and owns batching,
+consumption, and retention.
 
-Preparer
---------
+Training objective
+------------------
 
-The function that converts a reserved batch into a ``StepSignal`` containing
-the loss family, advantages, and next algorithm state. It is backend neutral
-and imports no training stack. A recipe names it by registered name or dotted
-path.
+The method-owned ``TrainingObjective`` declares its backend loss family and
+prepares a complete reserved batch. Its ``prepare`` method returns advantages,
+metrics, and proposed algorithm state in a ``StepSignal`` before optimizer or
+worker partitioning. It imports no training stack. A recipe selects it by
+registered name or dotted class/instance path and binds the ``StepScheduling``
+the runtime cuts each batch with; the objective only rejects a schedule its
+loss cannot train.
 
 Loss family
 -----------
 
-The tensor objective the training backend runs, declared by
-``WeightTrainingSpec.loss_family``. Separate from the preparer. Bundled:
-``sao``, ``tttd``, ``openclawrl``.
+The backend implementation selected by ``TrainingObjective.loss_family`` and
+exposed through ``WeightTrainingSpec.loss_family``. It computes model-dependent
+terms and the tensor loss. Shipped method families include ``sao``, ``tttd``,
+and ``openclawrl``.
 
 Harness
 -------
@@ -148,6 +164,18 @@ adapter, the loop's own tools, hook listeners, and control flow graph. Reef
 serves it over
 ``GET /reef/harness``. An adapter combines the rendered tree with a harness
 executable; that harness and its configured model form the running agent.
+
+Render
+------
+
+Turning a harness tree into the files one agent uses: harness tree entries in,
+paths and their text out. This process does not touch disk or start an agent.
+
+Reef's shared engine and the adapter own it together. The engine goes first,
+merging and writing by rules that are the same for every agent and rejecting a
+tree that breaks them. The adapter gets the last word: its paths decide where
+each file goes, and its quirks module may rewrite, drop, or refuse what the
+engine produced before an agent ever reads it.
 
 Skill
 -----

@@ -26,13 +26,11 @@ from typing import Any, NoReturn
 
 from reef.harness.episodes.model_binding import ModelBinding
 from reef.harness.runners.native.seed import SEED_GRAPH
-from reef.harness.tree.nodes import (
-    _NAME,
-    NATIVE_END_REASONS,
-    NATIVE_MATCH_WINDOW,
-    NATIVE_PATTERN_TIMEOUT_S,
-    validate_native_graph,
-)
+from reef.harness.tree.nodes import _NAME, NATIVE_END_REASONS, validate_native_graph
+
+#: Bound regex input and wall time; Python's matcher has no execution-step limit.
+NATIVE_MATCH_WINDOW = 4096
+NATIVE_PATTERN_TIMEOUT_S = 1.0
 
 #: The child side of a bounded search: the pattern and the text arrive as one JSON pair on stdin, the answer is one
 #: character. No reef import, so the child starts in tens of milliseconds and inherits nothing from the loop.

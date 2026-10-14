@@ -32,6 +32,10 @@ class GuidanceRunStateError(RuntimeError):
     """The Guidance archive and Reef's durable training state do not align."""
 
 
+class GuidanceTrainingTimeoutError(RuntimeError):
+    """Reef did not commit a Guidance-TTT training step before its deadline."""
+
+
 @dataclass(frozen=True)
 class GuidanceRunIdentity:
     """Settings a resumed run must reproduce exactly."""
@@ -160,7 +164,7 @@ def wait_for_training_step(
                 return last_health
         if poll_interval_s:
             time.sleep(poll_interval_s)
-    raise TimeoutError(
+    raise GuidanceTrainingTimeoutError(
         f"training rollout {expected_rollout_id} did not complete after {timeout_s:g}s: "
         f"bridge={last_health}; reef={last_status}"
     )
@@ -209,6 +213,7 @@ def require_step_success(
     expected_rollout_id: int,
     grad_norm: Any,
     lora_rank: int,
+    allow_zero_signal: bool = False,
 ) -> float:
     """Fail closed unless the LoRA optimizer really consumed this step."""
     if actual_rollouts != expected_rollouts:
@@ -219,8 +224,13 @@ def require_step_success(
         raise RuntimeError(f"expected {expected_completed_train_steps} completed train steps: {bridge_health}")
     if bridge_health.get("last_train_rollout_id") != expected_rollout_id:
         raise RuntimeError(f"expected last rollout id {expected_rollout_id}: {bridge_health}")
-    if not isinstance(grad_norm, (int, float)) or not math.isfinite(float(grad_norm)) or grad_norm <= 0:
-        raise RuntimeError(f"optimizer did not report a positive finite grad norm: {grad_norm!r}")
+    if (
+        not isinstance(grad_norm, (int, float))
+        or not math.isfinite(float(grad_norm))
+        or grad_norm < 0
+        or (grad_norm == 0 and not allow_zero_signal)
+    ):
+        raise RuntimeError(f"optimizer did not report the expected finite grad norm: {grad_norm!r}")
     metrics = bridge_health.get("last_train_metrics") or {}
     reported_batch = metrics.get("train/global_batch_size")
     if reported_batch != retained_trajectories:
@@ -233,9 +243,18 @@ def require_step_success(
         raise RuntimeError(f"rank-{lora_rank} LoRA exposed no trainable adapter parameters: {metrics}")
     if base_trainable != 0:
         raise RuntimeError(f"LoRA step left {base_trainable!r} base parameters trainable")
-    if not isinstance(lora_b_nonzero, (int, float)) or lora_b_nonzero <= 0:
+    if (
+        not isinstance(lora_b_nonzero, (int, float))
+        or lora_b_nonzero < 0
+        or (lora_b_nonzero == 0 and not allow_zero_signal)
+    ):
         raise RuntimeError(f"LoRA-B remained zero after the optimizer step: {metrics}")
-    if not isinstance(lora_b_l1, (int, float)) or not math.isfinite(lora_b_l1) or lora_b_l1 <= 0:
+    if (
+        not isinstance(lora_b_l1, (int, float))
+        or not math.isfinite(lora_b_l1)
+        or lora_b_l1 < 0
+        or (lora_b_l1 == 0 and not allow_zero_signal)
+    ):
         raise RuntimeError(f"LoRA-B did not receive a finite nonzero update: {metrics}")
     return float(grad_norm)
 
@@ -360,6 +379,7 @@ class GuidanceRunController:
                 expected_rollout_id=step,
                 grad_norm=metrics.get("train/grad_norm"),
                 lora_rank=identity.lora_rank,
+                allow_zero_signal=nonconstant_groups == 0,
             )
             if not (self.checkpoint_root / "latest_checkpointed_iteration.txt").is_file():
                 raise RuntimeError(f"durable Megatron checkpoint is missing under {self.checkpoint_root}")
@@ -426,6 +446,7 @@ __all__ = [
     "GuidanceRunOutcome",
     "GuidanceRunStateError",
     "GuidanceRunStateStore",
+    "GuidanceTrainingTimeoutError",
     "RayTrainingBridge",
     "atomic_copy",
     "failed_training_step",

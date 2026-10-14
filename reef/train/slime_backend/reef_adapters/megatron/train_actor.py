@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Mapping
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
@@ -10,13 +11,27 @@ from typing import Any
 import ray
 import torch
 import torch.distributed as dist
+from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
+
+# Megatron's gradient buffer binds ``torch.distributed.reduce_scatter_tensor``,
+# ``all_gather_into_tensor`` and ``_coalescing_manager`` when it is imported. Slime
+# applies this patch later, inside ``MegatronTrainRayActor.init``, so the bound
+# functions receive ``ReloadableProcessGroup`` objects and run through torch's
+# Python process-group trampoline, whose work handle crashes in ``wait`` on
+# torch 2.13. Patching before the Slime actor import makes Megatron bind the
+# wrappers, which unwrap the group first. Slime's later call is a per-process no-op.
+monkey_patch_torch_dist()
+
+# isort: split
 from slime.backends.megatron_utils.actor import MegatronTrainRayActor
 from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.memory_utils import print_memory
-from slime.utils.reloadable_process_group import destroy_process_groups, reload_process_groups
+from slime.utils.memory_utils import clear_memory, print_memory
+from slime.utils.misc import Box
 from slime.utils.timer import Timer, timer
 from torch_memory_saver import torch_memory_saver
 
+from reef.train.slime_backend.distill.teacher import TEACHER_TAG
+from reef.train.slime_backend.reef_adapters.batches import WORKER_SWITCH_KEY
 from reef.train.slime_backend.reef_adapters.megatron.adapter_slots import AdapterSlotSwitcher
 from reef.train.slime_backend.reef_adapters.megatron.lora import (
     collect_lora_train_metrics,
@@ -24,6 +39,7 @@ from reef.train.slime_backend.reef_adapters.megatron.lora import (
     zero_megatron_lora_adapters,
 )
 from reef.train.slime_backend.reef_adapters.megatron.lora_checkpoint import save_lora_adapter_to_path
+from reef.train.slime_backend.reef_adapters.megatron.scheduler_resume import restore_scheduler_progress
 from reef.train.slime_backend.reef_adapters.training_job.storage import ADAPTER_SLOTS_DIRNAME
 from reef.train.slime_backend.reef_adapters.worker_hooks import (
     _loss_family_spec,
@@ -31,6 +47,7 @@ from reef.train.slime_backend.reef_adapters.worker_hooks import (
     record_worker_metrics,
     reef_node_ip_and_free_port,
     resolve_tensor_dtype,
+    switch_loss_family,
 )
 
 
@@ -56,6 +73,8 @@ class ReefMegatronTrainRayActor(MegatronTrainRayActor):
 
     def init(self, args, role, with_ref=False, with_opd_teacher=False):
         result = super().init(args, role, with_ref=with_ref, with_opd_teacher=with_opd_teacher)
+        if isinstance(result, int):
+            restore_scheduler_progress(args, result, getattr(self, "opt_param_scheduler", None))
         updater = getattr(self, "weight_updater", None)
         if updater is not None:
             updater.tie_word_embeddings = bool(getattr(self.hf_config, "tie_word_embeddings", False))
@@ -77,11 +96,31 @@ class ReefMegatronTrainRayActor(MegatronTrainRayActor):
             finally:
                 if self.args.offload_train:
                     self.sleep()
+        # The loss families whose actor init hook ran; a family runs its hook on its first job.
+        self.initialized_loss_families = {args.loss_family}
         if role == "actor":
             init_hook = _loss_family_hook(args, "reef_actor_init_hook_path")
             if init_hook is not None:
                 init_hook(self)
         return result
+
+    def switch_training_method(self, worker_switch: Mapping[str, Any]) -> None:
+        """Switch this actor to a job's loss family and learning-rate schedule.
+
+        ``loss_family_args`` are the family's job arguments, which the bridge
+        derived from the startup arguments. ``learning_rate_schedule_state`` is
+        the job's schedule state, or ``None`` for Slime's configured scheduler.
+        """
+        for name, value in worker_switch["loss_family_args"].items():
+            setattr(self.args, name, value)
+        switch_loss_family(self.args)
+        loss_family = self.args.loss_family
+        if loss_family not in self.initialized_loss_families:
+            init_hook = _loss_family_hook(self.args, "reef_actor_init_hook_path")
+            if init_hook is not None:
+                init_hook(self)
+            self.initialized_loss_families.add(loss_family)
+        self.args.reef_learning_rate_schedule_state = worker_switch["learning_rate_schedule_state"]
 
     def set_rollout_manager(self, inference: Any) -> dict[str, Any]:
         """Attach directly to inference and return topology to Reef's trainer."""
@@ -118,10 +157,6 @@ class ReefMegatronTrainRayActor(MegatronTrainRayActor):
         slots = self.adapter_slots
         return None if slots is None else slots.active
 
-    def known_scenarios(self) -> tuple[str, ...]:
-        slots = self.adapter_slots
-        return () if slots is None else slots.scenarios
-
     def initialize_runtime_load_id(self, runtime_load_id: str) -> None:
         """Initialize only the sender's metadata; Reef initializes receivers."""
         self.weight_updater.initialize_exact_runtime_load_id(runtime_load_id)
@@ -134,6 +169,21 @@ class ReefMegatronTrainRayActor(MegatronTrainRayActor):
         """
         self.activate_scenario(scenario)
         self._with_lora_engines(lambda: self.weight_updater.publish_lora_adapter(lora_name))
+
+    def train(
+        self,
+        rollout_id: int,
+        rollout_data_ref: Box,
+        external_data: dict[str, list[torch.Tensor]] | None = None,
+    ) -> dict[str, list[torch.Tensor]] | None:
+        result = super().train(rollout_id, rollout_data_ref, external_data=external_data)
+        if not self.args.offload_train:
+            # A resident model shares its GPUs with the colocated other one.
+            # Slime empties the caching allocator only on the offload path, so
+            # without this a step's freed activations would stay reserved by
+            # this process and be unavailable to the other model's step.
+            clear_memory()
+        return result
 
     def train_actor(self, rollout_id, rollout_data, external_data=None):
         pre_train_hook = _loss_family_hook(self.args, "reef_actor_pre_train_hook_path")
@@ -152,6 +202,13 @@ class ReefMegatronTrainRayActor(MegatronTrainRayActor):
     def _get_rollout_data(self, rollout_data_ref):
         rollout_data = super()._get_rollout_data(rollout_data_ref)
         from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
+
+        # A job whose family or schedule state differs from the workers' current
+        # one carries a worker switch; the actor switches before its family's
+        # keys are sliced. The critic keeps the startup family.
+        worker_switch = rollout_data.pop(WORKER_SWITCH_KEY, None)
+        if worker_switch is not None and self.role == "actor":
+            self.switch_training_method(worker_switch)
 
         device = torch.cuda.current_device()
         # Slime's own per-response-token tensors, plus the ones the loss
@@ -232,7 +289,7 @@ class ReefMegatronTrainRayActor(MegatronTrainRayActor):
             else:
                 delattr(updater, "update_weights")
 
-    def save_model(self, rollout_id: int, force_sync: bool = False) -> None:
+    def save_model(self, rollout_id: int, force_sync: bool = False, *, scenario_step: int) -> None:
         # Not ``@timer``: Slime's own ``save_model`` carries that decorator, and
         # its Timer is a singleton that refuses a second start under the same
         # name ("Timer save_model already started"). Delegating under the
@@ -243,9 +300,9 @@ class ReefMegatronTrainRayActor(MegatronTrainRayActor):
             super().save_model(rollout_id, force_sync=force_sync)
             return
         with Timer().context("save_model"):
-            self._save_lora_model(rollout_id, force_sync=force_sync)
+            self._save_lora_model(rollout_id, force_sync=force_sync, scenario_step=scenario_step)
 
-    def _save_lora_model(self, rollout_id: int, force_sync: bool = False) -> None:
+    def _save_lora_model(self, rollout_id: int, force_sync: bool = False, *, scenario_step: int) -> None:
         if self.args.debug_rollout_only:
             return
 
@@ -273,7 +330,7 @@ class ReefMegatronTrainRayActor(MegatronTrainRayActor):
                         output_dir,
                         self.weight_updater.export_lora_adapter_tensors(),
                         scenario=None if slots is None else slots.active,
-                        scenario_step=rollout_id,
+                        scenario_step=scenario_step,
                     )
             if slots is not None and slots.active is not None:
                 # The Megatron checkpoint above holds only the active slot;
@@ -361,9 +418,9 @@ class ReefMegatronTrainRayActor(MegatronTrainRayActor):
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:
         super().load_other_checkpoint(model_tag, path)
-        if model_tag == "ref" and megatron_lora_enabled(self.args):
+        if model_tag in ("ref", TEACHER_TAG) and megatron_lora_enabled(self.args):
             zero_megatron_lora_adapters(self.model)
-            self.weights_backuper.backup("ref")
+            self.weights_backuper.backup(model_tag)
 
 
 __all__ = ["ReefMegatronTrainRayActor"]

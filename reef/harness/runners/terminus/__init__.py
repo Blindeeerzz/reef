@@ -6,9 +6,8 @@ hands it to Harbor's own ``terminus-2`` agent as native configuration,
 runs the task, and writes the ATIF trajectory and the verifier's reward under
 ``REEF_TERMINUS_SESSION_DIR`` for the episode's trajectory reader.
 
-harbor is an optional dependency (``pip install reef-infra[terminus]``) and is
-imported only when the runner actually runs, so importing the adapter registry
-stays cheap and CI without Docker still loads the descriptor.
+harbor is imported only when the runner actually runs, so importing the adapter
+registry stays cheap and CI without Docker still loads the descriptor.
 """
 
 from __future__ import annotations

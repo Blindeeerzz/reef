@@ -83,13 +83,8 @@ NATIVE_GRAPH_MAX_STEPS = 32
 NATIVE_GRAPH_MAX_STAGES = 16
 NATIVE_GRAPH_MAX_EDGES = 64
 NATIVE_GRAPH_MAX_CASES = 8
-#: A proposed pattern's length limit, how much of the last assistant text a branch matches against, and the wall
-#: clock one search gets. Python's matcher has no step budget and no static test tells a pattern that finishes
-#: from one that never does ((a|a)+b hangs on forty characters), so the interpreter runs each search in a child
-#: process and a search that outlives the clock is a check that failed, never a step that stalls.
+#: Admission bounds pattern length; the interpreter separately bounds search text and execution time.
 NATIVE_PATTERN_MAX_LENGTH = 200
-NATIVE_MATCH_WINDOW = 4096
-NATIVE_PATTERN_TIMEOUT_S = 1.0
 _SECRET_NAME = re.compile(r"(?i)(api[_-]?keys?([_-]?env)?|tokens?|secrets?|passwords?)$")
 #: Distinctive credential shapes in free text, checked like _SECRET_NAME:
 #: prefixes and key blocks that are never legitimate tree content, chosen so
@@ -230,6 +225,21 @@ def redact_secret_shaped(text: str) -> str:
     return _SECRET_TEXT.sub("[redacted credential]", text)
 
 
+#: Characters kept per text in a record; a longer text ends in a clip marker.
+RECORD_TEXT_CAP = 20_000
+
+
+def clip_record_text(text: str) -> str:
+    """``text`` with credential-shaped literals redacted, cut at the record cap with a marker naming how much was dropped.
+
+    The record holds model traffic and proposals before the tree boundary
+    saw them, so the boundary's credential tripwire runs here too."""
+    text = redact_secret_shaped(text)
+    if len(text) <= RECORD_TEXT_CAP:
+        return text
+    return f"{text[:RECORD_TEXT_CAP]}... [clipped {len(text) - RECORD_TEXT_CAP} chars]"
+
+
 def directive_shaped(text: str) -> bool:
     """Whether a saved task contains instruction-override phrasing or a chat-template control token."""
     return _DIRECTIVE_TEXT.search(text) is not None
@@ -270,11 +280,46 @@ def skill_node(ctx: Any, config: Any) -> None:
     _reject_secret_shaped_text(_require_text(options, "text"), "skill node 'text'")
 
 
+#: A write to the harness process's own stdout or stderr from inside an extension.
+_CONSOLE_WRITE = re.compile(
+    r"\bconsole\.(?:log|error|warn|info|debug|trace|dir|table|group|groupEnd|time|timeEnd|count|assert)\s*\("
+    r"|\bprocess\.(?:stdout|stderr)\.write\s*\("
+)
+
+
+def _reject_unguarded_console_write(code: str, where: str) -> None:
+    """Refuse an extension that writes to the harness's stdout or stderr without a ``ctx.hasUI`` guard.
+
+    An extension runs inside the harness process, and in a session with a UI
+    that process owns the screen: a raw write lands in the middle of a drawn
+    frame and leaves the terminal without its input box until the next full
+    redraw. Console output is the fallback for a session without a UI
+    (``-p``, ``--mode json``), so the guard is what separates the two, and it
+    is read textually: the write's own line or the line above it must name
+    ``hasUI``. In a session with a UI the text belongs in
+    ``ctx.ui.notify``, ``ctx.ui.setStatus`` or ``ctx.ui.setWidget``.
+    """
+    lines = code.splitlines()
+    previous = ""
+    for number, line in enumerate(lines, start=1):
+        if _CONSOLE_WRITE.search(line) and "hasUI" not in line and "hasUI" not in previous:
+            raise ValueError(
+                f"{where} writes to the harness's stdout or stderr at line {number} without a ctx.hasUI guard, "
+                "which overwrites the drawn terminal in a session with a UI; show the text with ctx.ui.notify, "
+                "ctx.ui.setStatus or ctx.ui.setWidget, and keep console output for the no-UI path "
+                "(if (!ctx.hasUI) console.error(...))"
+            )
+        if line.strip():
+            previous = line
+
+
 def code_extension_node(ctx: Any, config: Any) -> None:
     """A named code file the harness loads in-process (extension or plugin)."""
     options = _require_mapping(config)
     _require_name(options)
-    _reject_secret_shaped_text(_require_text(options, "code"), "code_extension node 'code'")
+    code = _require_text(options, "code")
+    _reject_secret_shaped_text(code, "code_extension node 'code'")
+    _reject_unguarded_console_write(code, "code_extension node 'code'")
 
 
 def native_tool_node(ctx: Any, config: Any) -> None:

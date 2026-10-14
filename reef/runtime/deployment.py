@@ -39,6 +39,15 @@ _logger = logging.getLogger(__name__)
 class DeploymentResources(ABC):
     """A coordinated allocation and its runtime connection, owned by Reef."""
 
+    @property
+    def training_node_id(self) -> str | None:
+        """Cluster node hosting the trainer's rank 0, or None when the allocation names none.
+
+        Components that must see the trainer's node-local files, such as the
+        coordinator verifying the checkpoints it writes, are placed there.
+        """
+        return None
+
     @abstractmethod
     def start(self) -> None:
         """Acquire resources; close must also handle a partially failed start."""
@@ -303,6 +312,9 @@ class ModelDeployment:
         inference = self.plan.inference
         if config is None or inference is None:
             return
+        # The coordinator verifies the checkpoints the trainer writes, so on a
+        # multi-node cluster it runs on the trainer's node; node-local
+        # checkpoint storage is invisible from anywhere else.
         self._coordinator = Executor.create(
             ExecutorConfig(
                 backend=config.backend,
@@ -314,6 +326,7 @@ class ModelDeployment:
                     ),
                 ),
                 options=config.options,
+                node_id=self.plan.resources.training_node_id,
                 launch_timeout_s=config.launch_timeout_s,
             )
         )
@@ -472,6 +485,7 @@ _BUILTIN_FACTORIES = {
     "sglang": "reef.inference.sglang.runtime:SGLangRuntimeFactory",
     "slime_training": "reef.train.slime_backend.runtime:SlimeRuntimeFactory",
     "tinker": "reef.inference.tinker:TinkerInferenceRuntimeFactory",
+    "vllm": "reef.inference.vllm.runtime:VLLMRuntimeFactory",
 }
 
 #: Explicitly registered extensions, plus cached instances of resolved builtins.
@@ -488,14 +502,6 @@ def register_runtime_kind(cls: type[RuntimeFactory]) -> type[RuntimeFactory]:
     """Register an extension factory when its owning module is explicitly loaded."""
     _register(cls())
     return cls
-
-
-def register_runtime_factory(factory: RuntimeFactory) -> RuntimeFactory:
-    """Register an external runtime factory (module-level convenience)."""
-    if not isinstance(factory, RuntimeFactory):
-        raise TypeError(f"a runtime factory registers a RuntimeFactory, got {type(factory).__name__}")
-    _register(factory)
-    return factory
 
 
 def runtime_kinds() -> tuple[str, ...]:
@@ -650,3 +656,14 @@ class RayRuntimeConfig(RuntimeConnectionConfig):
     actor_name: str = config_option(DEFAULT_ACTOR_NAME, help="Training coordinator actor name.")
     namespace: str = config_option(DEFAULT_NAMESPACE, help="Ray namespace containing the coordinator.")
     ray_address: str | None = config_option(None, help="Ray cluster address.")
+
+
+def http_readiness_command(python: str, endpoint: str) -> list[str]:
+    """Check HTTP readiness without a shell or an optional HTTP client."""
+    return [
+        python,
+        "-c",
+        "import sys, urllib.request; "
+        "urllib.request.build_opener(urllib.request.ProxyHandler({})).open(sys.argv[1], timeout=5).close()",
+        endpoint,
+    ]

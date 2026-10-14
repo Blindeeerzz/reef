@@ -433,27 +433,6 @@ def _gather_along_K(
 # stabilizing the training".
 
 
-def _w_rl(args: Namespace) -> float:
-    return float(getattr(args, "openclawrl_w_rl", 1.0))
-
-
-def _w_opd(args: Namespace) -> float:
-    return float(getattr(args, "openclawrl_w_opd", 1.0))
-
-
-def _eps_clip_lo(args: Namespace) -> float:
-    return float(args.eps_clip)
-
-
-def _eps_clip_hi(args: Namespace) -> float:
-    return float(args.eps_clip_high)
-
-
-def _adv_diff_clip(args: Namespace) -> float | None:
-    val = float(getattr(args, "openclawrl_adv_diff_clip", 1.0))
-    return val if val > 0.0 else None
-
-
 @objective("custom_advantage_function_path")
 def openclawrl_advantages(args: Namespace, rollout_data: dict) -> None:
     """Keep Reef's advantages through Slime's old-policy preparation pass."""
@@ -489,8 +468,8 @@ def openclawrl_loss(
         across k); the per-(k, t) selection signal travels in
         ``prm_teacher_native_topk_indices_cand``.
     """
-    hint_selection = str(getattr(args, "openclawrl_hint_selection", "sequence_optimal"))
-    subset_mode = str(getattr(args, "openclawrl_subset_mode", "student"))
+    hint_selection = args.openclawrl_hint_selection
+    subset_mode = args.openclawrl_subset_mode
     if hint_selection not in ("shortest", "token_optimal", "sequence_optimal"):
         raise ValueError(
             f"Unknown --openclawrl-hint-selection: {hint_selection!r}. Expected one of "
@@ -504,11 +483,12 @@ def openclawrl_loss(
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
 
-    w_rl = _w_rl(args)
-    w_opd = _w_opd(args)
-    eps_lo = _eps_clip_lo(args)
-    eps_hi = _eps_clip_hi(args)
-    diff_clip = _adv_diff_clip(args)
+    w_rl = float(args.openclawrl_w_rl)
+    w_opd = float(args.openclawrl_w_opd)
+    eps_lo = float(args.eps_clip)
+    eps_hi = float(args.eps_clip_high)
+    configured_diff_clip = float(args.openclawrl_adv_diff_clip)
+    diff_clip = configured_diff_clip if configured_diff_clip > 0.0 else None
     entropy_coef = float(getattr(args, "entropy_coef", 0.0) or 0.0)
     need_entropy_for_loss = entropy_coef != 0.0
 

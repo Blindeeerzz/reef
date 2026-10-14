@@ -15,8 +15,20 @@ precedence over repository guidance.
 - Before opening an issue or pull request, search existing issues and PRs for
   overlapping work. Follow the RFC criteria in `CONTRIBUTING.md` for changes to
   architecture, public contracts, persistence, or project policy.
+- Before drafting or updating an issue or RFC, follow
+  [Issue and RFC writing](CONTRIBUTING.md#issue-and-rfc-writing). Keep the
+  proposal concise; do not expand the design just to fill template sections.
 - Reproduce bugs and inspect the relevant implementation before changing it.
   Avoid speculative fixes, unrelated formatting, and unnecessary abstractions.
+- Before submitting a pull request, review every changed line against
+  [Python style and design](#python-style-and-design),
+  [Code structure and readability](#code-structure-and-readability), and
+  [Naming and terminology](#naming-and-terminology), and fix any violation.
+  Passing pre-commit does not replace this review; these rules are not all
+  checked mechanically.
+- Before submitting a pull request that changes documentation, complete the
+  [Documentation review checklist](#documentation-review-checklist) and fix
+  any issues. Review the resulting sections in context, not only the diff.
 - Use [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md).
   Explain the problem, resulting behavior, compatibility impact, and actual
   verification results. Disclose non-trivial AI assistance. The human
@@ -36,13 +48,20 @@ affected package's `__init__.py` docstring to find the owner of a change.
 | `reef/core/` | Shared value types, wire contracts, and errors |
 | `reef/dispatcher.py`, `reef/scenario/` | Coordination, scenario state, commit ordering, and recovery |
 | `reef/service/` | HTTP, authentication, streaming, and deployment |
-| `reef/recipe/`, `reef/train/` | Recipe contracts, processors, training, evaluation, and backend integrations |
+| `reef/recipe/`, `reef/train/` | Recipe contracts, built-in recipes, the training pipeline, training, and backend integrations |
+| `reef/evaluation/` | Candidate evaluation: running and scoring evaluation episodes, deciding whether a candidate is published, and plugin configuration |
 | `reef/runtime/` | Backend-neutral runtime contracts, scheduling, and publication coordination |
 | `reef/inference/` | Concrete inference integrations, engine control, and weight reception |
 | `reef/surface/` | Delivery of published artifacts |
 | `reef/artifact/` | Versioned artifacts and repositories |
 | `reef/storage/` | Record storage contracts, persistence, and retention |
 | `reef/harness/` | Harness adapters, rendering, runners, and trajectories |
+| `reef/sandbox/` | Shared execution and isolation through Harbor environments, file transfer, and process/session cleanup |
+| `reef/record2record/` | The record-to-record stage: which records Reef uses and in what order (report grouping, judging, eligibility checks, selection order) |
+| `reef/background_jobs.py` | A worker that runs asynchronous jobs, such as judge calls, off the trainer thread |
+| `reef/record2task/` | The record-to-task stage: one record set into tasks (`Record2Task`), and the generator service that writes, checks, and plays Harbor tasks (`generator/`) |
+| `reef/task2batch/` | The task-to-batch stage: the tasks of the selected record sets into one batch (`Task2Batch`) |
+| `reef/pipeline_context.py` | The context that the training pipeline and its stages read for one scenario |
 | `recipes/`, `tutorials/` | Method implementations, runnable examples, and tutorials |
 | `tests/`, `docs/`, `docker/` | Verification, documentation, and deployment environments |
 
@@ -70,8 +89,8 @@ uv pip install -e ".[dev]" -e ./third_party/reef-client
 pre-commit install
 ```
 
-Reef supports Python 3.10 and newer; CI tests 3.10, 3.11, and 3.12. Keep source
-syntax compatible with 3.10. Git LFS is required for artifact/checkpoint work.
+Reef requires Python 3.12 or newer, one interpreter for the service and every
+child it starts; CI tests 3.12. Git LFS is required for artifact/checkpoint work.
 
 Training-related work may also need:
 
@@ -112,6 +131,48 @@ for the environment required by the selected backend.
 - Do not bypass checks by adding broad suppressions or growing
   `.github/python-design-baseline.txt` to accommodate new violations.
 
+### Code structure and readability
+
+Apply these rules when writing or reviewing code. The
+[Code Review Style Guide](https://github.com/zhaochenyang20/sglang-diffusion-routing/issues/32)
+is a reference; the rules here take precedence where it differs.
+
+- **Avoid fragmented functions.** Inline tiny helpers used only once or twice
+  when they merely split up a continuous operation. Extract functions for a
+  meaningful responsibility or substantial reuse, not to meet an arbitrary
+  line limit. Keep related logic readable in one place.
+- **Use ordinary identifier names.** Only functions nested inside other
+  functions should use a leading underscore. Start other variables, fields,
+  constants, module-level functions, and methods with an English letter.
+  Preserve Python-required special names such as `__init__`.
+- **Handle realistic failures.** Validate types and data at entry points, then
+  rely on those contracts internally. Keep `try/except` blocks narrow and catch
+  specific, expected failures only when there is a meaningful recovery or error
+  translation. Do not add speculative fallbacks, repeated checks, or tests for
+  impossible states. Tests should be concise and cover observable behavior and
+  the operation's main failure modes.
+- **Keep constants with their consumer.** If a constant is defined in one
+  module solely to be imported by one other module, define it in the consuming
+  module instead. Share constants when they have actual shared use; avoid
+  unnecessary imports and separate modules for single-use values.
+- **Describe types explicitly.** Do not use `Any` fields or annotations to
+  bypass pre-commit, mypy, or other checks. Model the actual value types and
+  interfaces instead of weakening annotations to silence failures.
+- **Name the actual quantity or concept.** Variable and function names must
+  express their domain, scientific, or physical meaning. Include units or
+  representation where needed, such as `timeout_seconds`, `token_count`, or
+  `weight_dtype`; avoid arbitrary abbreviations and vague placeholder names.
+- **Make branches complete and shallow.** Use explicit `else` branches when
+  choosing values, assigning variables, or returning alternative results.
+  Guard clauses that return, raise, or continue early do not need `else`.
+  Check types and invalid data early to keep the main path clear and avoid
+  excessive branching or deeply nested `if/else` blocks.
+- **Use explicit attributes and interfaces.** Do not use `getattr`, `hasattr`,
+  or dynamic attribute mutation to guess object capabilities or add defensive
+  defaults. Replace these patterns in code being changed with typed attributes,
+  direct access, and explicit interfaces; fix the contract instead of probing
+  for attributes at runtime.
+
 ## Naming and terminology
 
 Prefer simple, conventional terminology already used in this repository.
@@ -138,7 +199,117 @@ Prefer concrete alternatives such as:
 
 When adding new concepts, reuse existing repository vocabulary before inventing new terminology.
 
+Prefer concrete names over metaphors in code, UI text, logs, and documentation:
+
+- Use `check` for a condition, `validation` for checking validity, and
+  `evaluation` for running and scoring tasks instead of `gate`.
+- Use `result` for an outcome, `selection_result` for a candidate selection,
+  and `review_result` for a review instead of `verdict`.
+- Name the actual operation or quantity: `evaluation_score`, `evaluation_tasks`,
+  `result_html`, and "passed the checks" are clearer than metaphorical names.
+- Apply terminology changes to identifiers, serialized keys, producers, consumers,
+  tests, and documentation. New records should use the preferred keys. Preserve
+  older records and callers with targeted fallback reads or API aliases where
+  compatibility is needed; keep those legacy names at the boundary rather than
+  spreading them through new code or displayed labels.
+- Keep standard technical names such as neural-network gates and third-party identifiers.
+
+## Writing style
+
+Use an [ASD-STE100](https://www.asd-ste100.org/)-inspired style for replies,
+documentation, comments, docstrings, and issue and pull request text.
+Aim for "80% of the way to ASD-STE100": clear technical writing, without
+requiring the full controlled dictionary or claiming formal compliance.
+
+- Use short sentences, familiar words, and active voice. Make the actor and
+  action clear. Give each instruction its own sentence.
+- For English, aim for at most 20 words per instruction and 25 per descriptive
+  sentence. Treat these as guidelines; preserve meaning and natural phrasing.
+- Use the same term for the same concept. Preserve necessary technical terms,
+  code identifiers, commands, and literal values.
+- Keep conditions, exceptions, technical details, and uncertainty explicit.
+  Split complex sentences instead of deleting information to shorten them.
+- Keep each paragraph focused on one topic. Remove filler and repetition.
+- For Chinese and other languages, apply the clarity principles without
+  imposing English word counts or vocabulary restrictions.
+
+## Documentation review checklist
+
+Apply this checklist to documentation changes in `docs/`, READMEs, recipes,
+and tutorials before submitting a pull request. Passing link, terminology,
+and build checks does not establish readability.
+
+Documentation is user-facing: each page should expose only the interface its
+intended readers need. That interface varies by audience: workflows and
+configuration for users, API contracts for callers, and extension contracts or
+component boundaries for developers. Describe the behavior, guarantees, and
+constraints readers must rely on. Omit implementation details they do not need
+to use that interface correctly; moving those details to an advanced page does
+not by itself make them relevant.
+
+Every pull request must assess documentation impact; this does not require a
+documentation change. Internal refactors and implementation-only fixes normally
+need none when existing documentation remains accurate and sufficient. Explain
+that in the template's `Documentation impact` section. When documentation changes,
+state the reader question, updated pages, and actual verification, including
+anything not verified. Refer to results in `Verification` rather than duplicating them.
+
+- **Reader and purpose.** Identify the question the change answers and make
+  the page's purpose clear near the start. Keep explanations concise while
+  preserving necessary prerequisites, examples, and failure behavior. Update
+  affected workflows, interfaces, and defaults; do not document each PR's
+  implementation details. Keep implementation history and PR commentary in
+  the PR or issue.
+- **Content placement.** Keep each page focused. Put introductory workflows,
+  task instructions, API reference, and developer contracts in their appropriate
+  pages. Prefer revising existing explanations over appending sections; merge
+  duplicates and remove obsolete text in the affected sections. Add content
+  only for a reader need the existing text does not cover. Explain each concept
+  in its owning page and link to it elsewhere. Update navigation and links when
+  moving content.
+- **Reading order.** Explain the main workflow and define concepts before
+  relying on them. Introduce the normal path before optional modes, exceptions,
+  and troubleshooting. A reader should not need to understand several
+  internal types before learning what an operation does.
+- **Findable details.** Organize sections around reader tasks or distinct
+  responsibilities. Separate inputs, outputs, required behavior, and optional
+  configuration. Use lists for parallel items and tables for comparisons;
+  split paragraphs that mix different adapters, modes, or responsibilities.
+- **Useful examples.** For task instructions, include prerequisites, commands
+  or examples, and the expected result. For interfaces, explain inputs, return
+  values, and relevant failure behavior. Match the detail to the page's purpose
+  rather than forcing every page into one template.
+- **Accuracy and plain language.** Check claims, defaults, names, and examples
+  against the current implementation, tests, or actual runs. Preserve relevant
+  constraints when simplifying prose. Use concrete descriptions and established
+  terms; remove vague claims and redundant explanations. Optimize for reader
+  understanding rather than minimum word count.
+- **Final read-through.** Read the complete affected sections, and the whole
+  page when changing its structure. Check transitions, duplication, and
+  consistency with linked pages. Inspect rendered output when changing layout
+  and run the applicable documentation checks. Report actual verification and
+  any unverified examples in the PR.
+
+Use these reviewed changes as examples of specific improvements, not as blanket
+endorsements of every sentence or historical API detail:
+
+- @yanxz: [#185](https://github.com/Human-Agent-Society/reef/pull/185) and
+  [#561](https://github.com/Human-Agent-Society/reef/pull/561): introduce the
+  workflow and its concepts before expanding modes and configuration.
+- @yanxz: [#324](https://github.com/Human-Agent-Society/reef/pull/324): separate
+  the core loop from advanced state details and move reference material to
+  the pages that own it.
+- @YihongT: [#606](https://github.com/Human-Agent-Society/reef/pull/606) and
+  [#607](https://github.com/Human-Agent-Society/reef/pull/607): organize dense
+  method and adapter descriptions by responsibility, with explicit inputs,
+  outputs, and configuration mappings.
+
 ## Tests and checks
+
+Read [tests/AGENTS.md](tests/AGENTS.md) before adding or moving tests. Place new
+tests under their owning component, not directly under `tests/`. Keep
+`tests/reef_service/` for service contracts and service workflows. Update CI
+selection and fixture paths with every move; preserve existing test coverage.
 
 Start with the smallest existing suite that exercises the changed behavior.
 Extend nearby tests and fixtures; check observable results and failure cases.
@@ -147,7 +318,7 @@ changes, include relevant evaluation or baseline comparisons.
 
 ```bash
 # Focused test example; substitute the suite relevant to the change.
-.venv/bin/python -m pytest tests/reef_service/test_reef_artifacts.py -q
+.venv/bin/python -m pytest tests/artifact/test_reef_artifacts.py -q
 
 # Python checks (activate .venv first for pre-commit's local hooks).
 pre-commit run --files path/to/changed_file.py
@@ -181,7 +352,7 @@ keep unrelated working-tree changes intact.
   method's README. Keep examples self-contained.
 - For harness adapters, read
   [harness-adapters.rst](docs/developer-guide/harness-adapters.rst).
-  Golden harness trees under `tests/reef_service/data/harness_goldens/` are
+  Golden harness trees under `tests/harness/data/harness_goldens/` are
   test fixtures, including their instruction files; preserve exact output.
 - For documentation site changes, read [docs/site/AGENTS.md](docs/site/AGENTS.md).
   With Node.js 22, run `npm ci`, `npm run check:docs`, `npm run lint`, and

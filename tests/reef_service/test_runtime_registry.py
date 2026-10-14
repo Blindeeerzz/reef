@@ -37,6 +37,7 @@ def test_runtime_repository_builds_all_available_runtime_types() -> None:
         "sglang",
         "slime_training",
         "tinker",
+        "vllm",
     )
 
 
@@ -69,12 +70,13 @@ def test_recipe_rejects_unknown_runtime_before_scenario_is_created(tmp_path) -> 
     recipes = tmp_path / "recipes"
     recipes.mkdir()
     (recipes / "qwen.yaml").write_text(
-        """implementation: recipe
-runtime:
-  type: missing
-  base_url: http://runtime
-model:
-  path: Qwen/Qwen3.5-27B
+        """recipe:
+  implementation: recipe
+  runtime:
+    type: missing
+    base_url: http://runtime
+inference:
+  upstream-model: Qwen/Qwen3.5-27B
 """
     )
 
@@ -87,13 +89,14 @@ def test_recipe_resolution_does_not_probe_runtime(tmp_path, monkeypatch) -> None
     recipes = tmp_path / "recipes"
     recipes.mkdir()
     (recipes / "qwen.yaml").write_text(
-        """implementation: recipe
-runtime:
-  type: inference_proxy
-  base_url: http://provider
-  api_key: secret
-model:
-  path: Qwen/Qwen3.5-27B
+        """recipe:
+  implementation: recipe
+  runtime:
+    type: inference_proxy
+    base_url: http://provider
+    api_key: secret
+inference:
+  upstream-model: Qwen/Qwen3.5-27B
 """
     )
 

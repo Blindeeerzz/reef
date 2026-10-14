@@ -3,7 +3,7 @@
 - Durable files: atomic JSON writes, the training-job marker and its state
   machine, and the per-scenario publication history.
 - Inference supervision: the hooks an integration implements
-  (:class:`InferenceEngines`, :class:`InferenceMonitor`,
+  (:class:`InferenceEngineGroup`, :class:`InferenceMonitor`,
   :class:`WeightUpdateConnection`, :class:`EngineHealthChecks`), and the
   objects that drive them: :class:`InferenceControl` pauses and recovers
   engines around weight updates; :class:`EngineHealthMonitor` probes them in
@@ -127,6 +127,25 @@ _IN_FLIGHT_STATES = frozenset(
 )
 
 
+def marker_in_flight(marker: Mapping[str, Any] | None) -> bool:
+    """Whether the marker names a job still out: in flight, or complete and not yet acknowledged."""
+    if marker is None:
+        return False
+    status = marker.get("status")
+    if status in _IN_FLIGHT_STATES:
+        return True
+    return status == "COMPLETE" and not marker.get("commit_acknowledged")
+
+
+#: Key under which a RUNNING marker keeps the committed marker it replaced.
+COMMITTED_MARKER_KEY = "committed_marker"
+
+
+def marker_committed(marker: Mapping[str, Any] | None) -> bool:
+    """Whether the marker settles a job whose commit Reef acknowledged."""
+    return marker is not None and marker.get("status") == "COMPLETE" and marker.get("commit_acknowledged") is True
+
+
 def marker_path(hf_template: str) -> Path:
     """The single marker location derived from the HF checkpoint template."""
     return Path(hf_template.format(rollout_id=0)).expanduser().parent / LATEST_JOB_MARKER_FILENAME
@@ -161,6 +180,12 @@ def _validate_marker(value: dict[str, Any], path: Path) -> None:
         raise RuntimeError(f"invalid training marker: {path}")
     if not isinstance(rollout_id, int) or isinstance(rollout_id, bool) or rollout_id < 0:
         raise RuntimeError(f"invalid training marker: {path}")
+    # A job still out is finished by the scenario step it trained; a settled marker needs none, so one an earlier
+    # release left behind when no job was out does not stop a start.
+    if "scenario_step" in value or marker_in_flight(value):
+        scenario_step = value.get("scenario_step")
+        if not isinstance(scenario_step, int) or isinstance(scenario_step, bool) or scenario_step < 0:
+            raise RuntimeError(f"invalid training marker scenario step: {path}")
     commit_acknowledged = value.get("commit_acknowledged")
     if commit_acknowledged is not None and not isinstance(commit_acknowledged, bool):
         raise RuntimeError(f"invalid training marker commit acknowledgement: {path}")
@@ -201,7 +226,9 @@ def marker_disposition(marker: Mapping[str, Any] | None, job_id: str) -> MarkerD
     - ``resume``: the same job trained and checkpointed; only the serving
       publication remains.
     - ``conflict``: a different job is mid-flight; operator recovery required.
-    - ``fresh``: nothing blocks running this job from the start.
+    - ``fresh``: nothing blocks running this job from the start. A rejected
+      job's batch trains again from the start: its checkpoint was refused and
+      can never be published.
     """
     if marker is None:
         return "fresh"
@@ -209,7 +236,7 @@ def marker_disposition(marker: Mapping[str, Any] | None, job_id: str) -> MarkerD
     if marker["job_id"] == job_id:
         if status in PUBLISHED_STATES:
             return "replay"
-        if status in {"CHECKPOINT", "REJECTED"}:
+        if status == "CHECKPOINT":
             return "resume"
     return "conflict" if status in _IN_FLIGHT_STATES else "fresh"
 
@@ -403,8 +430,8 @@ def _parse_history(value: Mapping[str, Any], path: Path) -> dict[str, dict[str, 
 # probe, recover and replace its engines without importing the integration.
 
 
-class InferenceEngines(ABC):
-    """Concrete operations on the inference engines attached to a trainer."""
+class InferenceEngineGroup(ABC):
+    """Concrete operations on the group of inference engines attached to a trainer."""
 
     @property
     @abstractmethod
@@ -478,7 +505,7 @@ class InferenceControl:
 
     def __init__(
         self,
-        engines: InferenceEngines,
+        engines: InferenceEngineGroup,
         connection: WeightUpdateConnection,
         monitor: InferenceMonitor,
     ) -> None:
@@ -768,9 +795,7 @@ class TrainingRecovery:
             # Restore the frozen base before registering scenario adapters,
             # including runs that only release KV/graphs on later steps.
             publisher.inference.onload_weights()
-        if status == "REJECTING":
-            if marker is None:
-                raise RuntimeError("REJECTING marker status has no marker payload")
+        if marker is not None and status == "REJECTING":
             self.publication.reject(str(marker["job_id"]))
             marker["status"] = status = "REJECTED"
             publisher.pause_generation(reconcile=True)
@@ -792,9 +817,7 @@ class TrainingRecovery:
         # recovery reuses its persisted target; a fresh deployment keeps the
         # incarnation Reef assigned before either backend was started.
         recovered_runtime_load_id = None
-        if status in PUBLISHED_STATES:
-            if marker is None:
-                raise RuntimeError(f"{status} marker status has no marker payload")
+        if marker is not None and status in PUBLISHED_STATES:
             recovered_runtime_load_id = str(marker["runtime_load_id"])
         if config.save_hf_template is not None and status != "REJECTED" and not (config.lora and marker is None):
             # The Megatron checkpoint can be newer than the HF checkpoint used
@@ -820,9 +843,7 @@ class TrainingRecovery:
                 publisher.inference.onload_weights()
                 publisher.inference.onload_kv()
             publisher.initialize_version()
-        elif status == "REJECTED":
-            if marker is None:
-                raise RuntimeError("REJECTED status requires a durable job marker")
+        elif marker is not None and status == "REJECTED":
             publisher.runtime_load_id = str(marker.get("parent_runtime_load_id") or versions[0])
             publisher.initialize_version()
         elif config.save_hf_template is None:

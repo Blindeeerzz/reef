@@ -35,8 +35,8 @@ attempts and trains on those attempts at test time.
    * - Guidance-TTT
      - guidance-model weights; the executor stays frozen
      - ``recipes/tttd/``
-     - `Guidance-TTT <../../recipes/tttd/examples/guidance_ttt/README.md>`__
-     - `Guidance-TTT on TriMul <../../recipes/tttd/examples/guidance_ttt/README.md>`__
+     - `Guidance-TTT <recipes/guidance-ttt.rst>`__
+     - `Guidance-TTT on four discovery tasks <../../recipes/tttd/examples/guidance_ttt/README.md>`__
 
 Continual learning on a task stream
 -----------------------------------
@@ -56,7 +56,17 @@ learns from each score before the next task arrives.
      - model weights
      - ``recipes/sao/``
      - `SAO <recipes/sao.rst>`__
-     - `SAO on IMOAnswerBench <../../recipes/sao/examples/sao/README.md>`__
+     - `SAO on IMOAnswerBench <../../recipes/sao/examples/imo_answerbench/README.md>`__
+   * - SDFT
+     - model weights
+     - ``recipes/sdft/``
+     - `SDFT <recipes/sdft.rst>`__
+     - `SDFT on a skill stream <../../recipes/sdft/examples/skill_stream/README.md>`__
+   * - SDPO
+     - model weights
+     - ``recipes/sdpo/``
+     - `SDPO <recipes/sdpo.rst>`__
+     - `SDPO on SciKnowEval Chemistry <../../recipes/sdpo/examples/sciknoweval/README.md>`__
    * - GEPA
      - harness tree: rules, skills, and agent commands
      - ``recipes/gepa/``
@@ -111,7 +121,6 @@ point deployments configured with different recipes at the same repository.
 
 .. code:: yaml
 
-   schema-version: 2
    recipe:
      implementation: recipes.sao.recipe:SAORecipe
      config:
@@ -151,3 +160,35 @@ Beta recipes
 **beta** until complete, reproducible learning results are published. Both
 live under ``recipes/beta/coral/``. Integration and smoke tests validate the
 wiring but do not establish learning performance.
+
+`SPADE <../../recipes/beta/spade/README.md>`__ (self play in adaptive
+synthetic executable environments, `arXiv:2608.19197
+<https://arxiv.org/abs/2608.19197>`__) is **beta** under
+``recipes/beta/spade/``: one policy plays an Environment Designer that writes
+executable environments and a Reasoning Agent that learns in them. Reef knows
+one task format, Harbor, and the Designer writes it directly: an instruction,
+a container, a verifier and a reference solution, a task any Harbor agent can
+play. SPADE is a task generator. The deployment selects it as the generator of
+the generated-task stages in its ``pipeline`` section, and the built-in
+generated-task recipe plays the tasks and trains on them (see `generated tasks
+<../reference/configuration.rst#generated-tasks>`__). Writing,
+checking and playing tasks is Reef's (``reef.record2task.generator``, the generator
+service ``reef serve`` starts beside the HTTP service). The package holds the
+method: the Designer's adversarial experience section, the hint arm each task
+asks for, and the hint based regret reported against the Designer's receipt.
+The Designer's own training follows.
+
+`AutoEnvScaling <../../recipes/beta/autoenvscaling/README.md>`__ (preprint
+forthcoming) is **beta** under ``recipes/beta/autoenvscaling/``. It is a task
+generator: a coding agent rebuilds recorded coding-agent sessions as Harbor
+tasks. The agent, pi in an E2B sandbox, writes one task in its workspace from
+one session and the repository the session changed. It runs the task's oracle
+and nop check itself through the generator service, and revises until the check
+passes. A model call reviews each task's tests and refuses a task whose tests
+check what its instruction does not state. A pass-rate band marks the tasks the
+Reasoning Agent can reach. The deployment selects it as the generator of the
+generated-task stages in its ``pipeline`` section, and the built-in
+generated-task recipe plays the tasks and trains on them (see `generated tasks
+<../reference/configuration.rst#generated-tasks>`__). With ``author: prompt``,
+the generator service's one-reply prompt Designer rebuilds the same sessions as
+the baseline.

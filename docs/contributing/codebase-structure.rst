@@ -11,7 +11,7 @@ Choose a destination
 at ``reef/train/cordis_backend/``. The built-in Reefine recipe lives under
 ``reef/recipe/reefine/``. Paper-backed methods live in separate
 packages under ``recipes/`` (``sao``, ``tttd``, ``openclawrl``, ``skillclaw``)
-with that method's recipe, processor, step preparer, and, for weight methods,
+with that method's recipe, processor, training objective, and, for weight methods,
 the ``slime/`` subpackage only the training plane imports. Nothing under
 ``reef/`` imports a method package.
 
@@ -33,7 +33,7 @@ composition and use paths; they are not an exhaustive Python import graph:
        subgraph Domains["Capability domains"]
            direction LR
            Serving("<b>Serving</b><br/><code>runtime</code> · <code>surface</code>")
-           Evolution("<b>Evolution</b><br/><code>train</code> · <code>harness</code>")
+           Evolution("<b>Evolution</b><br/><code>train</code> · <code>evaluation</code> · <code>harness</code>")
            State("<b>State</b><br/><code>artifact</code> · <code>records</code>")
        end
 
@@ -65,53 +65,71 @@ coordinate serving, evolution, and state. ``reef/service`` also imports
 Concrete integrations may depend on shared contracts; shared contracts never
 import a concrete integration.
 
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| Package              | Owns                                                     | Does not own                               |
-+======================+==========================================================+============================================+
-| ``reef/core/``       | shared value types, wire shapes, artifact                | storage, I/O, runtime behavior             |
-|                      | identity, root errors                                    |                                            |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/service/``    | HTTP routes, auth, streaming, process                    | training methods or domain logic           |
-|                      | lifecycle                                                | tied to aiohttp                            |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/scenario/``   | scenario binding, commit ordering,                       | training algorithms, repository            |
-|                      | recovery, and lifecycle                                  | implementations                            |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/recipe/``     | the contract a method implements, dotted                 | external cookbook methods                  |
-|                      | resolution, runtime binding, and built-in Reefine        |                                            |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/train/``      | the trainer loop, processor engines, batch               | HTTP endpoints, deployment                 |
-|                      | types, backend integrations                              | configuration parsing                      |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/runtime/``    | backend-neutral runtime contracts, scheduling,           | concrete inference and training            |
-|                      | weight synchronization and publication coordination      | integrations                               |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/inference/``  | concrete inference backends, native engine control,      | training algorithms and publication        |
-|                      | request adaptation and weight reception                  | decisions                                  |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/surface/``   | delivering a published artifact to the                   | proposing, evaluating, or                   |
-|                      | process or client that uses it                           | selecting updates                          |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/artifact/``  | artifact bytes, repositories,                            | commit policy or delivery                   |
-|                      | materialization, release heads                           | behavior                                   |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/harness/``    | harness descriptors, tree rendering,                     | recipe policy, the release chain           |
-|                      | episodes, trajectories                                   |                                            |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``recipes/``         | one method per package: recipe, processor, preparer,     | shared machinery, or another method        |
-|                      | and its runnable examples                                |                                            |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``tests/``           | repository-level tests grouped by responsibility         | tests hidden inside an integration subtree |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
-| ``docker/``          | container and GPU environment setup                      | Python dependency declarations             |
-+----------------------+----------------------------------------------------------+--------------------------------------------+
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| Package                 | Owns                                                     | Does not own                               |
++=========================+==========================================================+============================================+
+| ``reef/core/``          | shared value types, wire shapes, artifact                | storage, I/O, runtime behavior             |
+|                         | identity, root errors                                    |                                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/service/``       | HTTP routes, auth, streaming, process                    | training methods or domain logic           |
+|                         | lifecycle                                                | tied to aiohttp                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/scenario/``      | scenario binding, commit ordering,                       | training algorithms, repository            |
+|                         | recovery, and lifecycle                                  | implementations                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/recipe/``        | the contract a method implements, dotted                 | external cookbook methods                  |
+|                         | resolution, runtime binding, and the built-in Reefine    |                                            |
+|                         | and generated-task recipes                               |                                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/train/``         | the trainer loop, the training pipeline, batch types,    | HTTP endpoints, deployment                 |
+|                         | backend integrations                                     | configuration parsing                      |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/record2record/`` | which records Reef uses and in what order: report        | sample and batch assembly, record storage, |
+|                         | grouping, judging, eligibility checks, selection order   | task generation                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/record2task/``   | turning a record set into tasks (``Record2Task``,        | which records train, batch shape,          |
+|                         | ``ReportTasks``, ``JudgedTasks``), and the generator     | training loops                             |
+|                         | service that writes, checks, and plays Harbor tasks      |                                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/evaluation/``    | candidate evaluation: running and scoring evaluation     | proposing candidates, training loops,      |
+|                         | episodes, built-in selection policies, and the           | artifact publication                       |
+|                         | ``evaluation`` plugin configuration                      |                                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/task2batch/``    | shaping the tasks of the selected record sets into one   | which records train, the training loop,    |
+|                         | batch (``Task2Batch``)                                   | step signals                               |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/runtime/``       | backend-neutral runtime contracts, scheduling,           | concrete inference and training            |
+|                         | weight synchronization and publication coordination      | integrations                               |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/inference/``     | concrete inference backends, native engine control,      | training algorithms and publication        |
+|                         | request adaptation and weight reception                  | decisions                                  |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/surface/``       | delivering a published artifact to the                   | proposing, evaluating, or                  |
+|                         | process or client that uses it                           | selecting updates                          |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/artifact/``      | artifact bytes, repositories,                            | commit policy or delivery                  |
+|                         | materialization, release heads                           | behavior                                   |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/harness/``       | harness descriptors, tree rendering,                     | recipe policy, the release chain           |
+|                         | episodes, trajectories                                   |                                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``reef/sandbox/``       | process execution, isolation, file transfer              | harness rendering, evaluation, recipe      |
+|                         | and environment lifecycle through Harbor                 | policy                                     |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``recipes/``            | one method per package: recipe, processor, objective,    | shared machinery, or another method        |
+|                         | and its runnable examples                                |                                            |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``tests/``              | repository-level tests grouped by responsibility         | tests hidden inside an integration subtree |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
+| ``docker/``             | container and GPU environment setup                      | Python dependency declarations             |
++-------------------------+----------------------------------------------------------+--------------------------------------------+
 
 
 Package import direction
 ------------------------
 
 Imports between the top-level Reef packages form a directed acyclic graph.
-``tests/reef_service/test_dependency_boundaries.py`` scans every Python file,
+``tests/contributing/test_dependency_boundaries.py`` scans every Python file,
 including relative imports and imports inside functions. Importing the root
 ``reef`` facade from an internal package also counts as a dependency; internal
 code imports the owning module directly.
@@ -127,20 +145,26 @@ package's own submodules and third-party libraries):
      - Imports
    * - ``core``
      - None
-   * - ``storage``, ``artifact``, ``observability``
+   * - ``storage``, ``artifact``
      - ``core``
+   * - ``observability``
+     - ``storage``, ``core``
    * - ``surface``
      - ``artifact``, ``core``
    * - ``runtime``
      - ``surface``, ``artifact``, ``core``
    * - ``inference``
      - ``runtime``, ``artifact``, ``core``
+   * - ``sandbox``
+     - ``core``
    * - ``harness``
-     - ``runtime``, ``core``
+     - ``sandbox``, ``runtime``, ``core``
+   * - ``evaluation``
+     - ``harness``, ``runtime``, ``core``
    * - ``train``
-     - ``harness``, ``inference``, ``runtime``, ``surface``, ``artifact``, ``storage``, ``observability``, ``core``
+     - ``evaluation``, ``harness``, ``inference``, ``runtime``, ``surface``, ``artifact``, ``storage``, ``observability``, ``core``
    * - ``recipe``
-     - ``train``, ``harness``, ``runtime``, ``surface``, ``storage``, ``observability``, ``core``
+     - ``train``, ``evaluation``, ``harness``, ``sandbox``, ``runtime``, ``surface``, ``storage``, ``observability``, ``core``
    * - ``scenario``
      - ``recipe``, ``train``, ``runtime``, ``surface``, ``artifact``, ``storage``, ``observability``, ``core``
    * - ``dispatcher``
@@ -188,15 +212,24 @@ package. Runtime coordination has no direct imports of concrete inference or
 training code; the deployment registry resolves the selected factory explicitly.
 Generic connection implementations live in ``inference/runtime.py`` and
 ``train/runtime.py``; HTTP provider handling lives in ``inference/http.py``.
-``inference/sglang/runtime.py`` supplies ``SGLangInferenceRuntime`` and
+``inference/sglang/runtime.py`` supplies ``SGLangInferenceRuntime``,
+``inference/vllm/runtime.py`` supplies ``VLLMInferenceRuntime``, and
 ``train/slime_backend/runtime.py`` supplies ``SlimeTrainingRuntime``. These
 implement the scheduling interfaces; their native Backend implementations retain
 model operations, checkpoint and tensor I/O.
-``inference/sglang/`` owns SGLang engine launch, capture and control independently
-of training. ``train/slime_backend/inference.py`` only translates Slime options
-into plain launch data; the selected inference factory constructs its own configuration.
-``train/slime_backend/driver.py`` supplies Slime component definitions;
-``service/slime_driver.py`` preserves the legacy explicit-process entrypoint.
+``inference/chat.py`` holds the engine-neutral OpenAI and Anthropic chat facade
+over a token-native generate route: it renders the prompt, builds the training
+record from a ``CapturedGeneration`` and streams protocol frames. Each engine
+supplies a ``NativeGenerateClient`` that shapes its request, parses its response
+and builds its tool-call parser. ``inference/engine_control.py`` holds the control classes that SGLang and vLLM
+share: the coordinator backend, the inference service, the control actor and its
+default serving executor. ``inference/sglang/`` owns SGLang engine launch,
+capture and control independently of training; ``inference/vllm/`` owns vLLM capture,
+the KV connector that stamps tokens with their weight version, and engine launch and
+control over vLLM's HTTP control routes. ``train/slime_backend/inference.py`` only
+translates Slime options into plain launch data; the selected inference factory
+constructs its own configuration.
+``train/slime_backend/driver.py`` supplies Slime component definitions.
 
 The extension points those packages expose are in `Python API
 <../reference/python-api.rst>`__.
@@ -232,6 +265,15 @@ The extension points those packages expose are in `Python API
   without importing scenario coordination, training, or concrete adapters.
   ``ScenarioStore`` combines a ``RecordStore`` with committed scenario state;
   ``ScenarioStorage`` owns archival and retention.
+- Does it turn a designer's replies into Harbor tasks, check them with Harbor
+  or play them with an agent? Put it in ``reef/record2task/generator/``, the
+  generator service ``reef serve`` starts beside the HTTP service from a
+  ``generator`` section. ``reef/service/deploy/generator.py`` assembles that
+  child, and ``reef/service/deploy/generator_process.py`` runs it. The built-in generated-task recipe, which plays generated tasks
+  through that service and trains on them, is in
+  ``reef/recipe/generated_tasks/``. The ``TaskGenerator`` contract is in
+  ``reef/core/tasks/``. What a method asks the designer for, and what it does
+  with the results, stays in the method's task generator under ``recipes/``.
 - Does it implement storage? Put it in ``reef/storage/``. ``sql_records.py``
   shares SQL record and retention operations; ``sqlite.py`` supplies SQLite
   schema, connections, transactions, and file maintenance. ``postgres.py`` supplies
@@ -252,9 +294,13 @@ The extension points those packages expose are in `Python API
   the shared composition engine lives in ``reef/harness/compose/``. It derives
   from cordis 4.0.0-rc.8; see ``reef/harness/compose/UPSTREAM.md``. ``reef/train/slime_backend/`` is the
   weights counterpart.
-- Does it turn records and feedback into a batch or step signal? Put it in
-  ``reef/train/processors/`` or ``reef/train/algos/``. A recipe selects and
-  binds that machinery; it should not reimplement it.
+- Does it decide which records train, or in which groups? Put it in
+  ``reef/record2record/``. Does it turn one record set into tasks? Put the
+  shared contract in ``reef/record2task/``. Does it shape tasks into a batch?
+  Put it in ``reef/task2batch/``. Does it turn a batch into a step signal? Put
+  it in ``reef/train/algos/``. ``reef/train/pipeline.py`` drives the three
+  stages. A recipe selects and binds that machinery; it should
+  not reimplement it.
 - Is it HTTP-specific? Keep the aiohttp adapter in ``reef/service/routes/``
   and put transport-independent behavior in a service or domain object.
 - Does it orchestrate a benchmark, task, grader, or external environment?
@@ -267,7 +313,8 @@ Code for a concrete training integration lives together under
 ``reef/train/<integration>/``, but its surrounding files remain at repository
 level:
 
-- internal integration tests in ``tests/<integration>/``;
+- component and integration tests in ``tests/<owner>/``;
+- cookbook method tests in ``tests/recipes/<method>/``;
 - import and packaging contracts in ``tests/plugin_contracts/``;
 - service-facing contracts in ``tests/reef_service/``;
 - the learn-nothing deployment stacks, and the smallest example around them, in
@@ -276,6 +323,9 @@ level:
 - container and environment setup under ``docker/``; and
 - Python dependencies, package data, and plugin entry points in
   ``pyproject.toml``.
+
+The `test directory map <https://github.com/Human-Agent-Society/reef/blob/main/tests/AGENTS.md>`_
+defines the owner directories, shared support, and rules for moving tests.
 
 Do not copy third-party source into an integration subtree. Pin or declare the
 dependency in ``pyproject.toml`` and keep Reef-owned adapters local to the
@@ -287,7 +337,7 @@ Where the detailed rules live
 Each package's ``__init__`` docstring states the boundaries it holds and
 how to extend it; there are no READMEs under ``reef/``. Design pages for the
 two packages that need more than a docstring are `Surfaces
-<../developer-guide/surface.rst>`__ and `Processors
+<../developer-guide/surface.rst>`__ and `Training pipeline
 <../developer-guide/processors.rst>`__; the extension points every package
 exposes are in `Python API <../reference/python-api.rst>`__, and the public
 harness wire contract is `HTTP API <../reference/http-api.rst>`__. The

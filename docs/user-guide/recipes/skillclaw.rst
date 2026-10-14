@@ -16,7 +16,7 @@ observation changes the pool, and the next day measures what changed.
 +-------------+--------------------------------------------------------------+
 | Package     | ``recipes/skillclaw/``                                       |
 +-------------+--------------------------------------------------------------+
-| Processor   | reported feedback, producing trace items                     |
+| Pipeline    | reported feedback, producing trace items                     |
 +-------------+--------------------------------------------------------------+
 | Needs       | a Reef process, the ``pi`` binary, and Docker for the        |
 |             | Harbor tasks. Reef itself needs no GPU.                      |
@@ -44,7 +44,7 @@ How Reef implements it
 skillclaw is a method package on the harness evolution engine
 (``reef/train/cordis_backend/``); `Evolve your harness
 <../evolve-your-harness.rst>`__ describes the mechanism it runs on. The method
-supplies ``propose`` and ``evaluate``; the engine renders the harness, runs
+supplies a ``Proposer`` and an ``EpisodeScorer`` (``harness/plugins.py``); the engine renders the harness, runs
 evaluation tasks, records changes, and rolls back rejected changes.
 ``propose`` runs the night flow and maps its decisions to one composite
 mutation sequence, so a whole night applies under one snapshot
@@ -56,15 +56,16 @@ gate. And the skill catalog must reach the model on every live request, so the
 recipe overrides ``build_surface``, the hook controlling how a published
 artifact reaches the request path (`recipe.py
 <../../../recipes/skillclaw/recipe.py>`__). That override is
-the one extension point beyond the method's own callables.
+the one extension point beyond the method's own plugin classes; with it the recipe
+names no ``harness_adapter``, since no harness tree is installed.
 
 Configuration
 -------------
 
 ``recipes/skillclaw/skillclaw.yaml`` is the recipe config the driver boots. It
 names ``recipes.skillclaw.recipe:SkillClawRecipe`` as its ``implementation``
-and sets ``batch_size: 60``, so every report of the
-day batches and the day's last one triggers the night. The engine's keys are
+and sets ``pipeline.task2batch.config.batch_size: 60``, so every report of
+the day batches and the day's last one triggers the night. The engine's keys are
 in `Recipe configuration
 <../../reference/configuration.rst#recipe-configuration>`__.
 

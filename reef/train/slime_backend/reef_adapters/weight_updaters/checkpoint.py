@@ -214,7 +214,7 @@ class ReefUpdateWeightFromDiskDelta(SynchronizedWeightUpdateMixin, UpdateWeightF
             for name, tensor in self._iter_hf_tensors():
                 try:
                     self._snapshot[name] = read_hf(name)
-                except KeyError:  # noqa: PERF203 - the fallback is intentionally per tensor name
+                except KeyError:
                     self._snapshot[name] = tensor.detach().cpu().contiguous().view(torch.uint8).numpy().reshape(-1)
                     logger.warning("seed: %s absent from hf_checkpoint; using current weights", name)
         except BaseException as exc:
@@ -240,12 +240,12 @@ class ReefUpdateWeightFromDiskDelta(SynchronizedWeightUpdateMixin, UpdateWeightF
         self._raise_synchronized_update_error(local_error, phase="encode delta weights")
         local_error = None
         try:
-            self._write_delta_files()
+            self.write_delta_files()
         except BaseException as exc:
             local_error = exc
         self._raise_synchronized_update_error(local_error, phase="write delta weights")
 
-    def _write_delta_files(self) -> None:
+    def write_delta_files(self) -> None:
         group = get_gloo_group()
         world, rank = dist.get_world_size(), dist.get_rank()
         counts: list[int | None] = [None] * world
@@ -262,7 +262,8 @@ class ReefUpdateWeightFromDiskDelta(SynchronizedWeightUpdateMixin, UpdateWeightF
             _atomic_write(os.path.join(self._version_dir, filename), blob)
 
         maps: list[dict[str, str | None] | None] = [None] * world
-        dist.all_gather_object(maps, dict.fromkeys(self._delta, filename), group=group)
+        local_map: dict[str, str | None] = dict.fromkeys(self._delta, filename)
+        dist.all_gather_object(maps, local_map, group=group)
         if rank == 0:
             index = {
                 "metadata": {

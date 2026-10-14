@@ -14,7 +14,7 @@ import logging
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from recipes.beta.coral.journal import CallJournal, CallRecord
@@ -164,7 +164,7 @@ class ReefGatewayMiddleware(AsgiApp):
             usage = _usage_from_body(body)
             entry = CallRecord(
                 request_id=request_id,
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp=datetime.now(UTC).isoformat(),
                 scenario=self.scenario,
                 agent_id=coral.get("coral-agent", "unknown"),
                 commit_hash=coral.get("coral-commit", "unknown"),

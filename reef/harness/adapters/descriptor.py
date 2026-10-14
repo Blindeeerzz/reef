@@ -4,7 +4,9 @@ An ``AdapterDescriptor`` is loaded from a ``descriptor.yaml`` and states
 everything the shared engines need to drive one harness binary:
 
 - ``config_targets``: named JSON config files with their enforced defaults
-  (a ``primary`` target is required; ``config`` nodes merge into targets).
+  (a ``primary`` target is required; ``config`` nodes merge into targets) and
+  their locked keys (paths the merged config must keep at its defaults value,
+  or must not set when the defaults do not name it).
 - ``node_paths``: root-relative render paths for the other node kinds;
   named kinds carry a ``{name}`` placeholder. A kind the adapter leaves out
   is refused at admission and at render, never dropped.
@@ -22,14 +24,30 @@ everything the shared engines need to drive one harness binary:
 - ``install`` (optional): the vendor's install channel for the binary at a
   pinned version, consumed by the served install script; reef never hosts
   or proxies binary bytes.
+- ``client_env`` and ``client_args`` (optional): the variables and the leading
+  arguments a ``reef-<adapter>`` run adds when a person runs the binary, which
+  an episode never gets (``{root}`` in a ``client_env`` value is the install
+  root); ``client_version_args`` names the version flags that get no leading
+  arguments.
+- ``client_state`` (optional): the sessions and settings a ``reef-<adapter>`` run
+  keeps in the installed tree, so a later run finds them; the check of the
+  installed files at a session start skips them, except the keys of a
+  settings file outside its ``preference_keys``.
 - ``self_isolating`` (optional): the adapter runs episodes inside its own
   container, so nesting in Reef's jail is refused unless its execution quirk
   validates a compatible configuration (such as a remote task environment).
+- ``host_env`` (optional): service environment variables a local episode
+  keeps, for a host tool the relocated ``HOME`` would otherwise hide.
+- ``is_root_bind_mounted`` (optional): the binary bind-mounts paths below the
+  episode root into a container, so on macOS a local episode makes its root
+  under the home directory, which Docker's VM shares with the host.
 
 A descriptor may name a ``quirks`` module: its ``cleanup_whitelist`` extends
-the declared one and its ``finalize_render`` callable gets the last word on
-the rendered tree (the seam that enforces adapter traps such as opencode's
-``autoupdate: false``). External adapters register through the
+the declared one and the :class:`AdapterRenderer` subclass it defines adds the
+adapter's own render steps (the seam that enforces what the declaration cannot
+state, such as opencode's agent and command shapes; the keys a tree must keep
+are declared under ``files.config.<target>.locked`` and checked by the shared
+render). External adapters register through the
 ``reef.harness_adapters`` entry point group, each entry resolving to an
 ``AdapterDescriptor`` or a zero-argument callable returning one.
 """
@@ -39,7 +57,7 @@ from __future__ import annotations
 import importlib
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -47,7 +65,7 @@ from typing import Any
 import yaml
 
 from reef.core.errors import ReefError
-from reef.harness.episodes.executor import EpisodeExecutor
+from reef.sandbox.process import EpisodeExecutor
 
 
 class ExecutionValidator(ABC):
@@ -55,6 +73,94 @@ class ExecutionValidator(ABC):
 
     @abstractmethod
     def __call__(self, files: Mapping[str, str], executor: EpisodeExecutor) -> None: ...
+
+
+class AdapterRenderer:
+    """An adapter's own render steps, each given only the files of its concern.
+
+    The shared render runs them in a fixed order: ``process_config`` for each config file, ``process_skill`` and
+    ``process_command`` for each skill and command file, ``check_model_route``, then ``finalize_render`` after the
+    render has written each config file as text in the format its suffix names. Before any of them, the render
+    refuses a tree that sets a key Reef's model binding writes without the binding's credential;
+    ``check_model_route`` refuses the other model routes the harness reads.
+
+    Although ``finalize_render`` is an omnipower API that gives the users the maximum freedom for customization,
+    it is a last resort since that method has a large impact surface and make it hard to maintain. So instead users
+    should try using ``process_config``, ``process_skill`` and ``process_command`` whenever possible.
+
+    Each default leaves its input unchanged, so an adapter overrides only the steps it needs. A step refuses a tree
+    by raising ``RenderError``.
+
+    The render uses the class itself and never makes an instance, and every step is a static method, which
+    ``__init_subclass__`` checks: a step's output depends only on its arguments, so no step can pass state to a
+    later one or to another render. Keep module level state out of the steps too; the check cannot see it.
+    """
+
+    #: The steps a subclass may override, each as a static method.
+    STEPS = (
+        "process_config",
+        "process_skill",
+        "process_command",
+        "check_model_route",
+        "finalize_render",
+    )
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        for step in AdapterRenderer.STEPS:
+            if step in vars(cls) and not isinstance(vars(cls)[step], staticmethod):
+                raise TypeError(f"{cls.__name__}.{step} must be a static method, so render steps keep no state")
+
+    @staticmethod
+    def process_config(path: str, config: dict[str, Any]) -> dict[str, Any]:
+        """Check and adjust one merged config file, the tree's config entries over the descriptor's defaults.
+
+        ``path`` is the file's root-relative path, such as ``codex/config.toml``; the returned config is written
+        there in the format its suffix names.
+
+        A config is the file's content as a JSON object: its values are only ``dict``, ``list``, ``str``, ``int``,
+        ``float``, ``bool`` or ``None``, nested to any depth. It is typed ``Any`` because a precise recursive JSON type
+        would make every nested read (``config.get("env", {}).get(name)``) need an ``isinstance`` check first; a step
+        checks the type of a value before it relies on it instead.
+        """
+        return config
+
+    @staticmethod
+    def process_skill(path: str, text: str) -> str:
+        """Check and adjust one file a ``skill`` node renders."""
+        return text
+
+    @staticmethod
+    def process_command(path: str, text: str) -> str:
+        """Check and adjust one file an ``agent_command`` node renders."""
+        return text
+
+    @staticmethod
+    def check_model_route(
+        configs: Mapping[str, Mapping[str, Any]], skills: Mapping[str, str], commands: Mapping[str, str]
+    ) -> None:
+        """Refuse a model route the harness reads beyond the keys Reef's model binding writes, such as a fallback
+        model or a second provider.
+
+        ``configs`` maps each config file's path to its content after ``process_config``. ``skills`` and
+        ``commands`` map the path of each ``skill`` and ``agent_command`` file to its text after ``process_skill``
+        and ``process_command``, for a harness that reads a model from their frontmatter. The render has already
+        refused a tree that sets one of the binding's own keys without the binding's credential.
+
+        A config is the file's content as a JSON object: its values are only ``dict``, ``list``, ``str``, ``int``,
+        ``float``, ``bool`` or ``None``, nested to any depth. It is typed ``Any`` because a precise recursive JSON type
+        would make every nested read (``config.get("env", {}).get(name)``) need an ``isinstance`` check first; a step
+        checks the type of a value before it relies on it instead.
+        """
+
+    @staticmethod
+    def finalize_render(files: dict[str, str]) -> dict[str, str]:
+        """Work that spans several files, and any config file the format of its suffix does not fit.
+
+        ``files`` holds every rendered file as text, each config file already written in the format its suffix
+        names; a change to a config file reads that text again. The returned mapping is the rendered tree.
+        """
+        return files
 
 
 ENTRY_POINT_GROUP = "reef.harness_adapters"
@@ -88,11 +194,19 @@ class DescriptorError(ReefError):
 
 @dataclass(frozen=True)
 class ConfigTarget:
-    """One JSON config file: its render path and the defaults merged first."""
+    """One JSON config file: its render path, the defaults merged first, and the keys the tree must keep."""
 
     path: str
     defaults: Mapping[str, Any] = field(default_factory=dict)
+    #: Dotted key paths the merged config must keep at their ``defaults`` value; a path the defaults do not set
+    #: must not appear in the merged config at all. A ``*`` segment matches every key of an object and every item
+    #: of a list. The shared render checks them before any adapter step runs, so no adapter can skip the check.
+    locked: tuple[str, ...] = ()
 
+
+#: The ``{api_key}`` an installed binding carries when the client has no Reef token (a Reef without auth): a
+#: harness such as pi refuses an empty key, and the ``reef-<adapter>`` wrapper reads this one back as no token.
+NO_TOKEN_API_KEY = "reef-no-token"
 
 #: Vendor install kinds the install-script generator can render: an npm
 #: package at a version, or a git checkout at a ref installed editable into
@@ -106,6 +220,38 @@ INSTALL_KINDS = ("npm", "git")
 _INSTALL_PACKAGE_PATTERN = re.compile(r"^[@A-Za-z0-9._/-]+$")
 _INSTALL_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _INSTALL_REPOSITORY_PATTERN = re.compile(r"^https://[A-Za-z0-9._/-]+$")
+
+
+#: How a ``client_state`` entry is kept. ``directory`` and ``sqlite`` are created in the installed tree
+#: before the run: an empty directory, or an empty SQLite database (a zero-length file is not one, and a
+#: binary may set it aside and start a new one in its place). ``file`` is copied back after the run when
+#: the binary wrote it as a new file, or renamed a new file over the link, so its mode is kept too.
+CLIENT_STATE_KINDS = ("directory", "sqlite", "file")
+
+
+@dataclass(frozen=True)
+class ClientState:
+    """A path below the relocated composition that an interactive run keeps.
+
+    The wrapper runs the binary on a temp copy of links to the installed
+    composition and removes the copy afterwards, so what the binary creates
+    there is lost; a path that already exists in the installed tree is
+    linked, and what the binary writes through the link stays. The wrapper
+    refuses a session when a file the install wrote has changed, and skips
+    these paths, which are the binary's to write; a link at one of them is
+    removed before the run, so the binary's writes stay in the tree. A file
+    with ``preference_keys`` is the exception: its other keys are checked,
+    and a link at it is refused.
+
+    ``preference_keys`` is for a ``file`` the install writes too, a JSON
+    object: the top-level keys the binary saves there itself and that load no
+    code. The install records the value of every other key, and the wrapper
+    refuses a session once one of those differs.
+    """
+
+    path: str
+    kind: str
+    preference_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -142,17 +288,29 @@ class AdapterDescriptor:
     trajectory_path: str
     cleanup_whitelist: tuple[str, ...] = ()
     writable_paths: tuple[str, ...] = ()
-    finalize_render: Callable[[dict[str, str]], dict[str, str]] | None = None
+    #: The adapter's own render steps; the base class changes nothing.
+    renderer: type[AdapterRenderer] = AdapterRenderer
     install: InstallSpec | None = None
     #: True when the adapter isolates episodes itself; nesting is refused
     #: unless validate_execution checks a compatible configuration.
     self_isolating: bool = False
+    #: True when the ``{prompt}`` argv slot names a task directory (a Harbor task) rather than text the
+    #: model reads, so a gate can hand the adapter task directories instead of prompts.
+    is_prompt_task_directory: bool = False
     #: ``config`` node templates that point this harness at a model endpoint,
     #: keyed by API dialect (``openai``, ``responses``, ``anthropic``): ``{base_url}``,
     #: ``{api_key}`` and ``{model}`` substitute into string values. Reef appends
     #: the matching set when it runs evaluation episodes, so the served tree
     #: never carries a provider binding.
     model_binding: Mapping[str, tuple[Mapping[str, Any], ...]] = field(default_factory=dict)
+    #: Service environment variables an episode under the local executor keeps: the service's own value, else
+    #: the default, where ``{home}`` is the service's home directory; an empty default leaves the variable
+    #: unset. For a host tool the relocated ``HOME`` would otherwise hide, such as terminus's docker CLI.
+    host_env: Mapping[str, str] = field(default_factory=dict)
+    #: True when the binary bind-mounts paths below the episode root into a container. On macOS Docker runs in a VM
+    #: that shares the home directory, and colima does not share ``$TMPDIR``, so an episode under the local executor
+    #: then makes its root under ``~/.reef/episodes``; on other platforms the root stays in the temp directory.
+    is_root_bind_mounted: bool = False
     #: ``files.tree``: where the entries list travels with the rendered files (a JSON
     #: array of ``{id, name, config}``), so a resident process can reconcile the
     #: tree entry by entry; None for an adapter whose binary reads files only.
@@ -163,11 +321,21 @@ class AdapterDescriptor:
     #: Environment the ``reef-<adapter>`` wrapper adds when a person runs the
     #: binary: what an interactive run needs that an episode's ``env`` (offline,
     #: hermetic) must not carry, such as silencing the binary's self-updater
-    #: while reef pins its version.
+    #: while reef pins its version. ``{root}`` in a value is the install root,
+    #: for a directory of the installed tree outside the relocated composition.
     client_env: Mapping[str, str] = field(default_factory=dict)
+    #: Arguments the ``reef-<adapter>`` wrapper puts ahead of the person's own when
+    #: it runs the binary: a setting the rendered tree must not be able to undo.
+    client_args: tuple[str, ...] = ()
+    #: First arguments that get no ``client_args``: the binary's version flags, which start no
+    #: session and which a binary may answer early only when nothing else is on the command line.
+    client_version_args: tuple[str, ...] = ()
     #: Commands the binary expects on PATH at first start and otherwise fetches
     #: itself, as ``(command, package)``; the install script names the missing ones.
     client_tools: tuple[tuple[str, str], ...] = ()
+    #: Root-relative sessions and settings below the composition that a ``reef-<adapter>`` run
+    #: keeps in the installed tree, so a later run resumes its sessions and skips its first-run setup.
+    client_state: tuple[ClientState, ...] = ()
 
     def compose_relocation(self) -> tuple[str, str]:
         """The env var and the composition subdirectory it relocates: the deepest directory above the primary config target that an env entry names as ``{root}/<dir>``.
@@ -233,19 +401,38 @@ def load_descriptor(path: Path) -> AdapterDescriptor:
         isinstance(key, str) and isinstance(value, str) for key, value in env.items()
     ):
         raise DescriptorError(f"{where} 'env' must map strings to strings")
+    host_env = data.get("host_env", {})
+    if not isinstance(host_env, Mapping) or not all(
+        isinstance(key, str) and key.isidentifier() and isinstance(value, str) for key, value in host_env.items()
+    ):
+        raise DescriptorError(f"{where} 'host_env' must map variable names to default strings")
+    overlap = sorted(set(host_env) & set(env))
+    if overlap:
+        raise DescriptorError(f"{where} 'host_env' names variables 'env' already sets: {', '.join(overlap)}")
     whitelist = _str_list(data.get("cleanup_whitelist", []), f"{where} 'cleanup_whitelist'")
     writable_paths = _relative_paths(data.get("writable_paths", []), f"{where} 'writable_paths'")
     self_isolating = data.get("self_isolating", False)
     if not isinstance(self_isolating, bool):
         raise DescriptorError(f"{where} 'self_isolating' must be a boolean")
+    is_prompt_task_directory = data.get("is_prompt_task_directory", False)
+    if not isinstance(is_prompt_task_directory, bool):
+        raise DescriptorError(f"{where} 'is_prompt_task_directory' must be a boolean")
+    is_root_bind_mounted = data.get("is_root_bind_mounted", False)
+    if not isinstance(is_root_bind_mounted, bool):
+        raise DescriptorError(f"{where} 'is_root_bind_mounted' must be a boolean")
     client_env = data.get("client_env", {})
     if not isinstance(client_env, Mapping) or not all(
         isinstance(key, str) and isinstance(value, str) for key, value in client_env.items()
     ):
         raise DescriptorError(f"{where} 'client_env' must map strings to strings")
+    client_args = _str_list(data.get("client_args", []), f"{where} 'client_args'")
+    client_version_args = _str_list(data.get("client_version_args", []), f"{where} 'client_version_args'")
     client_tools = _parse_client_tools(data.get("client_tools"), where)
-    finalize, quirk_whitelist, validate_execution = _load_quirks(data.get("quirks"), where)
-    return AdapterDescriptor(
+    client_state = _parse_client_state(data.get("client_state"), where)
+    renderer, quirk_whitelist, validate_execution = _load_quirks(data.get("quirks"), where)
+    model_binding = _parse_model_binding(data.get("model_binding"), config_targets, where)
+    _check_locked_binding_overlap(config_targets, model_binding, where)
+    descriptor = AdapterDescriptor(
         name=name,
         binary=_require_str(data, "binary", where),
         argv=_str_list(data.get("argv"), f"{where} 'argv'"),
@@ -256,15 +443,27 @@ def load_descriptor(path: Path) -> AdapterDescriptor:
         trajectory_path=_require_str(trajectory, "path", f"{where} trajectory"),
         cleanup_whitelist=whitelist + quirk_whitelist,
         writable_paths=writable_paths,
-        finalize_render=finalize,
+        renderer=renderer,
         install=_parse_install(data.get("install"), where),
         self_isolating=self_isolating,
-        model_binding=_parse_model_binding(data.get("model_binding"), config_targets, where),
+        is_prompt_task_directory=is_prompt_task_directory,
+        host_env=dict(host_env),
+        is_root_bind_mounted=is_root_bind_mounted,
+        model_binding=model_binding,
         tree_path=_parse_tree_path(files, where),
         validate_execution=validate_execution,
         client_env=dict(client_env),
+        client_args=client_args,
+        client_version_args=client_version_args,
         client_tools=client_tools,
+        client_state=client_state,
     )
+    if client_state:
+        _, compose_dir = descriptor.compose_relocation()
+        for state in client_state:
+            if PurePosixPath(compose_dir) not in PurePosixPath(state.path).parents:
+                raise DescriptorError(f"{where} 'client_state' path {state.path!r} is not below {compose_dir!r}")
+    return descriptor
 
 
 def _parse_tree_path(files: Mapping[str, Any], where: str) -> str | None:
@@ -287,8 +486,61 @@ def _parse_config_targets(raw: Any, where: str) -> dict[str, ConfigTarget]:
         targets[str(target_name)] = ConfigTarget(
             path=_require_str(target, "path", f"{where} config target {target_name!r}"),
             defaults=dict(defaults),
+            locked=_locked_paths(target.get("locked", []), f"{where} config target {target_name!r} 'locked'"),
         )
     return targets
+
+
+def _locked_paths(value: Any, where: str) -> tuple[str, ...]:
+    """``locked`` key paths: dot separated key names, a ``*`` segment matching any object key or list item."""
+    paths = _str_list(value, where)
+    for path in paths:
+        if any(segment == "" for segment in path.split(".")):
+            raise DescriptorError(f"{where} entries must be dot separated key names, '*' naming a whole segment")
+    return paths
+
+
+def _binding_key_paths(data: Mapping[str, Any], segments: tuple[str, ...]) -> list[tuple[str, ...]]:
+    """Each key path a binding template writes, as segments; a template segment in braces matches any key."""
+    paths: list[tuple[str, ...]] = []
+    for key, value in data.items():
+        segment = str(key)
+        if isinstance(value, Mapping) and value:
+            paths.extend(_binding_key_paths(value, (*segments, segment)))
+        else:
+            paths.append((*segments, segment))
+    return paths
+
+
+def _paths_overlap(left: tuple[str, ...], right: tuple[str, ...]) -> bool:
+    """Whether two key paths can name one key: every segment pair matches, so one path holds the other.
+
+    A ``*`` in a locked path matches any binding segment, and a binding segment in braces (a ``{model}``
+    placeholder) matches any locked segment.
+    """
+    return all(locked == "*" or "{" in bound or locked == bound for locked, bound in zip(left, right, strict=False))
+
+
+def _check_locked_binding_overlap(
+    config_targets: Mapping[str, ConfigTarget],
+    model_binding: Mapping[str, tuple[Mapping[str, Any], ...]],
+    where: str,
+) -> None:
+    """A locked path must not overlap a key the model binding writes: the shared binding check owns those keys.
+
+    A lock beside the binding's keys could only refuse the binding's own render, or, one rename later, silently
+    stop the binding from writing what the adapter needs.
+    """
+    for api, templates in model_binding.items():
+        for node in templates:
+            target_name = str(node["target"])
+            for bound in _binding_key_paths(node["data"], ()):
+                for locked in config_targets[target_name].locked:
+                    if _paths_overlap(tuple(locked.split(".")), bound):
+                        raise DescriptorError(
+                            f"{where} config target {target_name!r} locks {locked!r}, which the {api} model "
+                            f"binding writes ({'.'.join(bound)})"
+                        )
 
 
 def _parse_model_binding(
@@ -390,27 +642,53 @@ def _parse_client_tools(value: Any, where: str) -> tuple[tuple[str, str], ...]:
     return tuple(tools)
 
 
+def _parse_client_state(value: Any, where: str) -> tuple[ClientState, ...]:
+    """``client_state``: a list of ``{path, kind}`` an interactive run keeps in the installed tree, a ``file`` with
+    the ``preference_keys`` the binary may change in it."""
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise DescriptorError(f"{where} 'client_state' must be a list")
+    states: list[ClientState] = []
+    for entry in value:
+        if not isinstance(entry, Mapping) or entry.get("kind") not in CLIENT_STATE_KINDS:
+            raise DescriptorError(f"{where} 'client_state' entries need a 'kind' in {CLIENT_STATE_KINDS}")
+        (path,) = _relative_paths([entry.get("path")], f"{where} 'client_state' 'path'")
+        if "preference_keys" in entry and entry["kind"] != "file":
+            raise DescriptorError(f"{where} 'client_state' 'preference_keys' is for a 'file' entry")
+        preference_keys = _str_list(entry.get("preference_keys", []), f"{where} 'client_state' 'preference_keys'")
+        states.append(ClientState(path=path, kind=entry["kind"], preference_keys=preference_keys))
+    return tuple(states)
+
+
 def _load_quirks(
     module_name: Any, where: str
-) -> tuple[Callable[[dict[str, str]], dict[str, str]] | None, tuple[str, ...], ExecutionValidator | None]:
+) -> tuple[type[AdapterRenderer], tuple[str, ...], ExecutionValidator | None]:
     if module_name is None:
-        return None, (), None
+        return AdapterRenderer, (), None
     if not isinstance(module_name, str):
         raise DescriptorError(f"{where} 'quirks' must be a dotted module name")
     try:
         module = importlib.import_module(module_name)
     except ImportError as exc:
         raise DescriptorError(f"{where} cannot import quirks module {module_name!r}: {exc}") from exc
-    finalize = getattr(module, "finalize_render", None)
-    if finalize is not None and not callable(finalize):
-        raise DescriptorError(f"{where} quirks finalize_render must be callable")
+    # The renderer is the one AdapterRenderer subclass the module defines.
+    renderers = [
+        value
+        for value in vars(module).values()
+        if isinstance(value, type) and issubclass(value, AdapterRenderer) and value.__module__ == module.__name__
+    ]
+    if len(renderers) > 1:
+        names = ", ".join(sorted(renderer.__name__ for renderer in renderers))
+        raise DescriptorError(f"{where} quirks module defines more than one AdapterRenderer subclass: {names}")
+    renderer = renderers[0] if renderers else AdapterRenderer
     whitelist = tuple(getattr(module, "cleanup_whitelist", ()))
     if not all(isinstance(item, str) and item for item in whitelist):
         raise DescriptorError(f"{where} quirks cleanup_whitelist must contain non-empty strings")
     validate_execution = getattr(module, "validate_execution", None)
     if validate_execution is not None and not isinstance(validate_execution, ExecutionValidator):
         raise DescriptorError(f"{where} quirks validate_execution must inherit ExecutionValidator")
-    return finalize, whitelist, validate_execution
+    return renderer, whitelist, validate_execution
 
 
 def external_descriptors() -> dict[str, AdapterDescriptor]:

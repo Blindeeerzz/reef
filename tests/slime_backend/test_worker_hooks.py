@@ -297,13 +297,77 @@ def test_updater_and_policy_gradient_hooks_replace_only_worker_globals(monkeypat
             loaded.append(path) or (lambda args, ppo_kl, log_probs, advantages: (args, ppo_kl, log_probs, advantages))
         ),
     )
-    loss = _stub_module(monkeypatch, "slime.backends.megatron_utils.loss")
+    loss = _stub_module(
+        monkeypatch,
+        "slime.backends.megatron_utils.loss",
+        compute_cispo_loss=lambda ppo_kl, log_probs, advantages, eps_clip, eps_clip_high: ("slime", eps_clip),
+    )
     args = SimpleNamespace(custom_pg_loss_function_path="reef.loss", advantage_estimator="grpo")
     worker_hooks._install_pg_primitive(args)
+    wrapped = loss.compute_cispo_loss
+    worker_hooks._install_pg_primitive(args)
+    assert loss.compute_cispo_loss is wrapped
     assert loss.compute_cispo_loss("kl", "logp", "adv", 0.1, 0.2) == (args, "kl", "logp", "adv")
     # Routing the estimator to cispo is the driver's job (configure_reef_loss_args).
     assert args.advantage_estimator == "grpo"
     assert loaded == ["reef.loss"]
+    # A job of a family without a primitive reaches Slime's own CISPO loss.
+    args.custom_pg_loss_function_path = None
+    assert loss.compute_cispo_loss("kl", "logp", "adv", 0.1, 0.2) == ("slime", 0.1)
+
+
+@pytest.mark.unit
+def test_score_centering_adds_to_the_family_loss_and_skips_the_critic(monkeypatch: pytest.MonkeyPatch) -> None:
+    from reef.train.slime_backend.score_centering import term
+
+    monkeypatch.setattr(
+        term,
+        "add_score_centering",
+        lambda _args, _batch, _logits, _reduce, loss, log: (loss + 1, {**log, "score_centering_term": 1}),
+    )
+    loss = _stub_module(
+        monkeypatch,
+        "slime.backends.megatron_utils.loss",
+        policy_loss_function=lambda _args, _batch, _logits, _reduce: (2, {"loss": 2}),
+    )
+    # A stock or pg-primitive family: Slime's policy loss gets the term, once.
+    policy = SimpleNamespace(score_centering=True, loss_type="policy_loss")
+    worker_hooks._install_score_centering(policy)
+    worker_hooks._install_score_centering(policy)
+    assert loss.policy_loss_function(policy, {}, None, None) == (3, {"loss": 2, "score_centering_term": 1})
+
+    # A custom-loss family: its path moves aside and the score-centered loss calls it.
+    custom = SimpleNamespace(
+        score_centering=True, loss_type="custom_loss", custom_loss_function_path="family.loss", loss_family="sao"
+    )
+    worker_hooks._install_score_centering(custom)
+    worker_hooks._install_score_centering(custom)
+    assert custom.custom_loss_function_path == worker_hooks.SCORE_CENTERED_CUSTOM_LOSS_PATH
+    assert custom.reef_score_centering_base_loss_path == "family.loss"
+    misc = importlib.import_module("slime.utils.misc")
+    monkeypatch.setattr(misc, "load_function", {"family.loss": lambda *_: (5, {"loss": 5})}.__getitem__)
+    assert term.score_centered_custom_loss(custom, {}, None, None) == (6, {"loss": 5, "score_centering_term": 1})
+
+    # The distillation loss owns its teacher advantage and applies centering itself.
+    distill = SimpleNamespace(
+        score_centering=True,
+        loss_type="custom_loss",
+        loss_family="sdft",
+        custom_loss_function_path="recipes.sdft.slime.objective.sdft_loss",
+    )
+    worker_hooks._install_score_centering(distill)
+    worker_hooks._install_score_centering(distill)
+    assert distill.custom_loss_function_path == "recipes.sdft.slime.objective.sdft_loss"
+
+    # The critic derives its namespace from the actor's: nothing to center.
+    critic = SimpleNamespace(score_centering=True, loss_type="value_loss", custom_loss_function_path=None)
+    worker_hooks._install_score_centering(critic)
+    assert critic.custom_loss_function_path is None
+    off = SimpleNamespace(score_centering=False, loss_type="custom_loss", custom_loss_function_path="family.loss")
+    worker_hooks._install_score_centering(off)
+    assert off.custom_loss_function_path == "family.loss"
+    with pytest.raises(RuntimeError, match="not --loss-type sft_loss"):
+        worker_hooks._install_score_centering(SimpleNamespace(score_centering=True, loss_type="sft_loss"))
 
 
 @pytest.mark.unit
@@ -323,6 +387,7 @@ def test_objective_initializers_chain_user_hooks(monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.setattr(worker_hooks, name, lambda *_, name=name: calls.append(name))
     monkeypatch.setattr(worker_hooks, "_install_pg_primitive", lambda _args: calls.append("pg"))
+    monkeypatch.setattr(worker_hooks, "_install_score_centering", lambda _args: calls.append("score_centering"))
     args = SimpleNamespace(
         reef_chained_megatron_init_path="custom.init",
         loss_family="openclawrl",
@@ -331,7 +396,8 @@ def test_objective_initializers_chain_user_hooks(monkeypatch: pytest.MonkeyPatch
     worker_hooks.initialize_megatron_objective(args)
 
     assert calls[0:2] == ["custom.init", "resolve"]
-    assert calls[-1] == "pg"
+    # Score centering wraps the loss last, after the pg primitive is routed.
+    assert calls[-2:] == ["pg", "score_centering"]
 
     configured: list[object] = []
     monkeypatch.setattr(
@@ -343,3 +409,76 @@ def test_objective_initializers_chain_user_hooks(monkeypatch: pytest.MonkeyPatch
     worker_hooks.configure_critic_objective(critic)
     assert calls[-1] == "custom.critic"
     assert configured == [("sao", critic)]
+
+
+@pytest.mark.unit
+def test_learning_rate_schedule_sets_each_optimizer_step_and_chains_the_user_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from reef.runtime.interfaces import LearningRateSchedule, LearningRateScheduleState
+
+    chained: list[tuple[object, ...]] = []
+    misc = importlib.import_module("slime.utils.misc")
+    monkeypatch.setattr(misc, "load_function", lambda path: lambda *call: chained.append((path, *call[1:3])))
+    groups = [{"lr": 9.0, "lr_mult": 1.0}, {"lr": 9.0, "lr_mult": 0.5}, {"lr": 9.0}]
+    optimizer = SimpleNamespace(param_groups=groups)
+    schedule_state = LearningRateScheduleState(LearningRateSchedule("warmup", 1e-4, warmup_steps=4), completed_steps=2)
+    args = SimpleNamespace(
+        reef_chained_before_train_step_hook_path="user.before_step",
+        reef_learning_rate_schedule_state=schedule_state.to_dict(),
+    )
+
+    worker_hooks.apply_learning_rate_schedule(args, 7, 1, "model", optimizer, "scheduler")
+
+    # The job's second step is the schedule's step 3; each group keeps its multiplier.
+    assert [group["lr"] for group in groups] == pytest.approx([7.5e-5, 3.75e-5, 7.5e-5])
+    assert chained == [("user.before_step", 7, 1)]
+    assert worker_hooks.APPLIED_LEARNING_RATE.value == pytest.approx(7.5e-5)
+
+    # Without a schedule Slime's scheduler keeps the rate it set.
+    args.reef_learning_rate_schedule_state = None
+    worker_hooks.apply_learning_rate_schedule(args, 7, 2, "model", optimizer, "scheduler")
+    assert [group["lr"] for group in groups] == pytest.approx([7.5e-5, 3.75e-5, 7.5e-5])
+    assert worker_hooks.APPLIED_LEARNING_RATE.value is None
+
+
+@pytest.mark.unit
+def test_logged_step_rates_follow_the_recipe_schedule(monkeypatch: pytest.MonkeyPatch) -> None:
+    logged: list[dict[str, object]] = []
+    _stub_module(monkeypatch, "slime.utils.logging_utils", log=lambda args, metrics, step: logged.append(metrics))
+    worker_hooks.drain_worker_metrics()
+    worker_hooks._install_metric_capture()
+    from slime.utils import logging_utils
+
+    step = {"train/lr-pg_0": 3e-6, "train/critic-lr-pg_0": 1e-6, "train/loss": 1.0, "train/step": 4}
+    worker_hooks.APPLIED_LEARNING_RATE.value = 2e-5
+    try:
+        logging_utils.log("args", step, "train/step")
+    finally:
+        worker_hooks.APPLIED_LEARNING_RATE.value = None
+    # The actor's rate is the schedule's; the critic's is its own scheduler's.
+    assert logged[-1] == {**step, "train/lr-pg_0": 2e-5}
+    assert worker_hooks.drain_worker_metrics()["train/lr-pg_0"] == 2e-5
+    logging_utils.log("args", step, "train/step")
+    assert logged[-1] == step
+
+
+@pytest.mark.unit
+def test_switching_a_loss_family_replaces_the_previous_familys_hooks() -> None:
+    args = SimpleNamespace(loss_family="tttd", loss_family_ref=None, score_centering=False)
+    worker_hooks.resolve_objective_paths(args)
+    assert args.custom_loss_function_path == "recipes.tttd.slime.objective.tttd_loss"
+    assert args.custom_advantage_function_path == "recipes.tttd.slime.objective.tttd_advantages"
+
+    # The suite's sft family registers no hooks: nothing of TTTD's stays behind.
+    args.loss_family = "sft"
+    worker_hooks.switch_loss_family(args)
+    assert args.custom_loss_function_path is None
+    assert args.custom_advantage_function_path is None
+
+    args.loss_family = "tttd"
+    args.loss_type = "custom_loss"
+    args.score_centering = True
+    worker_hooks.switch_loss_family(args)
+    assert args.custom_loss_function_path == worker_hooks.SCORE_CENTERED_CUSTOM_LOSS_PATH
+    assert args.reef_score_centering_base_loss_path == "recipes.tttd.slime.objective.tttd_loss"

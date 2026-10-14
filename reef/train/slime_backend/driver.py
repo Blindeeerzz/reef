@@ -10,7 +10,6 @@ import argparse
 import logging
 import os
 import re
-import shlex
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -26,29 +25,10 @@ from reef.train.slime_backend.loss_families import UnknownLossFamilyError, resol
 from reef.train.slime_backend.reef_adapters.training_job.storage import RetentionConfig
 
 
-def load_args_file(path: str | Path) -> list[str]:
-    """Read shell-like Slime arguments without executing a shell.
-
-    Environment variables are expanded first, ``#`` comments are supported,
-    and quoted values remain one token. Reef derives missing architecture
-    flags from ``--hf-checkpoint`` before the runtime parses them, so an args
-    file — when used — only carries deployment choices.
-    """
-    args_path = Path(path)
-    try:
-        contents = args_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise RuntimeError(f"cannot read SLIME_ARGS_FILE {args_path}: {exc}") from exc
-    try:
-        return shlex.split(os.path.expandvars(contents), comments=True)
-    except ValueError as exc:
-        raise RuntimeError(f"cannot parse SLIME_ARGS_FILE {args_path}: {exc}") from exc
-
-
 def _parse_slime_args(arguments: Sequence[str]):
-    """Parse prepared file-first/direct-last arguments through Slime."""
+    """Parse prepared arguments through Slime."""
     if not arguments:
-        raise RuntimeError("no Slime arguments: set SLIME_ARGS_FILE or pass flags on the driver command")
+        raise RuntimeError("no Slime arguments: configure training options in the deployment config")
 
     from reef.train.slime_backend.reef_adapters.megatron.hf_arguments import add_hf_architecture_arguments
 
@@ -58,12 +38,13 @@ def _parse_slime_args(arguments: Sequence[str]):
     try:
         from slime.utils.arguments import parse_args
 
+        from reef.train.slime_backend.reef_adapters.arguments import SlimeArguments
         from reef.train.slime_backend.reef_adapters.slime_arguments import (
             add_reef_slime_arguments,
             finalize_reef_slime_args,
         )
 
-        args = parse_args(add_custom_arguments=add_reef_slime_arguments)
+        args = SlimeArguments(**vars(parse_args(add_custom_arguments=add_reef_slime_arguments)))
         finalize_reef_slime_args(args, prepared_arguments)
         return args
     finally:
@@ -128,6 +109,27 @@ def _apply_bridge_resume_fallback(args) -> None:
     args.start_rollout_id = 0
 
 
+def _apply_unsaved_optimizer_resume(args) -> None:
+    """Resume a run that never saved its optimizer from its weights alone.
+
+    With ``--no-save-optim`` (required, for one, when the optimizer is offloaded
+    to the CPU) Reef's checkpoints carry no optimizer or scheduler state, and
+    after each save the train group already reloads them with
+    ``no_load_optim``. A cold restart did not, so Megatron looked for the
+    missing state and failed with ``KeyError: 'optimizer'``. This applies the
+    same rule when ``--load`` resumes the run's own save directory.
+    """
+    if not getattr(args, "no_save_optim", False):
+        return
+    load, save = getattr(args, "load", None), getattr(args, "save", None)
+    if not (isinstance(load, str) and load.strip() and isinstance(save, str) and save.strip()):
+        return
+    if Path(load).resolve() != Path(save).resolve():
+        return
+    if (Path(load) / "latest_checkpointed_iteration.txt").is_file():
+        args.no_load_optim = True
+
+
 def _retention_options(arguments: Sequence[str]) -> tuple[RetentionConfig, list[str]]:
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False, argument_default=argparse.SUPPRESS)
     parser.add_argument("--reef-checkpoint-policy", dest="policy")
@@ -181,17 +183,12 @@ def _job_runtime_env(environ: Mapping[str, str] | None = None) -> dict[str, Any]
     return {"env_vars": {"PYTHONPATH": pythonpath}}
 
 
-def create_training_plan(
-    config: Mapping[str, Any], direct_args: Sequence[str] = (), *, loss_family: str
-) -> TrainingDeploymentPlan:
+def create_training_plan(config: Mapping[str, Any], *, loss_family: str) -> TrainingDeploymentPlan:
     ray_address = os.environ.get("RAY_ADDRESS", "").strip()
     if not ray_address:
         raise RuntimeError("RAY_ADDRESS is required")
-    args_file = os.environ.get("SLIME_ARGS_FILE", "").strip() or None
     namespace = os.environ.get("REEF_RAY_NAMESPACE", DEFAULT_NAMESPACE)
     actor_name = os.environ.get("REEF_RAY_ACTOR_NAME", DEFAULT_ACTOR_NAME)
-    if config.get("reef", {}).get("inference_num_gpus") is not None and (args_file or direct_args):
-        raise RuntimeError("managed drivers read resolved configuration; pass options through reef serve")
     recipe = config_value(config, "reef", "recipe", expand=False)
     if not loss_family:
         raise RuntimeError(f"reef.recipe {recipe!r} declares no training loss family")
@@ -199,17 +196,13 @@ def create_training_plan(
         spec = resolve_loss_family(loss_family)
     except UnknownLossFamilyError as exc:
         raise RuntimeError(f"reef.recipe {recipe!r} declares unsupported loss family {loss_family!r}: {exc}") from exc
-    combined_args = [
-        *driver_arguments(config),
-        *(load_args_file(args_file) if args_file else []),
-        *direct_args,
-    ]
-    retention, remaining_args = _retention_options(combined_args)
+    retention, remaining_args = _retention_options(driver_arguments(config, loss_family=loss_family))
     loss_family_config, slime_args = spec.parse_driver_options(remaining_args)
     args = _parse_slime_args(slime_args)
     _configure_executors(args, config, slime_args)
     _validate_tracking_args(args)
     _apply_bridge_resume_fallback(args)
+    _apply_unsaved_optimizer_resume(args)
     spec.apply_driver_options(args, loss_family_config)
     _stamp_loss_family_reference(args, loss_family)
     from reef.train.slime_backend.reef_adapters.bridge import prepare_bridge
@@ -222,10 +215,14 @@ def create_training_plan(
     prepared = prepare_bridge(args, retention=retention, loss_family=loss_family)
     from reef.train.slime_backend.inference import inference_config
 
+    reef = config.get("reef", {})
+    inference_backend = reef.get("inference_backend") or "sglang"
     training = SlimeTrainingService(
         args,
         preparation=prepared,
         loss_family_config=loss_family_config,
+        inference_backend=inference_backend,
+        train_rpc_timeout_s=reef.get("train_timeout_s"),
     )
     return TrainingDeploymentPlan(
         resources=SlimeDeploymentResources(
@@ -234,7 +231,7 @@ def create_training_plan(
             namespace=namespace,
             runtime_env=_job_runtime_env(),
         ),
-        inference_config=inference_config(args),
+        inference_config=inference_config(args, inference_backend, reef.get("inference_options")),
         training=training,
         coordinator=_coordinator_config(args, actor_name=actor_name, namespace=namespace),
         monitor_components=not getattr(args, "rollout_external", False),

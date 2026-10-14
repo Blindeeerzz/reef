@@ -29,24 +29,12 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from .context import Context
 from .fiber import EffectHandle, Fiber
-
-if sys.version_info >= (3, 11):
-    from builtins import ExceptionGroup as _ExceptionGroup
-else:
-
-    class _ExceptionGroup(Exception):
-        """Python 3.10 stand-in carrying aggregated errors like 3.11's ExceptionGroup."""
-
-        def __init__(self, message: str, exceptions: Sequence[BaseException]) -> None:
-            super().__init__(message)
-            self.exceptions = tuple(exceptions)
 
 
 def is_bailed(value: Any) -> bool:
@@ -186,9 +174,11 @@ class EventsService:
             # inside an Exception subclass; peers stay visible on the chain.
             peers = [failure for failure in failures if failure is not hard]
             if peers:
-                raise hard from _ExceptionGroup("parallel event dispatch failed alongside", peers)
+                raise hard from BaseExceptionGroup("parallel event dispatch failed alongside", peers)
             raise hard
-        raise _ExceptionGroup("parallel event dispatch failed", failures)
+        raise ExceptionGroup(
+            "parallel event dispatch failed", [failure for failure in failures if isinstance(failure, Exception)]
+        )
 
     async def serial(self, *args: Any) -> Any:
         """Await listeners one at a time; the first bailed result wins."""

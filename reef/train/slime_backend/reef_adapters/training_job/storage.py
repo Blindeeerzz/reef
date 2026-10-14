@@ -33,6 +33,8 @@ class CheckpointStorageError(RuntimeError):
 
 #: Rank-local adapter snapshots live beside the Megatron checkpoint.
 ADAPTER_SLOTS_DIRNAME = "reef_adapter_slots"
+#: The learning-rate schedule progress of every scenario lives beside the job marker.
+LEARNING_RATE_SCHEDULES_FILENAME = "reef_learning_rate_schedules.json"
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,16 @@ class RetentionConfig:
         )
 
 
+def critic_checkpoint_due(rollout_id: int, interval: int) -> bool:
+    """Whether the commit at ``rollout_id`` writes the critic checkpoint.
+
+    Every ``interval``-th commit does, counting from the first; ``interval``
+    1 is every commit. The bridge saves on this cadence and the storage
+    requires the critic asset on the same commits.
+    """
+    return (rollout_id + 1) % interval == 0
+
+
 class CheckpointStorage:
     """Own paired Slime HF and Megatron checkpoints under one local byte cap."""
 
@@ -88,9 +100,17 @@ class CheckpointStorage:
         measure: Callable[[Path], int] | None = None,
         disk_usage: Callable[[Path], Any] = shutil.disk_usage,
         lora: bool = False,
+        critic_save_interval: int = 1,
     ) -> None:
         self.config = config
         self._lora = bool(lora)
+        if (
+            not isinstance(critic_save_interval, int)
+            or isinstance(critic_save_interval, bool)
+            or critic_save_interval < 1
+        ):
+            raise ValueError("critic_save_interval must be a positive integer")
+        self.critic_save_interval = critic_save_interval
         template = Path(hf_template).expanduser()
         if "{rollout_id}" not in template.name:
             raise ValueError("HF checkpoint template must contain {rollout_id} in its basename")
@@ -167,13 +187,13 @@ class CheckpointStorage:
             yield plan
 
     def complete(self, job_id: str, rollout_id: int, *, reward: float | None) -> None:
-        # The critic asset (when a critic root is configured) is required at
-        # completion time — the bridge saves it before completing — so a
-        # failed critic save cannot be recorded as a durable checkpoint.
-        for path in self.asset_paths(rollout_id):
+        # The critic asset is required at completion time on the commits the
+        # critic's cadence saves it — the bridge saves it before completing —
+        # so a failed critic save cannot be recorded as a durable checkpoint.
+        for path in self.required_assets(rollout_id):
             if path.is_symlink() or not path.is_dir():
                 raise CheckpointStorageError(f"checkpoint asset is missing or unsafe: {path}")
-        pair_bytes = sum(self._measure(path) for path in self.asset_paths(rollout_id))
+        pair_bytes = sum(self._measure(path) for path in self.required_assets(rollout_id))
         previous = (_read_json(self.estimate_path) or {}).get("bytes", 0)
         previous = previous if isinstance(previous, int) else 0
         _write_json(self.estimate_path, {"bytes": max(previous, pair_bytes)})
@@ -318,11 +338,12 @@ class CheckpointStorage:
 
     def _unknown_assets(self, known: set[Path]) -> list[str]:
         unknown: list[str] = []
-        # Control files Reef itself keeps in the managed roots: the job marker
-        # and the LoRA scenario history beside the HF exports, and the
-        # adapter-slot snapshots beside the Megatron checkpoints.
+        # Control files Reef itself keeps in the managed roots: the job marker,
+        # the LoRA scenario history and the learning-rate schedule progress
+        # beside the HF exports, and the adapter-slot snapshots beside the
+        # Megatron checkpoints.
         roots = [
-            (self.hf_root, LATEST_JOB_MARKER_FILENAME, {SCENARIO_HISTORY_FILENAME}),
+            (self.hf_root, LATEST_JOB_MARKER_FILENAME, {SCENARIO_HISTORY_FILENAME, LEARNING_RATE_SCHEDULES_FILENAME}),
             (self.megatron_root, "latest_checkpointed_iteration.txt", {ADAPTER_SLOTS_DIRNAME}),
         ]
         if self.critic_root is not None:
@@ -422,6 +443,18 @@ class CheckpointStorage:
         store."""
         paths: tuple[Path, ...] = self.pair_paths(rollout_id)
         if self.critic_root is not None:
+            paths = (*paths, self.critic_root / f"iter_{rollout_id:07d}")
+        return paths
+
+    def required_assets(self, rollout_id: int) -> tuple[Path, ...]:
+        """The assets a commit at ``rollout_id`` must have written: the pair,
+        plus the critic checkpoint on the commits its cadence saves it.
+
+        :meth:`asset_paths` stays the full set the store owns, so a critic
+        checkpoint from a denser earlier cadence is still recognized and
+        retired with its rollout."""
+        paths: tuple[Path, ...] = self.pair_paths(rollout_id)
+        if self.critic_root is not None and critic_checkpoint_due(rollout_id, self.critic_save_interval):
             paths = (*paths, self.critic_root / f"iter_{rollout_id:07d}")
         return paths
 

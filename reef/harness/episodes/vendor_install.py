@@ -20,11 +20,13 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from reef.core.errors import ReefError
 from reef.harness.adapters.descriptor import AdapterDescriptor, InstallSpec
+from reef.sandbox.process import SandboxProgram
 
 #: Where per-adapter install prefixes live, matching the ``PREFIX`` default the
 #: served install script bakes in; ``REEF_HARNESS_PREFIX`` moves the root, and
@@ -68,9 +70,9 @@ def resolve_binary(descriptor: AdapterDescriptor, *, prefix: Path | None = None)
         return descriptor.binary
     root = prefix if prefix is not None else install_prefix(descriptor)
     binary = root / install.binary_path
-    # Use the adapter's offline/update guards without its episode-root paths.
-    probe_env = {key: value for key, value in descriptor.env.items() if "{root}" not in value}
-    if _is_pinned(install, binary, root, env=probe_env):
+    with tempfile.TemporaryDirectory(prefix="reef-probe-") as probe_root:
+        pinned = _is_pinned(install, binary, root, env=version_probe_env(descriptor, Path(probe_root)))
+    if pinned:
         return str(binary)
     root.mkdir(parents=True, exist_ok=True)
     _install(install, root)
@@ -80,6 +82,51 @@ def resolve_binary(descriptor: AdapterDescriptor, *, prefix: Path | None = None)
             f"install the harness binary yourself and set evolution.binary to its path"
         )
     return str(binary)
+
+
+class AdapterProgram(SandboxProgram):
+    """An adapter's harness binary as the program an executor runs.
+
+    ``prefix`` overrides the adapter's install prefix (:func:`install_prefix`).
+    """
+
+    def __init__(self, descriptor: AdapterDescriptor, *, prefix: Path | None = None) -> None:
+        self.descriptor = descriptor
+        self.prefix = prefix
+        install = descriptor.install
+        self.name = descriptor.name
+        self.binary = descriptor.binary
+        self.self_isolating = descriptor.self_isolating
+        self.npm_package = (
+            f"{install.package}@{install.version}" if install is not None and install.kind == "npm" else ""
+        )
+        self.version = "" if install is None else install.version
+
+    def host_binary(self) -> str:
+        return resolve_binary(self.descriptor, prefix=self.prefix)
+
+    def host_install_dir(self) -> Path | None:
+        if self.descriptor.install is None:
+            return None
+        return self.prefix if self.prefix is not None else install_prefix(self.descriptor)
+
+
+def version_probe_env(descriptor: AdapterDescriptor, root: Path) -> dict[str, str]:
+    """The descriptor's env for a ``--version`` probe, each directory it relocates made under ``root``.
+
+    ``root`` is a scratch directory the caller removes. The probe keeps the
+    adapter's offline and update guards, and a binary that writes its state
+    on ``--version`` (hermes, opencode) writes it there, not in the home
+    directory of whoever runs the install, the doctor or the service."""
+    env: dict[str, str] = {}
+    for key, value in descriptor.env.items():
+        if "{root}" in value:
+            relocated_dir = value.replace("{root}", str(root))
+            Path(relocated_dir).mkdir(parents=True, exist_ok=True)
+            env[key] = relocated_dir
+        else:
+            env[key] = value
+    return env
 
 
 def _pin(install: InstallSpec) -> str:
@@ -186,7 +233,9 @@ __all__ = [
     "DEFAULT_PREFIX_ROOT",
     "PIN_FILE",
     "PREFIX_ENV",
+    "AdapterProgram",
     "VendorInstallError",
     "install_prefix",
     "resolve_binary",
+    "version_probe_env",
 ]

@@ -67,7 +67,7 @@ Register the spec by reference from the package ``__init__`` —
 ``register_loss_family_ref("<name>", "my_method.slime:MyMethodAlgorithm")``
 (:mod:`reef.train.algos.registry`) — so the service never imports
 the Slime side and the driver imports it on first resolve. Naming conventions, enforced by
-``tests/reef_service/test_slime_algorithm_contract.py``: the spec class is
+``tests/slime_backend/test_slime_algorithm_contract.py``: the spec class is
 ``<Pkg>Algorithm`` and its driver options ``<Pkg>Settings``, both importable
 from the family package root; ``@objective`` entry points are ``<pkg>_loss``,
 ``<pkg>_advantages``, ``<pkg>_actor_init`` / ``<pkg>_actor_pre_train``; family
@@ -77,20 +77,67 @@ CLI flags are ``--<pkg>-*``.
 from __future__ import annotations
 
 import importlib
+import math
 from abc import ABC, abstractmethod
 from argparse import Namespace
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from numbers import Real
 from typing import Any, Literal
 
 from reef.core.batches import TrajectoryItem
 from reef.core.trajectories import source_record_id, trajectory_reward
 
 
+#: ``none`` is ``f(r) = 1``; ``truncated`` is ``min(r, upper)``; ``masked`` is
+#: ``r`` strictly inside ``(lower, upper)`` and 0 outside.
+POLICY_GRADIENT_WEIGHT_KINDS = ("none", "truncated", "masked")
+
+
+def is_finite_number(value: object) -> bool:
+    return isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value)
+
+
+@dataclass(frozen=True)
+class PolicyGradientWeight:
+    """The weight ``f(r)``, ``r = p / q``, a family's loss puts on the sampled token's score.
+
+    A loss of the form ``-A_t * sg[f(p_t / q_t)] * log p_t``, with ``q`` the
+    rollout engine's probability, declares its ``f`` with this value through
+    :meth:`SlimeAlgorithm.policy_gradient_weight`: plain off-policy
+    REINFORCE is ``none``, truncated importance sampling ``truncated`` with
+    its cap as ``upper``, and masked importance sampling ``masked`` with its
+    trust region as ``(lower, upper)``. Score centering reads it to add the
+    matching correction term.
+    """
+
+    kind: str
+    lower: float = 0.0
+    upper: float = math.inf
+
+    def __post_init__(self) -> None:
+        if self.kind not in POLICY_GRADIENT_WEIGHT_KINDS:
+            raise ValueError(f"policy-gradient weight kind must be one of: {', '.join(POLICY_GRADIENT_WEIGHT_KINDS)}")
+        if self.kind == "truncated" and (not is_finite_number(self.upper) or self.upper <= 0):
+            raise ValueError("a truncated policy-gradient weight needs a finite cap upper > 0")
+        if self.kind == "masked" and (
+            not is_finite_number(self.lower) or not is_finite_number(self.upper) or not 0 <= self.lower < self.upper
+        ):
+            raise ValueError("a masked policy-gradient weight needs finite bounds 0 <= lower < upper")
+
+
 @dataclass(frozen=True)
 class TrainResult:
+    """One job's training: the actor workers' results and the method's durable metrics.
+
+    ``actor_trained`` is false when the job trained only the critic (a warmup
+    step): the actor took no optimizer step, so its learning-rate schedule
+    does not advance.
+    """
+
     worker_results: list[Any]
     durable_metrics: dict[str, Any] = field(default_factory=dict)
+    actor_trained: bool = True
 
 
 # --- objective registration (worker-side) ---
@@ -174,6 +221,17 @@ def resolve_objective_paths(args: Namespace) -> None:
         setattr(args, arg_name, f"{module_path}.{fn_name}")
 
 
+def reset_objective_paths(args: Namespace) -> None:
+    """Clear every objective hook path a family registered in this worker, before another family resolves its own.
+
+    A job of another loss family re-points the worker (see
+    ``worker_hooks.switch_loss_family``); a hook the previous family
+    registered and the next one does not must not stay on ``args``.
+    """
+    for arg_name in {name for hooks in _objective_registry.values() for name in hooks}:
+        setattr(args, arg_name, None)
+
+
 class SlimeAlgorithm(ABC):
     """Base class for Slime training algorithms.
 
@@ -192,6 +250,7 @@ class SlimeAlgorithm(ABC):
         ``prepare_rollout``           — pre-training work on the bridge actor.
         ``train``                     — critic→actor orchestration.
         ``rollout_metrics``           — telemetry after training.
+        ``policy_gradient_weight``    — the loss's per-token weight, for score centering.
     """
 
     # --- required class attributes (set in subclass) ---
@@ -256,6 +315,18 @@ class SlimeAlgorithm(ABC):
     def parse_specific_options(self, arguments: Sequence[str]) -> tuple[Any | None, list[str]]:
         """Parse family-specific CLI flags. Default: no-op."""
         return None, list(arguments)
+
+    def policy_gradient_weight(self, args: Namespace) -> PolicyGradientWeight | None:
+        """The weight ``f(p / q)`` this family's loss puts on the sampled token's score.
+
+        A family whose policy-gradient loss has the form
+        ``-A_t * sg[f(p_t / q_t)] * log p_t``, with ``q`` the rollout engine's
+        probability, returns its ``f`` so ``--score-centering`` can add the
+        matching correction term to that loss. Default ``None``: the loss has
+        another form (a clipped surrogate against a recomputed old policy, a
+        full-distribution divergence), and score centering is refused.
+        """
+        return None
 
     def configure_backend_args(self, args: Namespace) -> None:
         """Project family-specific settings onto the parsed backend args.

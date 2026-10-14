@@ -13,10 +13,8 @@ description = "A framework-agnostic runtime for continuously improving agents"
 readme = "README.md"
 license = "Apache-2.0"
 authors = [{ name = "Human-Agent-Society" }]
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 classifiers = [
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: System :: Distributed Computing",
@@ -24,29 +22,33 @@ classifiers = [
 # Reef core dependencies. Keep this list free of training and GPU packages:
 # `pip install reef-infra` must support the base `recipe` configuration on CPU.
 dependencies = [
-    "aiohttp",
+    "aiohttp>=3.14",  # web.RequestKey
     "alembic>=1.13,<2",
     "huggingface_hub",
+    # Harbor's environment contract backs reef.sandbox; the terminus runner, the task player and the generator
+    # service play Harbor tasks with reef-eval.
+    "harbor>=0.20,<0.21",
     "pyyaml",
     "reef-client>=0.2.0",
+    "reef-eval>=0.1.1",
     "sqlalchemy>=2.0,<3",
-    "tomli; python_version < '3.11'",
     "tomli-w",
 ]
 
 [project.optional-dependencies]
 # Python-side inference adapters; install native SGLang in its GPU environment.
 sglang = ["httpx", "requests", "ray[default]", "sglang-router>=0.3.2", "psutil>=5.9"]
+# Python-side vLLM adapter; install native vLLM in its GPU environment.
+vllm = ["httpx", "requests", "ray[default]", "psutil>=5.9"]
 tinker = [
-    "tinker==0.28.1; python_version >= '3.11'",
+    "tinker==0.33.1",
     # Converts Tinker checkpoints into PEFT adapters for a local engine (pulls torch).
-    "tinker-cookbook==0.5.7; python_version >= '3.11'",
-    "jinja2>=3.1.0; python_version >= '3.11'",
+    "tinker-cookbook==0.5.7",
+    "jinja2>=3.1.0",
 ]
 postgres = ["psycopg[binary]>=3.1,<4"]
-terminus = [
-    "reef-eval[harbor]>=0.1.1; python_version >= '3.12'",
-]
+# E2B cloud sandboxes for evaluation episodes and the agent proposer.
+e2b = ["e2b>=2.46", "connectrpc>=0.11.1,<0.13"]
 # Provider-neutral experiment tracking. Non-Slime training backends can opt in
 # without installing the Slime/GPU dependency stack.
 wandb = [
@@ -60,6 +62,11 @@ wandb = [
 mlx = [
     "mlx>=0.32,<0.33",
     "mlx-lm>=0.31,<0.32",
+]
+# Record tracing over OTLP/HTTP (observability.tracing); any OpenTelemetry-compatible backend receives it.
+opentelemetry = [
+    "opentelemetry-sdk>=1.25",
+    "opentelemetry-exporter-otlp-proto-http>=1.25",
 ]
 # Python-side dependencies used by the Slime backend. The runtime source pin
 # lives in the `runtime` dependency group below.
@@ -91,7 +98,7 @@ dev = [
     "pytest",
     # CI measures coverage against the [tool.coverage.report] floor below.
     "pytest-cov",
-    "ruff==0.16.7",
+    "ruff==0.16.10",
 ]
 
 [dependency-groups]
@@ -129,13 +136,13 @@ namespaces = true
 include = ["reef", "reef.*"]
 
 [tool.setuptools.package-data]
-reef = ["harness/adapters/*/descriptor.yaml", "harness/adapters/*/version_check.ts", "harness/adapters/*/requests.ts", "harness/adapters/*/pi_extension_api.md", "service/profiles/*.yaml"]
+reef = ["harness/adapters/*/descriptor.yaml", "harness/adapters/*/harness_facts.yaml", "harness/adapters/*/version_check.ts", "harness/adapters/*/requests.ts", "harness/adapters/*/pi_extension_api.md", "harness/adapters/codex/default_instructions.md", "harness/adapters/codex/bundled_models.json", "service/profiles/*.yaml", "recipe/reefine/agent_rules.md", "recipe/reefine/agent_tools.ts", "recipe/reefine/trial_driver.mjs", "recipe/reefine/health/instruction.md", "recipe/reefine/health/task.toml", "recipe/reefine/health/environment/Dockerfile", "recipe/reefine/health/tests/test.sh"]
 
 [tool.isort]
 profile = "black"  # black-compatible
 line_length = 119  # should match black parameters
 ignore_whitespace = true  # ignore whitespace for compatibility with the initial style
-py_version = 310  # python 3.10 as a target version
+py_version = 312  # sync with requires-python in [project]
 sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
 default_section = "THIRDPARTY"
 known_first_party = ["reef", "recipes"]
@@ -149,7 +156,7 @@ src_paths = ["reef", "recipes"]
 line_length = 119
 
 [tool.ruff]
-target-version = "py310"  # sync with requires-python in [project]
+target-version = "py312"  # sync with requires-python in [project]
 line-length = 119  # sync with [tool.black] and [tool.isort]
 
 [tool.ruff.lint]
@@ -176,6 +183,9 @@ ignore = [
     "E501",
     # N818: existing public exception names omit an Error suffix; renaming them would break callers
     "N818",
+    # UP046/UP047: PEP 695 type parameter syntax; the codebase declares TypeVars, and mypy reads both forms
+    "UP046",
+    "UP047",
 ]
 # Math notation in the RL objective docstrings: SAO's alpha/gamma, and the
 # true minus sign used alongside other Unicode math (∇, π, Â) in the SAO loss
@@ -195,17 +205,19 @@ allowed-confusables = ["α", "γ", "−"]
 # Reef's training adapters are checked with the rest of the package; the
 # runtime remains a separately installed distribution.
 files = ["reef"]
-python_version = "3.10"  # sync with requires-python in [project]
+python_version = "3.12"  # sync with requires-python in [project]
 ignore_missing_imports = true
 
 # The training runtime and its GPU dependencies do not ship type information
 # with Reef.
 [[tool.mypy.overrides]]
-module = ["slime.*", "slime_plugins.*"]
+module = ["slime.*", "slime_plugins.*", "vllm.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]
 source = ["reef"]
+# Coverage from the GitHub and Blacksmith checkouts is combined in one gate.
+relative_files = true
 # Reef-authored training control flow counts toward the CPU coverage gate. These
 # four modules execute only inside a live Megatron/CUDA worker; their useful
 # validation is the GPU integration suite, not import-only CPU mocks.
@@ -226,7 +238,7 @@ fail_under = 80
 [tool.pytest.ini_options]
 # durations=0 will display all tests execution time, sorted in ascending order starting from from the slowest one.
 # -vv will also display tests with duration = 0.00s
-addopts = "--verbose --pyargs --durations=0 --strict-markers"  # always add these arguments to pytest
+addopts = "--verbose --pyargs --durations=0 --strict-markers --import-mode=importlib"
 testpaths = ["./tests"]  # must be an explicit path to avoid importing another "tests" module
 # directories to ignore when discovering tests
 norecursedirs = [
@@ -242,6 +254,7 @@ norecursedirs = [
 ]
 # markers to select tests, use `pytest --markers` to see all available markers, `pytest -m "<marker>"` to select tests
 markers = [
+    "sandbox: requires real nested bubblewrap jails on the GitHub CI runner",
     "unit: marks unit test, i.e. testing a single, well isolated functionality (deselect with '-m \"not unit\"')",
     "integration: marks test checking the elements when integrated into subsystems (deselect with '-m \"not integration\"')",
     "acceptance: marks test checking whether the developed product/model passes the user defined acceptance criteria (deselect with '-m \"not acceptance\"')",

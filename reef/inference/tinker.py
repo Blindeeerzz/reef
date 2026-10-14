@@ -14,7 +14,6 @@ import asyncio
 import importlib
 import json
 import math
-import sys
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -85,8 +84,6 @@ class TinkerSDKSampler(TinkerSampler):
     def __init__(
         self, base_model: str, *, api_key: str, project_id: str | None = None, timeout_s: float = 300.0
     ) -> None:
-        if sys.version_info < (3, 11):
-            raise RuntimeError("Tinker requires Python 3.11 or newer; Reef's other backends still support 3.10")
         try:
             self._sdk = importlib.import_module("tinker")
         except ImportError as exc:
@@ -124,11 +121,18 @@ class TinkerSDKSampler(TinkerSampler):
             sampler = self._service.create_sampling_client(model_path=sampler_path)
             if sampler.get_base_model() != self._model:
                 raise ValueError("remote Tinker sampler checkpoint does not match the configured model")
-        result = sampler.sample(
-            prompt=self._sdk.ModelInput.from_ints(prompt),
-            num_samples=1,
-            sampling_params=self._sdk.SamplingParams(**params),
-        ).result(timeout=self._timeout_s)
+        try:
+            result = sampler.sample(
+                prompt=self._sdk.ModelInput.from_ints(prompt),
+                num_samples=1,
+                sampling_params=self._sdk.SamplingParams(**params),
+            ).result(timeout=self._timeout_s)
+        except self._sdk.BadRequestError as exc:
+            # An overflow carries OpenAI's code and wording, which agents match to compact their history.
+            message = str(exc)
+            if "context window" in message:
+                message = f"context_length_exceeded: the prompt exceeds this model's maximum context length. {message}"
+            raise UpstreamStatusError(message, status=400) from exc
         if len(result.sequences) != 1:
             raise ValueError("Tinker returned an unexpected number of sequences")
         sequence = result.sequences[0]
@@ -204,10 +208,6 @@ class TinkerInferenceRuntime(InferenceRuntime):
     def model_path(self) -> str:
         return self._model
 
-    @property
-    def pending_training_job_id(self) -> str | None:
-        return self._pending
-
     def serving_runtime_load_id(self) -> str:
         with self._lock:
             return self._version
@@ -237,7 +237,13 @@ class TinkerInferenceRuntime(InferenceRuntime):
                 raise ValueError("Tinker live snapshot belongs to an unavailable serving incarnation")
             if artifact.ref.release_id in self._releases:
                 return self._releases[artifact.ref.release_id]
-            selected = self._remember(checkpoint_sampler_path(artifact, self._model))
+            sampler_path = checkpoint_sampler_path(artifact, self._model)
+            # A release that carries the served sampler forward (a step of
+            # another component, a rollback to the same weights) was never
+            # activated; it serves under the load the engine reports now,
+            # not under the first load of that sampler.
+            carried = sampler_path == self._active
+            selected = (self._active, self._version) if carried else self._remember(sampler_path)
             self._releases[artifact.ref.release_id] = selected
             return selected
 
