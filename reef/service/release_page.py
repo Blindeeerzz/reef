@@ -779,15 +779,10 @@ def build_release_page(
     )
 
 
-# Compatibility aliases for existing imports.
-VERDICT_FIELDS = RESULT_FIELDS
-verdict_of = result_of
-
 __all__ = [
     "DECLINED_WORDS",
     "RESULT_FIELDS",
     "RESULT_LABELS",
-    "VERDICT_FIELDS",
     "before_release_id",
     "build_release_page",
     "build_running_step_page",
@@ -797,5 +792,4 @@ __all__ = [
     "result_of",
     "served_step",
     "step_href",
-    "verdict_of",
 ]
