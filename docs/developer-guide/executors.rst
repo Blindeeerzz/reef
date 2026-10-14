@@ -492,11 +492,8 @@ integration, not universal tensor-format or backend capability negotiation.
 A rebuilt deployment creates a new session. The previous trainer must be
 retired before attachment; the session is not a multi-writer election protocol.
 
-``reef.service.slime_driver`` retains the legacy argument-file and healthcheck
-syntax and delegates to the same assembly and lifecycle. ``start_bridge`` and
-the Slime-owned coordinator actor are removed. Managed full-weight, LoRA,
-colocated and external-engine modes all use the separate service contracts.
-Configurations continue to use ``inference.num-gpus``,
+Managed full-weight, LoRA, colocated and external-engine modes all use the
+separate service contracts. Configurations continue to use ``inference.num-gpus``,
 ``inference.tensor-parallel-size`` and ``inference.options``.
 
 Transport compatibility and GPU acceptance remain specific to the selected

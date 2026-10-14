@@ -358,8 +358,7 @@ Override an individual native flag with
 ``reef serve -c training.yaml --training.options.lr 0.000002``. The normalized
 options reach ``reef.service.training_driver`` through the same effective config
 as the HTTP child. The driver passes them through its existing recipe-specific
-argument handling and Slime's native parser. Automatic training launches use
-only this effective config and ignore an ambient ``SLIME_ARGS_FILE``.
+argument handling and Slime's native parser.
 
 ``inference.handler-config`` has a different owner: it configures Reef's
 selected ``inference.handler-factory`` adapter, for example its tool parser.
