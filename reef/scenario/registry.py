@@ -111,7 +111,7 @@ class ScenarioRegistry:
             scenario.name
             for scenario in scenarios
             if scenario.name not in dispatched
-            and any(bound.trainer.candidate_backend is not None for bound in scenario.component_trainers)
+            and any(bound.trainer.candidate_backend is not None for bound in scenario.trainers)
         )
         return (*dispatched, *local)
 

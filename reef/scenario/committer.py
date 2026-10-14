@@ -143,18 +143,6 @@ class ScenarioCommitter:
         return self._lock
 
     @property
-    def artifacts(self) -> ArtifactReleaseChain:
-        return self._artifacts
-
-    @property
-    def checkpoint_strategy(self) -> CheckpointStrategy:
-        return self._checkpoint_strategy
-
-    @property
-    def store(self) -> ScenarioStore:
-        return self._store
-
-    @property
     def step(self) -> int:
         return self._step
 
@@ -1014,9 +1002,6 @@ class ScenarioCommitter:
     def base_release_on_record(self, prepared: PreparedCommit) -> str | None:
         """The release a batch was reserved against, recorded only where another trainer can replace it."""
         return prepared.base_release_id if len(self.trainers) > 1 else None
-
-    def metrics_for_version(self, release_id: str) -> Mapping[str, Any] | None:
-        return self._releases.metrics_for_version(release_id)
 
     def entries_for_version(self, release_id: str) -> tuple[Mapping[str, Any], ...] | None:
         return self._releases.entries_for_version(release_id)

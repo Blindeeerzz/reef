@@ -32,7 +32,6 @@ def test_scenario_owns_recipe_derived_policy_and_base_artifact() -> None:
 
     assert not hasattr(scenario, "recipe")
     assert scenario.repository.base_artifact.release_id
-    assert scenario._committer.checkpoint_strategy is not None
     assert scenario.repository.current_artifact == scenario.repository.checkpoint_artifact
 
 
@@ -79,15 +78,17 @@ def test_each_scenario_keeps_recipe_derived_checkpoint_policy(tmp_path) -> None:
     fast = fast_dispatcher.get_or_create_scenario("fast")
     slow = slow_dispatcher.get_or_create_scenario("slow")
 
-    assert fast._committer.checkpoint_strategy.n == 1
-    assert slow._committer.checkpoint_strategy.n == 3
+    assert fast._committer._checkpoint_strategy.n == 1
+    assert slow._committer._checkpoint_strategy.n == 3
 
 
 def test_scenario_metadata_round_trips() -> None:
-    from reef.storage.commits import parse_scenario_metadata
+    from reef.storage.commits import parse_scenario_metadata, scenario_metadata_for
 
     scenario = build_default_dispatcher(scenario_storage=SQLiteScenarioStorage()).get_or_create_scenario("math")
-    metadata = scenario.to_metadata()
+    metadata = scenario_metadata_for(
+        name=scenario.name, base_artifact=scenario.repository.base_artifact, scenario_step=scenario.scenario_step
+    )
 
     assert metadata["format"] == "reef-scenario/4"
     assert "scenario" not in metadata["base_artifact"]
@@ -109,11 +110,13 @@ def test_scenario_metadata_round_trips() -> None:
 
 
 def test_rollback_metadata_preserves_its_operation() -> None:
-    from reef.storage.commits import parse_scenario_metadata
+    from reef.storage.commits import parse_scenario_metadata, scenario_metadata_for
 
     scenario = build_default_dispatcher(scenario_storage=SQLiteScenarioStorage()).get_or_create_scenario("math")
     assert scenario is not None
-    metadata = scenario.to_metadata()
+    metadata = scenario_metadata_for(
+        name=scenario.name, base_artifact=scenario.repository.base_artifact, scenario_step=scenario.scenario_step
+    )
     metadata["operation"] = "rollback"
     metadata["rollback_target_release_id"] = "checkpoint-v1"
 
@@ -345,7 +348,7 @@ def test_checkpoint_metadata_decodes_directly_to_commit_record(operation) -> Non
 )
 def test_checkpoint_metadata_rejects_invalid_recovery_state(changes, message) -> None:
     from reef.core.artifact_ref import ArtifactRef, encode_artifact_ref
-    from reef.storage.commits import parse_scenario_metadata
+    from reef.storage.commits import parse_scenario_metadata, scenario_metadata_for
 
     base = ArtifactRef("base", "base", None)
     metadata = {

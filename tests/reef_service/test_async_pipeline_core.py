@@ -377,7 +377,7 @@ def test_training_result_metrics_reach_the_durable_commit(start_dispatcher) -> N
     _wait_for_step(dispatcher, 1)
     scenario = dispatcher.get_or_create_scenario("math")
 
-    committed = scenario.metrics_for_version(scenario.current_artifact_ref().release_id)
+    _, committed = scenario.artifact_with_metrics()
     assert committed is not None
     assert {key: committed[key] for key in metrics} == metrics
     assert committed["selection"]["selected"] is True
@@ -402,7 +402,7 @@ def test_experiment_provider_observes_the_generic_commit_boundary(start_dispatch
     _wait_for_step(dispatcher, 1)
     scenario = dispatcher.get_or_create_scenario("math")
     produced = scenario.current_artifact_ref()
-    committed = scenario.metrics_for_version(produced.release_id)
+    _, committed = scenario.artifact_with_metrics(produced.release_id)
 
     assert committed is not None
     assert committed["experiment/provider"] == "test"

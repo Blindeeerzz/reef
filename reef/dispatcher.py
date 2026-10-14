@@ -338,7 +338,7 @@ class WorkerCoordination(ReplacedScenarioCloser):
             if state is not None:
                 state.reload_pending = False
         failures = (
-            {bound.component: bound.trainer.instruction_failures() for bound in current.component_trainers}
+            {bound.component: bound.trainer.instruction_failures() for bound in current.trainers}
             if current is not None
             else {}
         )
@@ -475,7 +475,7 @@ class Dispatcher:
     def _wake_training(self, current: Scenario) -> None:
         if current.training_runtime is not None:
             self._training.ready.set()
-        for bound in current.component_trainers:
+        for bound in current.trainers:
             backend = bound.trainer.candidate_backend
             if backend is not None and not backend.dispatched:
                 self._start_local_backend_worker(current.name, bound.component)
@@ -518,7 +518,7 @@ class Dispatcher:
             with self._training.lock:
                 self._training.failure_counts.pop(scenario, None)
             if dropped is not None:
-                for bound in dropped.component_trainers:
+                for bound in dropped.trainers:
                     backend = bound.trainer.candidate_backend
                     if backend is not None:
                         backend.retire_scenario(scenario)
@@ -715,7 +715,7 @@ class Dispatcher:
                     return existing
                 if current.training_mode == "auto":
                     raise ValueError("explicit training requests require training_mode='manual' or 'hybrid'")
-                if all(bound.trainer.candidate_backend is None for bound in current.component_trainers):
+                if all(bound.trainer.candidate_backend is None for bound in current.trainers):
                     raise ValueError("explicit training requests require a training backend")
                 request = TrainingRequest.from_dict(item.payload)
                 if item.references:
@@ -784,7 +784,7 @@ class Dispatcher:
         self._wake_training(current)
         if current.training_runtime is not None:
             return
-        for bound in current.component_trainers:
+        for bound in current.trainers:
             if bound.trainer.candidate_backend is not None:
                 continue
             result = current.prepare_training_step(bound.component)
@@ -883,7 +883,7 @@ class Dispatcher:
             backend=None if backend is None else type(backend).__name__,
             backend_config=backend_config,
             # One trainer's events need no name; several trainers' events say whose they are.
-            component=component if len(current.component_trainers) > 1 else None,
+            component=component if len(current.trainers) > 1 else None,
         )
 
     # -- Preload ---------------------------------------------------------
@@ -1161,7 +1161,7 @@ class Dispatcher:
         for name in self._training_scenario_names():
             current = self._registry.get_optional(name)
             if current is not None and any(
-                bound.trainer.pipeline.background_jobs_running() for bound in current.component_trainers
+                bound.trainer.pipeline.background_jobs_running() for bound in current.trainers
             ):
                 timeout = (
                     self.background_job_poll_seconds
@@ -1459,10 +1459,10 @@ class Dispatcher:
             and current.training_runtime.concurrent_training_scenarios
         ):
             block["adapter_runtime_load_id"] = runtime.serving_adapter_runtime_load_id(scenario_name)
-        if len(current.component_trainers) > 1:
+        if len(current.trainers) > 1:
             # Each component's trainer commits on its own; report each one beside the scenario-wide step.
             components: dict[str, Any] = {}
-            for bound in current.component_trainers:
+            for bound in current.trainers:
                 last = current.last_commit_for(bound.component)
                 components[str(bound.component)] = {
                     "batch_ready": bound.trainer.batch_ready(),
