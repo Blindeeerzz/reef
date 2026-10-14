@@ -441,8 +441,6 @@ def resolve_deployment_config(
         # A component named through ${VAR} is only known once the environment is applied.
         training = recipe_type is not None and selected_weight_training(recipe_type, config) is not None
         reject_null_settings(config, arguments)
-        if "services" in config.get("execution", {}):
-            raise DeployConfigError("execution.services is not accepted; configure component resources instead")
         for name, flag in (("host", "reef.host"), ("model_path", "inference.model-path")):
             value = config.get("reef", {}).get(name)
             if isinstance(value, str) and not value.strip():

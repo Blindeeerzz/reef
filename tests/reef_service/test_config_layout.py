@@ -84,9 +84,8 @@ def test_request_handler_configuration_is_independent_of_native_backend_selectio
 @pytest.mark.parametrize(
     "value, message",
     [
-        ({"service": {}}, "service/services are not accepted"),
-        ({"services": []}, "service/services are not accepted"),
-        ({"execution": {"services": "uni"}}, "execution.services is not accepted"),
+        ({"service": {}}, "unknown config sections: service"),
+        ({"services": []}, "unknown config sections: services"),
         ({"infernce": {}}, "unknown config sections"),
         ({"implementation": "recipe"}, "unknown config sections"),
         ({"reef": {"recipe": "recipe"}}, r"unknown config fields: reef\.recipe"),

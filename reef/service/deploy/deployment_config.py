@@ -85,13 +85,6 @@ def _unknown(values: Mapping[str, Any], prefix: str = "") -> list[str]:
 
 def translate_layout(config: Mapping[str, Any]) -> dict[str, Any]:
     """Translate a configuration file's public sections to the resolved deployment layout."""
-    if "service" in config or "services" in config:
-        raise DeployConfigError(
-            "service/services are not accepted: move HTTP settings to reef; "
-            "processes are assembled by Reef and the selected recipe"
-        )
-    if isinstance(config.get("execution"), Mapping) and "services" in config["execution"]:
-        raise DeployConfigError("execution.services is not accepted; configure component resources instead")
     pending = copy.deepcopy(dict(config))
     known_sections = {
         "reef",
@@ -221,7 +214,7 @@ def translate_references(config: dict[str, Any], arguments: tuple[ConfigArgument
     return convert(config)
 
 
-_EXECUTION_ROLES = ("services", "training", "rollout", "evolution", "generator")
+_EXECUTION_ROLES = ("training", "rollout", "evolution", "generator")
 
 
 def selected_weight_training(
@@ -367,7 +360,7 @@ def normalize_component_config(config: Mapping[str, Any], arguments: tuple[Confi
         factory.parse_config(runtime, os.environ)
     execution = normalized.get("execution", {})
     if not isinstance(execution, Mapping) or set(execution) - set(_EXECUTION_ROLES):
-        raise ValueError("execution must be an object with services, training, rollout, evolution or generator roles")
+        raise ValueError("execution must be an object with training, rollout, evolution or generator roles")
     for selection in execution.values():
         executor_settings(normalized, selection)
     return normalized
