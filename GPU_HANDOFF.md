@@ -57,8 +57,11 @@ cd data && sha256sum -c r2d-handoff-1.tar.gz.sha256 && tar xzf r2d-handoff-1.tar
 1. **Now:** `r2d-handoff-1.tar.gz`
    - `dryrun/`: 5 AES tasks from the user's pilot, for the Slime dry run. They are not in the training pools. `rewards.jsonl` gives 9B's rewards on 4 plays of each; each was solved 1 to 3 times.
    - `eval/swe-together/`: 47 strict and 15 capped tasks (the sets in `eval-sets.json`), `verifier_fixes.py`, and our earlier oracle results. Its `README.md` says how to use them.
-2. **When generation finishes:** `r2d-handoff-2.tar.gz`. It holds `train/A1-aes/` and `train/A2-spade/`: Harbor task folders, `manifest.json` (the train split, at least 100 tasks each), `generation.jsonl` (per task: the source session, the check results, the `gpt-6-luna` rewards, and the 9B rewards where measured) and `DATASHEET.md`.
-3. **Later:** `r2d-handoff-3.tar.gz`, with 300 tasks per arm for the scaling point.
+2. **Now (published 2026-10-14):** `r2d-handoff-2.tar.gz`, the full training pools, one task per session:
+   - `train/A1-aes/`: 402 tasks (336 fair) from 294 repositories;
+   - `train/A2-spade/`: 374 tasks (69 fair) from 270 repositories.
+
+   Each arm has `tasks/<task>/` (Harbor task folders), `manifest.json` (a Reef split manifest; `train` is the whole pool), and `generation.jsonl` (per task: the session, its repository, the check results, the `gpt-6-luna` rewards and the 9B rewards where measured). `DATASHEET.md` says how the pools were made. Both N = 100 and N = 300 come from this archive (Step 5).
 
 SWE-bench Verified is not in an archive. Use Harbor's registry dataset `swebench-verified@1.0`, all 500 tasks.
 
@@ -117,7 +120,7 @@ SWE-bench Verified is not in an archive. Use Harbor's registry dataset `swebench
 - **Seeds:** 1 per run. Add a second seed for the 9B main runs if time allows.
 - **Slime topology:** choose it from Slime's guidance for 8× B200: colocated, or GPUs split between rollout and training. Report the choice and the measured throughput.
 
-## Step 4: Pilot (when `r2d-handoff-2` arrives)
+## Step 4: Pilot (after Step 2; `r2d-handoff-2` is published)
 
 1. Prepare the A1 and A2 tasks for E2B and run each oracle once, as in Step 2.
 2. Run 9B on A1 for 10 steps.
@@ -142,8 +145,8 @@ SWE-bench Verified is not in an archive. Use Harbor's registry dataset `swebench
 | 5 | 9B | A1 AES | 300 | 113 |
 | 6 | 9B | A2 SPADE | 300 | 113 |
 
-- Sample N tasks at random, with seed 0, from each arm's manifest. Write the chosen task names to `results/`.
-- Order: runs 1 and 2, then their evaluations (**Checkpoint 4**), then runs 3 and 4, then runs 5 and 6 when `r2d-handoff-3` arrives.
+- From each arm's manifest, shuffle the task names with seed 0 (`random.Random(0).shuffle` on the sorted list) and take the first 300. N = 300 uses all of them; N = 100 uses the first 100, so the 100 are a subset of the 300. Write the chosen task names to `results/`.
+- Order: runs 1 and 2, then their evaluations (**Checkpoint 4**), then runs 3 and 4, then runs 5 and 6.
 
 ## Step 6: Evaluation
 
