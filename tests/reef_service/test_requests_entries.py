@@ -14,7 +14,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from reef_service.test_harness_recipe import MODEL, batch, make_binary, runtime
+from tests.reef_service.test_harness_recipe import MODEL, batch, make_binary, runtime
+from tests.support._strategies import resolve_episode_scorer, resolve_proposer
 
 import reef.harness.episodes.requests as requests
 from reef.artifact import InMemoryRepositoryBackend
@@ -34,7 +35,6 @@ from reef.recipe import RecipeConfigError
 from reef.recipe.cordis import CordisRecipe
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train.cordis_backend import CordisBackend
-from ._strategies import resolve_episode_scorer, resolve_proposer
 
 EXTENSION = "export default function (pi) {\n  if (process.env.PI_OFFLINE) return;\n}\n"
 SKILL = "---\nname: reef-pi-extension-api\ndescription: placeholder\n---\n# pi extension API\n"

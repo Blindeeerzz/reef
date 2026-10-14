@@ -126,7 +126,7 @@ Package import direction
 ------------------------
 
 Imports between the top-level Reef packages form a directed acyclic graph.
-``tests/reef_service/test_dependency_boundaries.py`` scans every Python file,
+``tests/contributing/test_dependency_boundaries.py`` scans every Python file,
 including relative imports and imports inside functions. Importing the root
 ``reef`` facade from an internal package also counts as a dependency; internal
 code imports the owning module directly.
@@ -307,7 +307,8 @@ Code for a concrete training integration lives together under
 ``reef/train/<integration>/``, but its surrounding files remain at repository
 level:
 
-- internal integration tests in ``tests/<integration>/``;
+- component and integration tests in ``tests/<owner>/``;
+- cookbook method tests in ``tests/recipes/<method>/``;
 - import and packaging contracts in ``tests/plugin_contracts/``;
 - service-facing contracts in ``tests/reef_service/``;
 - the learn-nothing deployment stacks, and the smallest example around them, in
@@ -316,6 +317,9 @@ level:
 - container and environment setup under ``docker/``; and
 - Python dependencies, package data, and plugin entry points in
   ``pyproject.toml``.
+
+The `test directory map <https://github.com/Human-Agent-Society/reef/blob/main/tests/AGENTS.md>`_
+defines the owner directories, shared support, and rules for moving tests.
 
 Do not copy third-party source into an integration subtree. Pin or declare the
 dependency in ``pyproject.toml`` and keep Reef-owned adapters local to the

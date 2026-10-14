@@ -17,8 +17,8 @@ from types import ModuleType
 
 import pytest
 import yaml
-from reef_service._trajectories import recorded_trajectory
-from reef_service.config_helpers import load_harness_deployment as load_config
+from tests.support._trajectories import recorded_trajectory
+from tests.support.config_helpers import load_harness_deployment as load_config
 
 from reef.core.requirements import REQUIRE_KINDS
 from reef.harness.episodes.model_binding import ModelBindingError
