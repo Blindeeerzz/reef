@@ -10,7 +10,7 @@ from aiohttp import web
 from tests.runtime.test_ray_runtime import DeferredWeightUpdateTrainGroupHandle, policy_batch
 from tests.support.runtime_stubs import ExecutorRuntimeFixture, runtime_bindings, runtime_fixture
 
-from reef.artifact import InMemoryRepositoryBackend
+from reef.artifact import GitLFSRepositoryBackendFactory, InMemoryRepositoryBackend
 from reef.dispatcher import Dispatcher
 from reef.inference.runtime import ExecutorInferenceRuntime
 from reef.recipe import Recipe
@@ -398,7 +398,7 @@ def test_service_app_cleanup_shuts_down_its_owned_runtime_once(monkeypatch, tmp_
         train_group_handle=ExecutorCoordinatorClient(UniProcExecutor.from_workers((worker,), owned=True))
     )
     monkeypatch.setattr(assembly, "_serving_recipe", lambda *args: Recipe(**runtime_bindings(runtime)))
-    monkeypatch.setattr(assembly.GitLFSRepositoryBackend, "factory", lambda *args, **kwargs: lambda name: object())
+    monkeypatch.setattr(GitLFSRepositoryBackendFactory, "from_config", lambda *args, **kwargs: lambda name: object())
 
     async def run():
         app = assembly.build_app(ServiceConfig(recipe="recipe", agent_record_dir=str(tmp_path)))
@@ -417,7 +417,7 @@ def test_failed_service_assembly_releases_its_runtime(monkeypatch, tmp_path):
         train_group_handle=ExecutorCoordinatorClient(UniProcExecutor.from_workers((worker,), owned=True))
     )
     monkeypatch.setattr(assembly, "_serving_recipe", lambda *args: Recipe(**runtime_bindings(runtime)))
-    monkeypatch.setattr(assembly.GitLFSRepositoryBackend, "factory", lambda *args, **kwargs: lambda name: object())
+    monkeypatch.setattr(GitLFSRepositoryBackendFactory, "from_config", lambda *args, **kwargs: lambda name: object())
     with pytest.raises(ValueError, match="training must be an object"):
         assembly.build_dispatcher(
             ServiceConfig(recipe="recipe", agent_record_dir=str(tmp_path), training_settings="invalid")
