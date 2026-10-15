@@ -9,7 +9,7 @@ test. This driver is the paper's shape at a budget one node can afford: it
 keeps ``IN_FLIGHT`` requests open at all times, each on a problem drawn from a
 training pool, grades each completion with the same strict rule the Harbor
 verifier uses, and reports the score against that rollout's receipt. Reef
-trains whenever ``recipe.config.batch-size`` reports have accumulated.
+trains whenever ``pipeline.task2batch.config.batch_size`` reports have accumulated.
 
 Problems come from a JSONL file with ``problem_idx``, ``problem`` and ``gold``
 columns (``export_problems.py`` writes it from the Hugging Face dump). The
@@ -26,7 +26,7 @@ Environment:
   SAO_MAX_TOKENS    generation window per rollout (default 61440)
   SAO_RECORDS_PATH  where one JSON line per scored rollout is appended
   SAO_SEED          sampling seed for the problem order (default 0)
-  SAO_BATCH         rollouts per optimizer step (the recipe's batch-size); the
+  SAO_BATCH         rollouts per optimizer step (the batch stage's batch_size); the
                     driver waits for BUDGET // SAO_BATCH training releases
                     before exiting, so the stack is not torn down mid-step
   SAO_TRAIN_DRAIN_TIMEOUT_S  how long to wait for that drain (default 14400)
@@ -130,9 +130,9 @@ def serving_release() -> str | None:
 class TrainerPacer:
     """Hold new submissions while more than AHEAD batches are out beyond the trainer.
 
-    Reef drops batches whose rollouts exceed max-staleness, and the driver
+    Reef drops rollouts that exceed max-staleness, and the driver
     cannot see that, so an idle trainer (no progress for STALL_S) releases one
-    batch of credit; otherwise a burst of dropped batches would deadlock.
+    batch of credit; otherwise a burst of dropped rollouts would deadlock.
     """
 
     def __init__(self, progress_file: str | None) -> None:

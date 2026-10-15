@@ -7,20 +7,20 @@ import time
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-from reef_service.runtime_stubs import StubTrainingRuntime, runtime_bindings
+from tests.support._policy_recipe import TestPolicyRecipe
+from tests.support.runtime_stubs import StubTrainingRuntime, runtime_bindings
 
 from reef.artifact import InMemoryRepositoryBackend
 from reef.core import AgentRecord, RequestType
 from reef.dispatcher import Dispatcher
 from reef.observability import ExperimentTracker, NullExperimentLogger
-from reef.recipe.checkpoint_strategy import EveryNVersions
+from reef.recipe.checkpoint_strategy import CheckpointStrategy, EveryNVersions
 from reef.runtime.interfaces import ActivatedModel, InferenceHandler, ModelCandidate, PreparedTrainingStep
 from reef.scenario import ReleaseNotRestorable
 from reef.service.app import RequestService, create_app
-from reef.storage.commit_log import CommitLogScenarioStore
+from reef.storage.commit_log import CommitHistoryScenarioStore
 from reef.storage.sqlite import SQLiteScenarioStorage
-
-from ._policy_recipe import TestPolicyRecipe
+from reef.train.types import TrainStepResult
 
 
 class RollbackRuntime(StubTrainingRuntime):
@@ -37,7 +37,7 @@ class RollbackRuntime(StubTrainingRuntime):
         return None
 
     def prepare_training_step(
-        self, batch, objective, algorithm_state, scheduling, scenario_step, *, serving_runtime_load_id=None
+        self, batch, objective, algorithm_state, scheduling, scenario_step, *, parent_runtime_load_id=None
     ):
         del batch, objective
         return PreparedTrainingStep(
@@ -65,8 +65,7 @@ class RollbackRuntime(StubTrainingRuntime):
     def activate_candidate(self, candidate):
         return ActivatedModel(candidate.candidate_id, self.candidate_versions[candidate.candidate_id])
 
-    def reject_candidate(self, candidate, decision):
-        del decision
+    def reject_candidate(self, candidate):
         self.candidate_versions.pop(candidate.candidate_id, None)
 
     @property
@@ -122,11 +121,19 @@ class RecordingExperimentTracker(ExperimentTracker):
         pass
 
 
-def inference(index: int) -> AgentRecord:
+def inference(index: int, runtime_load_id: str | None = None) -> AgentRecord:
+    """The inference record of step ``index``, served by the version that step ``index - 1`` published.
+
+    ``runtime_load_id`` names another serving version, such as one that a rollback restored.
+    """
+    version = runtime_load_id if runtime_load_id is not None or index == 1 else f"w{index - 1}"
+    payload: dict[str, object] = {"tokens": [1, 2], "loss_mask": [0, 1], "rollout_log_probs": [-0.2]}
+    if version is not None:
+        payload["runtime_load_id"] = version
     return AgentRecord.create(
         scenario="math",
         request_type=RequestType.INFERENCE,
-        payload={"tokens": [1, 2], "loss_mask": [0, 1], "rollout_log_probs": [-0.2]},
+        payload=payload,
         agent_record_id=f"i{index}",
     )
 
@@ -155,15 +162,14 @@ def dispatcher(tmp_path, *, checkpoint_every: int = 1, experiment_tracker=None):
         ),
         backend_factory,
         local_artifact_dir=tmp_path / "staged",
-        agent_record_dir=tmp_path / "agent-record",
         experiment_tracker=experiment_tracker,
         scenario_storage=SQLiteScenarioStorage(tmp_path / "agent-record"),
     )
     return value, runtime, backend_factory
 
 
-def train(dispatcher: Dispatcher, index: int) -> None:
-    dispatcher.accept_record(inference(index))
+def train(dispatcher: Dispatcher, index: int, runtime_load_id: str | None = None) -> None:
+    dispatcher.accept_record(inference(index, runtime_load_id))
     dispatcher.accept_record(report(index))
     for _ in range(1000):
         if dispatcher.get_or_create_scenario("math").scenario_step >= index:
@@ -252,7 +258,8 @@ def test_rollback_starts_a_new_experiment_run_segment(tmp_path) -> None:
     target_version = value.list_releases("math")[-2]["release_id"]
 
     value.rollback("math", target_version)
-    train(value, 4)
+    # The engine serves the restored checkpoint under the version that the restore returned.
+    train(value, 4, "restored:w1")
     # The step is visible before the tracker hears about the commit; wait for the event rather than race it.
     for _ in range(1000):
         if len(tracker.events) == 3:
@@ -281,8 +288,8 @@ def test_recovery_adopts_a_lost_rollback_record_without_treating_it_as_training(
 
     scenario = value.get_or_create_scenario("math")
     assert scenario is not None
-    assert isinstance(scenario.store, CommitLogScenarioStore)
-    journal = scenario.store.commit_log
+    assert isinstance(scenario.store, CommitHistoryScenarioStore)
+    journal = scenario.store.commit_history
     assert journal is not None
     path = journal.path
     records = path.read_text(encoding="utf-8").splitlines()
@@ -295,7 +302,6 @@ def test_recovery_adopts_a_lost_rollback_record_without_treating_it_as_training(
         ),
         backend_factory,
         local_artifact_dir=tmp_path / "restarted-staged",
-        agent_record_dir=tmp_path / "agent-record",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "agent-record"),
     )
     recovered = restarted.get_or_create_scenario("math")
@@ -324,7 +330,6 @@ def test_older_versions_and_version_catalog_survive_restart(tmp_path) -> None:
         TestPolicyRecipe(**runtime_bindings(restarted_runtime), checkpoint_strategy=EveryNVersions(1)),
         backend_factory,
         local_artifact_dir=tmp_path / "restarted-staged",
-        agent_record_dir=tmp_path / "agent-record",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "agent-record"),
     )
     recovered = restarted.get_or_create_scenario("math")
@@ -428,3 +433,33 @@ def test_rollback_restore_failure_keeps_requests_closed_and_head_unchanged(tmp_p
         value.rollback("math", created)
     assert not training.inference.inference_admission_status["open"]
     assert scenario.current_artifact_ref() == head
+
+
+class CountingCheckpoints(CheckpointStrategy):
+    """Record each policy decision while selecting the configured cadence."""
+
+    def __init__(self, every: int) -> None:
+        self.every = every
+        self.versions: list[int] = []
+
+    def should_checkpoint(self, scenario: str, version: int, result: TrainStepResult) -> bool:
+        self.versions.append(version)
+        return version % self.every == 0
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("checkpoint_every", [1, 2])
+def test_exported_weights_use_one_checkpoint_decision_per_step(tmp_path, monkeypatch, checkpoint_every: int) -> None:
+    value, runtime, _ = dispatcher(tmp_path, checkpoint_every=checkpoint_every)
+    try:
+        scenario = value.get_or_create_scenario("math")
+        strategy = CountingCheckpoints(checkpoint_every)
+        monkeypatch.setattr(scenario._committer, "_checkpoint_strategy", strategy)
+        train(value, 1)
+        train(value, 2)
+        assert strategy.versions == [1, 2]
+        assert [record.checkpoint for record in scenario.store.history()] == [checkpoint_every == 1, True]
+        assert scenario.trainer.state["steps"] == 2
+        assert runtime.trained == 2
+    finally:
+        value.close()

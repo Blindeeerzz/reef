@@ -242,7 +242,7 @@ def test_failed_artifact_fork_does_not_leave_runtime(tmp_path) -> None:
     with pytest.raises(ArtifactError, match="cannot fork math"):
         dispatcher.get_or_create_scenario("math")
 
-    assert not dispatcher.has_loaded("math")
+    assert dispatcher._registry.get_optional("math") is None
 
 
 @pytest.mark.unit
@@ -283,7 +283,7 @@ def test_http_artifact_failure_returns_service_unavailable(tmp_path) -> None:
 def test_recipe_pipeline_has_no_update_algorithm() -> None:
     runtime = build_default_dispatcher(scenario_storage=SQLiteScenarioStorage()).get_or_create_scenario("math")
 
-    assert runtime.trainer.processor.output_schema is TrainingBatch
+    assert runtime.trainer.pipeline.output_schema is TrainingBatch
     assert runtime.trainer.candidate_backend is None
 
 
@@ -299,7 +299,7 @@ def test_inference_payload_is_recorded_without_reef_body_fields() -> None:
             assert request_payload == payload
             return {"provider": "ok"}
 
-        await service.infer(
+        await service.infer_with_data(
             {"x-reef-scenario": "chat"},
             payload,
             "/v1/chat/completions",
@@ -1060,7 +1060,6 @@ def test_release_ids_are_independent_and_ignore_results_without_candidates(tmp_p
     # strategy: there is no candidate to checkpoint.
     assert dispatcher.get_or_create_scenario("math").scenario_step == 1
     assert dispatcher.get_or_create_scenario("math").repository.require_current_artifact() == math_head
-    assert dispatcher.published["math"] == "no artifact"
     assert decisions == []
 
     for scenario in ("math", "code", "math", "code"):
@@ -1116,7 +1115,6 @@ def test_artifact_publication_failure_leaves_runtime_unchanged(tmp_path, failure
         runtime.repository.checkpoint_artifact,
         runtime.scenario_step,
     ) == previous
-    assert "chat" not in dispatcher.published
     assert list((tmp_path / "local").rglob("*")) == []
 
 

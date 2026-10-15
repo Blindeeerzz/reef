@@ -229,9 +229,8 @@ def test_launcher_passes_typed_cli_values_to_commands_and_child(tmp_path: Path, 
     path.write_text(
         yaml.safe_dump(
             {
-                "reef": {"recipe": "recipe", "port": 9000, "upstream_model": "old", "tokens": ["old"]},
-                "services": [{"name": "reef", "command": ["python", "-m", "reef.service"]}],
-                "run_dir": str(tmp_path / "run"),
+                "reef": {"port": 9000, "tokens": ["old"], "run-dir": str(tmp_path / "run")},
+                "inference": {"upstream-url": "http://localhost:8000", "upstream-model": "old"},
             }
         )
     )
@@ -249,8 +248,8 @@ def test_launcher_passes_typed_cli_values_to_commands_and_child(tmp_path: Path, 
                 "001",
                 "--tokens",
                 "[]",
-                "--inference-handler-config",
-                json.dumps({"nested": [1, False]}),
+                "--reef.console-origins",
+                json.dumps(["http://127.0.0.1:3000"]),
             ]
         )
     assert caught.value.code == 0
@@ -259,7 +258,7 @@ def test_launcher_passes_typed_cli_values_to_commands_and_child(tmp_path: Path, 
         assert settings.port == 8123
         assert settings.upstream_model == "001"
         assert settings.tokens == ()
-        assert settings.inference_handler_config == {"nested": [1, False]}
+        assert settings.console_origins == ("http://127.0.0.1:3000",)
 
 
 def test_invalid_cli_setting_fails_before_download_or_spawn(tmp_path, monkeypatch, capsys):
@@ -269,7 +268,7 @@ def test_invalid_cli_setting_fails_before_download_or_spawn(tmp_path, monkeypatc
     monkeypatch.setattr(orchestrator, "resolve_model_paths", unexpected)
     monkeypatch.setattr(orchestrator, "_Stack", unexpected)
     path = tmp_path / "stack.yaml"
-    path.write_text("reef: {recipe: recipe}\nservices: [{name: reef, command: worker}]\n")
+    path.write_text("inference: {upstream-url: http://localhost:8000, upstream-model: demo}\n")
     with pytest.raises(SystemExit) as caught:
         cli_main(["serve", "-c", str(path), "--port", "credential-like-invalid-port"])
     assert caught.value.code == 2
@@ -277,3 +276,29 @@ def test_invalid_cli_setting_fails_before_download_or_spawn(tmp_path, monkeypatc
     assert "reef.port" in error
     assert "credential-like-invalid-port" not in error
     assert "Traceback" not in error
+
+
+def test_scenario_limits_and_idle_unload_are_reef_settings():
+    settings = service_config_from_mapping(
+        {"reef": {"recipe": "recipe", "scenario_idle_unload_s": 600, "max_loaded_scenarios": 4, "max_scenarios": 100}}
+    )
+    assert (settings.scenario_idle_unload_s, settings.max_loaded_scenarios, settings.max_scenarios) == (600, 4, 100)
+    assert settings.scenario_admission is None
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        ({"scenario_idle_unload_s": 0}, "scenario_idle_unload_s must be positive"),
+        ({"max_loaded_scenarios": 0}, "max_loaded_scenarios must be positive"),
+        ({"max_scenarios": -1}, "max_scenarios must be positive"),
+        (
+            {"scenario_admission": "reef.scenario.admission:ScenarioLimits", "max_scenarios": 3},
+            "configure the built-in admission",
+        ),
+        ({"scenario_admission": "reef.storage.sqlite:SQLiteScenarioStorage"}, "must name a class that inherits"),
+    ],
+)
+def test_invalid_scenario_admission_settings_are_refused(values, message):
+    with pytest.raises(ValueError, match=message):
+        service_config_from_mapping({"reef": {"recipe": "recipe", **values}})

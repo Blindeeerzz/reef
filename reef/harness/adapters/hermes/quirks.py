@@ -3,9 +3,7 @@
 Config nodes write ``config.yaml`` as a JSON object and the render
 emits it as YAML by its suffix, and the ``env`` target as ``.env`` lines, where hermes
 reads a custom provider's key. It also writes the ``.no-bundled-skills`` marker, so an
-episode carries only the tree's skills instead of hermes's bundled catalog;
-synthesizes the ``name`` and ``description`` frontmatter hermes requires on a
-SKILL.md the node text left bare, under both skill roots; adds the commands
+episode carries only the tree's skills instead of hermes's bundled catalog; adds the commands
 root to ``skills.external_dirs`` after the tree's own entries, so a tree
 that sets the list still has its commands; and, for every rendered plugin,
 writes the ``plugin.yaml`` manifest and grants the plugin in
@@ -13,53 +11,21 @@ writes the ``plugin.yaml`` manifest and grants the plugin in
 capability), since hermes discovers plugins but loads none without consent.
 Rules render to ``SOUL.md``, which hermes reads as the agent's identity and
 seeds with its own only while the file is absent, so the rules follow that
-default identity instead of replacing it.
+default identity instead of replacing it. ``process_skill`` and
+``process_command`` give a SKILL.md the node text left bare the ``name`` and
+``description`` frontmatter hermes requires, under both skill roots.
 
-The traps a mutated config could reopen: the scanner download, the session
-title call, the background review and the curator that write skills into
-the tree, and the snapshot the reader parses, are declared in the
-descriptor and refused by the shared render before any quirks step runs.
-This step checks what the declaration cannot state: a section holding a
-value that is not an object where one belongs, and a value that is not a
-list of strings where Reef adds a name, are rejected at render, the same
-check that rejects an invalid node.
-
-Every model call stays on Reef's model binding. The binding writes the
-``model`` section (a ``custom`` provider, the endpoint, the model and a
-literal key), renders after the tree and wins every key it writes. Its key
-is a credential, which a tree cannot hold because admission refuses an
-inline credential, so those keys pass only beside the binding's key. The
-other names hermes reads for the model, the endpoint or the key (in
-``model``, and at the top level, which hermes moves into ``model``), the
-sections that name other providers, their endpoints and credential commands
-(``providers``, ``custom_providers``) and the fallback models
-(``fallback_model``, ``fallback_providers``) are declared locks beside the
-descriptor's defaults. The model aliases, the mixture of agents presets,
-and a provider, an endpoint, a credential, a model or a fallback chain set
-for an auxiliary task, for delegation, for cron or for the curator, are the
-tree choosing where calls go, and are refused here. An
-auxiliary task may keep ``auto`` or ``main``, which run it on the main
-model. The binding sets no transport, so a tree's ``api_mode`` (in
-``model`` or in any of those sections) and ``model.openai_runtime`` are
-refused too: for the ``custom`` provider two api modes leave the bound
-endpoint, ``bedrock_converse`` for AWS Bedrock and ``codex_app_server`` for
-a ``codex app-server`` subprocess. A request body a tree passes to the
-bound endpoint (``extra_body``, ``delegation.request_overrides``) may not
-name a model either.
-
-These checks cover the config the tree renders. Reef's proxy forwards the
-``model`` and ``models`` a request sends as they are, so a request that other
-code builds with the rendered key, such as a tool the model runs, can still
-name another model.
+``process_config`` refuses a ``skills.external_dirs`` that is not a list of
+strings, where it adds the commands root.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
 
 import yaml
 
+from reef.harness.adapters.common.frontmatter import with_skill_frontmatter
 from reef.harness.adapters.descriptor import AdapterRenderer
 from reef.harness.tree.render import RenderError
 
@@ -89,34 +55,6 @@ DEFAULT_IDENTITY = (
     "default."
 )
 
-#: Other ``model`` keys hermes reads for the model, the endpoint or the key, and the model aliases a switch resolves.
-MODEL_ALIAS_KEYS = ("aliases", "api_base", "api_key_env", "key_cmd", "key_env", "model", "name")
-#: The ``model`` keys hermes reads for the transport; the binding writes neither.
-TRANSPORT_KEYS = ("api_mode", "openai_runtime")
-#: The mixture of agents keys that name its models: the presets, and the older flat form of one preset.
-MOA_KEYS = ("aggregator", "presets", "reference_models")
-#: The keys of an auxiliary task, of delegation, of cron and of the curator that choose its provider, endpoint,
-#: credential, transport or model, or a fallback chain of those.
-ROUTE_KEYS = (
-    "api_key",
-    "api_key_env",
-    "api_mode",
-    "base_url",
-    "fallback_chain",
-    "key_cmd",
-    "key_env",
-    "model",
-    "model_provider",
-    "provider",
-)
-#: Request body fields that name the model: ``model`` replaces the bound one, and OpenRouter reads ``models`` as
-#: fallback models.
-BODY_MODEL_KEYS = ("model", "models")
-#: The providers an auxiliary task may keep: hermes runs both on the main model.
-MAIN_MODEL_PROVIDERS = ("auto", "main")
-#: The older compression keys hermes moves into ``auxiliary.compression`` (provider, model, base_url).
-COMPRESSION_KEYS = ("summary_base_url", "summary_model", "summary_provider")
-
 # hermes's boot scaffolds the home on every start: state directories, the
 # runtime and cache files, lock files beside the state store, and the seed
 # skill it always writes. Episode state, not residue.
@@ -132,15 +70,6 @@ cleanup_whitelist = (
     "hermes/bin/**",
     "hermes/models_dev_cache.json*",
 )
-
-
-def _with_frontmatter(path: str, text: str) -> str:
-    if text.startswith("---\n"):
-        return text
-    name = path.split("/")[-2]
-    first = next((line.strip().lstrip("#").strip() for line in text.splitlines() if line.strip()), "")
-    header = {"name": name, "description": first[:200] or name}
-    return "---\n" + yaml.dump(header, sort_keys=False, default_flow_style=False, allow_unicode=True) + "---\n" + text
 
 
 def nested_setting(config: dict[str, Any], *keys: str) -> object:
@@ -185,87 +114,12 @@ def _granted(config: dict[str, Any], plugins: list[str]) -> dict[str, Any]:
     return {**config, "plugins": section}
 
 
-def is_set(value: object) -> bool:
-    """Whether hermes reads ``value`` as set: an empty string, list or object is its default."""
-    return value is not None and value != "" and value != [] and value != {}
-
-
-def section_of(config: dict[str, Any], name: str, where: str = "") -> dict[str, Any]:
-    """The config section ``name`` (``where`` names it in a refusal), empty when absent; hermes reads it as an object."""
-    section = config.get(name)
-    if section is None:
-        return {}
-    if not isinstance(section, dict):
-        raise RenderError(f"hermes {where or name} must be an object, got {type(section).__name__}")
-    return section
-
-
-def check_model_route(config: dict[str, Any]) -> None:
-    """Refuse a provider, an endpoint, a credential or a model the binding did not write."""
-    refusal = "Reef's model binding chooses the provider, the endpoint, the credential and the model"
-    model = config.get("model")
-    if model is not None and not isinstance(model, dict):
-        raise RenderError(f"hermes composition must not set model: {refusal}")
-    model = model or {}
-    # hermes reads model.model and model.name as the model (one reader prefers model.model to model.default),
-    # model.api_base as the endpoint and the key names as the key; the binding writes none of them.
-    for key in MODEL_ALIAS_KEYS:
-        if is_set(model.get(key)):
-            raise RenderError(f"hermes composition must not set model.{key}: {refusal}")
-    # The binding binds the chat completions API. For its custom provider hermes takes model.api_mode in any
-    # spelling it knows, and bedrock_converse (an AWS Bedrock client) and codex_app_server (a codex subprocess)
-    # leave the bound endpoint; openai_runtime picks the codex subprocess for the openai providers.
-    for key in TRANSPORT_KEYS:
-        if is_set(model.get(key)):
-            raise RenderError(f"hermes composition must not set model.{key}: {refusal}")
-    moa = section_of(config, "moa")
-    for key in MOA_KEYS:
-        if is_set(moa.get(key)):
-            raise RenderError(f"hermes composition must not set moa.{key}: {refusal}")
-    compression = section_of(config, "compression")
-    for key in COMPRESSION_KEYS:
-        value = compression.get(key)
-        if is_set(value) and not (key == "summary_provider" and value in MAIN_MODEL_PROVIDERS):
-            raise RenderError(f"hermes composition must not set compression.{key}: {refusal}")
-    auxiliary = section_of(config, "auxiliary")
-    if is_set(auxiliary.get("openrouter_model")):
-        raise RenderError(f"hermes composition must not set auxiliary.openrouter_model: {refusal}")
-    routed = [(f"auxiliary.{task}", settings) for task, settings in auxiliary.items() if isinstance(settings, dict)]
-    routed += [(name, section_of(config, name)) for name in ("delegation", "cron")]
-    # The curator still reads its older per task section, curator.auxiliary.
-    routed.append(("curator.auxiliary", section_of(section_of(config, "curator"), "auxiliary", "curator.auxiliary")))
-    for where, settings in routed:
-        for key in ROUTE_KEYS:
-            value = settings.get(key)
-            on_main_model = where.startswith("auxiliary.") and key == "provider" and value in MAIN_MODEL_PROVIDERS
-            if is_set(value) and not on_main_model:
-                raise RenderError(f"hermes composition must not set {where}.{key}: {refusal}")
-        if settings.get("prefer_fast_model") is True:
-            raise RenderError(f"hermes composition must not set {where}.prefer_fast_model: {refusal}")
-        check_body(settings.get("extra_body"), f"{where}.extra_body", refusal)
-    # Delegation sends request_overrides with each child call: its keys are call arguments, and its extra_body
-    # joins the request body.
-    overrides = section_of(config, "delegation").get("request_overrides")
-    check_body(overrides, "delegation.request_overrides", refusal)
-    if isinstance(overrides, dict):
-        check_body(overrides.get("extra_body"), "delegation.request_overrides.extra_body", refusal)
-
-
-def check_body(body: object, where: str, refusal: str) -> None:
-    """Refuse a request body that names a model; hermes skips a body that is not an object."""
-    if not isinstance(body, dict):
-        return
-    for key in BODY_MODEL_KEYS:
-        if key in body:
-            raise RenderError(f"hermes composition must not set {where}.{key}: {refusal}")
-
-
 class HermesAdapterRenderer(AdapterRenderer):
     @staticmethod
     def process_config(path: str, config: dict[str, Any]) -> dict[str, Any]:
         if path != _CONFIG:
             return config
-        # skills is read as an object here; the locked keys above checked what a composition must keep.
+        # skills is an object here: the descriptor's check on skills.creation_nudge_interval keeps it one.
         tree_dirs = nested_setting(config, "skills", "external_dirs")
         external_dirs = string_list([tree_dirs] if isinstance(tree_dirs, str) else tree_dirs, "skills.external_dirs")
         config["skills"]["external_dirs"] = external_dirs + [
@@ -275,18 +129,12 @@ class HermesAdapterRenderer(AdapterRenderer):
 
     @staticmethod
     def process_skill(path: str, text: str) -> str:
-        return _with_frontmatter(path, text)
+        return with_skill_frontmatter(path, text)
 
     @staticmethod
     def process_command(path: str, text: str) -> str:
         # A command is a skill under the commands root, so it needs the same frontmatter.
-        return _with_frontmatter(path, text)
-
-    @staticmethod
-    def check_model_route(
-        configs: Mapping[str, Mapping[str, Any]], skills: Mapping[str, str], commands: Mapping[str, str]
-    ) -> None:
-        check_model_route(dict(configs[_CONFIG]))
+        return with_skill_frontmatter(path, text)
 
     @staticmethod
     def finalize_render(files: dict[str, str]) -> dict[str, str]:

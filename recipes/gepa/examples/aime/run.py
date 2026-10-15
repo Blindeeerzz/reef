@@ -9,7 +9,7 @@ One round is one GEPA step: pull the served tree, run the next epoch-shuffled
 minibatch of three training problems as Pi episodes against it with a model
 binding pointed back at this service, report each score against the request
 that episode recorded, and wait. The third report closes the batch
-(``data.batch_size: 3``), which is what schedules the step where the method
+(``pipeline.task2batch.config.batch_size: 3``), which is what schedules the step where the method
 proposes, evaluates on the 45 validation problems, and publishes on a strict
 mean improvement. Rounds stop at ``--budget`` metric calls; then the seed and
 the served compositions are each scored on the sealed 150-problem test split
@@ -47,18 +47,18 @@ from recipes.gepa.recipe import scenario_archive_path
 from reef.artifact.memory import InMemoryRepositoryBackend
 from reef.core.records_types import RequestType
 from reef.dispatcher import Dispatcher
+from reef.evaluation.harness import evaluation_selection
 from reef.harness import render_composition, run_episode
 from reef.harness.adapters import get_adapter
 from reef.harness.episodes.model_binding import ModelBinding
 from reef.inference.http import HttpInferenceHandler, InferenceProxyRuntime, provider_request_headers
-from reef.recipe.config import recipe_config_from_mapping
+from reef.recipe.config import recipe_config_from_file_layout
 from reef.recipe.registry import build_recipe
 from reef.service.app import create_app
 from reef.service.deploy.config_utils import load_config
 from reef.service.wire import SCENARIO_HEADER
 from reef.storage.records import RecordStore
 from reef.storage.sqlite import SQLiteScenarioStorage
-from reef.train.cordis_backend.execution import evaluation_selection
 
 HERE = Path(__file__).resolve().parent
 # run.sh exports these; the defaults repeat here so the module imports (and
@@ -97,7 +97,7 @@ def load_recipe(tasks: list[str], *, api_key: str, seed: int = 0) -> tuple[str, 
     deployment. The method never sees the endpoint or the key.
     """
     config = load_config(HERE / "gepa.yaml")
-    sections = recipe_config_from_mapping(config)
+    sections = recipe_config_from_file_layout(config)
     evolution = dict(sections["evolution"])
     evolution["tasks"] = tasks
     # Importable functions alone do not carry the driver's populated globals
@@ -139,7 +139,7 @@ def worker_runtime(recipe):
     Ray reads RAY_ADDRESS when set; without it, start a local Ray runtime.
     Do not tear down an externally owned runtime when embedding this driver.
     """
-    selection, _ = evaluation_selection(recipe.score_episode, None, recipe.worker_executor)
+    selection, _ = evaluation_selection(recipe.score_episode, recipe.worker_executor)
     if selection.settings.backend != "ray":
         yield
         return
@@ -200,7 +200,6 @@ class RunService:
             recipe,
             InMemoryRepositoryBackend.factory(bootstrap_tree, root=run_dir / "artifacts"),
             local_artifact_dir=run_dir / "staged",
-            agent_record_dir=run_dir / "reef-data",
             scenario_storage=SQLiteScenarioStorage(run_dir / "reef-data"),
         )
         self._app = create_app(

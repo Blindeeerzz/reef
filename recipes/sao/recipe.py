@@ -6,12 +6,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from recipes.sao.processor import SAOProcessor
+from recipes.sao.processor import SAOBatches, SAOTasks
 from reef.core.reports import ReportBase, ScoredRolloutReport
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
-from reef.recipe.config_fields import config_field
 from reef.recipe.errors import RecipeConfigError
+from reef.record2record import ExclusiveReportRecord2Record
 from reef.train.algos import StepScheduling
+from reef.train.pipeline import PipelineSpec
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -30,17 +31,18 @@ class SAORecipe(WeightTrainingRecipe):
     (``reef.inference_handler_factory``); reef never re-tokenizes a rollout to
     reconstruct them.
 
+    The stages are ``ExclusiveReportRecord2Record`` (every rollout trains by
+    itself), ``SAOTasks``, and ``SAOBatches``.
+    The deployment sets ``batch_size`` in ``pipeline.task2batch.config``
+    (default 128). It must equal the Slime driver's ``--global-batch-size``:
+    each rollout sample is its own DP unit.
+
     Objective settings such as the clipping bounds, actor/critic cadence, and GAE
     parameters belong to the training backend. For Slime they are configured by
-    ``training.options``; this recipe only owns Reef-side batching and
-    checkpoint cadence.
-
-    ``batch_size`` must equal the Slime driver's ``--global-batch-size``: each
-    rollout sample is its own DP unit.
+    ``training.options``; this recipe owns only Reef-side checkpoint cadence.
     """
 
     name: str = "sao"
-    batch_size: int = config_field(128, env="REEF_SAO_BATCH_SIZE")
 
     @property
     def report_type(self) -> type[ReportBase]:
@@ -50,15 +52,13 @@ class SAORecipe(WeightTrainingRecipe):
     def training_spec(cls) -> WeightTrainingSpec:
         return WeightTrainingSpec(
             objective="sao",
-            processor=SAOProcessor,
             # Each rollout is its own DP unit; the backend's configured step size applies.
             scheduling=StepScheduling(unit="sample"),
         )
 
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if self.batch_size <= 0:
-            raise ValueError("batch_size must be positive")
+    @classmethod
+    def pipeline_spec(cls) -> PipelineSpec:
+        return PipelineSpec(record2record=ExclusiveReportRecord2Record, record2task=SAOTasks, task2batch=SAOBatches)
 
     @classmethod
     def _validate_config(cls, settings: Mapping[str, Any]) -> None:

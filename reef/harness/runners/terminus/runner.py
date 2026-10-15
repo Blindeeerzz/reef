@@ -31,8 +31,7 @@ from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import Any
 
-from reef.harness.episodes.executor import ISOLATION_ENV
-from reef.harness.episodes.trajectory import primary_reward
+from reef.core.tasks import primary_reward
 from reef.harness.runners.terminus.tree import (
     ENVIRONMENT_ENV,
     TerminusTreeError,
@@ -42,6 +41,7 @@ from reef.harness.runners.terminus.tree import (
     skill_roots,
     terminus_kwargs,
 )
+from reef.sandbox.process import ISOLATION_ENV
 
 #: Harbor's default when the tree has no code extension.
 AGENT_NAME = "terminus-2"

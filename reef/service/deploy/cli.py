@@ -17,7 +17,11 @@ import yaml
 from reef.core.config import ConfigArgument
 from reef.core.errors import DeployConfigError
 from reef.runtime.executor.arguments import normalize_native_options
-from reef.service.deploy.deployment_config import component_config_arguments, deployment_config_arguments
+from reef.service.deploy.deployment_config import (
+    RECIPE_SECTION_PATHS,
+    component_config_arguments,
+    deployment_config_arguments,
+)
 from reef.service.deploy.service_config import service_config_arguments, service_override
 
 _DESCRIPTION = """reef serve — connect an external provider or start a configured stack.
@@ -30,9 +34,8 @@ Config files are selected explicitly with -c; REEF_CONFIG and ./reef.yaml
 are not discovered by the launcher.
 
 ``reef serve -c <stack>.yaml`` assembles the configured components and starts
-their processes in dependency order. Only unversioned legacy files declare
-a ``services`` list. Each service's ``ready`` probe must pass before the next
-starts. After all services are up, Reef blocks until SIGTERM/SIGINT; a
+their processes in dependency order. Each process's readiness probe must pass
+before its dependents start. After all services are up, Reef blocks until SIGTERM/SIGINT; a
 watchdog thread detects unexpected exits and tears the stack down.
 
 The Reef HTTP child receives the effective configuration from the launcher.
@@ -40,11 +43,10 @@ The Reef HTTP child receives the effective configuration from the launcher.
 Config overrides:
   Public settings below share type conversion with YAML. Explicit CLI
   values override YAML; omitted settings use the dataclass defaults.
-  Use the full public namespace; legacy aliases remain accepted.
+  Use the full public namespace; short aliases remain accepted.
   Lists and objects take one quoted JSON/YAML value, including [] or {}.
   Selected recipe/runtime fields share these rules; use -c <file> --help
-  to inspect their definitions. Versioned files reject unknown public
-  fields; legacy custom-stack keys retain their compatibility parsing.
+  to inspect their definitions. Unknown fields and flags are errors.
 
   Examples:
     reef serve --inference.model-path Qwen/Qwen2.5-1.5B-Instruct
@@ -210,9 +212,10 @@ def _apply_overrides(
             if object_path is not None:
                 key = ".".join(object_path)
         if declared is None:
-            for public, internal in (("recipe.runtime.", "reef.runtime."), ("recipe.config.", "reef.data.")):
-                if key.startswith(public):
-                    key = internal + key[len(public) :].replace("-", "_")
+            for public, internal in RECIPE_SECTION_PATHS.items():
+                prefix = ".".join(public) + "."
+                if key.startswith(prefix):
+                    key = ".".join(internal) + "." + key[len(prefix) :].replace("-", "_")
                     break
         if "." not in key and declared is None:
             key = f"reef.{key}"
@@ -232,8 +235,8 @@ def _apply_overrides(
                 prefix = ".".join(parts[: index + 1])
                 raise InvalidOverrideError(f"override path {prefix!r} is not a section")
             node = existing
-        # Public fields are converted by argparse, just like YAML values.
-        # Keep generic recipe/custom-stack overrides on their legacy path.
+        # Declared fields are converted by their parser, just like YAML values;
+        # a leaf of an opaque object keeps its YAML reading.
         node[parts[-1]] = str(raw_value) if declared is not None else _coerce_value(raw_value)
     return config
 
@@ -255,7 +258,7 @@ def build_serve_parser(
         "--recipe",
         default=None,
         metavar="NAME",
-        help="Start a built in recipe's profile instead of a config file (reefine; harness-evolve is its former name).",
+        help="Start a built in recipe's profile instead of a config file (reefine).",
     )
     parser.add_argument(
         "--model",

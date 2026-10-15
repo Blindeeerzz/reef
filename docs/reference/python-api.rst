@@ -21,7 +21,7 @@ Start with Recipe and add only what the method actually needs.
 | validate feedback at ingress                | `Report <#report>`__                             | methods whose signal arrives |
 |                                             |                                                  | in reports                   |
 +---------------------------------------------+--------------------------------------------------+------------------------------+
-| turn records into a typed batch             | `Processor <#processor>`__                       | every method producing       |
+| turn records into a typed batch             | `Pipeline stages <#pipeline-stages>`__           | every method producing       |
 |                                             |                                                  | updates                      |
 +---------------------------------------------+--------------------------------------------------+------------------------------+
 | carry data to the backend                   | `Batch <#batch>`__                               | every method producing       |
@@ -90,14 +90,15 @@ Two other extension points have separate names and purposes:
   to Reef's scheduler; ``Trainer`` accepts it as ``candidate_backend``.
 - ``reef.runtime.interfaces.InferenceHandler`` executes one buffered or streaming
   request. Runtime and recipe objects expose it as ``inference_handler``;
-  ``create_app`` accepts the same keyword for an injected handler.
+  ``create_app`` and ``build_app`` accept the same keyword for an injected
+  handler (see `Embed the service`_).
 
 Native backend selectors remain ``training.backend`` and ``inference.backend``.
 Custom request adapters use ``inference.handler-factory`` and
 ``inference.handler-config``. The factory path names an ``InferenceHandler``
 subclass. Reef calls its ``from_config(upstream_url, *, model_path, timeout_s,
 **config)`` class method; arbitrary functions are not accepted. Handlers injected
-directly into ``create_app`` need only implement the inference methods.
+directly into ``create_app`` or ``build_app`` need only implement the inference methods.
 
 Streaming handlers return ``InferenceStream``; its ``record_response`` and
 ``record_response_pending`` fields carry buffered or deferred recording state.
@@ -219,11 +220,12 @@ Every recipe may declare ``report_type``, the ``ReportBase`` subclass its
 reports parse as (``None`` keeps ingress open), and ``harness_adapter``, the
 adapter a client installs its harness tree with (``None``, the default, for a
 recipe with no harness tree; ``CordisRecipe`` names ``evolution.adapter``).
-The scenario list names it for every scenario. Weight-training recipes add
-``training_spec()``, which binds the processor, the registered or dotted training
-objective, which declares the backend loss family, and the ``StepScheduling`` the
-runtime cuts each batch with; ``max_staleness``, the accepted
-producing-to-serving version lag, which must match the runtime; and
+The scenario list names it for every scenario. Every recipe declares
+``pipeline_spec()``, the default class of each pipeline stage (see `Pipeline
+stages <#pipeline-stages>`__). Weight-training recipes add ``training_spec()``,
+which binds the registered or dotted training objective, which declares the
+backend loss family, and the ``StepScheduling`` the runtime cuts each batch with; ``max_staleness``, how many
+versions training data may lag behind the version that the scenario serves; and
 ``candidate_evaluation``, the optional plugin configured by the deployment's
 ``evaluation`` section.
 
@@ -240,9 +242,16 @@ producing-to-serving version lag, which must match the runtime; and
        @classmethod
        def training_spec(cls) -> WeightTrainingSpec:
            return WeightTrainingSpec(
-               processor=MyMethodProcessor,
                objective="my_method.objective:MyObjective",
                scheduling=StepScheduling(unit="sample"),
+           )
+
+       @classmethod
+       def pipeline_spec(cls) -> PipelineSpec:
+           return PipelineSpec(
+               record2record=MyMethodRecord2Record,
+               record2task=MyMethodTasks,
+               task2batch=MyMethodBatches,
            )
 
 ``frozen=True`` is required by the base. ``kw_only=True`` keeps later fields
@@ -262,9 +271,9 @@ parser, and an optional environment fallback:
 Precedence is explicit configuration, then environment, then the default.
 ``from_environment()`` builds the recipe. On weight-training recipes,
 ``service_config()`` forwards declared fields and shared artifact settings
-from the service configuration; override ``processor_config()`` when a
-processor needs renamed or derived keys. Never read deployment YAML from
-inside a processor.
+from the service configuration. A setting that a pipeline stage reads belongs
+in the stage's settings, under the deployment's ``pipeline`` section, not in a
+recipe field. Never read deployment YAML from inside a stage.
 
 Report
 ------
@@ -323,6 +332,44 @@ The same type serves both sides: a producer constructs it and calls
 ``to_dict()``; a processor receives the parsed instance as
 ``context.parsed_report``.
 
+Embed the service
+-----------------
+
+An application can run the complete Reef service in its own process.
+``reef.service.assembly.build_app`` makes the dispatcher and the HTTP app from
+a ``ServiceConfig``. The app includes record retention, inference retries,
+the evaluation token, readiness of local cycles, and cleanup.
+
+.. code:: python
+
+   from aiohttp import web
+
+   from reef.service.app import get_dispatcher
+   from reef.service.assembly import build_app
+
+   app = build_app(settings, inference_handler=handler)
+
+   async def scenario_count(request: web.Request) -> web.Response:
+       dispatcher = get_dispatcher(request.app)
+       return web.json_response({"scenarios": len(dispatcher.list_scenarios())})
+
+   app.router.add_get("/my-app/scenario-count", scenario_count)
+   web.run_app(app, host=settings.host, port=settings.port)
+
+- ``inference_handler`` is optional. If you give one, it runs every
+  inference request in place of the recipe runtime's handler.
+- Add middleware and routes before the app starts. The service tokens also
+  protect the routes that you add.
+- ``get_dispatcher(app)`` returns the dispatcher of an app that ``build_app``
+  or ``create_app`` made.
+- ``build_app`` owns the dispatcher that it makes. The app closes it on
+  cleanup. ``create_app(dispatcher, ...)`` closes the dispatcher only if you
+  set ``close_dispatcher=True``.
+- You own the inference handler that you give. Reef does not close it.
+  Release it after the app stops.
+- If ``build_app`` fails, it closes the resources that it made and raises the
+  original error.
+
 Scenario stores
 ---------------
 
@@ -343,7 +390,7 @@ callers remain compatible with existing adapters.
 Storage implementations explicitly subclass ``RecordStore``,
 ``ScenarioStore``, and ``ScenarioStorage`` and override their abstract
 methods and properties. Incomplete subclasses cannot be instantiated. The
-bundled ``SQLiteRecordStore``, ``CommitLogScenarioStore``, and
+bundled ``SQLiteRecordStore``, ``CommitHistoryScenarioStore``, and
 ``SQLiteScenarioStorage`` inherit those bases, respectively.
 
 .. code:: python
@@ -357,21 +404,22 @@ bundled ``SQLiteRecordStore``, ``CommitLogScenarioStore``, and
    dispatcher = Dispatcher(
        recipe,
        repository_backend_factory,
-       agent_record_dir=Path(".reef/agent-record"),
        scenario_storage=storage,
    )
 
 ``Dispatcher`` requires ``scenario_storage`` and passes it to scenario
 creation. It never selects or imports a record storage implementation. The
 ``build_default_dispatcher`` convenience helper also requires this argument.
-Deployment assembly chooses SQLite or PostgreSQL from ``reef.record_backend``;
-embedded callers supply their chosen storage service explicitly. For ephemeral records
-and commits, pass ``SQLiteScenarioStorage()`` without a directory. Passing
-a directory preserves SQLite schemas, JSONL format, and scenario filenames.
+Deployment assembly builds the storage that ``storage.record_backend`` names:
+SQLite, PostgreSQL, or a ``ScenarioStorage`` plugin; embedded callers supply
+their chosen storage service explicitly. For ephemeral records, commits and
+settings, pass ``SQLiteScenarioStorage()`` without a directory. Passing a
+directory preserves SQLite schemas, JSONL format, and scenario filenames.
 
-With an explicit storage service, ``agent_record_dir`` independently selects the
-local directory for scenario model settings. Configure it to retain those
-settings across restarts even when records and commits use a remote adapter.
+The storage service keeps all per-scenario state. This includes the
+``ScenarioSettings`` of each scenario: the model configuration and the
+selected training mode. The scenario registry uses ``read_settings`` and
+``write_settings``. ``archive`` retires the settings with the records and commits.
 
 ``Recipe.with_model_config(config)`` accepts the concrete ``ModelConfig`` from
 ``reef.inference.model_config``. ``ModelConfig.from_value(value)`` validates the
@@ -385,10 +433,8 @@ The scenario registry caches one configuration object per scenario and passes
 it to the factory during creation and recovery. Recipes retain that object so
 new work observes updates while already resolved runtime snapshots remain
 unchanged. Use ``Dispatcher.configure_scenario_model`` to persist updates;
-it validates the value and recipe compatibility and writes the private JSON
-file before replacing the active runtime. ``reef.storage.model_config`` owns
-file reads, atomic writes, and archival. Existing file paths, JSON values,
-and owner-only permissions remain unchanged.
+it validates the value and recipe compatibility and writes the scenario
+settings through the storage service before replacing the active runtime.
 
 Direct ``Scenario`` construction requires ``store=...``. Replace the former
 ``records=...`` and ``commit_log=...`` arguments with one store opened by a
@@ -396,17 +442,44 @@ Direct ``Scenario`` construction requires ``store=...``. Replace the former
 ``Scenario`` does not choose a storage backend. Read committed history through
 ``scenario.store.history()`` and persistence capability through
 ``scenario.store.durable``; the former ``scenario.commit_log`` property has been
-removed. The concrete commit log store's ``commit_log`` is for backend diagnostics.
+removed. ``CommitHistoryScenarioStore.commit_history`` is for backend diagnostics.
 
 The abstract bases ``ScenarioStore`` and ``ScenarioStorage`` are exported from
-``reef.storage.scenario``, alongside ``ScenarioStoreConflict``. Concrete storage classes
-live under ``reef.storage``: ``commit_log.CommitLogScenarioStore`` accepts a
-``RecordStore`` and a JSONL ``CommitLog``; ``sqlite.SQLiteScenarioStorage`` and
-``postgres.PostgresScenarioStorage`` assemble their respective record backends.
-The scenario package depends only
-on storage contracts. Direct commit log callers now import ``CommitLog`` from
-``reef.storage.commit_log``; ``reef.scenario.commit_log`` is removed. The session
-contract is:
+``reef.storage.scenario``, alongside ``ScenarioSettings`` and ``ScenarioStoreConflict``.
+Concrete storage classes live under ``reef.storage``:
+``commit_log.CommitHistoryScenarioStore`` accepts a ``RecordStore`` and a
+``CommitHistory``, either the JSONL ``commit_log.CommitLog`` or the
+``postgres.PostgresCommitTable``; ``sqlite.SQLiteScenarioStorage`` and
+``postgres.PostgresScenarioStorage`` assemble their respective backends. The
+scenario package depends only on storage contracts. The storage contract is:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
+
+   * - Member
+     - Contract
+   * - ``from_config(config, *, directory)``
+     - Class method that builds the storage a deployment names in
+       ``storage.record_backend``. ``config`` is the plugin's own mapping;
+       ``directory`` is ``storage.agent_record_dir``.
+   * - ``durable``
+     - Whether new sessions and settings survive a process restart.
+   * - ``open(scenario)``
+     - Open an independently owned session (the ``ScenarioStore`` below).
+   * - ``read_settings(scenario)``
+     - The scenario's ``ScenarioSettings``; defaults for a scenario with none.
+   * - ``write_settings(scenario, settings)``
+     - Replace the settings durably. The caller serializes writers of one scenario.
+   * - ``archive(scenario)``
+     - Retire the scenario's records, commits and settings, so a recreated
+       scenario starts empty; return the archive locations.
+   * - ``prune(max_bytes=...)``
+     - Evict the oldest record bodies over the byte budget.
+   * - ``close()``
+     - Release shared resources; repeated calls are safe.
+
+The session contract is:
 
 .. list-table::
    :header-rows: 1
@@ -446,9 +519,12 @@ returns the original record, even after later steps have committed; only
 expected step, or a retry with conflicting content, raises
 ``ScenarioStoreConflict`` without advancing the store.
 
-The commit log adapter serializes its writers with a local POSIX file lock;
-direct writes through ``CommitLog`` bypass this store contract.
-The default adapter fsyncs the JSONL record as the durable commit point.
+``CommitHistoryScenarioStore`` serializes writers through ``CommitHistory.locked()``.
+``CommitLog`` uses a local POSIX file lock. Its fsynced JSONL line is the
+durable commit point. ``PostgresCommitTable`` holds an advisory lock in one
+transaction and inserts the commit row in that transaction. The commit is
+durable when the transaction ends. Direct writes through a ``CommitHistory``
+bypass this store contract.
 A failure after append can leave the step committed. Retry the exact commit or
 recover the session; do not infer rollback from an exception. Recovery uses
 committed ``consumed_ids`` and separate skipped-batch receipts to rebuild
@@ -461,13 +537,66 @@ pending releases, rollback, and checkpoint reconciliation. See `Commit ordering
 provide distributed leases or authorize multiple active training writers.
 
 The storage service exposes ``durable``, ``open(scenario)``, ``archive(scenario)``,
-``prune(days=..., max_bytes=...)``, and ``close()``. Archive retires that scenario's
+``prune(max_bytes=...)``, and ``close()``. Archive retires that scenario's
 stored state so its name can be reused; prune applies retained-body limits to
 active and archived state. Custom backends implement those operations instead
 of exposing local file paths. Each opened session belongs to its scenario and
 closes after its trainer, including on construction or recovery failure. The
 dispatcher closes its storage service on shutdown. Application assembly should use
 the scenario storage service; direct record store construction is described below.
+
+Artifact backends
+-----------------
+
+An artifact backend stores the releases of each scenario. By default, Reef
+uses Git LFS. A deployment selects a different backend in
+``storage.artifact_backend`` (see `Choose the artifact backend
+<../user-guide/operate.rst#choose-the-artifact-backend>`__).
+
+A backend plugin is a subclass of
+``reef.artifact.ConfigurableRepositoryBackendFactory``. Calling the factory
+with a scenario name returns the ``RepositoryBackend`` of that scenario. The
+plugin implements one class method:
+
+.. code:: python
+
+   @classmethod
+   def from_config(cls, config, *, context): ...
+
+- ``config`` is the plugin's own ``config`` mapping. Raise ``ValueError`` for
+  an invalid value.
+- ``context`` is a ``RepositoryBackendContext``. ``work_dir`` and ``cache_dir``
+  are ``storage.artifact_work_dir`` and ``storage.artifact_cache_dir``.
+  ``bootstrap_files`` are the files of the recipe's base artifact. A new
+  scenario starts from these files. ``bootstrap_component`` is the release
+  component of a bootstrap model snapshot, or ``None`` for the release root.
+
+The optional capabilities are separate base classes. Inherit only the ones
+that the backend supports:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
+
+   * - Base class
+     - Capability
+   * - ``RegistrationAwareRepositoryBackendFactory``
+     - ``has_registration(scenario)``: find a stored scenario without making
+       its backend.
+   * - ``EnumerableRepositoryBackendFactory``
+     - ``list_registrations()``: list the stored scenarios. The service
+       loads them when it starts.
+   * - ``CachedRepositoryBackendFactory``
+     - Both capabilities, and one cached backend for each scenario.
+   * - ``StagedReleaseRepositoryBackend``
+     - The backend side: ``publish(advance_head=False)`` stores a release
+       without moving the head, and ``commit_release`` moves the head
+       after the scenario commit. A durable scenario store requires it.
+
+``tests/artifact/test_reef_artifacts.py`` and
+``tests/artifact/test_reef_git_lfs.py`` show the publication and recovery
+behavior that a backend must have. ``GitLFSRepositoryBackendFactory`` is the
+built-in plugin. Reef does not call a close method on a backend factory.
 
 Record storage and audit
 ------------------------
@@ -493,6 +622,9 @@ SQLite leaves it empty because each store owns a database. Custom SQL adapters
 must also supply ``RecordTables.eviction`` with scope/scenario keys and the
 ``record_count``, ``body_bytes``, ``first_sequence`` and ``last_sequence`` columns.
 These totals are updated atomically with capacity deletion and retry hashes.
+``RecordTables.settings`` holds the store's settings as ``name`` and
+``value_json`` rows under the scope keys; ``SQLRecordStore.read_settings()`` and
+``write_settings(settings)`` read and replace them.
 
 .. code-block:: python
 
@@ -510,12 +642,15 @@ These totals are updated atomically with capacity deletion and retry hashes.
 The URL constructor owns its pool. To share a pool across sessions, construct
 ``PostgresRecordDatabase(url, schema=...)`` and pass that object instead of a URL;
 close sessions before closing the database. Both close operations are idempotent.
-``PostgresScenarioStorage(url, directory, schema=...)`` combines PostgreSQL
-records with ``CommitLogScenarioStore`` and local JSONL logs. Pass it through
+``PostgresScenarioStorage(url, directory, schema=...)`` keeps records, commits
+(the ``scenario_commit`` table) and settings (the ``scenario_setting`` table) in
+the schema. It uses ``directory`` only to import the commit logs and model
+configuration files of earlier versions on start. Pass it through
 ``Dispatcher(..., scenario_storage=...)`` for embedded use. Scenario code
 continues to depend only on the abstract store contracts. Deployment configuration
-selects this storage service with ``reef.record_backend: postgres``; see
-`operation settings <../user-guide/operate.rst>`__ for connection and storage setup.
+selects this storage service with ``storage.record_backend: postgres``; see
+`Choose the storage backend <../user-guide/operate.rst#choose-the-storage-backend>`__
+for connection and storage setup.
 
 Writes lock their store generation before allocating append sequences and hold
 the lock through commit. Reads use a consistent transaction snapshot. PostgreSQL
@@ -538,8 +673,7 @@ be instantiated. ``SQLiteRecordStore`` is also exported from ``reef``:
        retained = records.audit_page("math")
 
 ``RecordRetention`` in ``reef.storage.records`` holds and validates the
-``max_bytes`` capacity budget. ``days`` remains a validated compatibility
-argument but does not expire data. Store factories apply capacity limits through
+``max_bytes`` capacity budget. Store factories apply capacity limits through
 ``prune`` independently of record consumption.
 
 Training commits persist consumption progress without changing record
@@ -600,7 +734,7 @@ including ``archived/``. The budget measures UTF-8 JSON payloads, references,
 and artifact references. Limits are configurable in `Configuration <configuration.rst>`__.
 
 For embedded Python deployments, use
-``dispatcher.prune_record_archives(RecordRetention(days=7, max_bytes=20 * 1024**3))``
+``dispatcher.prune_record_archives(RecordRetention(max_bytes=20 * 1024**3))``
 with ``RecordRetention`` imported from ``reef.storage.records``. This runs one sweep
 through the configured storage service and serializes it with scenario archival.
 Standalone ``SQLiteRecordStore`` and ``Dispatcher`` construction do not start a
@@ -622,10 +756,10 @@ standalone SQLite maintenance, pass the directory to the storage service:
    from reef.storage.records import RecordRetention
    from reef.storage.sqlite import SQLiteScenarioStorage
 
-   retention = RecordRetention(days=7, max_bytes=20 * 1024**3)
+   retention = RecordRetention(max_bytes=20 * 1024**3)
    storage = SQLiteScenarioStorage(Path(".reef/agent-record"))
    try:
-       purged = storage.prune(days=retention.days, max_bytes=retention.max_bytes)
+       purged = storage.prune(max_bytes=retention.max_bytes)
    finally:
        storage.close()
 
@@ -640,74 +774,132 @@ sweeps. SQLite reuses freed pages without shrinking its file. Indexes and other
 metadata also require disk space. HTTP audit routes remain a separate integration. See
 `Configuration <configuration.rst>`__ for migration and rollback constraints.
 
-Processor
----------
+Pipeline stages
+---------------
 
 .. code:: python
 
-   from reef.train.processors import ComputedFeedbackProcessor, DistillProcessor, ReportedFeedbackProcessor
+   from reef.record2record import GroupDecision, RecordJudging, ReportContext, ReportGrouping, ReportRecord2Record
+   from reef.record2task import JudgedTasks, ReportTasks, SkippedReport
+   from reef.task2batch import DistillBatches, Task2Batch
 
-A processor turns durable records into typed batches. Reef owns replay,
-retention, deduplication, pending batches, and exactly-once consumption; the
-method implements only the hooks below. They run synchronously on the trainer
-thread, so they must not block on network or model latency.
+A training pipeline (``reef.train.pipeline.TrainingPipeline``) turns durable
+records into typed batches through three stages. A recipe names a default class
+for each in ``pipeline_spec()`` (``PipelineSpec(record2record=...,
+record2task=..., task2batch=...)``):
 
-Reported feedback supplies a ``make_sample`` hook that assembles valid reports;
-computed feedback supplies an asynchronous ``judge`` that derives new feedback.
-Both engines own their buffering, reservations, retention, and replay. Reports
-must reference existing inference records in the same scenario.
+- ``record2record``: the record-to-record stage
+  (``reef.record2record``). It decides which records train and in what order:
+  it groups reports, judges records, and drops records that can no longer
+  train, including data more than ``max_staleness`` versions behind the
+  serving version (see `the staleness check
+  <../developer-guide/processors.rst#the-record-to-record-stage>`__). Without
+  one, each record passes through and nothing trains.
+- ``record2task``: the record-to-task stage
+  (``reef.record2task.Record2Task``). It turns each record set into tasks
+  (``TrainDataItem`` values). Reported feedback supplies a ``make_sample`` hook
+  on ``ReportTasks`` that assembles valid reports; computed feedback supplies
+  a ``JudgedTasks`` after an asynchronous ``judge`` derives new feedback.
+- ``task2batch``: the task-to-batch stage (``reef.task2batch.Task2Batch``).
+  Its ``make_batch(tasks, batch_number)`` shapes the tasks of the selected
+  sets into a batch.
 
-``DataProcessor.training_mode`` selects automatic, instruction-triggered or
-combined batching on the same processor. Declare ``supported_training_modes`` and
-implement ``make_training_batch(batch_number, request)`` to select inputs;
-``request`` is the queued instruction in ``manual`` and ``hybrid`` and ``None``
-for an automatic batch. Ingestion, acknowledgement, retention,
-buffer release and background derivation are shared. See
-`Processors <../developer-guide/processors.rst>`__ for the instruction queue and batch contract.
+Reef builds the stages for each scenario, in this order, with the class
+methods below; a later stage receives the stages built before it:
 
-Every processor gets the scenario's experiment logger as
-``self.experiment_logger``. Log finite numeric metrics under the ``processor``
-namespace; processor code never imports W&B, and the logger is a no-op when
-tracking is off.
+- ``Record2Record.from_config(config, *, context, environ)``
+- ``Record2Task.from_config(config, *, context, record2record, environ)``
+- ``Task2Batch.from_config(config, *, context, record2record, record2task, environ)``
+
+``config`` is the stage's config from the deployment's ``pipeline`` section;
+``environ`` holds the environment the deployment was read with. A stage
+declares its keys in a frozen ``reef.core.plugins.PluginSettings`` subclass
+with ``reef.core.config.config_option`` fields and validation in
+``__post_init__``. In ``from_config``, parse the config with
+``Settings.parse(config, plugin_class=cls)`` (``NoSettings`` for a stage
+without config) and give the settings object to the constructor. A bad config
+fails when the first scenario builds its pipeline. A later stage that needs an
+earlier stage as a specific class checks it with ``isinstance`` and raises
+``PluginConfigError`` otherwise. A value that several stages need
+belongs to the first of them; later stages read it from the stage object
+they receive. A ``Record2Task`` that keeps
+per-scenario state also implements ``scenario_state_dirs(config, scenario)``,
+so a scenario delete archives it. Reef owns replay, retention, deduplication, pending batches,
+and exactly-once consumption; the method implements only the hooks below.
+They run synchronously on the trainer thread, so they must not block on
+network or model latency. Reports must reference existing inference records
+in the same scenario.
+
+``TrainingPipeline.training_mode`` selects automatic, instruction-triggered or
+combined batching. A ``Task2Batch`` declares ``supported_training_modes``. In
+``manual`` an instruction's batch has no tasks; in ``hybrid`` it takes the sets
+an automatic batch would. Ingestion, acknowledgement, retention, buffer release
+and background derivation are shared. See
+`Training pipeline <../developer-guide/processors.rst>`__ for the instruction queue and batch contract.
+
+Every stage gets the scenario's experiment logger as
+``context.experiment_logger`` (``self.experiment_logger`` on a ``Task2Batch``).
+Log finite numeric metrics under the method's namespace; stage code never
+imports W&B, and the logger is a no-op when tracking is off.
 
 Reported feedback
 ~~~~~~~~~~~~~~~~~
 
-``ReportedFeedbackProcessor`` exposes these recipe hooks:
+A reported-feedback recipe implements these hooks:
 
 .. list-table::
    :header-rows: 1
 
    * - Hook
      - Contract
-   * - ``make_sample(context) -> TrainDataItem``
-     - Assemble one valid report and its resolved inferences; raise on data errors.
-   * - ``make_batch(items, batch_number) -> TrainingBatch``
-     - Shape the flat tuple of selected training items into a batch.
-   * - ``grouping(context) -> (group_key, slot)``
+   * - ``ReportTasks.make_sample(context) -> TrainDataItem | SkippedReport``
+     - Assemble one valid report and its resolved inferences; raise on data errors. Return
+       ``SkippedReport(reason)`` for a valid report that cannot train; the stage releases it.
+   * - ``Task2Batch.make_batch(tasks, batch_number) -> TrainingBatch``
+     - Shape the flat tuple of selected tasks into a batch.
+
+The recipe owns the report policy. Its record stage is a subclass of
+``ReportRecord2Record(context, grouping, *, exclusive_sources=False,
+ordered_groups=False)``; ``ReportRecord2Record(context, ReportGrouping())``
+trains every report by itself. ``ExclusiveReportRecord2Record(context)`` also
+trains every report by itself, and a report that ends owns its inference
+records. A ``ReportGrouping`` runs in the
+record-to-record stage and reads only records:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Method
+     - Contract
+   * - ``placement(context) -> (group_key, slot)``
      - Optional collection group and retry slot; defaults to an independent report.
-   * - ``decide_group(key, items) -> GroupDecision``
-     - Required when grouping supplies a group key; return READY, INCOMPLETE, or DISCARD.
+   * - ``decide(key, members) -> GroupDecision``
+     - Required when ``placement`` supplies a group key. ``members`` are the group's
+       ``ReportContext`` values in arrival order. Return READY, INCOMPLETE, or DISCARD.
    * - ``is_training_report(report) -> bool``
-     - Optional; ``False`` for a valid report that is not this method's training data. The engine releases it and never assembles it; its sources go with it only under ``exclusive_sources`` or when it references more than one inference.
+     - Optional; ``False`` for a valid report that is not this method's training data. The stage releases it and
+       never assembles it; its sources go with it only under ``exclusive_sources`` or when it references more than
+       one inference.
+   * - ``status() -> Mapping``
+     - Optional JSON-safe group outcomes, such as steps that can never train. The pipeline adds them to its status.
 
 ``ReportContext`` carries ``report``, ordered ``inferences``, optional ``score``,
 and the recipe's ``parsed_report``. ``require_score()`` returns a finite reward or
 raises if the training method cannot use the supplied feedback.
 
-``make_sample`` returns a trajectory or task directly. The processor adds the
+``make_sample`` returns a trajectory or task directly. ``ReportTasks`` adds the
 report id and ordered references to ``source_agent_record_ids``. Grouping and
-consumption state stay private; recipes never receive buffered report objects.
-``grouping`` returns ``(None, None)`` by default. A group key collects reports,
+consumption state stay in the stage; recipes never receive buffered report objects.
+``placement`` returns ``(None, None)`` by default. A group key collects reports,
 and a slot deduplicates retries within that group (None uses the report id).
 This collection group differs from ``TrajectoryItem.group_id``: TTTD waits for
 a complete step, then trains several comparison groups within it.
-``make_batch`` receives items in group/arrival order. Acknowledgement consumes
+``make_batch`` receives tasks in group/arrival order. Acknowledgement consumes
 all selected reports, even when the recipe omits constant-reward groups from
 its output. Reports arriving after reservation remain for a later batch.
-``output_schema`` declares the batch type, ``exclusive_sources`` controls source
-release for terminal group/duplicate reports, and ``ordered_groups`` orders ready
-groups by their keys.
+``output_schema`` declares the batch type. On the stage, ``exclusive_sources``
+controls source release for terminal group/duplicate reports, and
+``ordered_groups`` orders ready groups by their keys.
 
 There is no report-level ``judge``, ``WAIT``, ``NEVER``, or eligibility flag.
 Reference validation runs at admission; incomplete groups wait for more valid
@@ -717,40 +909,38 @@ Computed feedback
 ~~~~~~~~~~~~~~~~~
 
 Use this engine when later traffic completes an earlier record and judging it
-calls a model or another slow service.
+calls a model or another slow service. The recipe writes a ``RecordJudging``.
+Its record stage is a ``JudgingRecord2Record(judging, worker)``,
+its record-to-task stage is a ``JudgedTasks``, and its ``Task2Batch`` shapes
+the judged samples into batches.
 
-+---------------------------------------+-----------------------------------+
-| Hook                                  | Contract                          |
-+=======================================+===================================+
-| ``ingest(record)``                    | correlate records; must not block |
-+---------------------------------------+-----------------------------------+
-| ``async judge(job)``                  | slow judgment, on the processor's |
-|                                       | own worker                        |
-+---------------------------------------+-----------------------------------+
-| ``make_sample(record, judgment)``     | a ``TrajectoryItem``, or ``None`` |
-|                                       | to retire the record              |
-+---------------------------------------+-----------------------------------+
-| ``make_batch(samples, batch_number)`` | the declared batch type           |
-+---------------------------------------+-----------------------------------+
-| ``expire(now)``                       | optionally return receipts whose  |
-|                                       | completion window ended           |
-+---------------------------------------+-----------------------------------+
-| ``required_request_types``            | optionally restrict which record  |
-|                                       | types reach the processor         |
-+---------------------------------------+-----------------------------------+
++------------------------------------------+-----------------------------------+
+| Hook                                     | Contract                          |
++==========================================+===================================+
+| ``RecordJudging.observe(record, now,``   | correlate one record with the     |
+| ``stage)``                               | stage's verbs; must not block     |
++------------------------------------------+-----------------------------------+
+| ``async RecordJudging.judge(job)``       | slow judgment, on the worker      |
+|                                          | thread                            |
++------------------------------------------+-----------------------------------+
+| ``RecordJudging.expire(now)``            | optionally return receipts whose  |
+|                                          | completion window ended           |
++------------------------------------------+-----------------------------------+
+| ``JudgedTasks.make_sample(record,``      | a ``TrajectoryItem``, or ``None`` |
+| ``judgment)``                            | to retire the record              |
++------------------------------------------+-----------------------------------+
+| ``make_batch(tasks, batch_number)``      | the declared batch type           |
++------------------------------------------+-----------------------------------+
+| ``required_request_types``               | optionally restrict which record  |
+|                                          | types reach the pipeline          |
++------------------------------------------+-----------------------------------+
 
-Every ``ingest()`` starts with ``catch_up(now)``, then uses ``track(record)``,
+Before each ``observe``, the stage retires expired records and absorbs finished
+judgments. ``observe`` then uses the stage's ``track(record)``,
 ``tracked_record(receipt)``, ``dispatch(job)``, ``retire(receipt)``, and
 ``abandon(receipt)``. A failed judgment or a ``None`` sample retires the record
 instead of failing a training step. All correlation state must be
 reconstructible from replay.
-
-While no batch is out, the engine retires candidates that are more than
-``max_staleness`` versions behind the newest candidate, by record arrival. The
-recipe's ``max_staleness`` reaches the processor as
-``ProcessorContext.max_staleness``. With the default value 0, only candidates of
-the newest version stay. Runtime admission still checks each batch against the
-serving version.
 
 Task generation
 ~~~~~~~~~~~~~~~
@@ -762,8 +952,8 @@ Task generation
        TaskPlayResult, TaskValidationResult,
    )
 
-``TaskGenerator`` is the plugin base class that a deployment's
-``task-generation`` section names. Subclasses implement:
+``TaskGenerator`` is the plugin base class that a deployment names in
+``pipeline.record2task.config.generator``. Subclasses implement:
 
 - the class method ``from_config(config, *, scenario, environ)``, which returns
   the generator of one scenario;
@@ -772,8 +962,8 @@ Task generation
 
 ``async record_results(results: tuple[TaskPlayResult, ...])`` is optional. The
 default keeps nothing. The built-in generated-task recipe,
-``reef.record2dataset.generated_tasks:GeneratedTaskRecipe``, calls these methods.
-See `Processors <../developer-guide/processors.rst#task-generation-contract>`__
+``reef.recipe.generated_tasks:GeneratedTaskRecipe``, calls these methods.
+See `Training pipeline <../developer-guide/processors.rst#task-generation-contract>`__
 for the round and its failure behavior.
 
 ``TaskGenerationRequest(source_records, description, assets=(), asset_files={})``
@@ -811,7 +1001,7 @@ its ``generate`` and ``validate`` methods to a ``TaskGenerator`` subclass:
 - ``validate`` receives the ``HarborTask`` instead of a directory path.
 - Import ``TaskValidationResult`` from ``reef.core.tasks``.
 
-Select the class in the ``task-generation`` section and use the generated-task recipe. The recipe plays and trains, so the processor half of the method is
+Name the class in ``pipeline.record2task.config.generator`` and use the generated-task recipe. The recipe plays and trains, so the processor half of the method is
 not needed.
 
 Batch
@@ -891,7 +1081,7 @@ The ``reef.core.trajectories`` helpers construct and consume ATIF:
 methods, including external ATIF without captured records; and
 ``trajectory_reward`` reads a finite policy reward. Policy assembly uses
 ``make_policy_trajectory`` or ``make_multi_turn_policy_trajectory`` from
-``reef.train.processors.common`` to add exact captured tensors. Missing required
+``reef.record2task.samples`` to add exact captured tensors. Missing required
 tensors fail at the training boundary; these helpers do not invent tokens or
 log probabilities from text. Both batch readers reject unsupported item kinds
 instead of silently filtering mixed batches.
@@ -915,7 +1105,7 @@ Training objective
 Each method defines a ``TrainingObjective`` in its own ``objective.py``. It
 owns full-batch signal preparation and declares the backend loss family.
 Recipes bind it with ``WeightTrainingSpec(objective="my_method.objective:MyObjective",
-processor=MyProcessor, scheduling=StepScheduling(...))``. The dotted reference names a class with a zero-argument
+scheduling=StepScheduling(...))``. The dotted reference names a class with a zero-argument
 constructor or an existing instance; its module must be importable in both the
 service and training processes.
 
@@ -958,6 +1148,15 @@ valid, as they are for a clipped ratio. ``validate_scheduling`` rejects
 ``epochs > 1`` otherwise, at recipe build and again in each backend before
 preparation.
 
+``WeightTrainingRecipe.training_method_selector()`` returns a
+``TrainingMethodSelector`` (``reef.train.runtime_backend``). Its
+``select(batch, algorithm_state)`` returns the ``TrainingMethod``
+(``reef.runtime.interfaces``) of each job: an objective reference and an
+optional ``LearningRateSchedule``. The default ``FixedTrainingMethodSelector``
+returns ``training_spec().objective``. The method is part of the job's
+identity. See `Write a recipe
+<../developer-guide/write-a-recipe.rst#switch-methods-within-a-run>`__.
+
 ``StepSignal`` carries:
 
 - ``action``: ``train`` runs backend training; ``skip`` commits a state-only
@@ -991,6 +1190,14 @@ and workers together. Experiment backend metadata now uses ``objective`` and
 ``scheduling`` instead of ``step_preparer``; committed algorithm state,
 training payloads, checkpoints and artifact formats are unchanged.
 
+Migration to per-job training methods: the second argument of every
+``prepare_training_step``, including the coordinator RPC, is now the job's
+``TrainingMethod``. ``RuntimeCandidateBackend`` takes a
+``TrainingMethodSelector`` instead of the objective string. Update custom
+runtimes, and upgrade coordinators and workers together. Training payloads gain
+a ``method`` entry, so the same rows produce a different job id. Finish or
+reject the jobs in flight before you upgrade.
+
 Harness method
 --------------
 
@@ -1000,8 +1207,9 @@ publish or revert.
 
 .. code:: python
 
-   from reef.train.cordis_backend import EpisodeScorer, Proposer
-   from reef.train.evaluation import SelectionPlugin
+   from reef.evaluation import SelectionPlugin
+   from reef.evaluation.harness import EpisodeScorer
+   from reef.train.cordis_backend import Proposer
 
    class MyProposer(Proposer):
        def propose(self, nodes, samples, models, *, manifest=None, rejected=(), sources=(),
@@ -1103,8 +1311,8 @@ exact result it was given.
 |                                   | name, version, and a metrics mapping          |
 +-----------------------------------+-----------------------------------------------+
 | ``decide(candidate, evaluation)`` | returns a ``SelectionDecision`` whose         |
-|                                   | ``outcome`` is ``select`` or ``reject``, and  |
-|                                   | which must carry the evaluation it was given  |
+|                                   | ``selected`` is a boolean, and which must     |
+|                                   | carry the evaluation it was given             |
 +-----------------------------------+-----------------------------------------------+
 
 A rejection leaves the previous artifact serving. An exception is fail-closed:
@@ -1121,11 +1329,12 @@ when it loads the configuration and calls ``from_config`` for each scenario.
 Reef rejects functions, abstract classes and objects that only expose
 matching methods.
 
-Harness recipes instead name a ``reef.train.evaluation.SelectionPlugin``
+Harness recipes instead name a ``reef.evaluation.SelectionPlugin``
 class in ``evolution.selection``. Its ``from_config(config, *,
 candidate_backend)`` binds the plugin to the scenario's candidate backend.
-``BackendAlwaysSelectPlugin``, ``ScoreComparisonPlugin`` and ``FloorPlugin``
-are the built-in policies ``always``, ``score_comparison`` and ``floor``.
+``BackendAlwaysSelectPlugin`` and ``reef.evaluation.harness``'s
+``ScoreComparisonPlugin`` and ``FloorPlugin`` are the built-in policies
+``always``, ``score_comparison`` and ``floor``.
 
 Surface
 -------
@@ -1267,7 +1476,9 @@ holds their Slime reference. ``loss_fn`` names the Tinker built-in loss the
 family trains with; ``inputs(rows, base_logprobs, kl_coef=...)`` returns that
 function's token-aligned ``loss_fn_inputs``, one dictionary per row; and
 ``needs_base_logprobs`` requests frozen-base scores for a nonzero KL
-coefficient. For ``importance_sampling``, ``TokenRow.inputs`` builds the
+coefficient. ``check_kl_coef(kl_coef)`` raises ``ValueError`` for a
+coefficient the family cannot train; Reef calls it when it prepares a job,
+before any remote work. The default accepts every coefficient. For ``importance_sampling``, ``TokenRow.inputs`` builds the
 dictionary from response-token advantages, shifting prediction targets by one
 token and padding prompt positions with zeros. A ``TinkerCustomLoss`` adds
 ``loss(data, logprobs)``, which the SDK boundary passes to

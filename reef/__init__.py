@@ -15,7 +15,7 @@ from reef.core.version import __version__
 from reef.core import ReefError, RequestType, AgentRecord, ReportBase, ReportValidationError
 from reef.service.wire import ReportPayload, RequestHeaders, parse_request_headers
 from reef.storage.records import RecordStore
-from reef.train.evaluation import (
+from reef.evaluation import (
     AlwaysSelectMixin,
     BackendAlwaysSelectPlugin,
     BackendEvaluateMixin,
@@ -39,11 +39,8 @@ from reef.recipe import (
     Recipe,
 )
 from reef.dispatcher import Dispatcher, build_default_dispatcher
-from reef.train import DataProcessor, Trainer
+from reef.train import Task2Batch, Trainer, TrainingPipeline
 from reef.runtime.interfaces import ActivatedModel, InferenceRuntime, ModelCandidate, TrainingRuntime
-
-# Compatibility aliases for existing imports.
-RegressionGateMixin = RegressionCheckMixin
 
 __all__ = [
     "SCENARIO_METADATA_KEY",
@@ -59,7 +56,6 @@ __all__ = [
     "CandidateSelector",
     "CheckpointStrategy",
     "ConfiguredEvaluationPlugin",
-    "DataProcessor",
     "Dispatcher",
     "EvaluationResult",
     "EveryNVersions",
@@ -71,7 +67,6 @@ __all__ = [
     "RecordStore",
     "ReefError",
     "RegressionCheckMixin",
-    "RegressionGateMixin",
     "ReportBase",
     "ReportPayload",
     "ReportValidationError",
@@ -80,7 +75,9 @@ __all__ = [
     "SQLiteRecordStore",
     "Scenario",
     "SelectionDecision",
+    "Task2Batch",
     "Trainer",
+    "TrainingPipeline",
     "TrainingRuntime",
     "UpdateCandidate",
     "__version__",

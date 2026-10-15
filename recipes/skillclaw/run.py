@@ -74,7 +74,7 @@ from reef.dispatcher import Dispatcher
 from reef.harness.adapters import get_adapter
 from reef.harness.tree.render import render_composition
 from reef.inference.http import HttpInferenceHandler, InferenceProxyRuntime, provider_request_headers
-from reef.recipe.config import recipe_config_from_mapping
+from reef.recipe.config import recipe_config_from_file_layout
 from reef.recipe.registry import build_recipe
 from reef.service.app import create_app
 from reef.service.deploy.config_utils import load_config
@@ -102,7 +102,7 @@ def load_recipe() -> Any:
     served deployment. The method (harness/) never sees the endpoint.
     """
     config = load_config(HERE / "skillclaw.yaml")
-    sections = recipe_config_from_mapping(config)
+    sections = recipe_config_from_file_layout(config)
     runtime = InferenceProxyRuntime(
         model_path=AGENT_MODEL,
         base_url=UPSTREAM_BASE,
@@ -152,7 +152,6 @@ class RunService:
             recipe,
             InMemoryRepositoryBackend.factory(bootstrap_pool, root=run_dir / "artifacts"),
             local_artifact_dir=run_dir / "staged",
-            agent_record_dir=run_dir / "reef-data",
             scenario_storage=SQLiteScenarioStorage(run_dir / "reef-data"),
         )
         self._app = create_app(

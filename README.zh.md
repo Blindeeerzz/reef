@@ -27,6 +27,7 @@ harness，包括提示词、规则和技能。
 
 **🚀 [快速上手](https://reefinfra.ai/docs/getting-started/quickstart/) |
 🗺️ [路线图](https://github.com/Human-Agent-Society/reef/issues/25) |
+🗓️ [Office Hours](https://github.com/Human-Agent-Society/reef/issues/818) |
 📣 [发布文章](https://x.com/ao_qu18465/status/2094867930081337730) |
 💬 [加入 Discord](https://discord.gg/5y8e5f937k) |
 📱 [加入微信群](docs/community/wechat.md)**
@@ -70,9 +71,9 @@ Reef 的每个学习周期分为四步，下表同时列出各步骤对应的模
 | 步骤 | 说明 | 对应模块 |
 |---|---|---|
 | **1&nbsp;·&nbsp;Serve** | 响应 Agent 请求，记录每次交互。 | [`service/`](reef/service) — Agent 请求与交互记录<br>[`runtime/`](reef/runtime) — 推理与 artifact 更新 |
-| **2&nbsp;·&nbsp;Observe** | 将反馈匹配到已记录的交互。 | [`storage/records.py`](reef/storage/records.py) — 已存储的交互与反馈<br>[`train/processors/`](reef/train/processors) — 反馈匹配与条件判定 |
-| **3&nbsp;·&nbsp;Grow** | 从符合条件的记录中产出一次更新。 | [`recipe/`](reef/recipe) — recipe 接入<br>[`train/`](reef/train) — 批次与更新任务 |
-| **4&nbsp;·&nbsp;Commit** | 应用配置的选择策略并发布通过的更新。 | [`train/evaluation/`](reef/train/evaluation) — 候选评估<br>[`artifact/`](reef/artifact) — 版本历史<br>[`surface/`](reef/surface) — artifact 分发 |
+| **2&nbsp;·&nbsp;Observe** | 将反馈匹配到已记录的交互。 | [`storage/records.py`](reef/storage/records.py) — 已存储的交互与反馈<br>[`record2record/`](reef/record2record) — 反馈匹配与条件判定 |
+| **3&nbsp;·&nbsp;Grow** | 从符合条件的记录中产出一次更新。 | [`recipe/`](reef/recipe) — recipe 接入<br>[`train/`](reef/train) — 训练管线、批次与更新任务 |
+| **4&nbsp;·&nbsp;Commit** | 应用配置的选择策略并发布通过的更新。 | [`evaluation/`](reef/evaluation) — 候选评估<br>[`artifact/`](reef/artifact) — 版本历史<br>[`surface/`](reef/surface) — artifact 分发 |
 
 
 ## 📦 安装
@@ -205,7 +206,7 @@ reef serve --recipe reefine \
 使用其他 provider 时，修改
 `--inference.upstream-url` 和 `--inference.upstream-model`；需要认证时设置
 `REEF_UPSTREAM_API_KEY`。使用此配置时，Reef 监听 `127.0.0.1:8901`，不启用认证（启动前设置 `REEF_TOKEN` 即要求该 token），状态保存在
-`.reef/reefine/`（`--recipe harness-evolve` 是旧名称，启动的是同一个配置）。
+`.reef/reefine/`。
 需要修改其他内容时，复制[该部署配置](reef/service/profiles/reefine.yaml) 并用 `-c` 传入你的副本。
 
 在另一个已激活同一 Python 环境的终端中（安装会把该终端的 `python3` 写入 `reef-pi`），创建 scenario、安装 harness 并提出修改请求：
@@ -236,7 +237,6 @@ recipe 链接到其指南，每个已测 benchmark 链接到其结果页，[Reci
 | 科学发现 | 对一个有可度量目标的难题反复尝试 | [TTT-Discover](https://reefinfra.ai/docs/user-guide/recipes/tttd/)、[Guidance-TTT](recipes/tttd/examples/guidance_ttt/README.md) | 暂无 | 已测：[TriMul](recipes/tttd/examples/guidance_ttt/results/README.md)、[圆填充](recipes/tttd/examples/tttd/README.md#formal-8x64-results)、[Erdős 最小重叠](recipes/tttd/examples/tttd/README.md#formal-8x64-results)。 |
 | 任务流上的持续学习 | 由校验器逐个打分的独立任务流 | [SAO](https://reefinfra.ai/docs/user-guide/recipes/sao/) | [Meta-Harness](recipes/meta_harness/README.md)、[GEPA](https://reefinfra.ai/docs/user-guide/recipes/gepa/) | 已测：[AIME 2025](recipes/gepa/examples/aime/README.md#the-validation-contract)、[IMOAnswerBench](recipes/sao/examples/imo_answerbench/README.md#results)、[CEO-Bench](recipes/sao/examples/ceobench/README.md#results)、[Terminal-Bench](recipes/meta_harness/examples/terminal_bench/README.md#results)。 |
 | 从使用中学习 | 没有人上报分数或反馈延迟到达的真实交互 | [OpenClaw-RL](https://reefinfra.ai/docs/user-guide/recipes/openclawrl/) | [SkillClaw](https://reefinfra.ai/docs/user-guide/recipes/skillclaw/)、[Reefine](docs/user-guide/recipes/reefine.rst) | 已测：[GSM8K 任务流上的模拟学生](recipes/openclawrl/examples/openclawrl/README.md#results)、[WildClawBench](recipes/skillclaw/README.md#the-2026-08-29-results-glm-53-flash-preliminary)。 |
-| 向独立教师学习 | 学生生成回答，冻结的教师逐 token 打分 | [OPD](docs/user-guide/recipes/opd.rst)、[数学示例](recipes/opd/examples/math/README.md) | 暂无 | 暂无。 |
 
 [`recipes/basic/`](recipes/basic/) 是只记录、不学习的起始栈，不在目录之内。如果想快速了解
 反馈、候选修改和发布流程，可以从[编程 harness 教程](tutorials/evolve-your-harness/README.md)开始。
@@ -277,6 +277,22 @@ recipe 链接到其指南，每个已测 benchmark 链接到其结果页，[Reci
 - 发现疑似漏洞请按[安全策略](SECURITY.md)私下反馈。
 
 如果 Reef 对你有帮助，欢迎点个 Star ⭐，让更多人发现并参与进来。
+
+
+## 📚 引用
+
+如果你在研究中使用 Reef，请引用：
+
+```bibtex
+@misc{reef2026,
+  title  = {Reef: Infrastructure for Continually Self-Improving Agents},
+  author = {{Reef Contributors}},
+  year   = {2026},
+  url    = {https://github.com/Human-Agent-Society/reef}
+}
+```
+
+引用元数据也可在 [CITATION.cff](CITATION.cff) 中获取。
 
 
 ## 👥 团队
