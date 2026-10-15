@@ -24,20 +24,15 @@ from reef.train.algos import StepScheduling
 class CheckpointTrainer(TrainingRuntime):
     """An exporter with its own journal and no receiver dependency."""
 
-    def __init__(self, *, colocate=False, concurrent=False, journal=True, max_staleness=0):
+    def __init__(self, *, colocate=False, concurrent=False, journal=True):
         self.journal = {"status": "IDLE", "colocate": colocate} if journal else None
         self.concurrent = concurrent
-        self.staleness = max_staleness
         self.failure = None
         self.calls = []
 
     @property
     def concurrent_training_scenarios(self):
         return self.concurrent
-
-    @property
-    def max_staleness(self):
-        return self.staleness
 
     def training_job_status(self):
         return self.journal
@@ -237,15 +232,15 @@ def test_rejection_must_finish_before_colocated_inference_reopens():
     assert training.calls[-1] == ("reject", "job-1")
 
 
-@pytest.mark.parametrize("max_staleness,expected", [(0, "engine:0"), (1, "engine:1")])
-def test_preparation_passes_only_the_required_serving_version_value(max_staleness, expected):
-    training = CheckpointTrainer(max_staleness=max_staleness)
+def test_preparation_passes_the_published_version_that_the_job_trains_from():
+    training = CheckpointTrainer()
     inference = WeightReceiver()
     scheduler = RuntimeScheduler(training, inference)
+    # The engine loaded engine:1, but Reef has published only engine:0.
     inference.loaded = "engine:1"
     prepared = scheduler.prepare_training_step(TrainingBatch("batch-1"), "test", {}, StepScheduling(), 0)
     assert prepared.payload == {"scenario_step": 0}
-    assert training.calls == [("prepare", expected)]
+    assert training.calls == [("prepare", "engine:0")]
     assert not hasattr(training, "inference_runtime")
     assert not hasattr(inference, "training_runtime")
 

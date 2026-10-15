@@ -121,8 +121,6 @@ class TinkerTrainingRuntime(TrainingRuntime):
         )
 
     def train_candidate(self, payload: Mapping[str, Any]) -> ModelCandidate:
-        if payload.get("stale"):
-            raise StaleCandidate({"tinker_stale_samples": 1})
         identity = hashlib.sha256(json.dumps(dict(payload), sort_keys=True, allow_nan=False).encode()).hexdigest()
         with self._lock:
             known = self._candidates.get(identity)

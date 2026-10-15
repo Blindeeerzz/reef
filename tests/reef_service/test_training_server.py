@@ -597,7 +597,7 @@ def test_build_dispatcher_treats_sao_as_training_recipe(monkeypatch, tmp_path) -
 
     def connector(**kwargs):
         connected.update(kwargs)
-        return stub_runtimes(max_staleness=kwargs["max_staleness"])
+        return stub_runtimes()
 
     monkeypatch.setattr(
         deploy.GitLFSRepositoryBackend,
@@ -618,13 +618,14 @@ def test_build_dispatcher_treats_sao_as_training_recipe(monkeypatch, tmp_path) -
     assert dispatcher._recipe.name == "sao"
     # The runtime connector was invoked (inference branch never connects).
     assert connected["actor_name"] == "reef-train-bridge"
-    assert connected["max_staleness"] == 2
+    # The window belongs to the recipe's pipeline; the runtime connection never receives it.
+    assert "max_staleness" not in connected
     assert dispatcher._recipe.max_staleness == 2
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize("max_staleness", [0, 1, 2])
-def test_build_dispatcher_resolves_max_staleness_environment_for_runtime(
+def test_build_dispatcher_resolves_max_staleness_environment_for_the_recipe(
     monkeypatch,
     tmp_path,
     max_staleness,
@@ -638,7 +639,7 @@ def test_build_dispatcher_resolves_max_staleness_environment_for_runtime(
 
     def connector(**kwargs):
         connected.update(kwargs)
-        return stub_runtimes(max_staleness=kwargs.get("max_staleness", 0))
+        return stub_runtimes()
 
     dispatcher = deploy.build_dispatcher(
         _settings(recipe=OPENCLAWRL_RECIPE, agent_record_dir=str(tmp_path / "agent-record")),
@@ -646,7 +647,7 @@ def test_build_dispatcher_resolves_max_staleness_environment_for_runtime(
         connector=connector,
     )
 
-    assert connected.get("max_staleness", 0) == max_staleness
+    assert "max_staleness" not in connected
     assert dispatcher._recipe.max_staleness == max_staleness
 
 

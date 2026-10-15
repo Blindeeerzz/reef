@@ -469,7 +469,7 @@ class _StubTrainingRuntime(StubTrainingRuntime):
             **prepared.payload,
             "scenario_step": scenario_step,
             "reward": trajectory_reward(sample),
-            "expected_runtime_load_id": sample.training.get("runtime_load_id", None),
+            "parent_runtime_load_id": sample.training.get("runtime_load_id", None),
         }
         return PreparedTrainingStep(
             action="train",
@@ -483,7 +483,7 @@ class _StubTrainingRuntime(StubTrainingRuntime):
         existing = self.completed.get(scenario_step)
         if existing is not None:
             return existing
-        if payload["expected_runtime_load_id"] != self._served_version:
+        if payload["parent_runtime_load_id"] != self._served_version:
             raise StaleCandidate
         self.jobs.append(dict(payload))
         job_id = f"job-{scenario_step}"

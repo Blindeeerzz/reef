@@ -223,8 +223,8 @@ The scenario list names it for every scenario. Every recipe declares
 ``pipeline_spec()``, the default class of each pipeline stage (see `Pipeline
 stages <#pipeline-stages>`__). Weight-training recipes add ``training_spec()``,
 which binds the registered or dotted training objective, which declares the
-backend loss family, and the ``StepScheduling`` the runtime cuts each batch with; ``max_staleness``, the accepted
-producing-to-serving version lag, which must match the runtime; and
+backend loss family, and the ``StepScheduling`` the runtime cuts each batch with; ``max_staleness``, how many
+versions training data may lag behind the version that the scenario serves; and
 ``candidate_evaluation``, the optional plugin configured by the deployment's
 ``evaluation`` section.
 
@@ -699,7 +699,10 @@ record2task=..., task2batch=...)``):
 - ``record2record``: the record-to-record stage
   (``reef.record2record``). It decides which records train and in what order:
   it groups reports, judges records, and drops records that can no longer
-  train. Without one, each record passes through and nothing trains.
+  train, including data more than ``max_staleness`` versions behind the
+  serving version (see `the staleness check
+  <../developer-guide/processors.rst#the-record-to-record-stage>`__). Without
+  one, each record passes through and nothing trains.
 - ``record2task``: the record-to-task stage
   (``reef.record2task.Record2Task``). It turns each record set into tasks
   (``TrainDataItem`` values). Reported feedback supplies a ``make_sample`` hook
@@ -815,7 +818,7 @@ Computed feedback
 
 Use this engine when later traffic completes an earlier record and judging it
 calls a model or another slow service. The recipe writes a ``RecordJudging``.
-Its record stage is a ``JudgingRecord2Record(context, judging, worker)``,
+Its record stage is a ``JudgingRecord2Record(judging, worker)``,
 its record-to-task stage is a ``JudgedTasks``, and its ``Task2Batch`` shapes
 the judged samples into batches.
 
@@ -846,13 +849,6 @@ judgments. ``observe`` then uses the stage's ``track(record)``,
 ``abandon(receipt)``. A failed judgment or a ``None`` sample retires the record
 instead of failing a training step. All correlation state must be
 reconstructible from replay.
-
-While no batch is out, the stage retires candidates that are more than
-``max_staleness`` versions behind the newest candidate, by record arrival. The
-recipe's ``max_staleness`` reaches the stages as
-``PipelineContext.max_staleness``. With the default value 0, only candidates of
-the newest version stay. Runtime admission still checks each batch against the
-serving version.
 
 Task generation
 ~~~~~~~~~~~~~~~

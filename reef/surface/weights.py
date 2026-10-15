@@ -83,7 +83,7 @@ class WeightLoader(ArtifactActivator):
         # matches the recovered one; serve the checkpoint so the recorded
         # serving version remains exact.
         if isinstance(runtime, WeightRuntime):
-            served = self._served_version(runtime)
+            served = self.engine_runtime_load_id(runtime)
             if served is None and self._scenario is not None and isinstance(runtime, AdapterWeightRuntime):
                 # An adapter runtime that holds nothing for this scenario
                 # cannot serve its live head; only the checkpoint is exact.
@@ -106,10 +106,29 @@ class WeightLoader(ArtifactActivator):
                 return checkpoint
         return current
 
-    def _served_version(self, runtime: WeightRuntime) -> str | None:
+    def engine_runtime_load_id(self, runtime: WeightRuntime) -> str | None:
+        """What the engine reports now: the scenario's resident adapter version, else the engine's version."""
         if self._scenario is not None and isinstance(runtime, AdapterWeightRuntime):
             return runtime.serving_adapter_runtime_load_id(self._scenario)
         return runtime.serving_runtime_load_id()
+
+    def served_runtime_load_id(self, artifact: Artifact, runtime: ServingRuntime | None) -> str | None:
+        """The version under which requests to the committed ``artifact`` are served; None when it is unknown.
+
+        Requests to a live release freeze the version that published it, and a
+        per-scenario adapter is named after that version. A durable release
+        serves under the version that Reef acknowledged when it loaded the
+        release, which a rollback or a restart changes. A release that no
+        version published, such as the initial one, has no served version.
+        An update that the engine loaded but Reef did not commit yet never counts.
+        """
+        materialized = artifact.materialize()
+        published = artifact_runtime_load_id(materialized)
+        if published is None or self._scenario is not None or isinstance(materialized.ref, LiveWeightArtifactRef):
+            return published
+        if not isinstance(runtime, WeightRuntime):
+            return None
+        return runtime.current_runtime_load_id()
 
     def load(self, artifact: Artifact, runtime: ServingRuntime | None) -> str:
         if not isinstance(runtime, WeightRuntime):

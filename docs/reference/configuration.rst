@@ -1355,9 +1355,9 @@ The following names are relative to ``operations/``:
        store. ``failed_total`` counts append exceptions, including conflicts;
        validation rejections before append do not count as write failures.
    * - ``runtime/stale_batches_total``
-     - Training submissions the runtime rejects as stale, such as an exact
-       version mismatch or an exceeded bounded-staleness window. This does not
-       count compatible older samples as errors or increment on status reads.
+     - Candidates the training backend refuses as stale, such as a Tinker
+       candidate whose base checkpoint changed while it trained. Samples that
+       the record-to-record stage drops for ``max_staleness`` do not count.
    * - ``records/unread_count``
      - Training-visible records after the processor's read cursor. These may
        still need feedback or filtering; this is not a ready-batch count.
