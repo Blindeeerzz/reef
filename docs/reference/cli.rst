@@ -8,7 +8,10 @@ adapters launch per episode; nothing calls them by hand.)
 
 .. code:: bash
 
+   export REEF_TOKEN="$(openssl rand -hex 16)"
    reef serve -c recipes/basic/external-provider.yaml
+
+The config binds every address, so Reef starts only with a token.
 
 ``reef serve`` runs in the foreground and holds the terminal until Ctrl-C. Each
 service's ``ready`` probe must pass before the next one starts; when they are
