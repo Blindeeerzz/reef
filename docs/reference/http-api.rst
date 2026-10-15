@@ -1210,15 +1210,20 @@ status code, and any other upstream 4xx comes back as 400.
 Browser consoles
 ----------------
 
-For runtimes that a console cannot reach directly, use
-`reef connect <cli.rst#connect-to-the-api-platform>`__. It forwards this same
-HTTP API over an outbound connection, with an explicit local route policy.
-Receiver implementations use the
-`connector protocol <connector-protocol.rst>`__.
+A browser console reaches this HTTP API in one of two ways. Both ways use the
+same API:
 
-The service can opt in to direct browser access with ``reef.console-origins``
-in the serve YAML. List each trusted console origin explicitly, with no path,
-trailing slash, credentials, or wildcard:
+* **Direct.** The browser sends requests to the service. The service must
+  allow the console origin in ``reef.console-origins``, as described below.
+* **Forwarded.** Use `reef connect <cli.rst#connect-to-the-api-platform>`__
+  when the browser cannot open the service URL, for example when the service
+  runs on a private network. ``reef connect`` forwards this API over an
+  outbound connection, with an explicit local route policy. Receiver
+  implementations use the `connector protocol <connector-protocol.rst>`__.
+
+For direct access, add ``reef.console-origins`` to the serve YAML. List each
+trusted console origin explicitly, with no path, trailing slash, credentials,
+or wildcard:
 
 .. code-block:: yaml
 
@@ -1237,12 +1242,12 @@ x-reef-scenario headers. Cookies are not enabled through CORS.
 CORS headers also cover errors and streamed responses, exposing
 ``x-reef-agent-record-id``, ``x-reef-release-id`` and ``x-reef-artifact-version``
 to the browser. Clients without an Origin header keep their existing behavior.
-A browser may additionally require local network permission or HTTPS; allowing
-an origin in Reef does not override browser policy.
+A browser can also require local network permission or HTTPS. An origin that
+Reef allows does not override browser policy.
 
-A connected console acts with the service token's existing permissions. Its
-requests operate directly on this runtime's scenarios, without creating a
-cloud deployment or uploading history as part of the CORS connection.
+A directly connected console acts with the existing permissions of the service
+token. Its requests operate on the scenarios of this service. The CORS
+connection does not create a cloud deployment or upload history.
 
 Record and commit history
 -------------------------
