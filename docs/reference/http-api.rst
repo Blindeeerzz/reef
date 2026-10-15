@@ -1236,8 +1236,7 @@ to the browser. Clients without an Origin header keep their existing behavior.
 A browser can also require local network permission or HTTPS. An origin that
 Reef allows does not override browser policy.
 
-A directly connected console acts with the existing permissions of the service
-token. Its requests operate on the scenarios of this service. The CORS
+A connected console acts with the existing permissions of the service token. Its requests operate on the scenarios of this service. The CORS
 connection does not create a cloud deployment or upload history.
 
 Record and commit history

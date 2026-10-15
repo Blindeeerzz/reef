@@ -649,7 +649,7 @@ The HTTP service reads these fields from the ``recipe``, ``reef``,
    reef.served-url | | the URL a composite recipe's own evaluation calls (episodes and the proposer) reach this service at; the default is loopback on the bind port, so set it when episodes run on another host. A recipe of one component calls its runtime's endpoint directly and ignores it
    reef.console-origins | [] | exact browser console origins allowed to access the HTTP service; disabled by default
    reef.token | the bearer token the service accepts. Use ``tokens: [...]`` to accept several while rotating.
-   reef.allow-unauthenticated | false | serve without a token on a ``reef.host`` that other machines can reach. Without a token, Reef refuses to start on such an address unless this is true. A loopback address, such as ``127.0.0.1``, ``::1`` or ``localhost``, needs no token
+   reef.allow-unauthenticated | false | when true, serve without a token on a ``reef.host`` that other machines can reach. When false, Reef does not start on such an address without a token. A loopback address, such as ``127.0.0.1``, ``::1`` or ``localhost``, needs no token
    reef.allow-implicit-scenario-creation | true | when false, an unknown scenario is HTTP 404
    inference.model-path | a local HF model directory or a repo id, downloaded on start
    inference.upstream-url | the OpenAI-compatible provider, with no ``/v1`` suffix
