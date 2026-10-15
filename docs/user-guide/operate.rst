@@ -253,7 +253,7 @@ Choose the artifact backend
 
 The artifact backend stores the releases of each scenario. The default,
 ``git_lfs``, keeps them in the Git LFS repository that
-``storage.artifact_repository`` names. Git and Git LFS must be installed.
+``storage.artifact-repository`` names. Git and Git LFS must be installed.
 
 To use a different store, name a subclass of
 ``reef.artifact.ConfigurableRepositoryBackendFactory`` in
