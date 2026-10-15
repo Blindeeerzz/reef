@@ -101,6 +101,7 @@ const navigationSources: ReadonlyArray<{ title: string; files: ReadonlyArray<str
     title: "API Reference",
     files: [
       "reference/http-api.rst",
+      "reference/connector-protocol.rst",
       "reference/python-api.rst",
       "reference/glossary.rst",
     ],

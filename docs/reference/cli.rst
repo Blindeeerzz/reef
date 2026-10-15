@@ -91,155 +91,125 @@ and the Git-backed release chain, to the ``storage.*`` paths in the config.
 Connect to the API platform
 --------------------------
 
-The connector can start Reef for you. Run it from your Reef project directory
-and put ``--serve`` last, followed by the ``reef serve`` options. This example
-starts the Reefine profile on port 9000 and connects it to a local API platform
-on port 3000:
+``reef connect`` forwards authorized HTTP requests to your Reef service.
+Direct connections and connector connections use the same API fields and
+response bodies. The receiver must implement the
+`connector protocol <connector-protocol.rst>`__.
+
+First, create a local ``policy.json``. This example permits two operations
+on the ``demo`` scenario:
+
+.. code:: json
+
+   {
+     "scenarios": ["demo"],
+     "routes": [
+       {"method": "GET", "path": "/reef/scenarios/{scenario}/releases"},
+       {"method": "POST", "path": "/reef/scenarios/{scenario}/update"}
+     ]
+   }
+
+Start Reef separately, then connect it:
 
 .. code:: bash
 
    uv run reef connect \
      --url http://127.0.0.1:9000 \
      --platform http://localhost:3000 \
-     --name workstation \
-     --no-browser \
-     --serve --recipe reefine --model ollama/qwen3
-
-``--serve`` passes the host and port from ``--url`` to ``reef serve``, so the
-two cannot disagree; ``--url`` must be a loopback ``http`` address with a port,
-and the options after ``--serve`` must not set ``--reef.host`` or
-``--reef.port``. The connector refuses to start if another service already
-answers at that address. Reef starts after you approve the connection, in the
-directory where you ran the command, with the same environment. Its output goes
-to ``serve.log`` in the connection's state directory. If ``REEF_TOKEN`` (or
-the ``--reef-token-env`` variable) is set, Reef receives it as its
-``REEF_TOKEN``. The console shows Reef as starting until it first answers,
-and reports its exit code if it stops; the connector does not restart it.
-Stopping the connector stops this Reef service too.
-
-To connect a Reef service that is already running, for example one managed by
-systemd or Docker, omit ``--serve``. This example connects the runtime on port
-9000 to a local API platform on port 3000:
-
-.. code:: bash
-
-   uv run reef connect \
-     --url http://127.0.0.1:9000 \
-     --platform http://localhost:3000 \
+     --http-policy policy.json \
      --name workstation \
      --no-browser --foreground
 
-Set ``--url`` to your running Reef service's address and ``--platform`` to
-your API platform's address. Replace both example addresses to match your setup.
-``--name`` sets the label shown in the console. Before pairing, the connector
-checks the address once and prints a warning if Reef does not answer; pairing
-still completes, and the console shows the runtime once Reef answers.
+Replace both addresses with your service and receiver addresses. Open the
+printed sign-in link and enter the device code. ``--no-browser`` prints the
+link without opening it. ``--foreground`` keeps the connector in this terminal;
+omit it to run in the background. The connection is outbound, so it needs no
+inbound port or browser CORS configuration.
 
-Open the printed sign-in link, sign in, and paste the device code from your
-terminal into the page. The code is required and expires after ten minutes.
-The link does not contain the code, and the page never fills it in for you.
-With ``--no-browser``, open the link yourself; ``--foreground`` keeps the
-connector in this terminal, which must remain open. Omit ``--foreground``
-to run it in the background after approval. Open **Local Reef** in
-the API platform to view the runtime from another device. No inbound port,
-public endpoint, browser access to localhost, or ``console_origins`` setting
-is required for this connection.
+If omitted, ``--url`` defaults to ``http://127.0.0.1:8900`` and ``--platform``
+defaults to ``https://api.reefinfra.ai``. URLs require HTTPS except for loopback
+HTTP. Set ``REEF_TOKEN`` if the local service requires authentication. Use
+``--reef-token-env VARIABLE`` to select another environment variable.
+The local service token stays on this machine. Do not put tokens in URLs
+or command-line arguments.
 
-If omitted, ``--url`` defaults to ``http://127.0.0.1:8900`` and
-``--platform`` defaults to ``https://api.reefinfra.ai``. Each invocation
-uses its own arguments; it does not inherit addresses from a previous command.
+Local permissions
+~~~~~~~~~~~~~~~~~
 
-URLs must use HTTPS except for loopback HTTP. If the existing service requires
-a token, set ``REEF_TOKEN`` in the connector's environment; use
-``--reef-token-env VARIABLE`` to select a different environment variable.
-Do not put tokens in URLs or command-line arguments.
+The connector saves a copy of the policy for subsequent starts. Pass
+``--http-policy`` again to replace it while the connector is stopped.
+Pairing requires this policy. A browser approval alone grants no route access.
 
-Data sent to the platform
-~~~~~~~~~~~~~~~~~~~~~~~~~
+* ``scenarios`` lists allowed scenario names. Use ``["*"]`` to allow all.
+  Global discovery through ``GET /reef/scenarios`` and ``GET /reef/status``
+  requires this all-scenarios grant and a matching route.
+* ``routes`` lists allowed ``method`` and ``path`` pairs. Supported methods
+  are ``GET``, ``POST``, and ``DELETE``. Paths match exactly, with optional
+  ``{scenario}`` substitution or a final ``/*`` for descendant paths.
+  A final ``/*`` does not match the parent path itself.
+* ``allow_record_bodies`` defaults to ``false``. Set it to ``true`` for routes
+  with a ``records``, ``requests``, or ``trajectories`` path segment.
+* ``allow_inference`` defaults to ``false``. Set it to ``true`` for ``/v1/``
+  routes and scenario evaluation inference routes. A matching route and
+  scenario authorization are still required.
 
-The connector sends summaries of the connected runtime:
+Authorized responses leave this machine in full, including native error
+bodies. Select routes with that access in mind. The connector rejects
+conflicting scenario selectors, path escapes, external redirects, and
+unapproved routes. Provider configuration remains part of the native scenario
+API; the connector does not translate it into separate commands.
 
-.. list-table::
-   :header-rows: 1
+Defaults are four concurrent requests, 1 MiB per request body, and a
+600-second request deadline. Set ``max_concurrent_requests`` from 1 to 16,
+``max_request_bytes`` from 1 to 1048576, and ``request_timeout_seconds``
+from 1 to 3600 in the policy. Streamed responses arrive as ordered chunks.
+Slow receivers apply backpressure to the local response reader.
 
-   * - Summary
-     - Included information
-   * - Runtime and scenario
-     - Reef URL, scenario name, harness adapter, serving release, training mode,
-       selected numeric evaluation results, and service state with ``--serve``.
-   * - Release step
-     - Result (``selected``, ``rejected``, ``skipped``, or ``failed``), selection
-       outcome, policy, evaluator, and pass/fail counts.
-   * - Step inputs and changes
-     - Request ID and requirement names/kinds, agent proposal ID, recheck reason
-       (``drift`` or ``cadence``), and each mutation's operation, entry ID, and kind.
-   * - Harness request
-     - ID, state, and filing time, including requests filed on the local machine.
-
-Local provider credentials, artifact files, entry contents, local request text,
-and recorded prompts are not uploaded. Instructions submitted through the
-console are stored on the platform as commands. Inference continues to use
-your runtime URL directly.
-
-Remote operations and limits
+Start Reef with the connector
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The console can create a scenario, request training, change training mode,
-promote or roll back a release, and delete a scenario as described below.
+Run this command from your Reef project directory. Put ``--serve`` last:
 
-The release list contains the newest 100 steps. If their summaries exceed the
-192 KiB result limit, it returns fewer steps and marks the result truncated.
-The harness request list contains the newest 100 requests. Update Reef and
-restart an older connector to enable request listing and adapter names; older
-connectors reject the ``requests`` command and send no adapter.
+.. code:: bash
 
-Lifecycle and local state
+   uv run reef connect \
+     --url http://127.0.0.1:9000 \
+     --platform http://localhost:3000 \
+     --http-policy policy.json \
+     --no-browser \
+     --serve --recipe reefine --model ollama/qwen3
+
+Reef starts after approval. ``--url`` must specify a loopback HTTP address
+and port. It supplies the host and port to ``reef serve``; do not pass
+``--reef.host`` or ``--reef.port`` after ``--serve``. The connector refuses
+an address already in use. Reef receives the local service token as
+``REEF_TOKEN`` and writes output to ``serve.log`` in the connection directory.
+The connector stops this service when it exits. It does not restart a service
+that exits on its own. Without ``--serve``, the connector only checks whether
+Reef answers and prints any readiness warning before pairing.
+
+Lifecycle and saved state
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Use the same ``--url`` and ``--platform`` options with ``--status`` to
-inspect the connector or ``--stop`` to stop it. Rerun the connection command
-above to restart it. Stopping the connector retains authorization. It leaves
-Reef serving, unless the connector started Reef with ``--serve``. **Revoke connection** in the console
-disables the credential; a revoked connector exits and requires a new login.
+Use the same ``--url`` and ``--platform`` with ``--status`` or ``--stop``.
+Rerun your connection command to restart. Stopping retains authorization and
+the saved policy. It leaves a separately managed Reef service running.
+After revocation, restart with ``--reauthorize`` to pair again.
 
-By default, each platform/runtime URL pair has a private directory under
-``~/.reef/connections/``. It stores an instance UUID, service and connector
-credentials, a SQLite command record, a process lock, and a background log.
-With ``--serve``, it also stores the ``reef serve`` options and directory, and
-``serve.log``.
-The directory is mode 0700 and credential files are mode 0600 on POSIX systems.
-``--state-dir PATH`` selects an explicit directory. Preserve it to keep the
-same identity; do not share or copy it between running machines.
+Each endpoint pair has a private directory under ``~/.reef/connections/``.
+``--state-dir PATH`` selects another directory. It stores the instance UUID,
+policy, credentials, a process lock, logs, and ``requests.sqlite3``.
+On POSIX systems, the directory is mode 0700; credentials, request state, and
+logs are mode 0600. Preserve this directory to retain identity and mutation
+history. Do not share it between running machines.
 
-Connected runtime cards in the console support deletion after confirmation.
-The connector sends ``DELETE /reef/scenarios/{scenario}`` to Reef, which
-removes that scenario and archives its own saved state. Other scenarios and
-the connection remain available. Update and restart older connectors before
-using this action; they reject the new ``delete_scenario`` command.
+The request database stores mutation IDs, request hashes, and outcomes.
+It stores no request or response bodies. Reusing a mutation ID never repeats
+the operation. An interrupted mutation remains ``unknown`` across restarts.
+Check native receipts or scenario state before submitting a new operation.
+An HTTP error is a completed response; it retains its native status and body.
+Cancellation cannot undo work already accepted by Reef.
 
 The connector reconnects after network failures. It does not install an OS
-startup service; use ``--foreground`` with your process supervisor for restart
-after a machine reboot. It polls every three seconds while idle or running a
-slow operation. Completed commands are reported immediately, so queued commands
-do not each wait for another heartbeat. For thirty seconds after activity, it
-checks for follow-up commands every second. It reports scenario summaries about
-every fifteen seconds, or every five seconds while Reef does not answer. When Reef does not answer, the summary names the address it
-checked and the reason: nothing listening, a rejected service token, a
-timeout, or a service that is not Reef. The console marks it offline after
-45 seconds without a heartbeat and retains its last scenario summary.
-
-Commands are delivered once. An interrupted operation is marked **unknown**,
-and is not replayed automatically. Check Reef before submitting it again.
-Completed results are saved locally until the platform acknowledges them;
-cloud command history is retained for 30 days. Closing a browser or revoking a
-connection cannot undo an operation already dispatched to Reef.
-
-Request lookup protocol
-~~~~~~~~~~~~~~~~~~~~~~~
-
-For the console's ``requests`` command, the connector reads training
-instructions from ``GET /reef/scenarios/{scenario}/records?request_type=train``
-and obtains each state from
-``GET /reef/harness/requests/{record_id}/progress``. Reef reports the adapter
-for each harness scenario even while it loads or after preload fails; a
-recipe that installs no harness tree reports none.
+startup service. Use ``--foreground`` with your process supervisor for restart
+after a machine reboot.

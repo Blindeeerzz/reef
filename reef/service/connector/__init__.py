@@ -17,206 +17,71 @@ import uuid
 import webbrowser
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlsplit
 
 import aiohttp
 
-from reef.service.connector.runtime import HTTPFailure, JSONClient, ReefRuntime, endpoint_url
+from reef.service.connector.http_policy import HttpPolicy
+from reef.service.connector.http_transport import NativeHttpConnector
+from reef.service.connector.runtime import HTTPFailure, JSONClient, endpoint_url
 from reef.service.connector.service import ReefService, address_in_use, serve_address
-from reef.service.connector.state import ConnectorState
-
-logger = logging.getLogger(__name__)
-
-BODY_LIMIT = 192 * 1024
+from reef.service.connector.state import ConnectionConfig, ConnectorState
 
 
-class Connector:
-    """Maintain heartbeats independently of one in-flight local operation."""
-
-    def __init__(
-        self, platform: JSONClient, runtime: ReefRuntime, state: ConnectorState, service: ReefService | None = None
-    ):
-        self.platform = platform
-        self.runtime = runtime
-        self.state = state
-        self.service = service
-
-    async def snapshot(self) -> dict[str, Any]:
-        snapshot = await self.runtime.snapshot()
-        if self.service is not None:
-            snapshot["service"] = self.service.status(snapshot["reachable"])
-        return snapshot
-
-    async def execute(self, command: dict[str, Any]) -> None:
-        command_id = str(uuid.UUID(command["id"]))
-        if not self.state.start(command_id):
-            return
-        try:
-            refresh = command.get("action") == "refresh"
-            value = await self.snapshot() if refresh else await self.runtime.execute(command)
-            result: dict[str, Any] = {"state": "succeeded", "value": value}
-            if command.get("action") not in ("releases", "requests"):
-                result["snapshot"] = value if refresh else await self.snapshot()
-            if command.get("action") == "releases" and len(json.dumps(result).encode()) > BODY_LIMIT:
-                # Rows come newest first: keep the newest that fit and mark the list truncated, as the row cap does.
-                # The whole list did not fit, so at least the oldest row goes.
-                rows = value["releases"]
-                room = BODY_LIMIT - len(json.dumps({**result, "value": {"releases": [], "truncated": True}}).encode())
-                kept = 0
-                for row in rows[:-1]:
-                    # A row after the first also takes the ", " that separates it.
-                    room -= len(json.dumps(row).encode()) + (2 if kept else 0)
-                    if room < 0:
-                        break
-                    kept += 1
-                result["value"] = {"releases": rows[:kept], "truncated": True}
-            if len(json.dumps(result).encode()) > BODY_LIMIT:
-                result = {"state": "failed", "error": "The result exceeds the connector size limit"}
-        except asyncio.CancelledError:
-            self.state.finish(
-                command_id,
-                {"state": "unknown", "error": "Connector stopped during execution. Check Reef before retrying."},
-            )
-            raise
-        except HTTPFailure as exc:
-            result = {
-                "state": "failed" if 400 <= exc.status < 500 else "unknown",
-                "error": f"Reef returned HTTP {exc.status}. Check the runtime before retrying.",
-            }
-        except (aiohttp.ClientError, TimeoutError):
-            result = {
-                "state": "unknown",
-                "error": "Lost contact with Reef after dispatch. Check the runtime before retrying.",
-            }
-        except (ValueError, KeyError, TypeError):
-            result = {"state": "failed", "error": "Reef returned an unsupported response or command"}
-        self.state.finish(command_id, result)
-
-    async def flush_results(self) -> None:
-        for command_id, result in self.state.pending():
-            try:
-                await self.platform.request(f"/api/connector/commands/{command_id}/result", body=result)
-            except HTTPFailure as exc:
-                if exc.status not in (404, 409):
-                    raise
-                logger.warning("Result %s no longer accepts updates (HTTP %s)", command_id, exc.status)
-            self.state.acknowledge(command_id)
-
-    async def run(self, stop: asyncio.Event) -> None:
-        self.state.recover()
-        if self.service is not None:
-            self.service.start()
-        operation: asyncio.Task[None] | None = None
-        next_snapshot = 0.0
-        snapshot: dict[str, Any] | None = None
-        retry_seconds = 3.0
-        active_until = 0.0
-        stop_wait = asyncio.create_task(stop.wait())
-        try:
-            while not stop.is_set():
-                backing_off = False
-                try:
-                    if operation is not None and operation.done():
-                        await operation
-                        operation = None
-                        active_until = time.monotonic() + 30
-                    await self.flush_results()
-                    if time.monotonic() >= next_snapshot:
-                        snapshot = await self.snapshot()
-                        # Check sooner while Reef is not answering, so the console sees it come up quickly.
-                        next_snapshot = time.monotonic() + (15 if snapshot["reachable"] else 5)
-                    body: dict[str, Any] = {"protocol": 1, "ready": operation is None}
-                    if snapshot is not None:
-                        body["snapshot"] = snapshot
-                    response = await self.platform.request("/api/connector/poll", body=body)
-                    snapshot = None
-                    if response.get("protocol") != 1:
-                        raise RuntimeError("Platform requires a newer connector")
-                    command = response.get("command")
-                    if command:
-                        operation = asyncio.create_task(self.execute(command))
-                        active_until = time.monotonic() + 30
-                    retry_seconds = 3.0
-                except HTTPFailure as exc:
-                    if exc.status in (401, 403):
-                        raise RuntimeError("Connection was revoked. Run reef connect to authorize it again.") from exc
-                    logger.warning("Platform unavailable (HTTP %s); reconnecting", exc.status)
-                    retry_seconds = min(30, retry_seconds * 2)
-                    backing_off = True
-                except (aiohttp.ClientError, TimeoutError, ValueError):
-                    logger.warning("Platform connection interrupted; reconnecting")
-                    retry_seconds = min(30, retry_seconds * 2)
-                    backing_off = True
-                # Report completed work immediately and drain queued commands. Keep
-                # slow-operation heartbeats and idle polling at three seconds, but
-                # check every second for follow-up commands during active use.
-                wait_seconds = retry_seconds
-                if not backing_off and operation is None and time.monotonic() < active_until:
-                    wait_seconds = 1.0
-                waiters: set[asyncio.Task[bool] | asyncio.Task[None]] = {stop_wait}
-                if operation is not None and not backing_off:
-                    waiters.add(operation)
-                await asyncio.wait(waiters, timeout=wait_seconds, return_when=asyncio.FIRST_COMPLETED)
-        finally:
-            stop_wait.cancel()
-            with suppress(asyncio.CancelledError):
-                await stop_wait
-            if operation is not None:
-                operation.cancel()
-                with suppress(asyncio.CancelledError):
-                    await operation
-            if self.service is not None:
-                await self.service.stop()
-
-
-async def authorize(config: dict[str, Any], state: ConnectorState, *, no_browser: bool) -> dict[str, Any]:
+async def authorize(config: ConnectionConfig, state: ConnectorState, *, no_browser: bool) -> ConnectionConfig:
     async with aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar(), trust_env=True) as session:
         platform = JSONClient(session, config["platform_url"], config.get("connector_token", ""))
         if platform.token:
-            try:
-                await platform.request("/api/connector/poll", body={"protocol": 1, "ready": False})
-                return config
-            except HTTPFailure as exc:
-                if exc.status != 401:
-                    raise
-        platform.token = ""
+            return config
         pairing = await platform.request(
             "/api/connector/pair",
             body={
-                "protocol": 1,
+                "protocol": 2,
                 "instance_id": config["instance_id"],
                 "name": config["name"],
             },
         )
-        verification = pairing["verification_uri"]
+        verification = pairing.get("verification_uri")
+        device_token, user_code = pairing.get("device_token"), pairing.get("user_code")
+        expires_in = pairing.get("expires_in", 600)
+        if (
+            not isinstance(verification, str)
+            or not verification
+            or not isinstance(device_token, str)
+            or not device_token
+            or not isinstance(user_code, str)
+            or not user_code
+        ):
+            raise ValueError("Pairing requires a login URL, device token and user code")
+        if not isinstance(expires_in, (int, float)) or isinstance(expires_in, bool) or not 0 < expires_in <= 600:
+            raise ValueError("Invalid pairing expiry")
         login_url, platform_url = urlsplit(endpoint_url(verification)), urlsplit(config["platform_url"])
         if (login_url.scheme, login_url.netloc) != (platform_url.scheme, platform_url.netloc):
             raise ValueError("Platform returned a login URL on a different origin")
-        platform.token = pairing["device_token"]
+        platform.token = device_token
         print(
-            f"Open {verification}\nDevice code: {pairing['user_code']}\nPaste this code into the page to connect {config['name']}.",
+            f"Open {verification}\nDevice code: {user_code}\nPaste this code into the page to connect {config['name']}.",
             flush=True,
         )
-        print(
-            "The platform can read scenario/version summaries and run training and version commands. Service credentials stay on this machine.",
-            flush=True,
-        )
+        print("HTTP forwarding uses your local policy. Approved responses leave this machine.", flush=True)
         if not no_browser:
             webbrowser.open(verification)
-        deadline = time.monotonic() + min(float(pairing.get("expires_in", 600)), 600)
+        deadline = time.monotonic() + expires_in
         while time.monotonic() < deadline:
             status = await platform.request("/api/connector/pair")
             if status.get("status") == "approved":
                 config["connector_token"] = platform.token
-                config["runtime_id"] = status["runtime_id"]
+                runtime_id = status.get("runtime_id")
+                if not isinstance(runtime_id, str) or not runtime_id:
+                    raise ValueError("Pairing requires a runtime ID")
+                config["runtime_id"] = runtime_id
                 state.save(config)
                 return config
             await asyncio.sleep(3)
         raise RuntimeError("Connection code expired; run reef connect again")
 
 
-async def run_connector(config: dict[str, Any], state: ConnectorState) -> None:
+async def run_connector(config: ConnectionConfig, state: ConnectorState) -> None:
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -238,21 +103,33 @@ async def run_connector(config: dict[str, Any], state: ConnectorState) -> None:
             if serve
             else None
         )
-        connector = Connector(
+        connector = NativeHttpConnector(
             JSONClient(platform_session, config["platform_url"], config["connector_token"]),
-            ReefRuntime(JSONClient(local_session, config["reef_url"], config.get("reef_token", ""))),
+            JSONClient(local_session, config["reef_url"], config.get("reef_token", "")),
             state,
+            HttpPolicy.from_mapping(config.get("http_policy")),
+            config["instance_id"],
             service,
         )
         await connector.run(stop)
 
 
-async def check_reef(config: dict[str, Any]) -> dict[str, Any]:
+async def check_reef(config: ConnectionConfig) -> str | None:
+    """Return a local readiness warning without publishing scenario summaries."""
+    url = config["reef_url"]
     async with aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar()) as session:
-        return await ReefRuntime(JSONClient(session, config["reef_url"], config.get("reef_token", ""))).snapshot()
+        try:
+            await JSONClient(session, url, config.get("reef_token", "")).request("/reef/scenarios", timeout=5)
+        except aiohttp.ClientConnectorError:
+            return f"Nothing answered at {url}. Start Reef there or use its serving address."
+        except HTTPFailure as exc:
+            return f"Reef at {url} returned HTTP {exc.status}. Check its address and service token."
+        except (aiohttp.ClientError, TimeoutError):
+            return f"Reef at {url} did not answer. Check its address."
+    return None
 
 
-def _parser() -> argparse.ArgumentParser:
+def connector_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="reef connect",
         description="Connect a Reef runtime to your API platform account, optionally starting it with --serve.",
@@ -267,6 +144,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--foreground", action="store_true", help="Stay in the foreground (for service supervisors)")
     parser.add_argument("--no-browser", action="store_true", help="Print the login link without opening a browser")
     parser.add_argument(
+        "--http-policy", type=Path, help="Required local JSON authorization policy; saved for subsequent starts"
+    )
+    parser.add_argument(
         "--stop", action="store_true", help="Stop this connector, keeping its credentials for a later restart"
     )
     parser.add_argument(
@@ -279,11 +159,12 @@ def _parser() -> argparse.ArgumentParser:
         help="Start `reef serve` with the options that follow on the --url address, and stop it with the connector."
         " Put it last.",
     )
+    parser.add_argument("--reauthorize", action="store_true", help="Pair again after revoking a connection")
     parser.add_argument("--run", action="store_true", help=argparse.SUPPRESS)
     return parser
 
 
-def _running(state: ConnectorState) -> bool:
+def connection_running(state: ConnectorState) -> bool:
     try:
         with state.lock():
             return False
@@ -293,7 +174,7 @@ def _running(state: ConnectorState) -> bool:
 
 def main(argv: list[str] | None = None) -> None:
     """Authorize once, then maintain the connection independently of the browser."""
-    args = _parser().parse_args(argv)
+    args = connector_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
         platform_url, reef_url = endpoint_url(args.platform), endpoint_url(args.url)
@@ -301,7 +182,7 @@ def main(argv: list[str] | None = None) -> None:
         directory = args.state_dir or Path.home() / ".reef" / "connections" / connection_key
         state = ConnectorState(directory)
         try:
-            running = _running(state)
+            running = connection_running(state)
             config = state.load()
             serving = bool(config.get("serve"))
             if args.status:
@@ -335,8 +216,16 @@ def main(argv: list[str] | None = None) -> None:
                 )
             if args.serve is not None and address_in_use(*serve_address(reef_url, args.serve)):
                 raise RuntimeError(f"A service already answers at {reef_url}. Stop it, or connect without --serve.")
+            policy = config.get("http_policy")
+            if args.http_policy is not None:
+                policy = json.loads(args.http_policy.read_text(encoding="utf-8"))
+            HttpPolicy.from_mapping(policy)
+            if args.reauthorize:
+                config.pop("connector_token", None)
+                config.pop("runtime_id", None)
             config.update(
                 {
+                    "http_policy": policy,
                     "platform_url": platform_url,
                     "reef_url": reef_url,
                     "instance_id": config.get("instance_id") or str(uuid.uuid4()),
@@ -351,10 +240,10 @@ def main(argv: list[str] | None = None) -> None:
             # Save identity before authorization so interrupted logins cannot create new identities.
             state.save(config)
             if args.serve is None:
-                reef = asyncio.run(check_reef(config))
-                if not reef["reachable"]:
+                warning = asyncio.run(check_reef(config))
+                if warning is not None:
                     print(
-                        f"Warning: {reef['error']}\nThe connection still completes; the console shows the runtime"
+                        f"Warning: {warning}\nThe connection still completes; the console shows the runtime"
                         " once Reef answers. To start Reef with the connector, add --serve and its options.",
                         file=sys.stderr,
                     )

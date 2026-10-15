@@ -1,4 +1,4 @@
-"""Run `reef serve` for `reef connect --serve`, so the console can tell starting, serving and exited apart."""
+"""Start and stop the Reef service owned by `reef connect --serve`."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import socket
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
@@ -56,8 +55,6 @@ class ReefService:
         self.directory = directory
         self.log_path = log_path
         self.process: subprocess.Popen[bytes] | None = None
-        self.answered = False
-        self.exit_logged = False
 
     def start(self) -> None:
         environment = dict(os.environ)
@@ -87,19 +84,6 @@ class ReefService:
                 start_new_session=True,
             )
         logger.info("Started reef serve (PID %s); logs: %s", self.process.pid, self.log_path)
-
-    def status(self, reachable: bool) -> dict[str, Any]:
-        """`starting` until Reef first answers, then `running`, or `exited` with the exit code."""
-        if self.process is None:
-            raise RuntimeError("reef serve has not been started")
-        exit_code = self.process.poll()
-        if exit_code is not None:
-            if not self.exit_logged:
-                logger.warning("reef serve exited with code %s; see %s", exit_code, self.log_path)
-                self.exit_logged = True
-            return {"state": "exited", "exit_code": exit_code}
-        self.answered = self.answered or reachable
-        return {"state": "running" if self.answered else "starting"}
 
     async def stop(self) -> None:
         if self.process is None or self.process.poll() is not None:

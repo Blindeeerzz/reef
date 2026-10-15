@@ -1,16 +1,15 @@
-"""Connector contracts: bounded access, private credentials and durable command outcomes."""
+"""Native connector contracts against real local HTTP and WebSocket peers."""
 
 import asyncio
+import base64
 import json
 import os
 import signal
 import socket
 import sys
 import uuid
-from collections.abc import Callable
-from contextlib import ExitStack
-from pathlib import Path
-from unittest.mock import AsyncMock
+from contextlib import asynccontextmanager
+from dataclasses import replace
 
 import aiohttp
 import pytest
@@ -18,44 +17,388 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from reef.cli import main
-from reef.service.connector import BODY_LIMIT, Connector, _running, authorize
-from reef.service.connector.runtime import HTTPFailure, JSONClient, ReefRuntime, endpoint_url, release_summary
+from reef.service.connector import authorize, connection_running
+from reef.service.connector import main as connect_main
+from reef.service.connector.http_policy import HttpPolicy
+from reef.service.connector.http_transport import HttpRequest, NativeHttpConnector
+from reef.service.connector.runtime import HTTPFailure, JSONClient, endpoint_url
 from reef.service.connector.service import ReefService, serve_address
 from reef.service.connector.state import ConnectorState
+
+
+def native_policy(**changes):
+    value = {
+        "scenarios": ["demo"],
+        "routes": [
+            {"method": "GET", "path": "/reef/scenarios/{scenario}/*"},
+            {"method": "POST", "path": "/reef/scenarios/{scenario}/*"},
+            {"method": "POST", "path": "/v1/chat/completions"},
+            {"method": "POST", "path": "/reef/train"},
+        ],
+    }
+    value.update(changes)
+    return HttpPolicy.from_mapping(value)
+
+
+def write_policy(directory):
+    path = directory / "policy.json"
+    path.write_text(json.dumps({"scenarios": ["*"], "routes": [{"method": "GET", "path": "/reef/*"}]}))
+    return path
+
+
+def request_frame(path, *, method="GET", body=b"", headers=None, query="", identity=None):
+    return {
+        "type": "request",
+        "id": identity or str(uuid.uuid4()),
+        "method": method,
+        "path": path,
+        "query": query,
+        "headers": headers or {},
+        "body": base64.b64encode(body).decode(),
+    }
+
+
+class NativeReceiver:
+    def __init__(self, protocol: int = 2, limit_updates: dict[str, object] | None = None):
+        self.protocol = protocol
+        self.limit_updates = limit_updates or {}
+        self.frames: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        self.connected = asyncio.Event()
+        self.websocket: web.WebSocketResponse | None = None
+        self.transport: asyncio.Transport | None = None
+        self.hello: dict[str, object] = {}
+        self.authorization = ""
+
+    async def handle(self, request: web.Request) -> web.WebSocketResponse:
+        self.authorization = request.headers.get("authorization", "")
+        websocket = web.WebSocketResponse()
+        await websocket.prepare(request)
+        self.websocket = websocket
+        self.transport = request.transport
+        self.hello = await websocket.receive_json()
+        await websocket.send_json(
+            {"type": "ready", "protocol": self.protocol, "limits": {**self.hello["limits"], **self.limit_updates}}
+        )
+        self.connected.set()
+        async for message in websocket:
+            if message.type == aiohttp.WSMsgType.TEXT:
+                await self.frames.put(json.loads(message.data))
+        return websocket
+
+    async def send(self, frame):
+        assert self.websocket is not None
+        await self.websocket.send_json(frame)
+
+    async def result(self, identity):
+        frames = []
+        async with asyncio.timeout(5):
+            while True:
+                frame = await self.frames.get()
+                if frame.get("id") != identity:
+                    continue
+                frames.append(frame)
+                if frame["type"] in ("end", "error"):
+                    return frames
+
+
+@asynccontextmanager
+async def native_connection(tmp_path, app, policy, receiver=None):
+    receiver = receiver if receiver is not None else NativeReceiver()
+    remote = web.Application()
+    remote.router.add_get("/api/connector/stream", receiver.handle)
+    async with (
+        TestServer(app) as local_server,
+        TestServer(remote) as remote_server,
+        aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar()) as platform_session,
+        aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar()) as local_session,
+    ):
+        state = ConnectorState(tmp_path)
+        connector = NativeHttpConnector(
+            JSONClient(platform_session, str(remote_server.make_url("/")).rstrip("/"), "platform-credential"),
+            JSONClient(local_session, str(local_server.make_url("/")).rstrip("/"), "local-credential"),
+            state,
+            policy,
+            "test-instance",
+        )
+        stop = asyncio.Event()
+        task = asyncio.create_task(connector.run(stop))
+        try:
+            await asyncio.wait_for(receiver.connected.wait(), 5)
+            yield receiver, state, connector, task
+        finally:
+            stop.set()
+            try:
+                await asyncio.wait_for(task, 5)
+            finally:
+                state.close()
+
+
+@pytest.mark.parametrize("status", [200, 400, 409, 500])
+def test_native_responses_match_direct_api_fields_and_errors(tmp_path, status):
+    async def run():
+        seen = []
+
+        async def handler(request):
+            seen.append((request.method, request.query_string, dict(request.headers), await request.read()))
+            return web.json_response(
+                {"model": {"name": "example"}, "next_cursor": "next", "details": [1, 2]},
+                status=status,
+                headers={"x-request-id": "native-id", "set-cookie": "private=value", "connection": "close"},
+            )
+
+        app = web.Application()
+        app.router.add_post("/reef/scenarios/demo/update", handler)
+        async with native_connection(tmp_path, app, native_policy()) as (receiver, state, connector, *_):
+            payload = b'{"model":{"model":"example","url":"https://provider.example/v1"}}'
+            frame = request_frame(
+                "/reef/scenarios/demo/update",
+                method="POST",
+                body=payload,
+                query="limit=2&after=next",
+                headers={
+                    "content-type": "application/json",
+                    "authorization": "Bearer remote-secret",
+                    "cookie": "remote-cookie=value",
+                    "x-reef-scenario": "demo",
+                },
+            )
+            await receiver.send(frame)
+            frames = await receiver.result(frame["id"])
+            assert frames[0]["status"] == status
+            headers = dict(frames[0]["headers"])
+            assert headers["x-request-id"] == "native-id"
+            assert "set-cookie" not in headers and "connection" not in headers
+            body = b"".join(base64.b64decode(part["body"]) for part in frames if part["type"] == "chunk")
+            direct = await connector.local.session.post(
+                connector.local.base_url + frame["path"],
+                data=payload,
+            )
+            async with direct:
+                assert direct.status == status
+                assert body == await direct.read()
+            method, query, forwarded, sent = seen[0]
+            assert method == "POST" and query == "limit=2&after=next" and sent == payload
+            assert forwarded["Authorization"] == "Bearer local-credential"
+            assert forwarded["x-reef-scenario"] == "demo" and "Cookie" not in forwarded
+            assert receiver.authorization == "Bearer platform-credential"
+            assert "local-credential" not in json.dumps([*frames, receiver.hello])
+            assert state.http_request(frame["id"]).outcome == "completed"
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "frame,changes",
+    [
+        (request_frame("https://other.example/reef/scenarios/demo/update"), {}),
+        (request_frame("//other.example/reef/scenarios/demo/update"), {}),
+        (request_frame("/reef/scenarios/demo/../other"), {}),
+        (request_frame("/reef/scenarios/demo/%2e%2e/other"), {}),
+        (request_frame("/reef/scenarios/demo%2fother/releases"), {}),
+        (request_frame("/reef/scenarios/demo/evaluation/v1/chat/completions", method="POST"), {}),
+        (request_frame("/reef/scenarios/demo/releases", query="scenario=demo&scenario=other"), {}),
+        (request_frame("/reef/scenarios/demo/releases", query="scenario=demo%20"), {}),
+        (request_frame("/reef/scenarios/demo/releases", query="scenario=%other"), {}),
+        (
+            request_frame("/reef/train", method="POST", body=b'{"scenario":"demo\\r\\nx: secret"}'),
+            {"scenarios": ["*"]},
+        ),
+        (request_frame("/reef/scenarios/demo/releases", headers={"accept": "\ud800"}), {}),
+        (request_frame("/reef/scenarios/de mo/releases"), {}),
+        (request_frame("/reef/scenarios/other/releases"), {}),
+        (request_frame("/reef/scenarios/demo/releases", query="scenario=other"), {}),
+        (request_frame("/reef/scenarios/demo/releases", headers={"x-reef-scenario": "other"}), {}),
+        (request_frame("/reef/scenarios/demo/update", method="POST", body=b'{"scenario":"other"}'), {}),
+        (request_frame("/reef/scenarios/demo/records"), {}),
+        (request_frame("/v1/chat/completions", method="POST", headers={"x-reef-scenario": "demo"}), {}),
+        (request_frame("/reef/scenarios/demo/update", method="POST", body=b"12345"), {"max_request_bytes": 4}),
+        (request_frame("/reef/scenarios/demo/update", method="POST", body=b"{"), {}),
+    ],
+)
+def test_native_policy_rejects_unauthorized_or_ambiguous_calls(frame, changes):
+    with pytest.raises(ValueError):
+        HttpRequest.from_message(frame, native_policy(**changes))
+
+
+def test_native_policy_requires_grants_for_global_discovery_and_private_bodies():
+    policy = native_policy(routes=[{"method": "GET", "path": "/reef/*"}])
+    with pytest.raises(ValueError, match="Global discovery"):
+        HttpRequest.from_message(request_frame("/reef/scenarios", headers={"x-reef-scenario": "demo"}), policy)
+    whole = replace(policy, scenarios=("*",))
+    assert HttpRequest.from_message(request_frame("/reef/scenarios"), whole).scenario is None
+    record = request_frame("/reef/scenarios/demo/records")
+    assert HttpRequest.from_message(record, replace(policy, allow_record_bodies=True)).scenario == "demo"
+
+
+def test_policy_matches_encoded_scenario_paths():
+    policy = native_policy(
+        scenarios=["demo one"], routes=[{"method": "GET", "path": "/reef/scenarios/demo%20one/releases"}]
+    )
+    request = HttpRequest.from_message(request_frame("/reef/scenarios/demo%20one/releases"), policy)
+    assert request.scenario == "demo one"
+
+
+@pytest.mark.parametrize("change", [{"allow_inference": "yes"}, {"max_concurrent_requests": True}, {"unknown": 1}])
+def test_native_policy_rejects_invalid_settings(change):
+    with pytest.raises(ValueError):
+        native_policy(**change)
+
+
+def test_native_streams_preserve_bytes_and_arrive_before_completion(tmp_path):
+    async def run():
+        finish = asyncio.Event()
+        first = b'data: {"delta":"first"}\n\n'
+        second = b'data: {"delta":"second"}\n\ndata: [DONE]\n\n'
+
+        async def handler(request):
+            response = web.StreamResponse(headers={"content-type": "text/event-stream"})
+            await response.prepare(request)
+            await response.write(first)
+            await finish.wait()
+            await response.write(second)
+            return response
+
+        app = web.Application()
+        app.router.add_post("/v1/chat/completions", handler)
+        async with native_connection(tmp_path, app, native_policy(allow_inference=True)) as (receiver, *_):
+            frame = request_frame("/v1/chat/completions", method="POST", headers={"x-reef-scenario": "demo"})
+            await receiver.send(frame)
+            start = await asyncio.wait_for(receiver.frames.get(), 3)
+            chunk = await asyncio.wait_for(receiver.frames.get(), 3)
+            assert start["type"] == "response" and chunk["type"] == "chunk"
+            assert base64.b64decode(chunk["body"]) == first
+            finish.set()
+            tail = await receiver.result(frame["id"])
+            assert b"".join(base64.b64decode(part["body"]) for part in tail if part["type"] == "chunk") == second
+
+    asyncio.run(run())
+
+
+def test_native_cancellation_and_capacity_do_not_start_extra_work(tmp_path):
+    async def run():
+        finish = asyncio.Event()
+        calls = []
+
+        async def handler(request):
+            calls.append(request.path)
+            response = web.StreamResponse()
+            await response.prepare(request)
+            await finish.wait()
+            return response
+
+        app = web.Application()
+        app.router.add_post("/reef/scenarios/demo/update", handler)
+        try:
+            async with native_connection(tmp_path, app, native_policy(max_concurrent_requests=1)) as (
+                receiver,
+                state,
+                *_,
+            ):
+                first = request_frame("/reef/scenarios/demo/update", method="POST")
+                await receiver.send(first)
+                assert (await asyncio.wait_for(receiver.frames.get(), 3))["type"] == "response"
+                second = request_frame("/reef/scenarios/demo/update", method="POST")
+                await receiver.send(second)
+                assert (await receiver.result(second["id"]))[-1]["code"] == "capacity_exceeded"
+                await receiver.send({"type": "cancel", "id": first["id"]})
+                result = await receiver.result(first["id"])
+                assert result[-1]["code"] == "cancelled" and result[-1]["outcome"] == "unknown"
+                assert len(calls) == 1 and state.http_request(second["id"]) is None
+                finish.set()
+        finally:
+            finish.set()
+
+    asyncio.run(run())
+
+
+def test_native_write_ids_survive_restart_without_replay_or_payload_storage(tmp_path):
+    async def run():
+        calls = []
+
+        async def handler(request):
+            calls.append(await request.read())
+            return web.json_response({"accepted": True})
+
+        app = web.Application()
+        app.router.add_post("/reef/scenarios/demo/update", handler)
+        frame = request_frame("/reef/scenarios/demo/update", method="POST", body=b'{"model":"private-body"}')
+        async with native_connection(tmp_path, app, native_policy()) as (receiver, *_):
+            await receiver.send(frame)
+            assert (await receiver.result(frame["id"]))[-1]["type"] == "end"
+        app2 = web.Application()
+        app2.router.add_post("/reef/scenarios/demo/update", handler)
+        async with native_connection(tmp_path, app2, native_policy()) as (receiver, *_):
+            await receiver.send(frame)
+            assert (await receiver.result(frame["id"]))[-1]["code"] == "already_dispatched"
+            changed = {**frame, "body": base64.b64encode(b'{"model":"changed"}').decode()}
+            await receiver.send(changed)
+            assert (await receiver.result(frame["id"]))[-1]["code"] == "id_conflict"
+        assert len(calls) == 1
+        assert b"private-body" not in (tmp_path / "requests.sqlite3").read_bytes()
+
+    asyncio.run(run())
+
+
+def test_native_disconnect_after_dispatch_stays_unknown(tmp_path):
+    async def run():
+        finish = asyncio.Event()
+
+        async def handler(request):
+            response = web.StreamResponse()
+            await response.prepare(request)
+            await finish.wait()
+            return response
+
+        app = web.Application()
+        app.router.add_post("/reef/scenarios/demo/update", handler)
+        frame = request_frame("/reef/scenarios/demo/update", method="POST")
+        try:
+            async with native_connection(tmp_path, app, native_policy()) as connection:
+                receiver, state, task = connection[0], connection[1], connection[3]
+                await receiver.send(frame)
+                assert (await asyncio.wait_for(receiver.frames.get(), 3))["type"] == "response"
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                assert state.http_request(frame["id"]).outcome == "unknown"
+                finish.set()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            finish.set()
+        reopened = ConnectorState(tmp_path)
+        try:
+            assert reopened.http_request(frame["id"]).outcome == "unknown"
+        finally:
+            reopened.close()
+
+    asyncio.run(run())
+
+
+def test_native_http_requires_policy_before_pairing(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        connect_main(["--state-dir", str(tmp_path)])
+    assert "HTTP policy" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "protocol,limits", [(1, {}), (2, {"max_request_bytes": 1}), (2, {"max_concurrent_requests": 4.0})]
+)
+def test_native_receiver_must_confirm_protocol(tmp_path, protocol, limits):
+    async def run():
+        with pytest.raises(RuntimeError, match=r"confirm native HTTP|invalid protocol limits"):
+            async with native_connection(
+                tmp_path, web.Application(), native_policy(), NativeReceiver(protocol, limits)
+            ):
+                pass
+
+    asyncio.run(run())
 
 
 def unused_port():
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         return listener.getsockname()[1]
-
-
-def test_connection_state_survives_restart_without_replay(tmp_path):
-    first, second = str(uuid.uuid4()), str(uuid.uuid4())
-    state = ConnectorState(tmp_path)
-    state.save({"connector_token": "private-test-token", "instance_id": first})
-    assert state.start(first)
-    assert state.start(second)
-    state.finish(second, {"state": "succeeded", "value": {"scenario": "original"}})
-    state.close()
-    state = ConnectorState(tmp_path)
-    try:
-        assert state.load()["instance_id"] == first
-        state.recover()
-        results = dict(state.pending())
-        assert results[first]["state"] == "unknown"
-        assert results[second]["state"] == "succeeded"
-        assert not state.start(first)
-        state.acknowledge(first)
-        assert first not in dict(state.pending())
-        with state.lock(), pytest.raises(RuntimeError, match="already running"), state.lock():
-            pass
-        if os.name != "nt":
-            assert tmp_path.stat().st_mode & 0o777 == 0o700
-            assert state.config_path.stat().st_mode & 0o777 == 0o600
-            assert (tmp_path / "commands.sqlite3").stat().st_mode & 0o777 == 0o600
-    finally:
-        state.close()
 
 
 @pytest.mark.parametrize(
@@ -72,466 +415,6 @@ def test_connection_state_survives_restart_without_replay(tmp_path):
 def test_endpoint_rejects_insecure_or_credential_urls(url):
     with pytest.raises(ValueError):
         endpoint_url(url)
-
-
-def test_snapshots_and_releases_strip_private_data():
-    async def run():
-        client = AsyncMock()
-        client.base_url = "http://127.0.0.1:8900"
-        client.request.side_effect = [
-            {"scenarios": [{"scenario": "original", "release_id": "seed", "token": "private"}]},
-            {"scenarios": {"original": {"training_mode": "manual", "provider_key": "private"}}, "config": "private"},
-        ]
-        snapshot = await ReefRuntime(client).snapshot()
-        assert snapshot == {
-            "reachable": True,
-            "scenarios": [{"scenario": "original", "release_id": "seed", "training_mode": "manual"}],
-            "reef_url": "http://127.0.0.1:8900",
-        }
-        client.request.side_effect = HTTPFailure(401, "private")
-        failed = await ReefRuntime(client).snapshot()
-        assert failed["reachable"] is False and "private" not in json.dumps(failed)
-
-    asyncio.run(run())
-    row = release_summary(
-        {
-            "release_id": "seed",
-            "current": True,
-            "artifact": "private",
-            "metrics": {
-                "wins": 3,
-                "selected": True,
-                "training_request": {"text": "private"},
-                "mutation": "private",
-                "skipped": "private reason",
-            },
-        }
-    )
-    assert row == {
-        "release_id": "seed",
-        "current": True,
-        "metrics": {"wins": 3, "selected": True, "skipped": True},
-        "result": "selected",
-    }
-
-
-def test_snapshot_names_each_scenario_adapter():
-    async def run():
-        client = AsyncMock()
-        client.base_url = "http://127.0.0.1:8900"
-        client.request.side_effect = [
-            {
-                "scenarios": [
-                    {"scenario": "chat", "release_id": "seed", "adapter": "claude"},
-                    {"scenario": "odd", "adapter": "pi; rm -rf ~"},
-                    {"scenario": "weights"},
-                ]
-            },
-            {"scenarios": {}},
-        ]
-        return await ReefRuntime(client).snapshot()
-
-    assert asyncio.run(run())["scenarios"] == [
-        {"scenario": "chat", "release_id": "seed", "adapter": "claude"},
-        {"scenario": "odd"},
-        {"scenario": "weights"},
-    ]
-
-
-def test_release_summary_keeps_request_mutation_and_selection_codes_without_text() -> None:
-    """A published request step as the catalog lists it: ids, kinds, counts and codes leave; every text stays."""
-    row = release_summary(
-        {
-            "release_id": "published",
-            "parent_release_id": "seed",
-            "operation": "training",
-            "current": True,
-            "pending": False,
-            "recorded_at": 1790000000.5,
-            "metrics": {
-                "selected": True,
-                "candidate_score": 1.0,
-                "passed": 1,
-                "failed": 0,
-                "floor_score": 1.0,
-                "step_record": "/private/steps/chat/1",
-                "proposal_notes": {"design": "private design", "review": {"covered": ["private point"]}},
-                "training_request": {
-                    "id": "3d44ceb6",
-                    "text": "private request text",
-                    "session": "private-session",
-                    "client": {"platform": "private"},
-                    "requires": [{"name": "SEARCH_KEY", "kind": "env", "check": "private check command"}],
-                },
-                "mutations": [
-                    {
-                        "op": "create",
-                        "id": "chat",
-                        "options": {"name": "agent_command", "config": {"text": "private"}},
-                    },
-                    {"op": "create", "id": "chat-rules", "options": {"name": "rules", "config": {"text": "private"}}},
-                    {"op": "update", "id": "settings", "options": {"config": {"allow": ["private"]}}},
-                ],
-                "selection": {
-                    "selected": True,
-                    "policy": "floor",
-                    "reason": "private reason text",
-                    "candidate_id": "private-candidate",
-                    "metrics": {"passed": 1, "failed": 0, "floor_score": 1.0},
-                    "evaluation": {"evaluator": "harness_episode_pairs", "metrics": {"candidate_paths": ["private"]}},
-                },
-            },
-        }
-    )
-    assert row == {
-        "release_id": "published",
-        "parent_release_id": "seed",
-        "operation": "training",
-        "current": True,
-        "pending": False,
-        "recorded_at": 1790000000.5,
-        "metrics": {
-            "selected": True,
-            "candidate_score": 1.0,
-            "passed": 1,
-            "failed": 0,
-            "floor_score": 1.0,
-            "training_request": {"id": "3d44ceb6", "requires": [{"name": "SEARCH_KEY", "kind": "env"}]},
-            "mutation_count": 3,
-            "mutations": [
-                {"op": "create", "id": "chat", "options": {"name": "agent_command"}},
-                {"op": "create", "id": "chat-rules", "options": {"name": "rules"}},
-                {"op": "update", "id": "settings"},
-            ],
-            "selection": {
-                "selected": True,
-                "policy": "floor",
-                "metrics": {"passed": 1, "failed": 0, "floor_score": 1.0},
-                "evaluation": {"evaluator": "harness_episode_pairs"},
-            },
-        },
-        "result": "selected",
-    }
-    assert "private" not in json.dumps(row)
-    failed = release_summary(
-        {"operation": "training", "metrics": {"skipped": "private", "error": "private traceback"}}
-    )
-    assert failed == {"operation": "training", "metrics": {"skipped": True}, "result": "failed"}
-    assert "result" not in release_summary({"operation": "creation", "metrics": {}})
-
-
-@pytest.mark.parametrize("selected", [True, False])
-def test_release_summary_preserves_selection_flag(selected: bool) -> None:
-    selection = {"selected": selected, "policy": "demo"}
-    row = release_summary({"operation": "training", "metrics": {"selection": selection}})
-
-    assert row["metrics"]["selection"] == {"selected": selected, "policy": "demo"}
-
-
-def test_release_summary_names_proposal_and_recheck_steps_without_text():
-    """A step from an agent's proposal keeps the proposal id; a recheck keeps its reason code."""
-    proposal = release_summary(
-        {
-            "operation": "training",
-            "metrics": {
-                "selected": False,
-                "proposal": {
-                    "id": "proposal-7",
-                    "session": "private-session",
-                    "release_id": "seed",
-                    "reason": "private reason text",
-                },
-                "mutation": {"op": "create", "id": "x", "options": {"name": "skill", "config": {"text": "private"}}},
-            },
-        }
-    )
-    assert proposal == {
-        "operation": "training",
-        "metrics": {
-            "selected": False,
-            "proposal": {"id": "proposal-7"},
-            "mutation_count": 1,
-            "mutations": [{"op": "create", "id": "x", "options": {"name": "skill"}}],
-        },
-        "result": "rejected",
-    }
-    recheck = release_summary(
-        {"operation": "training", "metrics": {"selected": True, "recheck": True, "recheck_reason": "drift"}}
-    )
-    assert recheck["metrics"] == {"selected": True, "recheck": True, "recheck_reason": "drift"}
-    assert "private" not in json.dumps([proposal, recheck])
-
-
-def test_releases_over_the_size_limit_keep_the_newest_rows_that_fit(tmp_path):
-    """A long catalog drops its oldest rows to fit the result limit instead of failing the whole read."""
-
-    def result_for(rows):
-        async def run():
-            state = ConnectorState(tmp_path)
-            runtime = AsyncMock()
-            runtime.execute.return_value = {"releases": rows, "truncated": False}
-            command = {"id": str(uuid.uuid4()), "action": "releases", "scenario": "chat"}
-            try:
-                await Connector(AsyncMock(), runtime, state).execute(command)
-                return dict(state.pending())[command["id"]]
-            finally:
-                state.close()
-
-        return asyncio.run(run())
-
-    def size(value):
-        return len(json.dumps(value).encode())
-
-    def rows_of():
-        return [{"release_id": f"step-{index:03d}", "metrics": {"mutation_count": 20}} for index in range(100)]
-
-    # Rows come newest first. A list exactly at the limit comes whole; one byte over drops its oldest row.
-    rows = rows_of()
-    rows[-1]["release_id"] += "x" * (
-        BODY_LIMIT - size({"state": "succeeded", "value": {"releases": rows, "truncated": False}})
-    )
-    whole = result_for(rows)
-    assert whole == {"state": "succeeded", "value": {"releases": rows, "truncated": False}}
-    assert size(whole) == BODY_LIMIT
-    rows[-1]["release_id"] += "x"
-    assert result_for(rows) == {"state": "succeeded", "value": {"releases": rows[:-1], "truncated": True}}
-    # The second oldest row pads the newest 99 to the limit exactly; one byte more and it goes too.
-    rows = rows_of()
-    rows[98]["release_id"] += "x" * (
-        BODY_LIMIT - size({"state": "succeeded", "value": {"releases": rows[:99], "truncated": True}})
-    )
-    fitted = result_for(rows)
-    assert fitted == {"state": "succeeded", "value": {"releases": rows[:99], "truncated": True}}
-    assert size(fitted) == BODY_LIMIT
-    rows[98]["release_id"] += "x"
-    assert result_for(rows) == {"state": "succeeded", "value": {"releases": rows[:98], "truncated": True}}
-
-
-def test_requests_lists_ids_states_and_times_without_text(tmp_path):
-    async def run():
-        seen = []
-
-        async def handler(request):
-            seen.append((request.path, request.query_string, request.headers.get("x-reef-scenario")))
-            if request.path.endswith("/records"):
-                after = int(request.query["after_sequence"])
-                # The first page answers like a Reef that predates the type filter: an inference record comes too.
-                pages = {
-                    0: {
-                        "records": [
-                            {"sequence": 1, "agent_record_id": "turn", "request_type": "inference", "created_at": 1.0},
-                            {"sequence": 2, "agent_record_id": "first", "request_type": "train", "created_at": 2.0},
-                        ],
-                        "next_after_sequence": 2,
-                    },
-                    2: {
-                        "records": [
-                            {"sequence": 3, "agent_record_id": "second", "request_type": "train", "created_at": 3.0}
-                        ],
-                        "next_after_sequence": None,
-                    },
-                }
-                return web.json_response(pages[after])
-            progress = {
-                "first": {"state": "selected", "step": 1, "activity": []},
-                "second": {
-                    "state": "proposing",
-                    "step": None,
-                    "meaning": "private words",
-                    "step_record": "/private/steps/chat/2",
-                    "activity": [{"at": 1.0, "kind": "model", "text": "private proposer line"}],
-                },
-            }
-            return web.json_response(progress[request.path.split("/")[4]])
-
-        app = web.Application()
-        app.router.add_route("*", "/{path:.*}", handler)
-        async with TestServer(app) as server, aiohttp.ClientSession() as session:
-            runtime = ReefRuntime(JSONClient(session, str(server.make_url("")).rstrip("/"), "local-test-token"))
-            state = ConnectorState(tmp_path)
-            connector = Connector(AsyncMock(), runtime, state)
-            command = {"id": str(uuid.uuid4()), "action": "requests", "scenario": "chat a"}
-            try:
-                await connector.execute(command)
-                result = dict(state.pending())[command["id"]]
-            finally:
-                state.close()
-        assert result == {
-            "state": "succeeded",
-            "value": {
-                "requests": [
-                    {"id": "second", "state": "proposing", "created_at": 3.0},
-                    {"id": "first", "state": "selected", "step": 1, "created_at": 2.0},
-                ],
-                "truncated": False,
-            },
-        }
-        assert "private" not in json.dumps(result)
-        assert [entry for entry in seen if entry[0].endswith("/records")] == [
-            ("/reef/scenarios/chat a/records", "request_type=train&limit=100&after_sequence=0", None),
-            ("/reef/scenarios/chat a/records", "request_type=train&limit=100&after_sequence=2", None),
-        ]
-        assert [entry for entry in seen if entry[0].endswith("/progress")] == [
-            ("/reef/harness/requests/second/progress", "", "chat a"),
-            ("/reef/harness/requests/first/progress", "", "chat a"),
-        ]
-
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize(
-    ("failure", "error_code"),
-    [
-        (HTTPFailure(401, "private"), "unauthorized"),
-        (HTTPFailure(404, "private"), "not_reef"),
-        (HTTPFailure(500, "HTTP 500"), "invalid_response"),
-        (TimeoutError(), "timeout"),
-        (ValueError("private"), "invalid_response"),
-    ],
-)
-def test_unreachable_snapshot_names_the_setting_to_check(failure, error_code):
-    client = AsyncMock()
-    client.base_url = "http://127.0.0.1:8901"
-    client.request.side_effect = failure
-    snapshot = asyncio.run(ReefRuntime(client).snapshot())
-    assert snapshot["reachable"] is False and snapshot["error_code"] == error_code
-    assert "http://127.0.0.1:8901" in snapshot["error"] and "private" not in json.dumps(snapshot)
-
-
-def test_snapshot_reports_nothing_listening_at_the_url():
-    async def run():
-        url = f"http://127.0.0.1:{unused_port()}"
-        async with aiohttp.ClientSession() as session:
-            return url, await ReefRuntime(JSONClient(session, url)).snapshot()
-
-    url, snapshot = asyncio.run(run())
-    assert snapshot["error_code"] == "connection_failed" and snapshot["reef_url"] == url
-
-
-def test_commands_use_original_scenarios_and_stable_training_receipts():
-    async def run():
-        client = AsyncMock()
-        client.request.return_value = {"secret": "private"}
-        runtime = ReefRuntime(client)
-        command = {"id": str(uuid.uuid4()), "action": "train", "scenario": "existing a", "text": "improve tests"}
-        result = await runtime.execute(command)
-        client.request.assert_awaited_once_with(
-            "/reef/train",
-            scenario="existing a",
-            body={"text": "improve tests", "agent_record_id": command["id"]},
-            timeout=60,
-        )
-        assert result == {"scenario": "existing a", "agent_record_id": command["id"]}
-        await runtime.execute({"action": "promote", "scenario": "existing a", "release_id": "candidate"})
-        assert client.request.call_args.args == ("/reef/scenarios/existing%20a/promote",)
-        count = client.request.await_count
-        for command in [
-            {"action": "http", "scenario": "original", "url": "http://localhost/secret"},
-            {"action": "train", "scenario": "../other", "text": "x"},
-            {"action": "set_training_mode", "scenario": "original", "training_mode": "invalid"},
-        ]:
-            with pytest.raises(ValueError):
-                await runtime.execute(command)
-        assert client.request.await_count == count
-
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize(
-    "failure,expected",
-    [
-        (HTTPFailure(400, "private"), "failed"),
-        (HTTPFailure(500, "private"), "unknown"),
-        (TimeoutError("private"), "unknown"),
-    ],
-)
-def test_execution_outcomes_are_not_repeated(tmp_path, failure, expected):
-    async def run():
-        state = ConnectorState(tmp_path)
-        runtime, platform = AsyncMock(), AsyncMock()
-        runtime.execute.side_effect = failure
-        connector = Connector(platform, runtime, state)
-        command = {"id": str(uuid.uuid4()), "action": "train"}
-        try:
-            await connector.execute(command)
-            await connector.execute(command)
-            assert runtime.execute.await_count == 1
-            result = dict(state.pending())[command["id"]]
-            assert result["state"] == expected and "private" not in json.dumps(result)
-            platform.request.side_effect = aiohttp.ClientConnectionError()
-            with pytest.raises(aiohttp.ClientConnectionError):
-                await connector.flush_results()
-            assert state.pending()
-            platform.request.side_effect = None
-            await connector.flush_results()
-            assert not state.pending()
-        finally:
-            state.close()
-
-    asyncio.run(run())
-
-
-def test_success_reports_snapshot_atomically_and_cancel_is_unknown(tmp_path):
-    async def run():
-        state = ConnectorState(tmp_path)
-        runtime = AsyncMock()
-        runtime.execute.return_value = {"scenario": "new"}
-        runtime.snapshot.return_value = {"reachable": True, "scenarios": [{"scenario": "new"}]}
-        connector = Connector(AsyncMock(), runtime, state)
-        first, second = str(uuid.uuid4()), str(uuid.uuid4())
-        try:
-            await connector.execute({"id": first, "action": "create_scenario"})
-            assert dict(state.pending())[first]["snapshot"]["scenarios"] == [{"scenario": "new"}]
-            runtime.execute.side_effect = asyncio.CancelledError
-            with pytest.raises(asyncio.CancelledError):
-                await connector.execute({"id": second, "action": "train"})
-            assert dict(state.pending())[second]["state"] == "unknown"
-        finally:
-            state.close()
-
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize("status", [200, 409])
-def test_delete_scenario_uses_native_endpoint_and_reports_outcome(tmp_path, status):
-    async def run():
-        seen = []
-
-        async def handler(request):
-            seen.append((request.method, request.path, request.headers.get("Authorization")))
-            if request.method == "DELETE":
-                return web.json_response({"archived": ["/private/records"]}, status=status)
-            if request.path == "/reef/scenarios":
-                return web.json_response({"scenarios": [{"scenario": "keep"}]})
-            return web.json_response({"scenarios": {"keep": {"training_mode": "manual"}}})
-
-        app = web.Application()
-        app.router.add_route("*", "/{path:.*}", handler)
-        async with TestServer(app) as server, aiohttp.ClientSession() as session:
-            runtime = ReefRuntime(JSONClient(session, str(server.make_url("")).rstrip("/"), "local-test-token"))
-            state = ConnectorState(tmp_path)
-            connector = Connector(AsyncMock(), runtime, state)
-            command = {"id": str(uuid.uuid4()), "action": "delete_scenario", "scenario": "existing a"}
-            try:
-                await connector.execute(command)
-                await connector.execute(command)
-                result = dict(state.pending())[command["id"]]
-                assert result["state"] == ("succeeded" if status == 200 else "failed")
-                assert "/private/records" not in json.dumps(result)
-                assert [entry for entry in seen if entry[0] == "DELETE"] == [
-                    ("DELETE", "/reef/scenarios/existing a", "Bearer local-test-token")
-                ]
-                if status == 200:
-                    assert result["value"] == {"scenario": "existing a"}
-                    assert result["snapshot"]["scenarios"] == [{"scenario": "keep", "training_mode": "manual"}]
-                else:
-                    assert "snapshot" not in result
-                with pytest.raises(ValueError, match="Invalid scenario name"):
-                    await runtime.execute({"action": "delete_scenario", "scenario": "../other"})
-            finally:
-                state.close()
-
-    asyncio.run(run())
 
 
 def test_http_boundary_keeps_tokens_separate_and_blocks_redirects():
@@ -576,7 +459,7 @@ def test_pairing_saves_only_after_approval_and_reuses_identity(tmp_path, monkeyp
             calls.append((request.method, request.headers.get("Authorization")))
             if request.method == "POST":
                 body = await request.json()
-                assert body == {"protocol": 1, "instance_id": "stable-id", "name": "my-machine"}
+                assert body == {"protocol": 2, "instance_id": "stable-id", "name": "my-machine"}
                 return web.json_response(
                     {
                         "verification_uri": str(server.make_url("/local/authorize")),
@@ -620,211 +503,6 @@ def test_connect_cli_is_dispatched_without_starting_a_deployment(capsys):
     assert "--foreground" in output and "--reef-token-env" in output and "--stop" in output
 
 
-def test_release_summary_is_valid_json_with_nonfinite_scores():
-    summary = release_summary(
-        {
-            "release_id": "seed",
-            "recorded_at": float("inf"),
-            "metrics": {"candidate_score": float("nan"), "current_score": 0.5},
-        }
-    )
-    assert summary == {"release_id": "seed", "metrics": {"current_score": 0.5}}
-    json.dumps(summary, allow_nan=False)
-
-
-@pytest.mark.skipif(os.name == "nt", reason="POSIX background process lifecycle")
-def test_background_cli_stops_restarts_without_pairing_and_exits_on_revocation(tmp_path):
-    async def run():
-        counts = {"pair": 0, "poll": 0}
-        revoked = False
-
-        async def handler(request):
-            if request.path == "/api/connector/pair":
-                if request.method == "POST":
-                    counts["pair"] += 1
-                    return web.json_response(
-                        {
-                            "device_token": "background-test-token",
-                            "user_code": "ABCD-EF12-3456",
-                            "verification_uri": str(server.make_url("/local/authorize")),
-                            "expires_in": 60,
-                        }
-                    )
-                return web.json_response({"status": "approved", "runtime_id": "runtime-id"})
-            if request.path == "/api/connector/poll":
-                counts["poll"] += 1
-                assert request.headers["Authorization"] == "Bearer background-test-token"
-                if revoked:
-                    return web.json_response({"error": "revoked"}, status=401)
-                return web.json_response({"protocol": 1, "command": None})
-            if request.path == "/reef/scenarios":
-                return web.json_response({"scenarios": [{"scenario": "original"}]})
-            return web.json_response({"scenarios": {"original": {"training_mode": "manual"}}})
-
-        app = web.Application()
-        app.router.add_route("*", "/{path:.*}", handler)
-        state = ConnectorState(tmp_path)
-
-        async def wait_for_running(expected):
-            for _ in range(100):
-                if _running(state) is expected:
-                    return
-                await asyncio.sleep(0.1)
-            raise AssertionError("Connector process did not reach expected state")
-
-        try:
-            async with TestServer(app) as server:
-
-                async def cli(*options):
-                    process = await asyncio.create_subprocess_exec(
-                        sys.executable,
-                        "-m",
-                        "reef.cli",
-                        "connect",
-                        "--no-browser",
-                        "--platform",
-                        str(server.make_url("")).rstrip("/"),
-                        "--url",
-                        str(server.make_url("")).rstrip("/"),
-                        "--state-dir",
-                        str(tmp_path),
-                        *options,
-                        cwd=Path(__file__).resolve().parents[2],
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    stdout, stderr = await asyncio.wait_for(process.communicate(), 15)
-                    assert process.returncode == 0, stderr.decode()
-                    return stdout.decode()
-
-                assert "Connected" in await cli()
-                await wait_for_running(True)
-                identity = state.load()["instance_id"]
-                assert "running" in await cli("--status")
-                await cli("--stop")
-                await wait_for_running(False)
-                await cli()
-                await wait_for_running(True)
-                assert state.load()["instance_id"] == identity and counts["pair"] == 1
-                revoked = True
-                await wait_for_running(False)
-                assert counts["poll"] >= 2
-                assert "background-test-token" not in (tmp_path / "connector.log").read_text()
-        finally:
-            if _running(state):
-                os.kill(int((tmp_path / "connector.pid").read_text()), signal.SIGTERM)
-                await wait_for_running(False)
-            state.close()
-
-    asyncio.run(run())
-
-
-def foreground_platform(polled: asyncio.Event, on_approval: Callable[[], object] = lambda: None) -> web.Application:
-    """A platform that approves the pairing at once and answers polls; it also answers as the Reef the connector checks."""
-
-    async def handler(request):
-        if request.path == "/api/connector/pair":
-            if request.method == "POST":
-                return web.json_response(
-                    {
-                        "device_token": "foreground-test-token",
-                        "user_code": "ABCD-EF12-3456",
-                        "verification_uri": str(request.url.with_path("/local/authorize")),
-                        "expires_in": 60,
-                    }
-                )
-            on_approval()
-            return web.json_response({"status": "approved", "runtime_id": "runtime-id"})
-        if request.path == "/api/connector/poll":
-            polled.set()
-            return web.json_response({"protocol": 1, "command": None})
-        if request.path == "/reef/scenarios":
-            return web.json_response({"scenarios": [{"scenario": "original"}]})
-        return web.json_response({"scenarios": {"original": {"training_mode": "manual"}}})
-
-    app = web.Application()
-    app.router.add_route("*", "/{path:.*}", handler)
-    return app
-
-
-async def foreground_connect(tmp_path: Path, platform_url: str) -> asyncio.subprocess.Process:
-    """``reef connect --foreground`` against ``platform_url``, which also stands in for the Reef."""
-    return await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-m",
-        "reef.cli",
-        "connect",
-        "--no-browser",
-        "--foreground",
-        "--name",
-        "workstation",
-        "--platform",
-        platform_url,
-        "--url",
-        platform_url,
-        "--state-dir",
-        str(tmp_path),
-        cwd=Path(__file__).resolve().parents[2],
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
-
-@pytest.mark.skipif(os.name == "nt", reason="POSIX process lifecycle")
-def test_foreground_cli_says_it_connected_once_the_pairing_is_approved(tmp_path):
-    """The foreground connector prints the line the background one prints, while it keeps running."""
-
-    async def run():
-        polled = asyncio.Event()
-        async with TestServer(foreground_platform(polled)) as server:
-            platform_url = str(server.make_url("")).rstrip("/")
-            process = await foreground_connect(tmp_path, platform_url)
-            try:
-                lines = []
-                while not lines or not lines[-1].startswith("Connected"):
-                    line = await asyncio.wait_for(process.stdout.readline(), 15)
-                    assert line, "the connector exited before it said it connected"
-                    lines.append(line.decode().rstrip("\n"))
-                assert lines[-1] == f"Connected workstation. Open {platform_url}/local"
-                # The connector is running: it polls after it said so, and stops cleanly on SIGTERM.
-                await asyncio.wait_for(polled.wait(), 15)
-                assert process.returncode is None
-            finally:
-                if process.returncode is None:
-                    process.send_signal(signal.SIGTERM)
-                _, stderr = await asyncio.wait_for(process.communicate(), 15)
-        assert process.returncode == 0, stderr.decode()
-
-    asyncio.run(run())
-
-
-@pytest.mark.skipif(os.name == "nt", reason="POSIX process lifecycle")
-def test_foreground_cli_never_says_connected_when_another_connector_took_the_lock(tmp_path):
-    """A connector that started while this one waited for approval holds the lock: this one says so and exits
-    without the Connected line, since it never runs."""
-
-    async def run():
-        polled = asyncio.Event()
-        other = ConnectorState(tmp_path)
-        held = ExitStack()
-        try:
-            # The other connector takes the lock after this one's start check, while the pairing waits.
-            platform = foreground_platform(polled, on_approval=lambda: held.enter_context(other.lock()))
-            async with TestServer(platform) as server:
-                process = await foreground_connect(tmp_path, str(server.make_url("")).rstrip("/"))
-                stdout, stderr = await asyncio.wait_for(process.communicate(), 15)
-        finally:
-            held.close()
-            other.close()
-        assert process.returncode == 1
-        assert "Device code: ABCD-EF12-3456" in stdout.decode()
-        assert "Connected" not in stdout.decode()
-        assert "reef connect: A connector is already running for this instance" in stderr.decode()
-        assert not polled.is_set()
-
-    asyncio.run(run())
-
-
 @pytest.mark.parametrize(
     ("url", "arguments"),
     [
@@ -851,7 +529,19 @@ def test_connect_warns_before_pairing_when_reef_does_not_answer(tmp_path, monkey
     monkeypatch.setattr("reef.service.connector.authorize", stop_before_pairing)
     url = f"http://127.0.0.1:{unused_port()}"
     with pytest.raises(SystemExit):
-        main(["connect", "--url", url, "--platform", "https://platform.example", "--state-dir", str(tmp_path)])
+        main(
+            [
+                "connect",
+                "--http-policy",
+                str(write_policy(tmp_path)),
+                "--url",
+                url,
+                "--platform",
+                "https://platform.example",
+                "--state-dir",
+                str(tmp_path),
+            ]
+        )
     error = capsys.readouterr().err
     assert f"Warning: Nothing answered at {url}" in error and "--serve" in error
 
@@ -873,213 +563,301 @@ def test_serve_reports_its_exit_code(tmp_path):
         )
         service.start()
         await asyncio.to_thread(service.process.wait, 30)
-        return service.status(reachable=False)
+        return service.process.returncode
 
-    assert asyncio.run(run()) == {"state": "exited", "exit_code": 2}
+    assert asyncio.run(run()) == 2
     assert "missing-profile" in (tmp_path / "serve.log").read_text()
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX process lifecycle")
-def test_serve_starts_on_the_connector_url_and_stops_with_it(tmp_path):
-    async def run():
-        url = f"http://127.0.0.1:{unused_port()}"
-        service = ReefService(["--model", "ollama/test"], url, "", tmp_path, tmp_path / "serve.log")
-        service.start()
-        try:
-            async with aiohttp.ClientSession() as session:
-                runtime = ReefRuntime(JSONClient(session, url))
-                assert service.status(reachable=False) == {"state": "starting"}
-                for _ in range(300):
-                    if (await runtime.snapshot())["reachable"]:
-                        break
-                    await asyncio.sleep(0.1)
-                assert service.status(reachable=True) == {"state": "running"}
-                # Once Reef has answered, a missed check no longer means it is starting.
-                assert service.status(reachable=False) == {"state": "running"}
-        finally:
-            await service.stop()
-        assert service.process.returncode == 0
-        async with aiohttp.ClientSession() as session:
-            assert (await ReefRuntime(JSONClient(session, url)).snapshot())["error_code"] == "connection_failed"
+class CliReceiver(NativeReceiver):
+    def __init__(self):
+        super().__init__()
+        self.pair_count = 0
+        self.revoked = False
 
-    asyncio.run(run())
+    async def pair(self, request):
+        if request.method == "POST":
+            self.pair_count += 1
+            payload = await request.json()
+            assert payload["protocol"] == 2
+            return web.json_response(
+                {
+                    "verification_uri": str(request.url.with_path("/local/authorize")),
+                    "device_token": "platform-credential",
+                    "user_code": "ABCD-EF12-3456",
+                    "expires_in": 60,
+                }
+            )
+        return web.json_response({"status": "approved", "runtime_id": "runtime-id"})
+
+    async def handle(self, request):
+        if self.revoked:
+            return web.Response(status=401)
+        return await super().handle(request)
+
+    def application(self):
+        app = web.Application()
+        app.router.add_route("*", "/api/connector/pair", self.pair)
+        app.router.add_get("/api/connector/stream", self.handle)
+        return app
+
+
+async def cli_process(directory, platform_url, reef_url, *options):
+    return await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "reef.cli",
+        "connect",
+        "--no-browser",
+        "--platform",
+        platform_url,
+        "--url",
+        reef_url,
+        "--state-dir",
+        str(directory),
+        *options,
+        cwd=directory,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+
+async def wait_for_connection_state(state, expected):
+    async with asyncio.timeout(15):
+        while connection_running(state) is not expected:
+            await asyncio.sleep(0.05)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX background process lifecycle")
-def test_background_connect_serve_reports_the_service_and_stops_it(tmp_path):
+def test_cli_reuses_saved_policy_and_identity_and_reauthorizes_after_revocation(tmp_path):
     async def run():
-        snapshots = []
+        receiver = CliReceiver()
+        state = ConnectorState(tmp_path)
+        async with TestServer(receiver.application()) as server:
+            address = str(server.make_url("/")).rstrip("/")
+
+            async def cli(*options):
+                process = await cli_process(tmp_path, address, address, *options)
+                stdout, stderr = await asyncio.wait_for(process.communicate(), 15)
+                assert process.returncode == 0, stderr.decode()
+                return stdout.decode()
+
+            try:
+                assert "Connected" in await cli("--http-policy", str(write_policy(tmp_path)))
+                await asyncio.wait_for(receiver.connected.wait(), 5)
+                identity = state.load()["instance_id"]
+                assert "running" in await cli("--status")
+                await cli("--stop")
+                await wait_for_connection_state(state, False)
+                receiver.connected.clear()
+                await cli()
+                await asyncio.wait_for(receiver.connected.wait(), 5)
+                assert state.load()["instance_id"] == identity and receiver.pair_count == 1
+                receiver.revoked = True
+                await receiver.websocket.close()
+                await wait_for_connection_state(state, False)
+                log = (tmp_path / "connector.log").read_text()
+                assert "--reauthorize" in log and "platform-credential" not in log
+                receiver.revoked = False
+                receiver.connected.clear()
+                await cli("--reauthorize")
+                await asyncio.wait_for(receiver.connected.wait(), 5)
+                assert receiver.pair_count == 2 and state.load()["instance_id"] == identity
+            finally:
+                if connection_running(state):
+                    await cli("--stop")
+                    await wait_for_connection_state(state, False)
+                state.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process lifecycle")
+@pytest.mark.parametrize("foreground", [True, False])
+def test_cli_starts_and_stops_reef_and_forwards_its_native_status(tmp_path, foreground):
+    async def run():
+        receiver = CliReceiver()
+        state = ConnectorState(tmp_path)
+        reef_url = f"http://127.0.0.1:{unused_port()}"
+        options = ["--foreground"] if foreground else []
+        async with TestServer(receiver.application()) as server:
+            address = str(server.make_url("/")).rstrip("/")
+            process = await cli_process(
+                tmp_path,
+                address,
+                reef_url,
+                "--http-policy",
+                str(write_policy(tmp_path)),
+                *options,
+                "--serve",
+                "--model",
+                "ollama/test",
+            )
+            try:
+                await asyncio.wait_for(receiver.connected.wait(), 15)
+                async with aiohttp.ClientSession() as session, asyncio.timeout(30):
+                    client = JSONClient(session, reef_url)
+                    while True:
+                        try:
+                            direct = await client.request("/reef/status")
+                            break
+                        except aiohttp.ClientConnectorError:
+                            await asyncio.sleep(0.1)
+                    frame = request_frame("/reef/status")
+                    await receiver.send(frame)
+                    frames = await receiver.result(frame["id"])
+                    body = b"".join(base64.b64decode(part["body"]) for part in frames if part["type"] == "chunk")
+                    assert frames[0]["status"] == 200 and json.loads(body).keys() == direct.keys()
+                assert (tmp_path / "serve.log").exists()
+            finally:
+                if foreground and process.returncode is None:
+                    process.send_signal(signal.SIGTERM)
+                else:
+                    await asyncio.wait_for(process.communicate(), 15)
+                    stop_process = await cli_process(tmp_path, address, reef_url, "--stop")
+                    await asyncio.wait_for(stop_process.communicate(), 15)
+                _, stderr = await asyncio.wait_for(process.communicate(), 15)
+                await wait_for_connection_state(state, False)
+                state.close()
+            assert process.returncode == 0, stderr.decode()
+            async with aiohttp.ClientSession() as session:
+                with pytest.raises(aiohttp.ClientConnectorError):
+                    await JSONClient(session, reef_url).request("/reef/status")
+
+    asyncio.run(run())
+
+
+def test_private_configuration_and_process_lock(tmp_path):
+    state = ConnectorState(tmp_path)
+    try:
+        state.save({"instance_id": "instance", "connector_token": "private-test-token"})
+        assert state.load()["instance_id"] == "instance"
+        with state.lock(), pytest.raises(RuntimeError, match="already running"), state.lock():
+            pass
+        if os.name != "nt":
+            assert tmp_path.stat().st_mode & 0o777 == 0o700
+            assert state.config_path.stat().st_mode & 0o777 == 0o600
+            assert (tmp_path / "requests.sqlite3").stat().st_mode & 0o777 == 0o600
+    finally:
+        state.close()
+
+
+def test_native_deadline_does_not_repeat_dispatched_work(tmp_path):
+    async def run():
+        finish = asyncio.Event()
+        calls = []
 
         async def handler(request):
-            if request.path == "/api/connector/pair":
-                if request.method == "POST":
-                    return web.json_response(
-                        {
-                            "device_token": "serve-test-token",
-                            "user_code": "ABCD-EF12-3456",
-                            "verification_uri": str(server.make_url("/local/authorize")),
-                            "expires_in": 60,
-                        }
-                    )
-                return web.json_response({"status": "approved", "runtime_id": "runtime-id"})
-            body = await request.json()
-            if "snapshot" in body:
-                snapshots.append(body["snapshot"])
-            return web.json_response({"protocol": 1, "command": None})
+            calls.append(request.path)
+            await finish.wait()
+            return web.Response()
 
         app = web.Application()
-        app.router.add_route("*", "/{path:.*}", handler)
-        state = ConnectorState(tmp_path / "state")
-        url = f"http://127.0.0.1:{unused_port()}"
+        app.router.add_post("/reef/scenarios/demo/update", handler)
         try:
-            async with TestServer(app) as server:
+            async with native_connection(tmp_path, app, native_policy(request_timeout_seconds=1)) as (
+                receiver,
+                state,
+                *_,
+            ):
+                frame = request_frame("/reef/scenarios/demo/update", method="POST")
+                await receiver.send(frame)
+                result = await receiver.result(frame["id"])
+                assert result[-1]["code"] == "deadline_exceeded" and result[-1]["outcome"] == "unknown"
+                await receiver.send(frame)
+                assert (await receiver.result(frame["id"]))[-1]["code"] == "already_dispatched"
+                assert len(calls) == 1 and state.http_request(frame["id"]).outcome == "unknown"
+                finish.set()
+        finally:
+            finish.set()
 
-                async def cli(*options):
-                    process = await asyncio.create_subprocess_exec(
-                        sys.executable,
-                        "-m",
-                        "reef.cli",
-                        "connect",
-                        "--no-browser",
-                        "--platform",
-                        str(server.make_url("")).rstrip("/"),
-                        "--url",
-                        url,
-                        "--state-dir",
-                        str(tmp_path / "state"),
-                        *options,
-                        cwd=tmp_path,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    stdout, stderr = await asyncio.wait_for(process.communicate(), 15)
-                    assert process.returncode == 0, stderr.decode()
-                    return stdout.decode()
+    asyncio.run(run())
 
-                assert f"Starting Reef at {url}" in await cli("--serve", "--model", "ollama/test")
-                for _ in range(300):
-                    if snapshots and snapshots[-1].get("service") == {"state": "running"}:
+
+def test_native_redirects_do_not_reach_another_origin(tmp_path):
+    async def run():
+        reached = []
+
+        async def secret(request):
+            reached.append(request.headers.get("authorization"))
+            return web.Response()
+
+        target = web.Application()
+        target.router.add_get("/secret", secret)
+        async with TestServer(target) as target_server:
+
+            async def redirect(request):
+                raise web.HTTPFound(str(target_server.make_url("/secret")))
+
+            app = web.Application()
+            app.router.add_get("/reef/scenarios/demo/releases", redirect)
+            async with native_connection(tmp_path, app, native_policy()) as (receiver, *_):
+                frame = request_frame("/reef/scenarios/demo/releases")
+                await receiver.send(frame)
+                assert (await receiver.result(frame["id"]))[-1]["code"] == "external_redirect"
+            remote = web.Application()
+            remote.router.add_get("/api/connector/stream", redirect)
+            async with TestServer(remote) as remote_server, aiohttp.ClientSession() as session:
+                state = ConnectorState(tmp_path)
+                connector = NativeHttpConnector(
+                    JSONClient(session, str(remote_server.make_url("/")).rstrip("/"), "platform-credential"),
+                    JSONClient(session, "http://127.0.0.1:8900", "local-credential"),
+                    state,
+                    native_policy(),
+                    "test-instance",
+                )
+                try:
+                    with pytest.raises(RuntimeError, match="must not redirect"):
+                        await connector.run(asyncio.Event())
+                finally:
+                    state.close()
+            assert reached == []
+
+    asyncio.run(run())
+
+
+def test_slow_receiver_limits_the_local_response_reader(tmp_path):
+    async def run():
+        started = asyncio.Event()
+        written_chunks = 0
+        chunk = b"x" * 32768
+        total_chunks = 2048
+
+        async def handler(request):
+            nonlocal written_chunks
+            response = web.StreamResponse()
+            await response.prepare(request)
+            started.set()
+            for _ in range(total_chunks):
+                await response.write(chunk)
+                written_chunks += 1
+            return response
+
+        app = web.Application()
+        app.router.add_get("/reef/scenarios/demo/releases", handler)
+        async with native_connection(tmp_path, app, native_policy()) as (receiver, *_):
+            frame = request_frame("/reef/scenarios/demo/releases")
+            await receiver.send(frame)
+            await asyncio.wait_for(started.wait(), 3)
+            transport = receiver.transport
+            assert transport is not None
+            # Stop consuming peer messages at the server transport, like a stalled receiver.
+            transport.pause_reading()
+            try:
+                await asyncio.sleep(0.2)
+                assert written_chunks < total_chunks
+            finally:
+                transport.resume_reading()
+            received_bytes = 0
+            async with asyncio.timeout(15):
+                while True:
+                    part = await receiver.frames.get()
+                    if part["type"] == "chunk":
+                        decoded = base64.b64decode(part["body"])
+                        assert len(decoded) <= 32768
+                        received_bytes += len(decoded)
+                    if part["type"] == "end":
                         break
-                    await asyncio.sleep(0.1)
-                assert snapshots[-1]["reachable"] is True and snapshots[-1]["reef_url"] == url
-                assert "Reef logs:" in await cli("--status")
-                assert "together with the Reef service" in await cli("--stop")
-                for _ in range(100):
-                    if not _running(state):
-                        break
-                    await asyncio.sleep(0.1)
-                async with aiohttp.ClientSession() as session:
-                    assert (await ReefRuntime(JSONClient(session, url)).snapshot())[
-                        "error_code"
-                    ] == "connection_failed"
-        finally:
-            if _running(state):
-                os.kill(int((tmp_path / "state" / "connector.pid").read_text()), signal.SIGTERM)
-            state.close()
-
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize("action", ["releases", "create_scenario"])
-def test_completed_commands_report_and_drain_without_heartbeat_delay(tmp_path, action):
-    async def run():
-        state = ConnectorState(tmp_path)
-        stop = asyncio.Event()
-        commands = [{"id": str(uuid.uuid4()), "action": action, "scenario": "fixture"} for _ in range(3)]
-        expected_ids = [command["id"] for command in commands]
-        reported = []
-        runtime, platform = AsyncMock(), AsyncMock()
-        runtime.execute.return_value = {"scenario": "fixture"}
-        runtime.snapshot.return_value = {"reachable": True, "scenarios": []}
-
-        async def request(path, *, body):
-            if path.endswith("/result"):
-                reported.append(path.split("/")[-2])
-                assert body["state"] == "succeeded"
-                if action == "create_scenario":
-                    assert body["snapshot"] == runtime.snapshot.return_value
-                if len(reported) == 3:
-                    stop.set()
-                return {"accepted": True}
-            assert body["ready"] is True
-            assert len(reported) == 3 - len(commands), "Report before dispatching another operation"
-            return {"protocol": 1, "command": commands.pop(0) if commands else None}
-
-        platform.request.side_effect = request
-        try:
-            # Previously each result waited three seconds, so this batch took nine.
-            await asyncio.wait_for(Connector(platform, runtime, state).run(stop), 1)
-            assert reported == expected_ids
-            assert runtime.execute.await_count == 3
-            assert runtime.snapshot.await_count == (4 if action == "create_scenario" else 1)
-            assert state.pending() == []
-        finally:
-            state.close()
-
-    asyncio.run(run())
-
-
-def test_report_failure_keeps_backoff_and_saved_result(tmp_path):
-    async def run():
-        state = ConnectorState(tmp_path)
-        stop, attempted = asyncio.Event(), asyncio.Event()
-        runtime, platform = AsyncMock(), AsyncMock()
-        runtime.snapshot.return_value = {"reachable": True, "scenarios": []}
-        runtime.execute.return_value = {"releases": []}
-        command = {"id": str(uuid.uuid4()), "action": "releases", "scenario": "fixture"}
-        attempts = 0
-
-        async def request(path, *, body):
-            nonlocal attempts
-            if path.endswith("/result"):
-                attempts += 1
-                attempted.set()
-                raise aiohttp.ClientConnectionError
-            return {"protocol": 1, "command": command}
-
-        platform.request.side_effect = request
-        task = asyncio.create_task(Connector(platform, runtime, state).run(stop))
-        try:
-            await asyncio.wait_for(attempted.wait(), 1)
-            await asyncio.sleep(0.1)
-            assert attempts == 1, "A completed operation must not wake network backoff repeatedly"
-            assert runtime.execute.await_count == 1
-            assert dict(state.pending())[command["id"]]["state"] == "succeeded"
-        finally:
-            stop.set()
-            await asyncio.wait_for(task, 1)
-            state.close()
-
-    asyncio.run(run())
-
-
-def test_slow_operation_keeps_heartbeats_and_stops_without_replay(tmp_path):
-    async def run():
-        state = ConnectorState(tmp_path)
-        stop = asyncio.Event()
-        runtime, platform = AsyncMock(), AsyncMock()
-        runtime.snapshot.return_value = {"reachable": True, "scenarios": []}
-        command = {"id": str(uuid.uuid4()), "action": "train", "scenario": "fixture"}
-        polls = []
-
-        async def execute(_command):
-            await asyncio.Event().wait()
-
-        async def request(path, *, body):
-            polls.append(body["ready"])
-            if len(polls) == 1:
-                return {"protocol": 1, "command": command}
-            stop.set()
-            return {"protocol": 1, "command": None}
-
-        runtime.execute.side_effect = execute
-        platform.request.side_effect = request
-        try:
-            await asyncio.wait_for(Connector(platform, runtime, state).run(stop), 5)
-            assert polls == [True, False]
-            assert runtime.execute.await_count == 1
-            assert dict(state.pending())[command["id"]]["state"] == "unknown"
-        finally:
-            state.close()
+            assert received_bytes == total_chunks * len(chunk)
 
     asyncio.run(run())
