@@ -76,12 +76,11 @@ def _connect_training_runtime(
     settings: ServiceConfig,
     *,
     model_path: str,
-    max_staleness: int,
     connector: Any = None,
 ) -> tuple[TrainingRuntime, InferenceRuntime]:
     """Build the selected integration's runtime, independently of its process topology."""
     backend = training_deployment_for(settings.training_backend)
-    runtime_config = backend.runtime_config(asdict(settings), max_staleness=max_staleness, connector=connector)
+    runtime_config = backend.runtime_config(asdict(settings), connector=connector)
     built = RuntimeRegistry().build(runtime_config, model_path=model_path)
     pair = runtime_pair(built)
     if pair is None:
@@ -127,16 +126,8 @@ def _training_recipe(
         recipe_config["evaluation"] = dict(settings.evaluation_settings)
     if settings.pipeline_settings is not None:
         recipe_config["pipeline"] = dict(settings.pipeline_settings)
-    # The runtime must exist before the recipe can be constructed, so
-    # resolve the shared runtime-owned config field from the same inputs first.
-    # WeightTrainingRecipe then verifies that both resolved the same value.
     resolved_recipe_data = resolve_config_field_values(recipe_type, recipe_config.get("data", {}), env)
-    training_runtime, runtime = _connect_training_runtime(
-        settings,
-        model_path=model_path,
-        max_staleness=resolved_recipe_data["max_staleness"],
-        connector=connector,
-    )
+    training_runtime, runtime = _connect_training_runtime(settings, model_path=model_path, connector=connector)
     try:
         return recipe_type.from_resolved_config(
             recipe_config, resolved_recipe_data, environ=env, runtime=runtime, training_runtime=training_runtime
@@ -155,17 +146,15 @@ def composed_training_recipe(
     recipe_type: type[Recipe],
     config: dict[str, Any],
     weight_type: type[WeightTrainingRecipe],
-    weight_config: Mapping[str, Any],
     settings: ServiceConfig,
     env: Mapping[str, str],
     connector: Any,
 ) -> Recipe:
     """Build a recipe that trains weights through one of its components, on the selected backend runtime.
 
-    The component's own data resolves the staleness window the runtime is
-    connected with, and the pair reaches every component of the recipe. The
-    deployment's model path is every component's model, and a top level
-    evaluation section belongs to the component that trains.
+    The runtime pair reaches every component of the recipe. The deployment's
+    model path is every component's model, and a top level evaluation section
+    belongs to the component that trains.
     """
     model_path = _require_non_empty(settings.model_path, "reef.model_path")
     if config.get("runtime"):
@@ -178,13 +167,7 @@ def composed_training_recipe(
             f"reef.{unknown[0]} is not a setting of {recipe_type.__name__}; a component's settings go under "
             "components.<name>.config"
         )
-    resolved_weight_data = resolve_config_field_values(weight_type, weight_config.get("data", {}), env)
-    training_runtime, runtime = _connect_training_runtime(
-        settings,
-        model_path=model_path,
-        max_staleness=resolved_weight_data["max_staleness"],
-        connector=connector,
-    )
+    training_runtime, runtime = _connect_training_runtime(settings, model_path=model_path, connector=connector)
     config = {**config, "model": {**dict(config.get("model", {})), "path": model_path}}
     framework_sections = {
         key: value
@@ -241,9 +224,8 @@ def _serving_recipe(selected: str, settings: ServiceConfig, env: Mapping[str, st
         recipe_type = recipe_class_for(selected)
         weight_training = None if recipe_type is None else recipe_type.select_weight_training(config)
         if weight_training is not None and recipe_type is not None:
-            weight_type, weight_config = weight_training
             return composed_training_recipe(
-                selected, recipe_type, config, weight_type, weight_config, settings, env, connector
+                selected, recipe_type, config, weight_training[0], settings, env, connector
             )
         refuse_weight_training_sections(settings)
         if settings.pipeline_settings is not None:
