@@ -413,11 +413,11 @@ class WeightTrainingRecipe(Recipe):
     and obtains its loss family from this hook; deployments do not repeat that
     binding in an environment variable.
 
-    ``max_staleness`` is how many versions a sample may lag behind the version
-    that the scenario serves and still train. Zero keeps exact-version
-    training. The default :meth:`build` gives it to the pipeline as
-    ``PipelineContext.max_staleness``; the record-to-record stage drops the
-    data that lags more.
+    ``max_staleness`` is the number of versions that a sample can lag behind
+    the version that the scenario serves and still train. Zero keeps
+    exact-version training. The default :meth:`build` gives the value to the
+    pipeline as ``PipelineContext.max_staleness``. The record-to-record stage
+    drops the data that lags more.
 
     ``candidate_evaluation`` is framework-owned configuration derived from an
     optional top-level ``evaluation`` section. The plugin class it names builds one

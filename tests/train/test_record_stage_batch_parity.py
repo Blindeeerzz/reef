@@ -205,7 +205,7 @@ class StreamRun:
                     self.records.append(step)
                 elif isinstance(step, Serve):
                     self.serving_runtime_load_id = step.runtime_load_id
-                    trainer.pipeline.observe_serving_version(step.runtime_load_id)
+                    trainer.pipeline.observe_serving_runtime_load_id(step.runtime_load_id)
                 elif step == CYCLE:
                     self.drain(trainer)
                 elif step == RELOAD:

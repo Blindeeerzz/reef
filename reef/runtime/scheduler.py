@@ -11,8 +11,9 @@ Backbone objects, in the order a training step meets them:
 - :class:`InferenceMemory` — pairs a colocated engine's memory releases with
   their resumes.
 
-The staleness check is not here: the record-to-record stage drops stale
-training data before a batch forms (``reef.record2record.staleness``).
+The record-to-record stage checks staleness before a batch forms
+(``reef.record2record.staleness``). The jobs here carry each sample's
+producing runtime load ID only as training metadata.
 """
 
 from __future__ import annotations
@@ -132,7 +133,7 @@ def training_job_id(payload: Mapping[str, Any]) -> str:
     identity.pop("scenario_step", None)
     # The processor numbers batches per process; a reload numbers the same rows again.
     identity.pop("batch_id", None)
-    # A retry after a newer publication trains the same batch; it must not repeat an optimizer step.
+    # A retry after a newer publication trains the same batch. It must not repeat an optimizer step.
     identity.pop("parent_runtime_load_id", None)
     encoded = json.dumps(identity, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -298,7 +299,7 @@ class RuntimeScheduler:
             algorithm_state,
             scheduling,
             scenario_step,
-            serving_runtime_load_id=self.inference_runtime.current_runtime_load_id(),
+            parent_runtime_load_id=self.inference_runtime.current_runtime_load_id(),
         )
 
     def train_candidate(self, payload: Mapping[str, Any]) -> ModelCandidate:

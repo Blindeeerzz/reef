@@ -100,7 +100,7 @@ class TinkerTrainingRuntime(TrainingRuntime):
         scheduling: StepScheduling,
         scenario_step: int,
         *,
-        serving_runtime_load_id: str | None = None,
+        parent_runtime_load_id: str | None = None,
     ) -> PreparedTrainingStep:
         prepared = prepare_tinker_step(
             batch,
@@ -109,7 +109,7 @@ class TinkerTrainingRuntime(TrainingRuntime):
             scheduling,
             batch_size=self._config.batch_size,
             kl_coef=self._config.kl_coef,
-            runtime_load_id=serving_runtime_load_id,
+            runtime_load_id=parent_runtime_load_id,
         )
         if prepared.payload is None:
             return prepared

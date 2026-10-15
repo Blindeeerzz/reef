@@ -55,11 +55,11 @@ The check has three parts:
    +----------------------------+--------------------------------------------+
    | Durable head               | The runtime's ``current_runtime_load_id``  |
    +----------------------------+--------------------------------------------+
-   | Bootstrap head             | ``None``: the check does not run           |
+   | Initial head (no version)  | ``None``: the check does not run           |
    +----------------------------+--------------------------------------------+
 
-   ``Record2Record.observe_serving_version`` appends each new version to a
-   list. A version of another incarnation starts the list again.
+   ``Record2Record.observe_serving_runtime_load_id`` adds each new version to
+   a list. A version of another incarnation starts the list again.
 2. **Lag.** The lag of a producing version is the number of versions that
    this scenario served after it. The same rule applies to full weights and to
    per-scenario LoRA. A sample is stale when its lag exceeds
@@ -115,8 +115,8 @@ receipt.
 4. Trade-offs
 -------------
 
-- **Rebuilt trainer.** The served-version list is memory. A trainer that
-  rebuilds knows only the versions that it sees after the rebuild. Retained
+- **Rebuilt trainer.** The list of served versions is only in memory. A
+  trainer that rebuilds knows only the versions that it sees after the rebuild. Retained
   samples from earlier versions are stale, even when they are within the
   window.
 - **No execution fence.** Nothing checks the window between batch build and

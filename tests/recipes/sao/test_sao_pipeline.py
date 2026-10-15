@@ -459,7 +459,7 @@ class _StubTrainingRuntime(StubTrainingRuntime):
         return self._served_version
 
     def prepare_training_step(
-        self, batch, objective, algorithm_state, scheduling, scenario_step, *, serving_runtime_load_id=None
+        self, batch, objective, algorithm_state, scheduling, scenario_step, *, parent_runtime_load_id=None
     ):
         assert isinstance(batch, TrainingBatch)
         sample = batch.items[0]

@@ -377,7 +377,7 @@ class Trainer:
         has to advance its record cursor) or when the pipeline is not yet
         ready to produce a batch. ``base_release_id`` names the release served
         now; a batch reserved by this call is prepared against it.
-        ``serving_runtime_load_id`` is the version served now, for the staleness check.
+        ``serving_runtime_load_id`` is the version that serves the scenario now, for the staleness check.
         """
         if self.dispatched:
             raise RuntimeError("dispatched candidate backends must reserve a batch before execution")
@@ -482,21 +482,19 @@ class Trainer:
         with self._lock:
             return self.reserve_batch(base_release_id, serving_runtime_load_id)
 
-    def reserve_batch(
-        self, base_release_id: str | None, serving_runtime_load_id: str | None = None
-    ) -> TrainingBatch | None:
+    def reserve_batch(self, base_release_id: str | None, serving_runtime_load_id: str | None) -> TrainingBatch | None:
         """Return the reserved batch, or reserve the next one when the pipeline is ready. The caller holds the lock.
 
         The reservation is prepared against ``base_release_id`` unless it already names a release.
-        ``serving_runtime_load_id`` is the version served now: the pipeline's
-        staleness check measures the lag of each held set against it.
+        ``serving_runtime_load_id`` is the version that serves the scenario now.
+        The staleness check of the pipeline measures the lag of each held set against it.
         """
         if self._pending is not None:
             if self._pending.base_release_id is None:
                 self._pending.base_release_id = base_release_id
             return self._pending.batch
         if serving_runtime_load_id is not None:
-            self._pipeline.observe_serving_version(serving_runtime_load_id)
+            self._pipeline.observe_serving_runtime_load_id(serving_runtime_load_id)
         self._consume_data()
         if not self._pipeline.ready():
             return None

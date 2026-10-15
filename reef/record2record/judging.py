@@ -187,7 +187,7 @@ class JudgingRecord2Record(Record2Record):
             self.tracked.pop(agent_record_id, None)
             self.in_flight.pop(agent_record_id, None)
             self.pool.remove(agent_record_id)
-            self.producing_versions.pop(agent_record_id, None)
+            self.producing_runtime_load_ids.pop(agent_record_id, None)
 
     def operational_metrics(self) -> Mapping[str, float | int]:
         reserved = len(self.pool.reserved_sets())

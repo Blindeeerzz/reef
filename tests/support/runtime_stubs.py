@@ -46,7 +46,7 @@ class StubTrainingRuntime(TrainingRuntime):
         scheduling: StepScheduling,
         scenario_step: int,
         *,
-        serving_runtime_load_id: str | None = None,
+        parent_runtime_load_id: str | None = None,
     ) -> PreparedTrainingStep:
         raise NotImplementedError("StubTrainingRuntime does not prepare training steps")
 

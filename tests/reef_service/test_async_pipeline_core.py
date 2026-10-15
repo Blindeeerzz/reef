@@ -66,7 +66,7 @@ class DurableRuntime(StubTrainingRuntime):
         return self.serving_version
 
     def prepare_training_step(
-        self, batch, objective, algorithm_state, scheduling, scenario_step, *, serving_runtime_load_id=None
+        self, batch, objective, algorithm_state, scheduling, scenario_step, *, parent_runtime_load_id=None
     ):
         sample = batch.items[0]
         payload = {

@@ -303,9 +303,9 @@ class TrainingPipeline:
         self.record2record.ingest(item)
         self.make_formed_tasks()
 
-    def observe_serving_version(self, runtime_load_id: str) -> None:
-        """Give the record stage the version that the scenario serves now, for its staleness check."""
-        self.record2record.observe_serving_version(runtime_load_id)
+    def observe_serving_runtime_load_id(self, runtime_load_id: str) -> None:
+        """Give the record stage the runtime load ID that serves the scenario now, for its staleness check."""
+        self.record2record.observe_serving_runtime_load_id(runtime_load_id)
 
     # ------------------------------------------------------------ batch cycle
     #

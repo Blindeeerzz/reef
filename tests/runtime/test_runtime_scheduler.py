@@ -38,9 +38,9 @@ class CheckpointTrainer(TrainingRuntime):
         return self.journal
 
     def prepare_training_step(
-        self, batch, objective, algorithm_state, scheduling, scenario_step, *, serving_runtime_load_id=None
+        self, batch, objective, algorithm_state, scheduling, scenario_step, *, parent_runtime_load_id=None
     ):
-        self.calls.append(("prepare", serving_runtime_load_id))
+        self.calls.append(("prepare", parent_runtime_load_id))
         return PreparedTrainingStep("train", algorithm_state, {}, {"scenario_step": scenario_step})
 
     def train_candidate(self, payload):

@@ -44,7 +44,7 @@ class WeightRuntime(ServingRuntime):
 
     @abstractmethod
     def current_runtime_load_id(self) -> str | None:
-        """The version that Reef acknowledged as published; an update that is not committed yet does not count."""
+        """Return the version that Reef acknowledged as published. An update that is not committed does not count."""
 
     @abstractmethod
     def restore_checkpoint(self, artifact: Artifact) -> str: ...
@@ -85,7 +85,7 @@ class ArtifactLoader(ABC):
     def load(self, artifact: Artifact, runtime: ServingRuntime | None) -> str: ...
 
     def served_runtime_load_id(self, artifact: Artifact, runtime: ServingRuntime | None) -> str | None:
-        """The runtime load ID under which ``runtime`` serves the committed ``artifact``; None when it cannot tell."""
+        """Return the runtime load ID that serves the committed ``artifact``, or None when it is unknown."""
         return None
 
 
@@ -417,7 +417,7 @@ class Surface:
         return checkpoint if loader is None else loader.recover(current, checkpoint, runtime)
 
     def served_runtime_load_id(self, artifact: Artifact, runtime: ServingRuntime | None) -> str | None:
-        """The runtime load ID under which ``runtime`` serves the committed release; None without a loader."""
+        """Return the runtime load ID that serves the committed release, or None when no component has a loader."""
         name = self.loader_component
         if name is None:
             return None

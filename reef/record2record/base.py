@@ -42,10 +42,11 @@ class Record2Record(ABC, Plugin):
     sets (``consume``). The pool applies the stage's selection policy. The
     stage never calls the pipeline.
 
-    The stage also runs the staleness check, the only check of how far the
-    training data lags behind the weights. The pipeline gives it each version
-    that the scenario serves (``observe_serving_version``) and asks it to drop
-    the held sets that are too many versions behind (``drop_stale_sets``).
+    The stage also runs the staleness check. No other part of Reef checks how
+    far the training data lags behind the weights. The pipeline gives the stage
+    each version that the scenario serves (``observe_serving_runtime_load_id``).
+    Then it tells the stage to drop the held sets that are too many versions
+    behind (``drop_stale_sets``).
 
     A record that the stage ends, for example a record that can no longer
     train, appears in ``releasable_record_ids``. The trainer adds those IDs to
@@ -79,7 +80,7 @@ class Record2Record(ABC, Plugin):
         #: Sets formed since the last ``take_formed``, in the order they formed.
         self.formed: list[RecordSet] = []
         #: The runtime load IDs that produced each held formed set's training data, by formed set ID.
-        self.producing_versions: dict[Hashable, frozenset[str | None]] = {}
+        self.producing_runtime_load_ids: dict[Hashable, frozenset[str | None]] = {}
         #: The versions that the scenario served, oldest first. The last one is the version that it serves now.
         self.served_runtime_load_ids: list[str] = []
 
@@ -109,10 +110,10 @@ class Record2Record(ABC, Plugin):
         """Keep or end a formed set from what the task stage made of it.
 
         ``producing_runtime_load_ids`` are the versions that produced the
-        set's training data. The staleness check reads them.
+        training data of the set. The staleness check reads them.
         """
         if status is TaskStatus.READY:
-            self.producing_versions[record_set.set_id] = producing_runtime_load_ids
+            self.producing_runtime_load_ids[record_set.set_id] = producing_runtime_load_ids
             self.accept(record_set)
         elif status is TaskStatus.SKIPPED:
             self.reject(record_set)
@@ -132,16 +133,16 @@ class Record2Record(ABC, Plugin):
         """Return the IDs of the formed sets that ended since the last call. The pipeline forgets their tasks."""
         ended, self.ended_set_ids = frozenset(self.ended_set_ids), set()
         for set_id in ended:
-            self.producing_versions.pop(set_id, None)
+            self.producing_runtime_load_ids.pop(set_id, None)
         return ended
 
     # ------------------------------------------------------------- staleness
 
-    def observe_serving_version(self, runtime_load_id: str) -> None:
-        """Add the version that the scenario serves now, if it changed.
+    def observe_serving_runtime_load_id(self, runtime_load_id: str) -> None:
+        """Add the version that the scenario serves now, if the version changed.
 
-        A version of another incarnation starts the list again: the engine
-        restarted, and no earlier version can train.
+        A version of another incarnation starts the list again. The engine
+        restarted, so no earlier version can train.
         """
         served = self.served_runtime_load_ids
         if served and served[-1] == runtime_load_id:
@@ -155,12 +156,12 @@ class Record2Record(ABC, Plugin):
     def drop_stale_sets(self, max_staleness: int) -> None:
         """End the held sets whose training data is more than ``max_staleness`` versions behind.
 
-        The check does not run while a batch is reserved: the batch references held sets.
+        The check does not run while a batch is reserved, because the batch refers to held sets.
         """
         if self.pool.reserved is not None:
             return
         for record_set in stale_sets(
-            self.pool.sets(), self.producing_versions, self.served_runtime_load_ids, max_staleness
+            self.pool.sets(), self.producing_runtime_load_ids, self.served_runtime_load_ids, max_staleness
         ):
             self.drop_held_set(record_set)
 

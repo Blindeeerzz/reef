@@ -1,4 +1,4 @@
-"""The staleness check: find held sets whose training data is too many published versions behind."""
+"""The staleness check: find the held sets whose training data is too many versions behind."""
 
 from __future__ import annotations
 
@@ -32,19 +32,20 @@ def producing_runtime_load_ids(tasks: Sequence[TrainDataItem]) -> frozenset[str 
 
 def stale_sets(
     record_sets: Sequence[RecordSet],
-    producing_versions: Mapping[Hashable, frozenset[str | None]],
+    producing_runtime_load_ids_by_set: Mapping[Hashable, frozenset[str | None]],
     served_runtime_load_ids: Sequence[str],
     max_staleness: int,
 ) -> tuple[RecordSet, ...]:
-    """Return the sets whose training data is more than ``max_staleness`` publications behind.
+    """Return the sets whose training data is more than ``max_staleness`` versions behind.
 
-    ``served_runtime_load_ids`` lists the versions that the scenario served, oldest
-    first; the last one is the version that it serves now. The lag of a version is
-    the number of versions that the scenario served after it. A set is stale when
-    one of its formed sets has a version that is not in the list, or that lags by
-    more than ``max_staleness``. With ``max_staleness`` 0, only data of the
-    current version trains. An empty list means that the serving version is
-    unknown, and no set is stale.
+    ``served_runtime_load_ids`` lists the versions that the scenario served,
+    oldest first. The last one is the version that it serves now. The lag of a
+    version is the number of versions that the scenario served after it.
+
+    A set is stale when one of its formed sets has a version that is not in the
+    list, or a version that lags by more than ``max_staleness``. With
+    ``max_staleness`` 0, only data of the current version trains. An empty list
+    means that the serving version is unknown, so no set is stale.
     """
     if not served_runtime_load_ids:
         return ()
@@ -55,7 +56,7 @@ def stale_sets(
         versions = (
             version
             for formed_set_id in record_set.formed_set_ids()
-            for version in producing_versions.get(formed_set_id, frozenset())
+            for version in producing_runtime_load_ids_by_set.get(formed_set_id, frozenset())
         )
         for version in versions:
             position = None if version is None else positions.get(version)

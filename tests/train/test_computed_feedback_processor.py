@@ -173,10 +173,10 @@ def test_refused_submission_retires_immediately() -> None:
 
 def test_judged_sets_behind_the_serving_version_drop_before_a_batch() -> None:
     processor, worker = _engine(batch_size=2)
-    processor.observe_serving_version("v1")
+    processor.observe_serving_runtime_load_id("v1")
     processor.ingest(_record("old", track=True, version="v1"))
     processor.ingest(_record("done1", completes="old"))
-    processor.observe_serving_version("v2")
+    processor.observe_serving_runtime_load_id("v2")
     processor.ingest(_record("new", track=True, version="v2"))
     processor.ingest(_record("done2", completes="new"))
     worker.push(_Judgment("new"))
@@ -190,7 +190,7 @@ def test_judged_sets_within_max_staleness_of_the_serving_version_stay() -> None:
     worker = _FakeWorker()
     processor = _ToyProcessor(PipelineContext("s", max_staleness=1), worker=worker, batch_size=3)
     for name, version in (("v3", "e:3"), ("v4", "e:4"), ("v5", "e:5")):
-        processor.observe_serving_version(version)
+        processor.observe_serving_runtime_load_id(version)
         processor.ingest(_record(name, track=True, version=version))
         processor.ingest(_record(f"done-{name}", completes=name))
         worker.push(_Judgment(name))

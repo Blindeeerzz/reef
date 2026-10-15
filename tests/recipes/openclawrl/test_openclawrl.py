@@ -212,10 +212,10 @@ def test_untrainable_verdicts_and_bad_tensors_are_terminal() -> None:
 def test_candidates_behind_the_serving_version_drop_from_pending_candidates() -> None:
     worker = FakeWorker()
     processor = _processor(batch_size=2, worker=worker)
-    processor.observe_serving_version("v1")
+    processor.observe_serving_runtime_load_id("v1")
     processor.ingest(_turn("old", Q1, runtime_load_id="v1"))
     processor.ingest(_turn("cont1", _successor(Q1, "ok")))
-    processor.observe_serving_version("v2")
+    processor.observe_serving_runtime_load_id("v2")
     processor.ingest(_turn("new", Q2, runtime_load_id="v2"))
     processor.ingest(_turn("cont2", _successor(Q2, "ok")))
     worker.push(TurnJudgment("old", score=1.0, teacher_cands=ANCHOR))

@@ -226,7 +226,7 @@ class Scenario:
             )
 
     def serving_runtime_load_id(self) -> str | None:
-        """The runtime load ID under which the committed release serves requests; None when it cannot tell."""
+        """Return the runtime load ID that serves the committed release, or None when it is unknown."""
         artifact = Artifact(self.current_artifact_ref(), self.repository)
         return self._binding.surface.served_runtime_load_id(artifact, self._binding.runtime)
 

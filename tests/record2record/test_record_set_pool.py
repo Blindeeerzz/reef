@@ -87,7 +87,7 @@ def test_staleness_check_measures_lag_in_versions_the_scenario_served() -> None:
             ("current", "one-behind", "two-behind", "never-served", "unknown", "mixed", "rolled-out"), start=1
         )
     )
-    producing_versions = {
+    producing_runtime_load_ids_by_set = {
         "current": frozenset({"e:5"}),
         "one-behind": frozenset({"e:4"}),
         "two-behind": frozenset({"e:3"}),
@@ -99,16 +99,18 @@ def test_staleness_check_measures_lag_in_versions_the_scenario_served() -> None:
     # The engine sequence skips e:2: lag counts the scenario's own versions, not sequence numbers.
     served = ("e:1", "e:3", "e:4", "e:5")
     stale = {"two-behind", "never-served", "unknown", "mixed"}
-    assert {stale_set.set_id for stale_set in stale_sets(record_sets, producing_versions, served, 1)} == stale
+    assert {
+        stale_set.set_id for stale_set in stale_sets(record_sets, producing_runtime_load_ids_by_set, served, 1)
+    } == stale
     # Window 0 keeps only data of the current version, and data that the algorithm rolls out.
-    assert {stale_set.set_id for stale_set in stale_sets(record_sets, producing_versions, served, 0)} == stale | {
-        "one-behind"
-    }
+    assert {
+        stale_set.set_id for stale_set in stale_sets(record_sets, producing_runtime_load_ids_by_set, served, 0)
+    } == stale | {"one-behind"}
     # An unknown serving version checks nothing.
-    assert stale_sets(record_sets, producing_versions, (), 0) == ()
+    assert stale_sets(record_sets, producing_runtime_load_ids_by_set, (), 0) == ()
 
 
-def test_producing_versions_come_from_every_sample_and_token_span() -> None:
+def test_producing_runtime_load_ids_come_from_every_sample_and_token_span() -> None:
     spans = (
         RuntimeLoadSpan(start=0, end=1, runtime_load_id="e:1"),
         RuntimeLoadSpan(start=1, end=2, runtime_load_id="e:2"),
@@ -132,8 +134,8 @@ def test_the_stage_drops_held_sets_behind_the_serving_version_but_not_a_reserved
             TaskStatus.READY,
             frozenset({version}),
         )
-    stage.observe_serving_version("e:1")
-    stage.observe_serving_version("e:2")
+    stage.observe_serving_runtime_load_id("e:1")
+    stage.observe_serving_runtime_load_id("e:2")
     stage.pool.reserve(2)
     stage.drop_stale_sets(0)
     assert len(stage.pool) == 2
@@ -143,11 +145,11 @@ def test_the_stage_drops_held_sets_behind_the_serving_version_but_not_a_reserved
     assert [held.set_id for held in stage.pool.sets()] == ["new"]
     assert stage.take_ended() == frozenset({"old"})
     assert "old" in stage.releasable_record_ids()
-    assert set(stage.producing_versions) == {"new"}
+    assert set(stage.producing_runtime_load_ids) == {"new"}
 
 
 def test_a_serving_version_of_another_incarnation_restarts_the_served_versions() -> None:
     stage = InferenceRecord2Record()
     for version in ("e:1", "e:2", "e:2", "f:0"):
-        stage.observe_serving_version(version)
+        stage.observe_serving_runtime_load_id(version)
     assert stage.served_runtime_load_ids == ["f:0"]

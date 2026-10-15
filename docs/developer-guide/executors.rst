@@ -728,11 +728,15 @@ Slime, the startup preflight's error lists what the job left on disk, and
 gives the recovery. A
 checkpointed or completed job replays without preparing or training again.
 Resource cleanup failure after ``CHECKPOINT`` also replays the recorded result.
-A job's identity is its batch: the scenario step is not
-part of it, since the other components of a composite advance that step while
-the job is out, nor is the processor's batch number, which a reload starts
-again, nor is the version that the job trains from, which a newer publication
-changes before a retry. Upgrade Reef while no job is out: ``GET /reef/status`` shows
+A job's identity is its batch. These values are not part of it:
+
+* The scenario step. The other components of a composite advance that step
+  while the job is out.
+* The processor's batch number. A reload starts it again.
+* The version that the job trains from. A newer publication can change it
+  before a retry.
+
+Upgrade Reef while no job is out: ``GET /reef/status`` shows
 ``training_job`` as ``null``. A marker an earlier release left for a job still
 out names it by that release's identity, so the job is refused with
 ``operator recovery required``, and the error names the marker's job and this

@@ -122,20 +122,26 @@ A record that the stage ends, for example a report in a taken slot or a set
 that is too stale, appears in ``releasable_record_ids()``. The next commit
 names it, so the record never trains after a restart.
 
-Every record stage runs the staleness check, and nothing else in Reef checks
-the version of training data. When the scenario reserves a batch, it gives the
-pipeline the runtime load ID that serves its committed release
-(``observe_serving_version``). The stage keeps the versions that the scenario
-served, oldest first. Before each batch, it ends every held set whose data
-comes from a version that is more than ``max_staleness`` versions behind the
-current one (``drop_stale_sets``). The lag counts the versions of this
-scenario only, so another scenario's publication on a shared engine does not
-age the data. A sample without a recorded version, or from a version that the
-stage did not see, is stale. A rebuilt trainer knows only the versions that it
-sees after the rebuild. While the serving version is unknown, for example
-before the first publication, nothing is stale. A stage that holds combined
-sets overrides ``drop_held_set`` to end a whole set, as ``ReportRecord2Record``
-does for a ready group.
+Every record stage runs the staleness check. No other part of Reef checks the
+version of training data. The check has these steps:
+
+1. When the scenario reserves a batch, it gives the pipeline the runtime load
+   ID that serves its committed release (``observe_serving_runtime_load_id``).
+   The stage keeps these versions, oldest first.
+2. Before each batch, the stage ends every held set that has data more than
+   ``max_staleness`` versions behind the current version (``drop_stale_sets``).
+
+The lag counts only the versions of this scenario. A publication of another
+scenario on a shared engine does not age the data. These rules also apply:
+
+* A sample without a recorded version is stale.
+* A sample from a version that the stage did not see is stale. A rebuilt
+  trainer knows only the versions that it sees after the rebuild.
+* While the serving version is unknown, for example before the first
+  publication, no data is stale.
+
+A stage that holds combined sets overrides ``drop_held_set`` to end a whole
+set. ``ReportRecord2Record`` does this for a ready group.
 
 .. list-table::
    :header-rows: 1

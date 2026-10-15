@@ -821,7 +821,7 @@ class TrainingRuntime(ABC):
         scheduling: StepScheduling,
         scenario_step: int,
         *,
-        serving_runtime_load_id: str | None = None,
+        parent_runtime_load_id: str | None = None,
     ) -> PreparedTrainingStep:
         """Turn one reserved batch into backend work, or a state-only skip.
 
@@ -829,7 +829,7 @@ class TrainingRuntime(ABC):
         selected for this job, and ``scheduling`` the recipe's step schedule;
         the backend resolves the objective in its own process, refuses a method
         it cannot train, and records the method in the job's payload.
-        ``serving_runtime_load_id`` is the published version that the job trains from, if known.
+        ``parent_runtime_load_id`` is the published version that the job trains from, if known.
         """
 
     def execute_training_job(self, payload: Mapping[str, Any]) -> TrainingJobResult:

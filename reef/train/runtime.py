@@ -49,7 +49,7 @@ class ExecutorTrainingRuntime(TrainingRuntime):
         scheduling: StepScheduling,
         scenario_step: int,
         *,
-        serving_runtime_load_id: str | None = None,
+        parent_runtime_load_id: str | None = None,
     ) -> PreparedTrainingStep:
         prepared = self._train_group_handle.prepare_training_step(batch, method, algorithm_state, scheduling)
         if not isinstance(prepared, PreparedTrainingStep):
@@ -62,7 +62,7 @@ class ExecutorTrainingRuntime(TrainingRuntime):
             raise TrainingRuntimeError("non-skip training preparation must carry a payload")
         payload = dict(prepared.payload)
         samples = _ordered_samples(batch, payload.pop("source_rows", None))
-        payload.update(self.version_fields(samples, serving_runtime_load_id))
+        payload.update(self.version_fields(samples, parent_runtime_load_id))
         # The backend numbers its own checkpoints; the job records the scenario step it trains.
         payload["scenario_step"] = scenario_step
         return PreparedTrainingStep(
@@ -72,10 +72,11 @@ class ExecutorTrainingRuntime(TrainingRuntime):
             metrics=prepared.metrics,
         )
 
-    def version_fields(self, samples: Sequence[TrajectoryItem], serving_runtime_load_id: str | None) -> dict[str, Any]:
-        """The versions of one job: each sample's producing versions, and the version that the job trains from.
+    def version_fields(self, samples: Sequence[TrajectoryItem], parent_runtime_load_id: str | None) -> dict[str, Any]:
+        """Return the versions of one job: the producing versions of each sample, and the parent version.
 
-        They are training metadata, not a check. The record-to-record stage
+        The parent version is the version that the job trains from. These
+        fields are training metadata, not a check. The record-to-record stage
         dropped stale samples before the batch formed.
         """
         spans = [
@@ -90,8 +91,8 @@ class ExecutorTrainingRuntime(TrainingRuntime):
         }
         if any(spans):
             fields["producing_runtime_load_spans"] = spans
-        if serving_runtime_load_id is not None:
-            fields["parent_runtime_load_id"] = serving_runtime_load_id
+        if parent_runtime_load_id is not None:
+            fields["parent_runtime_load_id"] = parent_runtime_load_id
         return fields
 
     def execute_training_job(self, payload: Mapping[str, Any]) -> TrainingJobResult:
