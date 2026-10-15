@@ -3,7 +3,7 @@
 # reports and evaluates against the Reef stack this script serves. Setup
 # (once): download the student and teacher checkpoints and prepare the data as
 # the README describes. State goes to $OPD_RUN_DIR; the campaign's responses,
-# scores and curve to $OPD_RUN_DIR/results.
+# scores to $OPD_RUN_DIR/results.
 #
 #   ./run.sh                                 the protocol: 60 updates, evaluated every 5
 #   OPD_STEPS=1 OPD_EVAL_REPEATS=1 ./run.sh  one update and one sample per question, to check the stack
@@ -64,5 +64,3 @@ python run.py --config "$OPD_CONFIG" --url "http://127.0.0.1:$REEF_PORT" \
   --steps "$OPD_STEPS" --prompts-per-step 64 --samples-per-prompt 4 \
   --train-tokens 16384 --eval-tokens "$OPD_EVAL_TOKENS" --eval-repeats "${OPD_EVAL_REPEATS:-16}" \
   --eval-every "$OPD_EVAL_EVERY" --concurrency 128 "$@"
-python analyze.py "$OPD_RUN_DIR/results" --final-step "$OPD_STEPS" --eval-every "$OPD_EVAL_EVERY" \
-  --target-improvement 0.03 --title "Qwen3-8B SFT student, Qwen3-32B teacher engine, LoRA OPD"

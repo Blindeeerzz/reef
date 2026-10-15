@@ -282,8 +282,8 @@ class Campaign:
     def reuse_baseline(self, questions: list[Question]) -> None:
         """Take step 0 from an earlier campaign's evaluation of the same initial weights, seeds and budget.
 
-        The reused rows keep their own release id, so ``analyze.py`` still sees
-        a baseline release distinct from every trained checkpoint.
+        The reused rows keep their own release id, so the baseline release stays
+        distinct from every trained checkpoint.
         """
         target = self.output / "eval-0000.jsonl"
         metric_path = self.output / "eval-0000.metrics.json"
