@@ -42,6 +42,11 @@ class ServiceConfig:
     tokens: tuple[str, ...] = config_option(
         (), public_path=("reef", "tokens"), help="Accepted bearer tokens as a JSON/YAML list."
     )
+    allow_unauthenticated: bool = config_option(
+        False,
+        public_path=("reef", "allow_unauthenticated"),
+        help="Serve without bearer tokens on an address that other machines can reach.",
+    )
     served_url: str | None = config_option(
         None,
         public_path=("reef", "served_url"),

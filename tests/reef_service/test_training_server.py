@@ -211,16 +211,21 @@ def test_cookbook_configs_launch_internal_service_from_reef_settings(
     config_path = deploy.PROJECT_ROOT / config_name
     if not config_path.exists():
         pytest.skip("repo-owned stack: shipped with the repo, not with the package")
-    monkeypatch.delenv("REEF_TOKEN", raising=False)
     from tests.support.config_helpers import load_deployment
 
+    # The stacks bind every address, so they refuse to start without a token.
+    monkeypatch.delenv("REEF_TOKEN", raising=False)
+    with pytest.raises(deploy.DeployConfigError, match=r"reef\.tokens is empty"):
+        load_deployment(config_path)
+
+    monkeypatch.setenv("REEF_TOKEN", "test-token")
     config = load_deployment(config_path)
     service = next(item for item in config["services"] if item["name"] == "reef")
     args = deploy.service_config_from_mapping(config)
 
     assert service["command"] == [sys.executable, "-m", "reef.service"]
     assert "REEF_TOKEN" not in service.get("env", {})
-    assert args.tokens == ()
+    assert args.tokens == ("test-token",)
     assert args.recipe == recipe
 
 
@@ -233,7 +238,8 @@ def test_cookbook_configs_launch_internal_service_from_reef_settings(
         _example_owned("recipes/openclawrl/examples/openclawrl/serve.yaml"),
     ],
 )
-def test_cookbook_training_configs_leave_max_staleness_unset(relative_path) -> None:
+def test_cookbook_training_configs_leave_max_staleness_unset(relative_path, monkeypatch) -> None:
+    monkeypatch.setenv("REEF_TOKEN", "test-token")
     from tests.support.config_helpers import load_deployment
 
     config = load_deployment(deploy.PROJECT_ROOT / relative_path)
@@ -247,7 +253,7 @@ def test_cookbook_training_configs_leave_max_staleness_unset(relative_path) -> N
     (_example_owned("recipes/openclawrl/examples/openclawrl/serve.yaml"),),
 )
 def test_training_configs_make_checkpoint_budget_mandatory(relative_path, monkeypatch) -> None:
-    monkeypatch.delenv("REEF_TOKEN", raising=False)
+    monkeypatch.setenv("REEF_TOKEN", "test-token")
     from tests.support.config_helpers import load_deployment
 
     config = load_deployment(deploy.PROJECT_ROOT / relative_path)
