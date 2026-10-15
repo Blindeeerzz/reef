@@ -33,6 +33,7 @@ from reef.observability import (
     RollbackExperimentEvent,
     TrainingExperimentContext,
     TrainingExperimentEvent,
+    UsageReporting,
 )
 from reef.recipe.base import Recipe
 from reef.recipe.checkpoint_strategy import CheckpointStrategy, EveryNVersions
@@ -368,12 +369,15 @@ class Dispatcher:
         local_artifact_dir: Path | None = None,
         allow_implicit_creation: bool = True,
         experiment_tracker: ExperimentTracker | None = None,
+        usage_reporting: UsageReporting | None = None,
         scenario_storage: ScenarioStorage,
         hold_local_cycles: bool = False,
     ) -> None:
         """``hold_local_cycles``: run no local cycle until :meth:`open_local_cycles`, for a service whose recipe
-        calls this same service, which does not answer yet while the dispatcher starts."""
+        calls this same service, which does not answer yet while the dispatcher starts. ``usage_reporting``
+        receives the usage of the scenarios' operations; the dispatcher closes it."""
         self._recipe = recipe
+        self.usage_reporting = usage_reporting if usage_reporting is not None else UsageReporting()
         self._storage = scenario_storage
         self._record_retention_lock = Lock()
         self._experiment_tracker = experiment_tracker if experiment_tracker is not None else NullExperimentTracker()
@@ -384,6 +388,7 @@ class Dispatcher:
             scenario_storage=scenario_storage,
             allow_implicit_creation=allow_implicit_creation,
             experiment_tracker=self._experiment_tracker,
+            usage_reporting=self.usage_reporting,
         )
         self._registry.set_training_scenario_callback(self._start_training)
         self._training = _TrainingState()
@@ -889,6 +894,7 @@ class Dispatcher:
         try:
             metrics = current.trainer.operational_metrics()
             metrics.update(current.operations.snapshot())
+            metrics.update(self.usage_reporting.counters())
             with self._training.lock:
                 metrics["training/failed_attempts_total"] = self._training.failure_counts.get(current.name, 0)
                 metrics["training/error"] = int(any(key[0] == current.name for key in self._training.errors))
@@ -1539,6 +1545,7 @@ class Dispatcher:
             self._experiment_tracker.close()
         except Exception:
             logger.exception("experiment tracker failed to close")
+        self.usage_reporting.close()
         if errors:
             raise errors[0]
 
