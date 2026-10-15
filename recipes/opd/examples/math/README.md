@@ -110,7 +110,7 @@ integration check.
 The driver collects a complete batch before submitting any training report,
 checks that every response came from one release, then waits for exactly one
 committed update. Its `--prompts-per-step` times `--samples-per-prompt` must
-equal the recipe's `batch-size`. It refuses an existing output directory or
+equal the deployment's `pipeline.task2batch.config.batch_size`. It refuses an existing output directory or
 scenario unless `--resume` is given.
 
 `run.sh --resume` recovers an interrupted driver against the same live

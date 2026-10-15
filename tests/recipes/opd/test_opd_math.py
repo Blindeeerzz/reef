@@ -26,10 +26,12 @@ def test_only_final_boxed_integer_is_scored(response, expected) -> None:
 
 def test_driver_rejects_batch_mismatch_before_creating_output(tmp_path) -> None:
     config = tmp_path / "serve.yaml"
-    config.write_text("recipe:\n  config:\n    batch-size: 32\ntraining:\n  config:\n    global_batch_size: 32\n")
+    config.write_text(
+        "pipeline:\n  task2batch:\n    config:\n      batch_size: 32\ntraining:\n  config:\n    global_batch_size: 32\n"
+    )
     output = tmp_path / "results"
     args = Namespace(config=config, steps=1, prompts_per_step=512, samples_per_prompt=4, output=output)
-    with pytest.raises(ValueError, match="recipe's batch-size"):
+    with pytest.raises(ValueError, match="pipeline's batch_size"):
         Campaign(args)
     assert not output.exists()
 
@@ -153,7 +155,7 @@ class CampaignService:
 def campaign_args(tmp_path):
     config = tmp_path / "serve.yaml"
     config.write_text(
-        "recipe:\n  config:\n    batch-size: 2\ntraining:\n  config:\n    global_batch_size: 2\n"
+        "pipeline:\n  task2batch:\n    config:\n      batch_size: 2\ntraining:\n  config:\n    global_batch_size: 2\n"
         "inference:\n  options:\n    context-length: 16\n"
     )
     train_data = tmp_path / "train.jsonl"

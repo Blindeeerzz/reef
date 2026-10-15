@@ -2,7 +2,6 @@
 # Qwen3-32B teacher engine on eight GPUs: the TP2 actor on two, four single-GPU rollout engines on
 # four, and the TP2 teacher engine on the other two. Mount model and experiment directories at
 # /work. See README.md.
-schema-version: 2
 reef:
   ready-timeout: 3600
   host: 127.0.0.1
@@ -37,10 +36,15 @@ inference:
 recipe:
   implementation: recipes.opd.recipe:OPDRecipe
   config:
-    batch-size: 256
     max-staleness: 0
-    max-teacher-tokens: 32768
     checkpoint-every-n-versions: 1000
+pipeline:
+  record2task:
+    config:
+      max_teacher_tokens: 32768
+  task2batch:
+    config:
+      batch_size: 256                  # run.py's prompts per step times samples per prompt
 training:
   backend: slime
   colocate: false

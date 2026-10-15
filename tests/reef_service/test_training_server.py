@@ -1047,7 +1047,7 @@ def test_second_stack_signal_skips_shutdown_grace(tmp_path: Path, monkeypatch) -
 @pytest.mark.unit
 @pytest.mark.parametrize("config_path", [_example_owned("recipes/opd/examples/math/serve.yaml")])
 def test_opd_example_trains_an_adapter_against_the_teacher_engine(monkeypatch, config_path) -> None:
-    from reef_service.config_helpers import load_deployment
+    from tests.support.config_helpers import load_deployment
     from reef.runtime.executor.arguments import native_arguments
 
     monkeypatch.setenv("OPD_MODEL_PATH", "/models/qwen3-8b-sft")
