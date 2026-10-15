@@ -14,10 +14,10 @@ import pytest
 from tests.support.runtime_stubs import StubTrainingRuntime
 
 
+from reef.artifact import GitLFSRepositoryBackendFactory, RepositoryBackendContext
 from reef.recipe.checkpoint_strategy import EveryNVersions
 from reef.recipe.errors import RecipeConfigError
 from reef.service import deploy
-from reef.service.assembly import _repository_location
 from reef.service.deploy.service_config import ServiceConfig
 
 OPENCLAWRL_RECIPE = "recipes.openclawrl.recipe:OpenClawRLRecipe"
@@ -278,12 +278,11 @@ def test_build_dispatcher_connects_runtime_and_injects_selected_recipe(monkeypat
         connected.update(kwargs)
         return stub_runtimes()
 
-    def factory(repository, **kwargs):
-        backend["repository"] = repository
-        backend.update(kwargs)
+    def factory(config, *, context):
+        backend.update(config=config, context=context)
         return lambda scenario: object()
 
-    monkeypatch.setattr(deploy.GitLFSRepositoryBackend, "factory", factory)
+    monkeypatch.setattr(GitLFSRepositoryBackendFactory, "from_config", factory)
 
     dispatcher = deploy.build_dispatcher(
         _settings(agent_record_dir=str(tmp_path / "agent-record")),
@@ -301,14 +300,17 @@ def test_build_dispatcher_connects_runtime_and_injects_selected_recipe(monkeypat
         "inference_timeout_s": 30.0,
         "train_timeout_s": None,
     }
-    assert backend["repository"] == Path("/state/artifacts.git")
+    assert backend == {
+        "config": {"repository": "/state/artifacts.git"},
+        "context": RepositoryBackendContext(work_dir=Path("/state/work"), cache_dir=Path("/state/cache")),
+    }
 
 
 @pytest.mark.unit
 def test_build_dispatcher_loads_recipe_for_inference_service(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
-        deploy.GitLFSRepositoryBackend,
-        "factory",
+        GitLFSRepositoryBackendFactory,
+        "from_config",
         lambda *args, **kwargs: lambda scenario: object(),
     )
 
@@ -325,8 +327,8 @@ def test_build_dispatcher_loads_recipe_for_inference_service(monkeypatch, tmp_pa
 @pytest.mark.unit
 def test_build_dispatcher_uses_the_recipe_name_for_a_dotted_reference(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
-        deploy.GitLFSRepositoryBackend,
-        "factory",
+        GitLFSRepositoryBackendFactory,
+        "from_config",
         lambda *args, **kwargs: lambda scenario: object(),
     )
     selected = "reef.recipe.base:Recipe"
@@ -355,8 +357,8 @@ def test_build_dispatcher_passes_recipe_settings_to_a_dotted_reference(monkeypat
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setattr(
-        deploy.GitLFSRepositoryBackend,
-        "factory",
+        GitLFSRepositoryBackendFactory,
+        "from_config",
         lambda *args, **kwargs: lambda scenario: object(),
     )
 
@@ -385,10 +387,10 @@ def test_build_dispatcher_passes_recipe_settings_to_a_dotted_reference(monkeypat
 def test_build_dispatcher_applies_common_recipe_controls(monkeypatch, tmp_path) -> None:
     captured = {}
 
-    def factory(repository, **kwargs):
+    def factory(config, *, context):
         return lambda scenario: object()
 
-    monkeypatch.setattr(deploy.GitLFSRepositoryBackend, "factory", factory)
+    monkeypatch.setattr(GitLFSRepositoryBackendFactory, "from_config", factory)
     dispatcher = deploy.build_dispatcher(
         _settings(
             recipe=OPENCLAWRL_RECIPE,
@@ -409,8 +411,8 @@ def test_build_dispatcher_applies_common_recipe_controls(monkeypatch, tmp_path) 
 @pytest.mark.unit
 def test_build_dispatcher_injects_candidate_evaluation_into_weight_recipe(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
-        deploy.GitLFSRepositoryBackend,
-        "factory",
+        GitLFSRepositoryBackendFactory,
+        "from_config",
         lambda *args, **kwargs: lambda scenario: object(),
     )
     evaluation = {
@@ -436,8 +438,8 @@ def test_build_dispatcher_injects_candidate_evaluation_into_weight_recipe(monkey
 @pytest.mark.unit
 def test_build_dispatcher_rejects_candidate_evaluation_for_non_weight_recipe(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
-        deploy.GitLFSRepositoryBackend,
-        "factory",
+        GitLFSRepositoryBackendFactory,
+        "from_config",
         lambda *args, **kwargs: lambda scenario: object(),
     )
 
@@ -454,8 +456,8 @@ def test_build_dispatcher_rejects_candidate_evaluation_for_non_weight_recipe(mon
 @pytest.mark.unit
 def test_build_dispatcher_hands_the_pipeline_section_to_the_recipe(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
-        deploy.GitLFSRepositoryBackend,
-        "factory",
+        GitLFSRepositoryBackendFactory,
+        "from_config",
         lambda *args, **kwargs: lambda scenario: object(),
     )
     generator = {"module": "tests.reef_recipe.test_generated_tasks:ScriptedGenerator", "config": {"count": 1}}
@@ -500,8 +502,8 @@ def test_build_dispatcher_rejects_a_pipeline_section_it_cannot_use(
     monkeypatch, tmp_path, recipe, error, message
 ) -> None:
     monkeypatch.setattr(
-        deploy.GitLFSRepositoryBackend,
-        "factory",
+        GitLFSRepositoryBackendFactory,
+        "from_config",
         lambda *args, **kwargs: lambda scenario: object(),
     )
 
@@ -525,8 +527,8 @@ def test_build_dispatcher_rejects_recipe_settings_nothing_consumes(monkeypatch, 
     from reef.recipe import RecipeConfigError
 
     monkeypatch.setattr(
-        deploy.GitLFSRepositoryBackend,
-        "factory",
+        GitLFSRepositoryBackendFactory,
+        "from_config",
         lambda *args, **kwargs: lambda scenario: object(),
     )
 
@@ -548,8 +550,8 @@ def test_build_dispatcher_rejects_recipe_settings_nothing_consumes(monkeypatch, 
 @pytest.mark.unit
 def test_build_dispatcher_refuses_a_stage_setting_with_its_pipeline_key(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
-        deploy.GitLFSRepositoryBackend,
-        "factory",
+        GitLFSRepositoryBackendFactory,
+        "from_config",
         lambda *args, **kwargs: lambda scenario: object(),
     )
 
@@ -569,8 +571,8 @@ def test_build_dispatcher_refuses_a_stage_setting_with_its_pipeline_key(monkeypa
 def test_build_dispatcher_loads_configured_inference_handler(monkeypatch, tmp_path) -> None:
     connected = {}
     monkeypatch.setattr(
-        deploy.GitLFSRepositoryBackend,
-        "factory",
+        GitLFSRepositoryBackendFactory,
+        "from_config",
         lambda *args, **kwargs: lambda scenario: object(),
     )
 
@@ -606,8 +608,8 @@ def test_build_dispatcher_treats_sao_as_training_recipe(monkeypatch, tmp_path) -
         return stub_runtimes()
 
     monkeypatch.setattr(
-        deploy.GitLFSRepositoryBackend,
-        "factory",
+        GitLFSRepositoryBackendFactory,
+        "from_config",
         lambda *args, **kwargs: lambda scenario: object(),
     )
 
@@ -638,8 +640,8 @@ def test_build_dispatcher_resolves_max_staleness_environment_for_the_recipe(
 ) -> None:
     connected = {}
     monkeypatch.setattr(
-        deploy.GitLFSRepositoryBackend,
-        "factory",
+        GitLFSRepositoryBackendFactory,
+        "from_config",
         lambda *args, **kwargs: lambda scenario: object(),
     )
 
@@ -661,8 +663,8 @@ def test_build_dispatcher_resolves_max_staleness_environment_for_the_recipe(
 @pytest.mark.parametrize("attribute", ["ray_address", "model_path"])
 def test_build_dispatcher_requires_runtime_locations(attribute, monkeypatch) -> None:
     monkeypatch.setattr(
-        deploy.GitLFSRepositoryBackend,
-        "factory",
+        GitLFSRepositoryBackendFactory,
+        "from_config",
         lambda *args, **kwargs: lambda scenario: object(),
     )
 
@@ -672,12 +674,6 @@ def test_build_dispatcher_requires_runtime_locations(attribute, monkeypatch) -> 
             environ={},
             connector=lambda **kwargs: stub_runtimes(),
         )
-
-
-@pytest.mark.unit
-def test_repository_location_preserves_remote_git_locations() -> None:
-    assert _repository_location("https://git.example/repository") == "https://git.example/repository"
-    assert _repository_location("git@example:repository") == "git@example:repository"
 
 
 def test_service_tokens_merge_token_and_tokens_and_drop_empties() -> None:

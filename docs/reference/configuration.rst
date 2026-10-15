@@ -84,7 +84,7 @@ The public layout groups fields by their owner:
 * ``recipe.config``: fields declared by that recipe.
 * ``recipe.runtime``: the runtime type and its declared settings.
 * ``training``: backend selection, bridge startup/request timeouts, Ray connection and native Slime ``options``.
-* ``storage``: artifact repository, work/cache directories and record retention.
+* ``storage``: artifact backend and repository, work/cache directories and record retention.
 * ``execution`` / ``executors``: role placement and named executor profiles.
 * ``evaluation`` / ``observability``: their existing component-owned settings.
 * ``pipeline``: the stage classes that replace a weight-training recipe's own, with their config.
@@ -665,7 +665,8 @@ persistent.
 
 .. config::
 
-   storage.artifact-repository | .reef/artifacts.git | the Git-backed release chain
+   storage.artifact-backend | git_lfs | where releases are stored: ``git_lfs``, or a ``ConfigurableRepositoryBackendFactory`` plugin reference
+   storage.artifact-repository | .reef/artifacts.git | the Git LFS repository of the release chain; only for ``git_lfs``
    storage.artifact-work-dir | .reef/artifact-work | materialization scratch
    storage.artifact-cache-dir | .reef/artifact-cache | fetched artifact cache
    storage.agent-record-dir | .reef/agent-record | the SQLite scenario storage: records, commit logs and settings
