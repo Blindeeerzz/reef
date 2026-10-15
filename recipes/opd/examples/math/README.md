@@ -18,8 +18,33 @@ campaign and need neither Harbor nor reef-eval.
 
 ## Results
 
-The 60-update run started on 2026-10-12 and is in progress. Its learning curve
-and acceptance report land here when it completes.
+Measured with this directory's configuration on eight H100s, starting
+2026-10-13. The training loss is the sampled-token reverse KL between student
+and teacher, averaged over the response tokens of one 256-response batch. It
+fell from 0.454 at update 1 to 0.216 at update 5 and then from 0.22 to 0.18
+over the next 50 updates, while the gradient norm fell from 5.7 to about 0.07.
+No training response reached the 16384-token limit.
+
+| Update | Training loss (mean of the five updates ending here) | AIME'24 accuracy | Correct of 480 | Responses at the 30720-token budget |
+| --- | --- | --- | --- | --- |
+| 0 (SFT checkpoint) | | 41.0% | 197 | 30 |
+| 5 | 0.303 | 41.5% | 199 | 191 |
+| 10 | 0.219 | 42.7% | 205 | 138 |
+| 15 | 0.205 | 49.4% | 237 | 154 |
+| 20 | 0.199 | 47.7% | 229 | 99 |
+| 25 | 0.197 | 46.5% | 223 | 98 |
+| 30 | 0.189 | 47.3% | 227 | 118 |
+| 35 | 0.184 | 50.2% | 241 | 107 |
+| 40 | 0.186 | 52.1% | 250 | 86 |
+| 45 | 0.186 | 52.7% | 253 | 94 |
+| 50 | 0.183 | 49.8% | 239 | 70 |
+
+The teacher control is 80.2%. From update 35 on the student scores between
+49.8% and 52.7%, 9 to 12 points above the SFT checkpoint and above the
+three-point target. Adjacent evaluations exchange about 60 correct responses in
+each direction, so a two-point difference between them is noise. Loss and
+accuracy agree: as the student matched the teacher more closely, its AIME'24
+accuracy rose from 41% to about 50%.
 
 ## Protocol
 
@@ -69,9 +94,9 @@ reproducible, and they keep `chunked-prefill-size` at 2048 with
 `mem-fraction-static` 0.80 because a request the engine retracts under memory
 pressure re-prefills its generated tokens with input log-probs, whose
 full-vocabulary logits must fit beside the static pool. On this hardware an
-update takes about 47 minutes (sampling 30, teacher scoring 4, the adapter
-update 12) and an evaluation about 1.6 hours, so the protocol takes about
-68 hours.
+update takes about 45 minutes (sampling 30, teacher scoring 3, the adapter
+update 11) and an evaluation about two hours, so the protocol takes about
+70 hours.
 
 ## Data
 
