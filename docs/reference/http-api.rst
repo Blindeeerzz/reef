@@ -1210,20 +1210,11 @@ status code, and any other upstream 4xx comes back as 400.
 Browser consoles
 ----------------
 
-A browser console reaches this HTTP API in one of two ways. Both ways use the
-same API:
-
-* **Direct.** The browser sends requests to the service. The service must
-  allow the console origin in ``reef.console-origins``, as described below.
-* **Forwarded.** Use `reef connect <cli.rst#connect-to-the-api-platform>`__
-  when the browser cannot open the service URL, for example when the service
-  runs on a private network. ``reef connect`` forwards this API over an
-  outbound connection, with an explicit local route policy. Receiver
-  implementations use the `connector protocol <connector-protocol.rst>`__.
-
-For direct access, add ``reef.console-origins`` to the serve YAML. List each
-trusted console origin explicitly, with no path, trailing slash, credentials,
-or wildcard:
+A browser console sends requests to this HTTP API directly, as every other
+client does. The browser must be able to open the service URL. To let a console
+connect, add ``reef.console-origins`` to the serve YAML. List each trusted
+console origin explicitly, with no path, trailing slash, credentials, or
+wildcard:
 
 .. code-block:: yaml
 
