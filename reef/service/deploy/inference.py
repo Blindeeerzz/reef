@@ -267,7 +267,7 @@ def local_service_url(settings: ServiceConfig) -> str:
 
 
 def http_service(config: Mapping[str, Any], settings: ServiceConfig) -> dict[str, Any]:
-    """Build the standard local HTTP child and its readiness probe."""
+    """Build the standard local HTTP child and its readiness probe. Check authentication first."""
     require_authentication(settings)
     endpoint = local_service_url(settings)
     python = os.environ.get("REEF_PYTHON", sys.executable)
@@ -286,8 +286,8 @@ def require_authentication(settings: ServiceConfig) -> None:
     if settings.tokens or settings.allow_unauthenticated or is_loopback_host(settings.host):
         return
     raise DeployConfigError(
-        f"reef.host {settings.host!r} accepts connections from other machines, and reef.tokens is empty; "
-        "set reef.tokens, bind reef.host to 127.0.0.1, or set reef.allow-unauthenticated to true"
+        f"reef.host {settings.host!r} accepts connections from other machines, but reef.tokens is empty. "
+        "Set reef.tokens, bind reef.host to 127.0.0.1, or set reef.allow-unauthenticated to true."
     )
 
 
