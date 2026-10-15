@@ -83,7 +83,9 @@ def test_local_executor_runs_candidate_activation_and_durable_commit(backend):
         prepared = runtime.prepare_training_step(
             policy_batch(), TrainingMethod("custom-objective"), {}, StepScheduling(), 0
         )
-        assert prepared.payload["expected_runtime_load_id"] == "v0"
+        # The job records the samples' producing version and the published version that it trains from.
+        assert prepared.payload["producing_runtime_load_ids"] == ["v0", "v0"]
+        assert prepared.payload["parent_runtime_load_id"] == "engine:0"
         candidate = runtime.train_candidate(prepared.payload)
         assert worker.calls == ["prepare", "execute"]
         assert runtime.serving_runtime_load_id() == "engine:0"
