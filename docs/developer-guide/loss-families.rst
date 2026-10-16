@@ -226,6 +226,13 @@ and each such recipe's family is a thin subclass of it:
   through the global log-sum-exp;
   ``tests/slime_backend/test_distill_parity.py`` pins them to a pure-Python
   reference and to the dense gradients across four ranks.
+- A family whose ``DistillSettings`` subclass sets ``normalize_advantages``
+  (OPD does) normalizes the sampled reverse KL's advantages. The pre-train
+  hook centers the teacher-minus-rollout log-probs and scales them to unit
+  standard deviation over the training job's trained tokens on all
+  data-parallel ranks, and stores them as ``distill_advantages``. The loss
+  uses them in the gradient. The setting is a family default, not a flag,
+  and has no effect on the other divergences.
 
 The base registers no family and imports nothing from ``reef_adapters``;
 ``recipes/openclawrl/slime/`` imports its packing schedule from it. The
