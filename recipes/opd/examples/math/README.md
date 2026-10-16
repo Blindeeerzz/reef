@@ -110,18 +110,20 @@ control above was measured that way.
 
 ![AIME'24 avg@16 against optimizer steps](results/2026-10-13-aime24-qwen3-8b-32b/learning_curve.png)
 
-One run with seed 0 on eight H100s. The actor, the rollout engines and the
-teacher engine ran on separate GPUs.
+One run with seed 0 on eight H100s, stopped after update 55 of the 60 in the
+protocol. The actor, the rollout engines and the teacher engine ran on
+separate GPUs.
 
 AIME'24 accuracy goes from 41.0% at the SFT checkpoint to 49.4% at update 15
-and to 52.7% at update 45. It stays between 49.8% and 52.7% from update 35 on.
-The teacher scores 80.2%. Adjacent evaluations exchange about 60 correct
-responses in each direction, so a two-point difference between them is noise.
+and to 52.7% at update 45. It stays between 49.8% and 52.7% from update 35 on
+and ends at 52.1% at update 55. The teacher scores 80.2%. Adjacent evaluations
+exchange about 60 correct responses in each direction, so a two-point
+difference between them is noise.
 
 The training loss, the sampled-token reverse KL between student and teacher,
 falls from 0.454 at update 1 to 0.216 at update 5 and to 0.18 by update 30,
-while the gradient norm falls from 5.7 to about 0.07. Loss and accuracy agree:
-as the student matches the teacher more closely, it answers more AIME'24
-questions. No training response reaches the 16384-token limit. The evaluation
-responses that hit the 30720-token budget go from 30 at the checkpoint to 191
-at update 5 and back to 70 at update 50.
+where it stays, while the gradient norm falls from 5.7 to about 0.07. Loss and
+accuracy agree: as the student matches the teacher more closely, it answers
+more AIME'24 questions. No training response reaches the 16384-token limit.
+The evaluation responses that hit the 30720-token budget go from 30 at the
+checkpoint to 191 at update 5 and stay between 70 and 118 from update 20 on.
