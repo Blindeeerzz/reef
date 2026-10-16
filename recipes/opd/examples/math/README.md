@@ -33,9 +33,9 @@ results/                        the learning curve of the recorded run
   `knowledge-distillation/openthoughts3_math` at learning rate 5e-6. The
   weights are used as published, and OPD trains a fresh rank/alpha 128 adapter
   on every attention and MLP projection, the adapter shape of the reference
-  recipe. The checkpoint ships a plain ChatML template, and the run serves it
-  with the teacher's Qwen3 template, which renders a single-turn prompt
-  identically, so student and teacher read the same ids.
+  recipe. The checkpoint ships a plain ChatML template without thinking tags.
+  The setup below replaces it with the teacher's Qwen3 template, which renders
+  a single-turn prompt identically, so student and teacher read the same ids.
 - Teacher: `Qwen/Qwen3-32B`, revision `9216db5781bf21249d130ec9da846c4624c16137`,
   frozen on its own TP2 SGLang engine. It scores the student's exact recorded
   prompt and response ids. No template is rendered and nothing is retokenized.
@@ -77,8 +77,13 @@ update 11) and an evaluation about two hours, so the protocol takes about
 hf download seomh/Qwen3-8B-Base-OpenThoughts3Math-SFT-step750-lr5e-6 \
   --revision 273e685cf58c09149986e058e4a1a391d45c6b7e --local-dir /work/models/Qwen3-8B-Base-SFT
 hf download Qwen/Qwen3-32B --revision 9216db5781bf21249d130ec9da846c4624c16137 --local-dir /work/models/Qwen3-32B
+python -c "import json; print(json.load(open('/work/models/Qwen3-32B/tokenizer_config.json'))['chat_template'], end='')" \
+  > /work/models/Qwen3-8B-Base-SFT/chat_template.jinja
 python recipes/opd/examples/math/prepare.py --output /work/data --tokenizer /work/models/Qwen3-8B-Base-SFT
 ```
+
+The template command writes the teacher's chat template into the student
+directory, as the measured run did.
 
 `prepare.py` pins the two datasets, writes `deepmath.jsonl` and `aime24.jsonl`
 with their checksums in `manifest.json`, and refuses to overwrite an existing
