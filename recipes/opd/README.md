@@ -32,46 +32,22 @@ Clipping requires sampled reverse KL with positive `opd-top-k` and
 
 ## Teacher engine
 
-For a larger teacher with the same token ids, the deployment's `teacher`
-section serves the teacher on its own frozen SGLang process with its own Ray
-GPUs, and the bridge scores each recorded sequence there instead of swapping a
-checkpoint into the actor:
+The deployment's `teacher` section serves the teacher as a separate frozen
+SGLang model that scores the student's recorded token ids, so the teacher can
+be larger than the student. Student and teacher must share a tokenizer. That
+is the only OPD the recipe supports today.
 
 ```yaml
 teacher:
   model-path: Qwen/Qwen3-32B
   num-gpus: 2
-  port: 30001
-  options:
-    dtype: bfloat16
-    context-length: 32768
-    chunked-prefill-size: 2048
-    mem-fraction-static: 0.80
 training:
   options:
     opd-teacher: separate
-    opd-top-k: 1
-    rollout-temperature: 1.0
 ```
 
-`num-gpus` is both the teacher's GPU budget and its tensor parallel size, on
-top of the student's training and inference GPUs; its context limit must
-cover the teacher prefix plus the recorded response. Drop
-`opd-teacher-checkpoint`. Set the student's Megatron `vocab-size` to the
-checkpoint's `vocab_size`, the embedding rows including the padding beyond
-the tokenizer (151936 for Qwen3): the student samples from the padded rows
-too, and the bridge scores them like any other token.
-
-The bridge sends the exact recorded ids to the engine's `/generate` with zero
-output tokens, sixteen requests at a time, checks every returned response id,
-and fills the teacher probability columns before the optimizer step;
-`perf/distill_teacher_time` is the scoring wall time in seconds. A vocabulary
-or decoder mismatch, an endpoint serving another model, a missing row or a
-timeout fails the step. The engine path supports the sampled reverse KL and
-teacher-selected top-K objectives at rollout temperature 1; the exact
-full-vocabulary and student-selected top-K representations stay on the
-checkpoint teacher. Engine log-probs come from bf16 kernels rather than the
-trainer's, a small constant bias for a frozen teacher.
+`num-gpus` is the teacher's tensor parallel size on its own GPUs. Drop
+`opd-teacher-checkpoint`.
 
 ## Where the rest is documented
 
