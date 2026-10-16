@@ -36,6 +36,9 @@ class MLXEngineConfig:
     learning_rate: float = config_option(1e-5, help="AdamW learning rate.")
     weight_decay: float = config_option(0.01, help="AdamW weight decay.")
     max_tokens: int = config_option(256, help="Completion tokens of a request that sets no limit.")
+    max_context_tokens: int = config_option(
+        0, help="Prompt and completion tokens of one request; 0 sets no limit. It also bounds each training row."
+    )
     temperature: float = config_option(1.0, help="Sampling temperature of a request that sets none.")
     top_p: float = config_option(1.0, help="Nucleus sampling threshold of every request.")
     seed: int = config_option(0, help="Seed of the MLX random generator.")
@@ -72,6 +75,7 @@ class MLXEngineConfig:
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
         for name, value in (
+            ("max_context_tokens", self.max_context_tokens),
             ("capture_topk", self.capture_topk),
             ("prefill_step_size", self.prefill_step_size),
             ("log_probs_chunk_size", self.log_probs_chunk_size),
