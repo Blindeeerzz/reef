@@ -89,7 +89,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--tokenizer", required=True, help="The student's tokenizer directory; the teacher shares it.")
-    parser.add_argument("--prompts", type=int, default=3840, help="Prompts in the pool: 60 updates of 64.")
+    parser.add_argument("--prompts", type=int, default=3840, help="Prompts in the pool: 64 per update.")
     args = parser.parse_args()
     if args.prompts <= 0:
         parser.error("--prompts must be positive")

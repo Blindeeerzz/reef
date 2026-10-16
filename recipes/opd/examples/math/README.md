@@ -40,7 +40,7 @@ results/                        the learning curve of the recorded run
   excluding exact-match AIME'24 questions and ten questions that also appear in
   OpenThoughts3 math. That gives 3840 prompts, 64 per update, each used once.
 - OPD: four responses per prompt at temperature 1 under a 16384-token response
-  limit, 60 optimizer updates at learning rate 5e-5, the sampled-token reverse
+  limit, 55 optimizer updates at learning rate 5e-5, the sampled-token reverse
   KL (`opd-top-k 1`) with no importance-sampling correction: one on-policy update
   per batch. No answer labels, correctness rewards or teacher-only context.
 - Evaluation: the 30 AIME'24 questions, 16 samples per question at seeds 0

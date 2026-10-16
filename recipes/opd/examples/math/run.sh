@@ -5,7 +5,7 @@
 # the README describes. State goes to $OPD_RUN_DIR; the campaign's responses,
 # scores to $OPD_RUN_DIR/results.
 #
-#   ./run.sh                                 the protocol: 60 updates, evaluated every 5
+#   ./run.sh                                 the protocol: 55 updates, evaluated every 5
 #   OPD_STEPS=1 OPD_EVAL_REPEATS=1 ./run.sh  one update and one sample per question, to check the stack
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -14,7 +14,7 @@ export OPD_TEACHER_PATH="${OPD_TEACHER_PATH:?the teacher, the pinned Qwen3-32B d
 export OPD_RUN_DIR="${OPD_RUN_DIR:-$PWD/work}"
 OPD_DATA="${OPD_DATA:-/work/data}"               # prepare.py's output
 OPD_CONFIG="${OPD_CONFIG:-$PWD/serve.yaml}"
-OPD_STEPS="${OPD_STEPS:-60}"
+OPD_STEPS="${OPD_STEPS:-55}"
 OPD_EVAL_EVERY="${OPD_EVAL_EVERY:-5}"            # evaluate every N updates
 OPD_EVAL_TOKENS="${OPD_EVAL_TOKENS:-30720}"      # the student's 32768-token window less 2048 for the prompt
 REEF_PORT="${REEF_PORT:-8900}"                   # serve.yaml's reef.port
