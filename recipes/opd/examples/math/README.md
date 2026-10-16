@@ -13,9 +13,7 @@ The method follows the
 [Thinking Machines write-up](https://thinkingmachines.ai/blog/on-policy-distillation/),
 which used the same Qwen3-8B/Qwen3-32B pair after SFT on about 400k examples
 and reported AIME'24 moving from about 60% to 70%. This example starts from a
-published SFT checkpoint instead of training one. It targets roadmap
-[#502](https://github.com/Human-Agent-Society/reef/issues/502) and its runs are
-tracked in [#682](https://github.com/Human-Agent-Society/reef/issues/682).
+published SFT checkpoint instead of training one.
 
 ```text
 run.sh                          starts the Reef stack and runs the campaign
