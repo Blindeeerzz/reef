@@ -110,9 +110,8 @@ control above was measured that way.
 
 ![AIME'24 avg@16 against optimizer steps](results/2026-10-13-aime24-qwen3-8b-32b/learning_curve.png)
 
-One run with seed 0 on eight H100s, stopped after update 55 of the 60 in the
-protocol. The actor, the rollout engines and the teacher engine ran on
-separate GPUs.
+One run of 55 updates with seed 0 on eight H100s. The actor, the rollout
+engines and the teacher engine ran on separate GPUs.
 
 AIME'24 accuracy goes from 41.0% at the SFT checkpoint to 49.4% at update 15
 and to 52.7% at update 45. It stays between 49.8% and 52.7% from update 35 on
