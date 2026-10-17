@@ -194,33 +194,40 @@ class DispatchedTrainingLoop:
             raise RuntimeContractError(
                 f"training thread requires a TrainingRuntime for scenario {current.name!r}, got {type(runtime).__name__}"
             )
-        self.errors.clear(current.name)
-        # A crash may leave remote serving updated but paused after Reef's
-        # commit, or checkpointed before the weight update. Recover that
-        # pending step before deciding whether another batch is available.
         component = current.dispatched_component
         backend = current.trainer_for(component).candidate_backend
         if backend is None or not backend.dispatched:
             raise RuntimeContractError(f"training scenario {current.name!r} has no dispatched training backend")
-        backend.recover_pending_step(
-            current.scenario_step,
-            committed_training_job_id=current.committed_training_job_id,
-            committed_training_without_job_id=current.committed_training_without_job_id,
-        )
-        with self.registry.lock_instance(current) as state:
-            if state is not InstanceState.CURRENT:
-                # Reloaded since the turn began: the next turn reserves on the rebuilt instance.
-                return True
-            # Reserved under the registry lock: a local cycle's failure from here on defers its reload.
-            batch = current.reserve_training_batch(component)
-        if batch is None:
+        # A scenario runs one step at a time. While a local cycle holds the cycle lock,
+        # skip the scenario: the end of that cycle wakes this thread.
+        cycle_lock = self.local_workers.cycle_lock(name)
+        if not cycle_lock.acquire(blocking=False):
             return False
         try:
-            return self.run_dispatched_turn(current, component, backend, batch)
+            self.errors.clear(current.name)
+            # A crash may leave remote serving updated but paused after Reef's
+            # commit, or checkpointed before the weight update. Recover that
+            # pending step before deciding whether another batch is available.
+            backend.recover_pending_step(
+                current.scenario_step,
+                committed_training_job_id=current.committed_training_job_id,
+                committed_training_without_job_id=current.committed_training_without_job_id,
+            )
+            with self.registry.lock_instance(current) as state:
+                if state is not InstanceState.CURRENT:
+                    # Reloaded since the turn began: the next turn reserves on the rebuilt instance.
+                    return True
+                batch = current.reserve_training_batch(component)
+            if batch is None:
+                return False
+            try:
+                return self.run_dispatched_turn(current, component, backend, batch)
+            finally:
+                # Whatever the outcome, the local cycles that waited for the job run now, on every scenario.
+                self.local_workers.wake_all()
         finally:
-            # Whatever the outcome, the local cycles that waited for the job run now, on every scenario.
-            # A cycle whose reload waited for the job rebuilds the scenario first.
-            self.local_workers.wake_all()
+            cycle_lock.release()
+            self.local_workers.close_replaced_instances(name)
 
     def run_dispatched_turn(
         self, current: Scenario, component: str | None, backend: CandidateBackend, batch: TrainingBatch

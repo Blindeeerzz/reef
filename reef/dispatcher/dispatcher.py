@@ -438,18 +438,13 @@ class Dispatcher(ScenarioLifecycle):
         """Start consumption only after the accepted records are durable."""
         # Every component's trainer sees the record. A dispatched backend wakes the
         # training thread, and a local backend wakes its own worker. A trainer
-        # without a backend consumes the record here.
+        # without a backend only advances its record cursor, here.
         self.local_workers.wake(current)
         if current.training_runtime is not None:
             return
         for bound in current.trainers:
-            if bound.trainer.candidate_backend is not None:
-                continue
-            result = current.prepare_training_step(bound.component)
-            if result is not None:
-                # Commit consumption durably with the model update so recovery
-                # never repeats a batch whose update was already published.
-                current.commit(result, component=bound.component)
+            if bound.trainer.candidate_backend is None:
+                current.prepare_training_step(bound.component)
 
     # -- Preload ---------------------------------------------------------
 

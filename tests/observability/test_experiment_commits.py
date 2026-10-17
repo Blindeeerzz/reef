@@ -95,7 +95,7 @@ def test_only_successful_storage_notifications_report_and_retries_preserve_conte
     correlation = observer.prepare(
         context, source_runtime_load_id="load-0", produced_runtime_load_id="load-1", checkpoint_path="/checkpoint/1"
     )
-    record = replace(training_record(), metrics={**correlation, "score": 0.8, "merged_onto": "seed"})
+    record = replace(training_record(), metrics={**correlation, "score": 0.8})
     commit_step = inner.commit_step
 
     def fail_commit(*, expected_step: int, commit: CommitRecord) -> CommitRecord:

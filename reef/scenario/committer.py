@@ -56,31 +56,6 @@ class _ArtifactHeadSync:
     error: str | None = None
 
 
-class SettledTrainingResultError(ReefError):
-    """A trainer's result is on record already: another trainer's commit settled its durable record first.
-
-    The caller read the result before that commit landed. Committing it again
-    would publish a second step with nothing behind it, so the caller looks
-    again instead; the step it would have made is in the log.
-    """
-
-
-class StaleTrainingResultError(ReefError):
-    """A local result was prepared against a release that another component's commit has since replaced.
-
-    The result is not attached to the newer combination. ``policy`` says what
-    the caller does with the batch: ``reevaluate`` keeps the prepared
-    candidate and evaluates it again against the release served now,
-    ``refuse`` keeps the batch alone and prepares it again. A backend whose
-    policy is ``merge``, and every dispatched backend, is never refused: see
-    :meth:`ScenarioCommitter.commit`.
-    """
-
-    def __init__(self, message: str, *, policy: str = "refuse") -> None:
-        super().__init__(message)
-        self.policy = policy
-
-
 class ScenarioCommitter:
     """Order one scenario's commit, rollback, and retry effects; delegate release queries."""
 
@@ -116,8 +91,8 @@ class ScenarioCommitter:
         self._lock = RLock()
         # A lone trainer's preparation holds the operation lock across proposer
         # calls and evaluation episodes, neither of which changes committed
-        # releases; with several trainers a preparation runs outside it and its
-        # result meets the commits made meanwhile at the commit boundary.
+        # releases. With several trainers a preparation runs outside it; the
+        # dispatcher still runs one step of the scenario at a time.
         # Readers share only the publication lock with commit and rollback.
         # Writers must acquire the operation lock first; readers never take it.
         self._publication_lock = RLock()
@@ -542,66 +517,18 @@ class ScenarioCommitter:
     def commit(self, result: TrainStepResult, *, component: str | None = None) -> Any:
         """Commit ``component``'s pending training result as one atomic version record.
 
-        Several trainers of one scenario meet here: the scenario lock serializes
-        their commits. A result whose batch was reserved against a release
-        that another trainer has since replaced goes the way its backend's
-        ``stale_result_policy`` says: merged onto the release served now, with
-        the record's ``base_release_id`` naming the release the batch was
-        reserved against, or refused as :class:`StaleTrainingResultError` so
-        the caller evaluates the candidate again or prepares the batch again.
-        A dispatched result is always merged: the backend published its
-        weights before the result arrived and its job marker only moves
-        forward, so refusing it would leave that job unfinished and inference
-        admission paused for good.
+        The trainers of one scenario run one step at a time, so no other
+        trainer's commit lands while this step runs. The head is the release
+        that the step was prepared against.
         """
         with self.experiment_reporting(), self._lock:
             with self._publication_lock:
                 bound = self.bound_trainer(component)
                 trainer, component = bound.trainer, bound.component
-                self.settle_sibling_record(component)
-                if trainer.result_on_record(result):
-                    # A sibling's commit settled this trainer's durable record after the caller read the result.
-                    raise SettledTrainingResultError(
-                        f"scenario {self._name!r} component {component!r}: its result is on record already"
-                    )
                 next_step = self._step + 1
-                # Refuse a stale base before the trainer acknowledges its batch, so
-                # the batch stays whole for another preparation; a batch an earlier
-                # attempt acknowledged stays taken, and its retry records what that
-                # attempt consumed. Only another trainer can move the head under a
-                # reserved batch: a lone trainer finds its own failed attempt's
-                # head, and a step already in the log is a retry after a lost
-                # acknowledgment. Neither is stale. A result with no candidate (a
-                # skip) was not evaluated against any release, so it never is.
+                # A step that is in the log already is a retry after a lost acknowledgment.
                 records = self._store.history()
                 retrying = bool(records) and records[-1].step == next_step
-                base = trainer.pending_base_release_id
-                served = self._artifacts.current.release_id
-                if (
-                    not retrying
-                    and len(self.trainers) > 1
-                    and base is not None
-                    and base != served
-                    and trainer.pending_has_candidate
-                ):
-                    # A pending candidate comes from a local backend: a dispatched result carries none.
-                    backend = trainer.candidate_backend
-                    policy = "merge" if backend is None else backend.stale_result_policy
-                    if policy != "merge":
-                        raise StaleTrainingResultError(
-                            f"scenario {self._name!r} component {component!r} prepared its result against release "
-                            f"{base!r} but {served!r} is served now",
-                            policy=policy,
-                        )
-                    logger.info(
-                        "scenario %r component %r: merging a result reserved against release %r onto %r",
-                        self._name,
-                        component,
-                        base,
-                        served,
-                    )
-                    # The record names the base its batch was reserved against; the metrics say what it landed on.
-                    result = trainer.add_commit_metrics(result, {"merged_onto": served})
             # The operation lock keeps the step and source stable while tracker
             # I/O runs; published artifact readers need only the publication lock.
             if not retrying:
@@ -824,7 +751,6 @@ class ScenarioCommitter:
             operation=operation,
             rollback_target_release_id=rollback_target_release_id,
             component=self.component_on_record(component),
-            base_release_id=self.base_release_on_record(prepared) if operation == "training" else None,
         )
         return {
             **dict(artifact.metadata),
@@ -947,31 +873,6 @@ class ScenarioCommitter:
         )
         return record
 
-    def settle_sibling_record(self, component: str | None) -> None:
-        """Settle another trainer's commit that reached the log but not memory, before ``component`` commits.
-
-        A commit can fail after its record is durable (a lost fsync
-        acknowledgment, a failed install); while a dispatched job is reserved
-        the failed trainer's reload waits, so the log holds a step the
-        committer has not advanced to. The failed trainer still holds the
-        prepared commit that record names: settling it here is the retry that
-        trainer would make, so the next commit takes the step after it.
-        """
-        records = self._store.history()
-        if not records or records[-1].step != self._step + 1:
-            return
-        record = records[-1]
-        if record.operation != "training" or self.own_record(record, component):
-            return
-        for bound in self.trainers:
-            if bound.component == component or not self.own_record(record, bound.component):
-                continue
-            prepared = bound.trainer.pending_prepared_commit
-            if prepared is None or not self._record_matches_prepared(record, prepared):
-                return
-            self.finish_recorded_retry(record, prepared, bound.trainer)
-            return
-
     def recorded_retry(
         self,
         prepared: PreparedCommit,
@@ -1036,17 +937,9 @@ class ScenarioCommitter:
             metrics=prepared.metrics,
             training_job_id=prepared.training_job_id,
             component=self.component_on_record(component),
-            base_release_id=self.base_release_on_record(prepared) if operation == "training" else None,
             components=components,
         )
         return self._store.commit_step(expected_step=self._step, commit=record)
 
-    def base_release_on_record(self, prepared: PreparedCommit) -> str | None:
-        """The release a batch was reserved against, recorded only where another trainer can replace it."""
-        return prepared.base_release_id if len(self.trainers) > 1 else None
 
-
-__all__ = [
-    "ScenarioCommitter",
-    "StaleTrainingResultError",
-]
+__all__ = ["ScenarioCommitter"]

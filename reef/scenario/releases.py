@@ -95,7 +95,6 @@ class ScenarioReleases:
                     metrics=record.metrics,
                     pending=record.pending,
                     component=record.component,
-                    base_release_id=record.base_release_id,
                     components=record.components,
                 )
                 for record in records
@@ -263,7 +262,6 @@ class ScenarioReleases:
         metrics: Mapping[str, Any] | None = None,
         pending: bool = False,
         component: str | None = None,
-        base_release_id: str | None = None,
         components: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         row: dict[str, Any] = {
@@ -290,8 +288,6 @@ class ScenarioReleases:
             row["metrics"] = dict(metrics)
         if component is not None:
             row["component"] = component
-        if base_release_id is not None:
-            row["base_release_id"] = base_release_id
         if components is not None:
             row["components"] = dict(components)
         return row
