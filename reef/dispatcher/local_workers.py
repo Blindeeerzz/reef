@@ -232,7 +232,7 @@ class LocalTrainingWorkers:
             # Keep only the short commit and recovery window under the scenario
             # registry lock. Candidate generation above can take minutes and must
             # not block record acceptance for this scenario.
-            with current.experiment_reporting(), self.registry.lock_instance(current) as state:
+            with self.registry.lock_instance(current) as state:
                 if not self.cycles_run():
                     # The service stopped under this cycle: its model calls may have failed as the routes went away.
                     logger.info(

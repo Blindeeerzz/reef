@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from contextlib import AbstractContextManager, nullcontext, suppress
+from contextlib import suppress
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -316,7 +316,7 @@ class ScenarioCommitter:
         if not isinstance(release_id, str) or not release_id.strip():
             raise ValueError("release_id must be a non-empty string")
         release_id = release_id.strip()
-        with self.experiment_reporting(), self._lock, self._publication_lock:
+        with self._lock, self._publication_lock:
             current_ref = self._artifacts.current
             if current_ref.release_id == release_id:
                 return current_ref
@@ -478,7 +478,7 @@ class ScenarioCommitter:
         served at once rather than held for review for the same reason. Returns the
         new head, or ``None`` when the served release already carries the content.
         """
-        with self.experiment_reporting(), self._lock, self._publication_lock:
+        with self._lock, self._publication_lock:
             current_ref = self._artifacts.current
             if isinstance(current_ref, LiveWeightArtifactRef):
                 return None
@@ -521,7 +521,7 @@ class ScenarioCommitter:
         trainer's commit lands while this step runs. The head is the release
         that the step was prepared against.
         """
-        with self.experiment_reporting(), self._lock:
+        with self._lock:
             with self._publication_lock:
                 bound = self.bound_trainer(component)
                 trainer, component = bound.trainer, bound.component
@@ -583,11 +583,6 @@ class ScenarioCommitter:
                         result, publication, prepared, trainer, component, checkpointed=checkpointed
                     )
                 return result.state
-
-    def experiment_reporting(self) -> AbstractContextManager[None]:
-        if self.experiment_observer is None:
-            return nullcontext()
-        return self.experiment_observer.reporting()
 
     def prepare_experiment(
         self, result: TrainStepResult, trainer: Trainer, step: int, component: str | None

@@ -1495,6 +1495,7 @@ def test_each_components_step_reaches_the_tracker_under_its_name(dispatchers: _D
     weights = scenario.prepare_training_step(WEIGHTS)
     assert weights is not None
     dispatcher.registry.get("agent").commit(weights, component=WEIGHTS)
+    dispatcher.registry.experiment_reports.flush()
     assert [event.context.component for event in tracker.events] == [HARNESS, WEIGHTS]
     assert [event.context.backend for event in tracker.events] == ["_ComponentBackend", "_ComponentBackend"]
     assert [event.context.step for event in tracker.events] == [1, 2]
@@ -1937,10 +1938,7 @@ def test_service_start_notification_cannot_reopen_stopping_workers(dispatchers: 
 @pytest.mark.parametrize("next_operation", ["training", "reload", "rollback"])
 @pytest.mark.parametrize("tracker_fails", [False, True])
 def test_experiment_events_remain_ordered_across_reload(tmp_path, monkeypatch, next_operation, tracker_fails):
-    from concurrent.futures import ThreadPoolExecutor
     from threading import Event
-
-    from tests.support.experiment_reporting import ContendedReportLock
 
     tracker = _RecordingTracker()
     value, backends = _dispatcher(tmp_path, experiment_tracker=tracker)
@@ -1949,9 +1947,6 @@ def test_experiment_events_remain_ordered_across_reload(tmp_path, monkeypatch, n
     update.mkdir()
     (update / "harness.txt").write_text("updated shipped content")
     entered, release = Event(), Event()
-    report_lock = ContendedReportLock()
-    delivery = value.registry.loaded_experiment_reports.delivery_for("agent", tracker)
-    monkeypatch.setattr(delivery, "lock", report_lock)
     attempted = []
 
     def shipped(state, tree):
@@ -1969,13 +1964,6 @@ def test_experiment_events_remain_ordered_across_reload(tmp_path, monkeypatch, n
             raise ConnectionError("tracker unavailable")
         tracker.events.append(event)
 
-    def next_step():
-        if next_operation == "reload":
-            return value.registry.reload("agent")
-        if next_operation == "rollback":
-            return value.rollback("agent", initial.release_id)
-        return value.local_workers.process_step("agent", HARNESS)
-
     def record_rollback(event):
         attempted.append(event.step)
 
@@ -1983,25 +1971,21 @@ def test_experiment_events_remain_ordered_across_reload(tmp_path, monkeypatch, n
     monkeypatch.setattr(backends[HARNESS], "shipped_content_update", shipped)
     monkeypatch.setattr(tracker, "record", record)
     try:
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            first = pool.submit(value.registry.reload, "agent")
-            try:
-                assert entered.wait(5)
-                if next_operation != "reload":
-                    current = value.registry.reload("agent")
-                    if next_operation == "training":
-                        _append_records(current, 1)
-                second = pool.submit(next_step)
-                assert report_lock.waiting.wait(5), "later report did not wait for the previous observer"
-                # The next reporting operation may wait, but serving lookups must not.
-                current = pool.submit(value.get_or_create_scenario, "agent").result(timeout=2)
-                assert not first.done()
-                assert not second.done()
-                assert attempted == []
-            finally:
-                release.set()
-            first.result(timeout=5)
-            second.result(timeout=5)
+        # The reload publishes shipped content at step 1; the tracker blocks on its event.
+        value.registry.reload("agent")
+        assert entered.wait(5)
+        # The next operation lands step 2 while the tracker still blocks: nothing waits for it.
+        if next_operation == "reload":
+            value.registry.reload("agent")
+        elif next_operation == "rollback":
+            value.rollback("agent", initial.release_id)
+        else:
+            current = value.registry.reload("agent")
+            _append_records(current, 1)
+            assert value.local_workers.process_step("agent", HARNESS)
+        assert attempted == []
+        release.set()
+        value.registry.experiment_reports.flush()
         current = value.get_or_create_scenario("agent")
         assert [record.step for record in current.store.history()] == [1, 2]
         assert attempted == [1, 2]

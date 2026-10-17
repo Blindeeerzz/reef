@@ -26,7 +26,7 @@ from reef.observability import ExperimentTracker, NullExperimentTracker
 from reef.recipe.base import Recipe
 from reef.recipe.checkpoint_strategy import CheckpointStrategy, EveryNVersions
 from reef.scenario.admission import ScenarioAdmission
-from reef.scenario.registry import InstanceState, ScenarioLifecycle, ScenarioRegistry
+from reef.scenario.registry import ScenarioLifecycle, ScenarioRegistry
 from reef.scenario.scenario import Scenario
 from reef.storage.records import RecordRetention
 from reef.storage.scenario import ScenarioStorage
@@ -373,15 +373,8 @@ class Dispatcher(ScenarioLifecycle):
         return self.rollback(scenario, release_id, operation="promote")
 
     def rollback(self, scenario: str, release_id: str, *, operation: str = "rollback") -> ArtifactRef:
-        while True:
-            with self.registry.lock_for(scenario):
-                current = self.registry.require(scenario)
-            # Wait for earlier reports without blocking scenario resolution.
-            with current.experiment_reporting(), self.registry.lock_instance(current) as state:
-                if state is not InstanceState.CURRENT:
-                    # Reload or deletion won the gap before the reporting scope.
-                    continue
-                return current.rollback(release_id, operation=operation)
+        with self.registry.lock_for(scenario):
+            return self.registry.require(scenario).rollback(release_id, operation=operation)
 
     def current_artifact(
         self,
@@ -551,6 +544,8 @@ class Dispatcher(ScenarioLifecycle):
                     component.shutdown()
                 except BaseException as exc:
                     errors.append(exc)
+        # Send the experiment events that are still queued before the tracker closes.
+        self.registry.experiment_reports.close()
         try:
             self.experiment_tracker.close()
         except Exception:

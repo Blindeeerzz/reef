@@ -243,7 +243,7 @@ class DispatchedTrainingLoop:
             if execution.outcome not in ("drop", "commit"):
                 raise RuntimeContractError(f"training backend returned unsupported outcome: {execution.outcome!r}")
             # The registry lock keeps a local worker's reload out between the instance check and the commit.
-            with current.experiment_reporting(), self.registry.lock_instance(current) as state:
+            with self.registry.lock_instance(current) as state:
                 if state is InstanceState.REMOVED:
                     raise RuntimeContractError(
                         f"scenario {current.name!r} was deleted under its training job; the backend's job needs "
