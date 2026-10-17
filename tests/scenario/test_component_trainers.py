@@ -1802,15 +1802,15 @@ def test_a_creation_manifest_read_that_failed_is_asked_again(monkeypatch: Any, d
         return original(self, ref)
 
     monkeypatch.setattr(ArtifactReleaseChain, "resolve", fail_once)
-    assert scenario.creation_components(0) is None
+    assert scenario.release_queries.creation_components(0) is None
     # Not asked again at the same step (a page polls every few seconds; a remote read is a fetch)...
-    assert scenario.creation_components(0) is None
+    assert scenario.release_queries.creation_components(0) is None
     assert calls["failed"] == 1
     # ...but asked again after the next commit.
-    components = scenario.creation_components(1)
+    components = scenario.release_queries.creation_components(1)
     assert components is not None and set(components) == {WEIGHTS, HARNESS}
     assert calls["failed"] == 1
-    assert scenario.creation_components(0) is not None
+    assert scenario.release_queries.creation_components(0) is not None
 
 
 @pytest.mark.unit

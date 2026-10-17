@@ -82,7 +82,7 @@ def test_local_tracker_read_locks(tmp_path, monkeypatch, callback, failing):
                 if callback == "record":
                     read = pool.submit(value.get_or_create_scenario, "agent")
                 else:
-                    read = pool.submit(scenario.artifact_with_metrics)
+                    read = pool.submit(scenario.release_queries.artifact_with_metrics)
                 read.result(timeout=2)
                 assert not operation.done()
             finally:

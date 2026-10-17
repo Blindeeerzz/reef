@@ -82,6 +82,8 @@ class Scenario:
             recovered_head_record=recovered_head_record,
             experiment_observer=experiment_observer,
         )
+        #: Read-only queries of committed releases and their content, safe while a commit runs.
+        self.release_queries = self._committer.releases
 
     @property
     def name(self) -> str:
@@ -288,30 +290,9 @@ class Scenario:
         return self._committer.last_record_for(component)
 
     def releases(self) -> tuple[dict[str, Any], ...]:
-        return self._committer.releases()
-
-    def creation_components(self, scenario_step: int) -> Mapping[str, str] | None:
-        """The content id of each component the creation artifact binds; ``None`` when it has no manifest."""
-        return self._committer.creation_components(scenario_step)
-
-    def artifact_for_version(self, release_id: str) -> Artifact:
-        """Materialize a scenario release for read-only serving; absence raises ArtifactNotFound."""
-        return self._committer.artifact_for_version(release_id)
-
-    def ref_for_version(self, release_id: str) -> ArtifactRef | None:
-        """The ref of a scenario release without materializing it; ``None`` when the catalog has no such release."""
-        return self._committer.ref_for_version(release_id)
-
-    def entries_for_version(self, release_id: str) -> tuple[Mapping[str, Any], ...] | None:
-        """The composition entries behind a scenario release, if its training commit logged them."""
-        return self._committer.entries_for_version(release_id)
-
-    def artifact_with_metrics(
-        self,
-        release_id: str | None = None,
-    ) -> tuple[Artifact, Mapping[str, Any] | None]:
-        """Freeze one artifact and its gate metrics without waiting for preparation."""
-        return self._committer.artifact_with_metrics(release_id)
+        """Committed releases, newest first; the scenario step is read under the same lock as the log."""
+        with self.release_queries.publication_lock:
+            return self.release_queries.releases(self._committer.step)
 
     def current_artifact_ref(self) -> ArtifactRef:
         return self._artifact_chain.current

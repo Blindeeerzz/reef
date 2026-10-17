@@ -121,7 +121,8 @@ class ScenarioCommitter:
         # Readers share only the publication lock with commit and rollback.
         # Writers must acquire the operation lock first; readers never take it.
         self._publication_lock = RLock()
-        self._releases = ScenarioReleases(
+        #: Read-only release queries; they share the publication lock with commit and rollback.
+        self.releases = ScenarioReleases(
             name=name,
             artifacts=artifacts,
             store=store,
@@ -171,14 +172,6 @@ class ScenarioCommitter:
             raise ValueError(f"scenario step must advance from {self._step} to {self._step + 1}")
         self._step = step
         self._commit_status = (step, self._latest_training_record, self._artifact_head_sync)
-
-    def releases(self) -> tuple[dict[str, Any], ...]:
-        with self._publication_lock:
-            return self._releases.releases(self._step)
-
-    def creation_components(self, scenario_step: int) -> Mapping[str, str] | None:
-        """The content id of each component the creation artifact binds; ``None`` when it has no manifest."""
-        return self._releases.creation_components(scenario_step)
 
     def bound_trainer(self, component: str | None) -> ComponentTrainer:
         """The trainer bound to ``component``; ``None`` selects the first, for scenario-wide operations."""
@@ -252,7 +245,7 @@ class ScenarioCommitter:
             return recorded.artifact_ref.content_id != served_id
         served_entry = next((entry.components[loaded] for entry in earlier if entry.components is not None), None)
         if served_entry is None:
-            creation = self._releases.creation_components(self._step, retry=True)
+            creation = self.releases.creation_components(self._step, retry=True)
             served_entry = None if creation is None else creation.get(loaded)
         recorded_entry = None if recorded.components is None else recorded.components.get(loaded)
         if recorded_entry is None or served_entry is None:
@@ -352,7 +345,7 @@ class ScenarioCommitter:
             current_ref = self._artifacts.current
             if current_ref.release_id == release_id:
                 return current_ref
-            target = self._releases.find_release(release_id)
+            target = self.releases.find_release(release_id)
             if target is None:
                 raise ArtifactNotFound(f"scenario {self._name!r} has no release {release_id!r}")
             target_ref, target_checkpoint = target
@@ -496,8 +489,8 @@ class ScenarioCommitter:
         if record.components is None or parent_id is None:
             return None
         carried = next((row.components for row in records if row.artifact_ref.release_id == parent_id), None)
-        if carried is None and self._releases.creation_artifact.release_id == parent_id:
-            carried = self._releases.creation_components(self._step, retry=retry)
+        if carried is None and self.releases.creation_artifact.release_id == parent_id:
+            carried = self.releases.creation_components(self._step, retry=retry)
         if carried is None:
             return None
         return [name for name, content_id in record.components.items() if carried.get(name) != content_id]
@@ -947,7 +940,7 @@ class ScenarioCommitter:
         records = self._store.history()
         previous = next(
             (prior.artifact_ref for prior in reversed(records[:-1]) if not prior.pending),
-            self._releases.creation_artifact,
+            self.releases.creation_artifact,
         )
         self.finish_committed_step(
             prepared, record, trainer, expected=previous, expected_checkpoint=self._artifacts.checkpoint
@@ -1051,23 +1044,6 @@ class ScenarioCommitter:
     def base_release_on_record(self, prepared: PreparedCommit) -> str | None:
         """The release a batch was reserved against, recorded only where another trainer can replace it."""
         return prepared.base_release_id if len(self.trainers) > 1 else None
-
-    def entries_for_version(self, release_id: str) -> tuple[Mapping[str, Any], ...] | None:
-        return self._releases.entries_for_version(release_id)
-
-    def artifact_for_version(self, release_id: str) -> Artifact:
-        return self._releases.artifact_for_version(release_id)
-
-    def ref_for_version(self, release_id: str) -> ArtifactRef | None:
-        with self._publication_lock:
-            found = self._releases.find_release(release_id)
-        return None if found is None else found[0]
-
-    def artifact_with_metrics(
-        self,
-        release_id: str | None = None,
-    ) -> tuple[Artifact, Mapping[str, Any] | None]:
-        return self._releases.artifact_with_metrics(release_id)
 
 
 __all__ = [

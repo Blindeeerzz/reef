@@ -449,7 +449,7 @@ def test_slow_correlation_tracker_does_not_block_published_artifact_reads(
         with ThreadPoolExecutor(max_workers=1) as executor:
             try:
                 assert entered.wait(5), "correlation tracker was not called"
-                read = executor.submit(scenario.artifact_with_metrics)
+                read = executor.submit(scenario.release_queries.artifact_with_metrics)
                 artifact, _ = read.result(timeout=2)
                 assert artifact.ref == initial
                 assert not recorded.is_set(), "commit must wait for correlation metadata"
