@@ -82,9 +82,14 @@ class Task2Batch(ABC, Plugin):
         return self.context.experiment_logger
 
     @abstractmethod
-    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_id: str) -> TrainingBatch:
         """Build a batch from the tasks of the selected record sets, in batch order.
 
+        The pipeline assigns ``batch_id``: ``<scenario>:batch:<number>`` for an
+        automatic batch and ``<scenario>:instruction:<request id>`` for an
+        instruction's batch. The returned batch must keep it, or the pipeline
+        raises ``ValueError``. The number counts the batches that this pipeline
+        built; it starts again when the pipeline does and is not a training step.
         The pipeline tracks consumption by record set, including the tasks
         that the recipe leaves out of the batch. In ``manual`` mode an
         instruction's batch has no tasks.
@@ -110,5 +115,5 @@ class NoBatches(Task2Batch):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(context, 1)
 
-    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_id: str) -> TrainingBatch:
         raise RuntimeError(f"scenario {self.scenario!r} trains no weights and never produces a training batch")

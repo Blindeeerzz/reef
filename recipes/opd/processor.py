@@ -79,7 +79,5 @@ class OPDTasks(ReportTasks):
 class OPDBatches(DistillBatches):
     """OPD's batches: tasks as they come, ``batch_size`` reports to a batch."""
 
-    batch_label = "opd"
-
 
 __all__ = ["OPDBatches", "OPDSettings", "OPDTasks"]

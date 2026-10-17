@@ -349,9 +349,17 @@ class TrainingPipeline:
                 for formed_set_id in record_set.formed_set_ids()
                 for task in self.tasks[formed_set_id]
             )
-            batch = self.task2batch.make_batch(tasks, self.batch_number)
+            if request is None:
+                batch_id = f"{self.scenario}:batch:{self.batch_number}"
+            else:
+                batch_id = f"{self.scenario}:instruction:{request.id}"
+            batch = self.task2batch.make_batch(tasks, batch_id)
+            if batch.batch_id != batch_id:
+                raise ValueError(
+                    f"{type(self.task2batch).__name__}.make_batch returned batch_id {batch.batch_id!r}, not {batch_id!r}"
+                )
             if request is not None:
-                batch = replace(batch, batch_id=f"{self.scenario}:instruction:{request.id}", request=request)
+                batch = replace(batch, request=request)
             self.pending = batch
         return self.pending
 

@@ -78,7 +78,7 @@ def test_exact_student_tokens_and_no_scalar_reward_reach_slime(processor: Traini
     processor.ingest(report(score=score))
     batch = processor.build_batch()
     assert isinstance(batch, TrainingBatch)
-    assert batch.batch_id == "math:opd:1"
+    assert batch.batch_id == "math:batch:1"
     prepared = prepare_slime_step(batch, TrainingMethod("opd"), {}, StepScheduling(unit="sample", batch_size="actual"))
     payload = prepared.payload
     assert payload is not None

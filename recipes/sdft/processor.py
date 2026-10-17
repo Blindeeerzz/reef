@@ -77,7 +77,5 @@ class SDFTTasks(DistillTasks):
 class SDFTBatches(DistillBatches):
     """SDFT's batches: distillation tasks as they come, ``batch_size`` reports to a batch."""
 
-    batch_label = "sdft"
-
 
 __all__ = ["CONTEXT_PLACEHOLDER", "DEFAULT_CONTEXT_TEMPLATE", "SDFTBatches", "SDFTSettings", "SDFTTasks"]
