@@ -514,8 +514,8 @@ def test_rollback_uses_reloaded_scenario_after_waiting_for_reporting(
 
     @contextmanager
     def reload_before_reporting():
-        with value._registry.lock_for("math"):
-            value._registry.reload("math")
+        with value.registry.lock_for("math"):
+            value.registry.reload("math")
         with reporting():
             yield
 

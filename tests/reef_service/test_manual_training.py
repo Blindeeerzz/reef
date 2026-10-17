@@ -664,10 +664,10 @@ def test_mode_selection_survives_a_reload_and_a_restart(tmp_path, caplog):
         scenario = dispatcher.get_or_create_scenario("s")
         assert dispatcher.set_training_mode("s", "manual") == {"scenario": "s", "training_mode": "manual"}
         assert scenario.trainer.pipeline.training_mode == "manual"
-        reloaded = dispatcher._registry.reload("s")
+        reloaded = dispatcher.registry.reload("s")
         assert reloaded is not scenario and reloaded.trainer.pipeline.training_mode == "manual"
         assert dispatcher.set_training_mode("s", "auto")["training_mode"] == "auto"
-        assert dispatcher._registry.reload("s").trainer.pipeline.training_mode == "auto"
+        assert dispatcher.registry.reload("s").trainer.pipeline.training_mode == "auto"
         dispatcher.set_training_mode("s", "manual")
         dispatcher.accept_record(instruction("one"))
         assert _wait(lambda: _committed_skip(dispatcher, "one") == "no proposal")

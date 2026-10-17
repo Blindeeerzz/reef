@@ -108,11 +108,11 @@ def test_a_local_cycle_stands_aside_while_admission_is_closed_and_runs_once_it_r
             scenario.records.append(record)
         training.inference.pause_admission()
         assert dispatcher.local_workers.process_step("agent", HARNESS) is False
-        assert dispatcher._recipe.backends[HARNESS].prepared == 0
+        assert dispatcher.recipe.backends[HARNESS].prepared == 0
         assert HARNESS in dispatcher.local_workers.scenarios["agent"].waiting_for_admission
         training.inference.resume_admission()
         assert dispatcher.local_workers.process_step("agent", HARNESS) is True
-        assert dispatcher._recipe.backends[HARNESS].prepared == 1
+        assert dispatcher.recipe.backends[HARNESS].prepared == 1
         assert HARNESS not in dispatcher.local_workers.scenarios["agent"].waiting_for_admission
     finally:
         dispatcher.close()
@@ -177,7 +177,7 @@ def test_a_local_cycle_that_waited_for_a_job_stands_aside_when_the_job_left_admi
             training.inference.pause_admission()
         worker.join(10)
         assert outcomes == [False]
-        assert dispatcher._recipe.backends[HARNESS].prepared == 0
+        assert dispatcher.recipe.backends[HARNESS].prepared == 0
         assert HARNESS in dispatcher.local_workers.scenarios["agent"].waiting_for_admission
     finally:
         dispatcher.close()
@@ -190,7 +190,7 @@ def test_the_retry_of_a_promote_over_the_creation_leaves_held_admission_closed(t
     dispatcher = _dispatcher(tmp_path)
     try:
         scenario = _scenario(dispatcher, training)
-        dispatcher._recipe.backends[HARNESS].hold_next = True
+        dispatcher.recipe.backends[HARNESS].hold_next = True
         _step(scenario, HARNESS, 1)
         held = next(row["release_id"] for row in scenario.releases() if row.get("pending"))
         training.inference.pause_admission()
@@ -259,7 +259,7 @@ def test_a_rejected_step_before_the_rollback_does_not_make_its_retry_look_like_a
         scenario = _scenario(dispatcher, training)
         first = _step(scenario, HARNESS, 1)
         _step(scenario, HARNESS, 2)
-        dispatcher._recipe.backends[HARNESS].reject_next = True
+        dispatcher.recipe.backends[HARNESS].reject_next = True
         _step(scenario, HARNESS, 3)
         assert scenario.store.history()[-1].components is None
         training.inference.pause_admission()

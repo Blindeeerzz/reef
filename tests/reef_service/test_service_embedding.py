@@ -90,7 +90,7 @@ def test_build_app_serves_through_an_injected_handler_and_exposes_its_dispatcher
 def test_a_plugin_artifact_backend_gets_its_config_and_the_deployment_context(tmp_path, no_git_lfs) -> None:
     dispatcher = assembly.build_dispatcher(_settings(tmp_path), environ={})
     try:
-        factory = dispatcher._registry._backend_factory
+        factory = dispatcher.registry._backend_factory
         assert isinstance(factory, MemoryArtifactBackend)
         assert factory.label == "memory"
         assert factory.context == RepositoryBackendContext(work_dir=tmp_path / "work", cache_dir=tmp_path / "cache")

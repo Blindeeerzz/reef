@@ -245,7 +245,7 @@ def test_dispatcher_reload_closes_the_dropped_scenario_instance() -> None:
     original = dropped.close
     dropped.close = lambda: (closed.append("dropped"), original())[-1]
 
-    recovered = dispatcher._registry.reload("math")
+    recovered = dispatcher.registry.reload("math")
 
     assert closed == ["dropped"]
     assert recovered is not dropped
@@ -254,7 +254,7 @@ def test_dispatcher_reload_closes_the_dropped_scenario_instance() -> None:
 
 def test_lock_instance_tells_a_replaced_instance_from_a_removed_one() -> None:
     dispatcher = build_default_dispatcher(scenario_storage=SQLiteScenarioStorage())
-    registry = dispatcher._registry
+    registry = dispatcher.registry
     try:
         dropped = dispatcher.get_or_create_scenario("math")
         with registry.lock_instance(dropped) as state:

@@ -82,8 +82,8 @@ class Scenario:
             recovered_head_record=recovered_head_record,
             experiment_observer=experiment_observer,
         )
-        #: Read-only queries of committed releases and their content, safe while a commit runs.
-        self.release_queries = self._committer.releases
+        #: Read-only queries of committed releases and their content. They take only the publication lock.
+        self.release_queries = self._committer.release_queries
 
     @property
     def name(self) -> str:

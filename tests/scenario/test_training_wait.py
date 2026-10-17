@@ -68,7 +68,7 @@ def _bind(
         training_runtime=runtime,
         commit_status={"scenario_step": 0, "last_committed_step": last_committed_step},
     )
-    dispatcher._registry = SimpleNamespace(
+    dispatcher.registry = SimpleNamespace(
         training_scenario_name="s",
         training_scenario_names=("s",),
         training_status_scenario_names=("s",),
@@ -76,9 +76,9 @@ def _bind(
         loaded_scenarios=lambda: (scenario,),
         preload_errors=(),
     )
-    dispatcher.local_workers.registry = dispatcher._registry
-    dispatcher.training_loop.registry = dispatcher._registry
-    dispatcher.training_status.registry = dispatcher._registry
+    dispatcher.local_workers.registry = dispatcher.registry
+    dispatcher.training_loop.registry = dispatcher.registry
+    dispatcher.training_status.registry = dispatcher.registry
 
 
 def test_no_training_scenario_sleeps_until_the_next_accept() -> None:
@@ -163,7 +163,7 @@ def test_status_keeps_the_published_version_until_inference_reopens(monkeypatch)
     assert status["current_runtime_load_id"] == "engine:old"
     assert status["inference_admission"] == {"open": False, "active": 0}
 
-    runtime = dispatcher._registry.get_optional("s").runtime
+    runtime = dispatcher.registry.get_optional("s").runtime
     runtime.current = "engine:new"
     runtime.open = True
     status = dispatcher.build_training_status()["scenarios"]["s"]
@@ -194,14 +194,14 @@ def test_status_reports_build_failure_instead_of_raising() -> None:
     def fail() -> bool:
         raise RuntimeError("processor status is unavailable")
 
-    dispatcher._registry.get_optional("s").trainer.batch_ready = fail
+    dispatcher.registry.get_optional("s").trainer.batch_ready = fail
 
     status = dispatcher.build_training_status()
 
     assert status["scenarios"] == {}
     assert status["error"] == "s: RuntimeError: processor status is unavailable"
 
-    dispatcher._registry.get_optional("s").trainer.batch_ready = lambda: False
+    dispatcher.registry.get_optional("s").trainer.batch_ready = lambda: False
     recovered = dispatcher.build_training_status()
     assert recovered["error"] is None
     assert "s" in recovered["scenarios"]
@@ -215,7 +215,7 @@ def test_status_reports_training_and_build_failures() -> None:
     def fail() -> bool:
         raise RuntimeError("processor status is unavailable")
 
-    dispatcher._registry.get_optional("s").trainer.batch_ready = fail
+    dispatcher.registry.get_optional("s").trainer.batch_ready = fail
 
     assert dispatcher.build_training_status()["error"] == (
         "s: RuntimeError: backend failed\ns: RuntimeError: processor status is unavailable"
@@ -246,7 +246,7 @@ def test_training_loop_reports_recovery_failures_outside_a_training_attempt() ->
         raise RuntimeError("scenario reload failed")
 
     dispatcher.training_loop.process = fail_training
-    dispatcher._registry.reload = fail_reload
+    dispatcher.registry.reload = fail_reload
     dispatcher.training_loop.run()
 
     assert dispatcher.build_training_status()["error"] == "s: RuntimeError: scenario reload failed"

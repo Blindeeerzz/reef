@@ -524,7 +524,7 @@ def test_periodic_metrics_report_backlog_during_training_without_status_reads(st
     assert final["runtime/weight_sync/completed_total"] == 2
     assert final["training/failed_attempts_total"] == 0
     assert tracker.closed
-    assert not dispatcher._lifecycle.metrics_thread.is_alive()
+    assert not dispatcher.background_threads.metrics_thread.is_alive()
 
 
 def test_periodic_metrics_keep_failures_after_training_recovery(start_dispatcher, monkeypatch) -> None:
@@ -555,7 +555,7 @@ def test_periodic_metrics_keep_failures_after_training_recovery(start_dispatcher
 
 def test_disabled_tracking_does_not_start_periodic_sampling(start_dispatcher) -> None:
     _, dispatcher = start_dispatcher()
-    assert dispatcher._lifecycle.metrics_thread is None
+    assert dispatcher.background_threads.metrics_thread is None
 
 
 def test_periodic_metrics_observe_incomplete_weight_sync(start_dispatcher, monkeypatch) -> None:

@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Mapping
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from typing import Any
 
 from reef.dispatcher.errors import TrainingErrors, error_text
@@ -46,10 +46,10 @@ class ScenarioTrainingError(Exception):
 class DispatchedTrainingLoop:
     """Run the training thread and keep the state that the training status reports about it.
 
-    Keep prepare, remote execution, and the trainer/version-chain commit in
-    one serial thread. Accepts may signal readiness while a commit is slow;
-    serial draining prevents two wake-ups from observing and committing the
-    same pending result as separate steps.
+    Preparation, remote execution and the commit run in one serial thread.
+    An accepted record can wake the thread while a slow commit runs. Because
+    the thread is serial, two wakes cannot commit the same pending result as
+    two steps.
     """
 
     storage_retry_seconds: float = 5.0
@@ -66,12 +66,13 @@ class DispatchedTrainingLoop:
     undrained_warning_seconds: float = 60.0
 
     def __init__(
-        self, registry: ScenarioRegistry, errors: TrainingErrors, local_workers: LocalTrainingWorkers
+        self, registry: ScenarioRegistry, errors: TrainingErrors, local_workers: LocalTrainingWorkers, ready: Event
     ) -> None:
+        """``ready`` wakes the thread. The local workers set it too, when a weight-training scenario wakes."""
         self.registry = registry
         self.errors = errors
         self.local_workers = local_workers
-        self.ready = local_workers.training_ready
+        self.ready = ready
         self.lock = Lock()
         self.storage_status: Mapping[str, Any] | None = None
         self.last_drain: float | None = None
@@ -89,13 +90,18 @@ class DispatchedTrainingLoop:
             self.thread.start()
         self.ready.set()
 
+    def drain_state(self) -> tuple[Mapping[str, Any] | None, float | None]:
+        """The checkpoint storage block, or ``None``, and the time of the last drain."""
+        with self.lock:
+            return self.storage_status, self.last_drain
+
     def join(self) -> None:
-        """Wait for the training thread to end; the caller has closed the local workers and set ``ready``."""
+        """Wait for the training thread to end. Close the local workers and set ``ready`` first."""
         if self.thread is not None:
             self.thread.join()
 
     def stopped_unexpectedly(self) -> bool:
-        """Whether the thread ended although the dispatcher is not closed."""
+        """Whether the thread ended while the dispatcher is still open."""
         with self.lock:
             thread = self.thread
         return thread is not None and not thread.is_alive() and not self.local_workers.closed.is_set()
@@ -137,12 +143,12 @@ class DispatchedTrainingLoop:
         return timeout
 
     def drain(self) -> None:
-        # One recovery attempt, not a retry loop: if draining fails we reload
-        # the scenario from durable state and drain once more, so a crash
-        # between a durable commit and processor cleanup is healed on the spot. A
-        # second failure still reloads (leaving a clean scenario for the next
-        # wake-up) but is not spun on; the cause is reported through
-        # training_status.
+        # One recovery attempt, not a retry loop. If a drain fails, we reload
+        # the scenario from durable state and drain once more. This repairs a
+        # crash between a durable commit and the processor cleanup at once.
+        # A second failure also reloads, so the next wake finds a clean
+        # scenario, but the thread does not try again. The training status
+        # reports the cause.
         for _ in range(self.drain_attempts):
             try:
                 while self.process():
@@ -162,10 +168,10 @@ class DispatchedTrainingLoop:
     def process(self) -> bool:
         """Give every training scenario one turn; True when any of them progressed.
 
-        Several scenarios share one training runtime only when it time-slices
-        its adapter slot between them; the round-robin keeps the schedule
-        deterministic and fair, and a failure in one scenario's turn reloads
-        that scenario alone.
+        Several scenarios share one training runtime only when the runtime
+        time-slices its adapter slot between them. The round-robin keeps the
+        schedule deterministic and fair. A failed turn reloads only its own
+        scenario.
         """
         names = self.registry.training_scenario_names
         if not names:
@@ -212,8 +218,8 @@ class DispatchedTrainingLoop:
         try:
             return self.run_dispatched_turn(current, component, backend, batch)
         finally:
-            # Local cycles that stood aside or yielded for the job run now, on every scenario, whatever the
-            # outcome; a cycle whose reload waited for the job rebuilds the scenario as its first act.
+            # Whatever the outcome, the local cycles that waited for the job run now, on every scenario.
+            # A cycle whose reload waited for the job rebuilds the scenario first.
             self.local_workers.wake_all()
 
     def run_dispatched_turn(
@@ -249,10 +255,10 @@ class DispatchedTrainingLoop:
                 result = execution.result
                 if result is None:
                     raise RuntimeContractError("commit execution must carry a training result")
-                # Another component may have moved the head while the job ran. The
-                # committer merges a dispatched result rather than refusing it: the
-                # backend has published the weights already and its job can only be
-                # finished, never taken back.
+                # Another component can move the head while the job runs. The
+                # committer merges a dispatched result and does not refuse it. The
+                # backend has published the weights already, and the job can only
+                # finish; it cannot go back.
                 current.commit(result, component=component)
                 if result.training_job_id is not None:
                     backend.acknowledge_commit(current.scenario_step, result.training_job_id)

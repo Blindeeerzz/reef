@@ -327,7 +327,7 @@ def test_dispatcher_closes_runtime_after_all_scenarios_but_not_on_reload(tmp_pat
     )
     dispatcher.get_or_create_scenario("math")
     dispatcher.get_or_create_scenario("code")
-    dispatcher._registry.reload("math")
+    dispatcher.registry.reload("math")
     assert events == []
 
     def track_close(scenario):

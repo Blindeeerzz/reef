@@ -19,12 +19,13 @@ from reef.storage.records import RecordConflict
 
 
 def training_request_refusal(text: str, requires: Sequence[Mapping[str, Any]] = ()) -> str | None:
-    """Why admission refuses an instruction; the reason names the rule, never the text or the item.
+    """Why admission refuses an instruction, or ``None``. The reason names the rule, never the text or the item.
 
-    The text becomes proposer input and a catalog row, so it meets the
-    screens a promoted task prompt meets; a ``requires`` name, check or
-    prompt is shown to the person and recorded in the commit, so it meets
-    them too."""
+    The text becomes proposer input and a catalog row. Thus it must pass the
+    same screens as a promoted task prompt. A ``requires`` name, check or
+    prompt is shown to the person and recorded in the commit. Thus it must
+    pass the same screens too.
+    """
     if secret_shaped(text):
         return "the request text carries a credential shaped literal; a request never holds secrets"
     if directive_shaped(text):
@@ -58,12 +59,12 @@ def validate_record(current: Scenario, item: AgentRecord, preceding: Mapping[str
             refusal = training_request_refusal(request["text"], request["requires"])
             if refusal is not None:
                 raise ValueError(refusal)
-        # Schema enforcement: reject a malformed report before it is durably
-        # appended, so the producer's POST fails with the violation naming
-        # the broken field instead of the record dying silently at training
-        # time. An undeclared schema keeps open ingress; a scenario of several
-        # components admits what any of them accepts, and each trainer releases
-        # a report shaped for another.
+        # Reject a malformed report before it is appended. Then the producer's
+        # POST fails with an error that names the broken field. Otherwise the
+        # record would fail silently at training time. A recipe without a
+        # report schema accepts every report. A scenario of several components
+        # accepts a report that any of its components accepts. Each trainer
+        # skips a report that has the shape of another component.
         if item.request_type is RequestType.REPORT:
             # An identical retry remains valid after capacity eviction.
             if (existing := current.records.existing_receipt(item)) is not None:

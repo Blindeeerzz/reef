@@ -121,8 +121,8 @@ class ScenarioCommitter:
         # Readers share only the publication lock with commit and rollback.
         # Writers must acquire the operation lock first; readers never take it.
         self._publication_lock = RLock()
-        #: Read-only release queries; they share the publication lock with commit and rollback.
-        self.releases = ScenarioReleases(
+        #: Read-only release queries. They share the publication lock with commit and rollback.
+        self.release_queries = ScenarioReleases(
             name=name,
             artifacts=artifacts,
             store=store,
@@ -245,7 +245,7 @@ class ScenarioCommitter:
             return recorded.artifact_ref.content_id != served_id
         served_entry = next((entry.components[loaded] for entry in earlier if entry.components is not None), None)
         if served_entry is None:
-            creation = self.releases.creation_components(self._step, retry=True)
+            creation = self.release_queries.creation_components(self._step, retry=True)
             served_entry = None if creation is None else creation.get(loaded)
         recorded_entry = None if recorded.components is None else recorded.components.get(loaded)
         if recorded_entry is None or served_entry is None:
@@ -345,7 +345,7 @@ class ScenarioCommitter:
             current_ref = self._artifacts.current
             if current_ref.release_id == release_id:
                 return current_ref
-            target = self.releases.find_release(release_id)
+            target = self.release_queries.find_release(release_id)
             if target is None:
                 raise ArtifactNotFound(f"scenario {self._name!r} has no release {release_id!r}")
             target_ref, target_checkpoint = target
@@ -489,8 +489,8 @@ class ScenarioCommitter:
         if record.components is None or parent_id is None:
             return None
         carried = next((row.components for row in records if row.artifact_ref.release_id == parent_id), None)
-        if carried is None and self.releases.creation_artifact.release_id == parent_id:
-            carried = self.releases.creation_components(self._step, retry=retry)
+        if carried is None and self.release_queries.creation_artifact.release_id == parent_id:
+            carried = self.release_queries.creation_components(self._step, retry=retry)
         if carried is None:
             return None
         return [name for name, content_id in record.components.items() if carried.get(name) != content_id]
@@ -940,7 +940,7 @@ class ScenarioCommitter:
         records = self._store.history()
         previous = next(
             (prior.artifact_ref for prior in reversed(records[:-1]) if not prior.pending),
-            self.releases.creation_artifact,
+            self.release_queries.creation_artifact,
         )
         self.finish_committed_step(
             prepared, record, trainer, expected=previous, expected_checkpoint=self._artifacts.checkpoint

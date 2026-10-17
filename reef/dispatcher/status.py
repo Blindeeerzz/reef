@@ -1,7 +1,7 @@
 """The training status that ``GET /reef/status`` reports.
 
-Reading the status is also the only health check Reef runs: it warns about
-a ready batch that the training thread has not drained, and it notices a
+Reading the status is also the only health check that Reef runs. It warns
+about a ready batch that the training thread has not drained. It also finds a
 training thread that ended without recording an error.
 """
 
@@ -37,9 +37,7 @@ class TrainingStatus:
         a log line, so callers must expect a status read to have effects.
         """
         preload_errors = self.registry.preload_errors
-        with self.training_loop.lock:
-            storage_status = self.training_loop.storage_status
-            last_drain = self.training_loop.last_drain
+        storage_status, last_drain = self.training_loop.drain_state()
         # One scenario's status failing stops the sweep: the recorded error goes
         # out with whatever was collected before it.
         scenarios: dict[str, dict[str, Any]] = {}
@@ -135,7 +133,7 @@ class TrainingStatus:
                         if bound.trainer is stepping_trainer
                         else bound.trainer.pipeline_status()
                     ),
-                    "stale_refusals_total": self.errors.stale_refusal_total(scenario_name, bound.component),
+                    "stale_refusals_total": self.errors.stale_refusal_count(scenario_name, bound.component),
                     "last_committed_step": (
                         None
                         if last is None
@@ -154,14 +152,12 @@ class TrainingStatus:
         """Every recorded training error, noticing a training thread that died silently."""
         training_errors, status_build_error = self.errors.snapshot()
         training_scenario = self.registry.training_scenario_name or "<unbound>"
-        if (
-            training_scenario,
-            TRAINING_THREAD_SOURCE,
-        ) not in training_errors and self.training_loop.stopped_unexpectedly():
+        thread_error_key = (training_scenario, TRAINING_THREAD_SOURCE)
+        if thread_error_key not in training_errors and self.training_loop.stopped_unexpectedly():
             error = "RuntimeError: training thread stopped unexpectedly"
             logger.error("%s: %s", training_scenario, error)
             self.errors.record(training_scenario, error)
-            training_errors[(training_scenario, TRAINING_THREAD_SOURCE)] = error
+            training_errors[thread_error_key] = error
         errors = [f"{scenario}: {training_errors[(scenario, source)]}" for scenario, source in sorted(training_errors)]
         if status_build_error is not None:
             errors.append(status_build_error)

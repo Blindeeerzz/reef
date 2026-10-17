@@ -1,9 +1,10 @@
 """Local backend workers: one thread per scenario component whose backend runs in this process.
 
-A local cycle prepares a candidate (for example, a harness evaluation that can
-take minutes) outside the scenario's registry lock, then commits it under that
-lock. The workers also share the cycle locks with dispatched training turns
-and close the instances that a reload replaced.
+A local cycle prepares a candidate outside the scenario's registry lock,
+because the preparation can take minutes (for example, a harness evaluation).
+Then it commits the candidate under that lock. The workers share the cycle
+locks with dispatched training turns. They also close the instances that a
+reload replaced.
 """
 
 from __future__ import annotations
@@ -55,15 +56,16 @@ class LocalTrainingWorkers:
     closure therefore tries the cycle lock without waiting.
     """
 
-    # A local result refused this many times in a row, each time because a
-    # dispatched commit replaced its base, stops spinning: the worker keeps
-    # the batch, reports the refusals, and prepares it again on its next wake.
+    # A dispatched commit can replace the base of a local result, and the
+    # committer then refuses the result. After this many refusals in a row,
+    # the worker stops and reports the refusals. It keeps the batch and
+    # prepares it again on its next wake.
     stale_refusal_limit: int = 3
 
     def __init__(
         self, registry: ScenarioRegistry, errors: TrainingErrors, training_ready: Event, *, held: bool
     ) -> None:
-        """``training_ready`` is the training thread's wake event: a wake for a weight-training scenario sets it."""
+        """``training_ready`` is the wake event of the training thread. A wake of a weight-training scenario sets it."""
         self.registry = registry
         self.errors = errors
         self.training_ready = training_ready
@@ -78,31 +80,27 @@ class LocalTrainingWorkers:
     # -- Worker lifetime -------------------------------------------------
 
     def start(self, scenario: str, component: str | None = None) -> None:
-        """Start the worker of ``scenario``'s ``component``, or wake it if it runs."""
-        ready = Event()
-        thread = Thread(
-            target=self.run_worker,
-            args=(scenario, component, ready),
-            name=(
-                f"reef-local-backend-{scenario}" if component is None else f"reef-local-backend-{scenario}/{component}"
-            ),
-            daemon=True,
-        )
-        worker = LocalBackendWorker(ready, thread)
+        """Start the worker of ``scenario``'s ``component``, or wake it if it runs already."""
         with self.lock:
             if self.phase == "closed":
                 return
             key = (scenario, component)
-            existing = self.workers.get(key)
-            if existing is None:
+            worker = self.workers.get(key)
+            if worker is None:
+                ready = Event()
+                thread = Thread(
+                    target=self.run_worker,
+                    args=(scenario, component, ready),
+                    name=f"reef-local-backend-{scenario}" + ("" if component is None else f"/{component}"),
+                    daemon=True,
+                )
+                worker = LocalBackendWorker(ready, thread)
                 self.workers[key] = worker
-                worker.thread.start()
-            else:
-                worker = existing
+                thread.start()
         worker.ready.set()
 
     def wake(self, current: Scenario) -> None:
-        """Wake every trainer of ``current`` that runs a backend: the training thread or its local workers."""
+        """Wake each trainer of ``current`` that has a backend: the training thread, or a local worker."""
         if current.training_runtime is not None:
             self.training_ready.set()
         for bound in current.trainers:
@@ -211,11 +209,11 @@ class LocalTrainingWorkers:
         if not self.check_admission(current, component):
             return False
         self.errors.clear(scenario, local_error_source(component))
-        # Local workers of one scenario take turns for a whole cycle, prepare
-        # and commit together, under this lock alone: letting their commits
-        # race only had the slower worker refused as stale on every cycle, and
-        # each refusal threw away a full candidate evaluation. A dispatched
-        # commit still lands meanwhile; the stale policy answers it.
+        # The local workers of one scenario take turns for a whole cycle,
+        # preparation and commit, under this lock. When their commits raced,
+        # the committer refused the slower worker as stale on every cycle.
+        # Each refusal discarded a full candidate evaluation. A dispatched
+        # commit can still land during a cycle; the stale policy handles it.
         with self.cycle(scenario):
             if not self.cycles_run():
                 return False
@@ -250,9 +248,9 @@ class LocalTrainingWorkers:
                     )
                     return False
                 if state is not InstanceState.CURRENT:
-                    # Rebuilt under this cycle by a sibling trainer's failure, or deleted: the result belongs to the
-                    # instance that prepared it, and the step ends without a commit. A rebuilt instance holds these
-                    # rows unread: look again on it.
+                    # A sibling trainer's failure rebuilt the scenario during this cycle, or a delete removed it.
+                    # The result belongs to the old instance, so the step ends without a commit. A rebuilt
+                    # instance has not read these rows: look again on it.
                     return state is InstanceState.REPLACED
                 try:
                     current.commit(result, component=component)
@@ -268,16 +266,16 @@ class LocalTrainingWorkers:
                     # in-memory step and append the same step number again.
                     self.reload_after_local_failure(current)
                     raise
-        self.errors.end_stale_refusals(scenario, component)
+        self.errors.reset_stale_refusals_in_a_row(scenario, component)
         return True
 
     def retry_stale_result(self, current: Scenario, component: str | None, stale: StaleTrainingResultError) -> bool:
         """Keep the refused batch for another preparation; after a few refusals in a row, wait for the next wake.
 
-        Only a dispatched commit can still overtake a local result: the local
-        workers take turns. A weights job that lands during every local cycle
-        would otherwise keep the local worker preparing and discarding forever
-        with nothing in the status to show for it.
+        Only a dispatched commit can still overtake a local result, because the
+        local workers take turns. A weights job can land during every local
+        cycle. Without the limit, the worker would prepare and discard
+        forever, and the status would not show it.
         """
         in_a_row = self.errors.count_stale_refusal(current.name, component)
         reevaluate = stale.policy == "reevaluate"
@@ -304,8 +302,8 @@ class LocalTrainingWorkers:
         if not current.trainer_for(component).fail_pending_instruction(error_text(cause)):
             return
         with self.registry.lock_instance(current) as state:
-            # Wake the worker so failed instructions settle even when no new records arrive; a scenario
-            # deleted or reloaded meanwhile starts no worker for an instance that is gone.
+            # Wake the worker, so that the failed instruction settles without a new record.
+            # Do not start a worker for an instance that a delete or a reload removed.
             if state is InstanceState.CURRENT:
                 self.wake(current)
 
@@ -338,7 +336,7 @@ class LocalTrainingWorkers:
         self.turn_waiting.set()
         try:
             with ExitStack() as turn:
-                # Callbacks run after every lock is released, including on partial acquisition failure.
+                # The callbacks run after the turn releases every lock, also when it acquired only some.
                 for name in names_in_order:
                     turn.callback(self.close_replaced_instances, name)
                 for name in names_in_order:
