@@ -48,11 +48,11 @@ from reef.core.tasks.metadata import TRAINING_ARM, reported_arm, reported_task_n
 from reef.core.tasks.split import TaskSplitConflict
 from reef.harness.client.tasks import TaskPlay
 from reef.pipeline_context import PipelineContext
-from reef.recipe.generated_tasks.store import FileTaskStore, TaskConflict
 from reef.record2record import GroupDecision, Record2Record, ReportContext, RoundGrouping, RoundRecord2Record
 from reef.record2task import Record2Task, ReportTasks
 from reef.record2task.assembly import SampleAssembly, SampleAssemblySettings
 from reef.record2task.generator.client import DuplicateTask, Generator, HttpGenerator, TaskNameConflict
+from reef.record2task.store import FileTaskStore, TaskConflict
 from reef.task2batch import Task2Batch
 from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem
 

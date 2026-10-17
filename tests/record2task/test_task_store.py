@@ -9,7 +9,7 @@ from tests.support.task_service_stubs import task_for
 
 from reef.core.tasks import GeneratedTask, PlayArm, manifest_task_paths, read_harbor_task
 from reef.core.tasks.split import TaskSplitConflict
-from reef.recipe.generated_tasks.store import FileTaskStore, TaskConflict, TaskStoreError
+from reef.record2task.store import FileTaskStore, TaskConflict, TaskStoreError
 
 TASK_NAME = "stored-task"
 SOURCE_ID = "source-session"

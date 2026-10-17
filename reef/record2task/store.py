@@ -1,6 +1,7 @@
 """Persist generation outcomes and Harbor tasks independently of their rollout.
 
-Generation documents own task metadata. Harbor directories contain only Harbor
+A record-to-task stage that generates tasks saves them here with their fixed
+train/eval split before any rollout. Generation documents own task metadata. Harbor directories contain only Harbor
 files, and the split manifest is rebuilt from published generation outcomes.
 """
 

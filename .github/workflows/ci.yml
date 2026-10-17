@@ -347,6 +347,7 @@ jobs:
               "alembic",
               "harbor",
               "huggingface-hub",
+              "pydantic",
               "pyyaml",
               "reef-client",
               "reef-eval",

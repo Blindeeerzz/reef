@@ -45,8 +45,8 @@ from reef.recipe.generated_tasks.processor import (
     reported_task_name,
     rewards_of,
 )
-from reef.recipe.generated_tasks.store import FileTaskStore
 from reef.record2record import GroupDecision, ReportContext
+from reef.record2task.store import FileTaskStore
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train.algos.registry import resolve_objective
 from reef.train.pipeline import PipelineConfig, TrainingPipeline

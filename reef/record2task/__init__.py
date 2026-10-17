@@ -28,6 +28,12 @@ Implementations:
   Each round generates tasks, checks them, and plays them; the training plays
   come back as reports and become tasks.
 
+Generated tasks:
+
+* ``TaskStore`` and ``FileTaskStore`` (``store.py``, which this module does not
+  import): a store that saves generated tasks and their train/eval split before
+  any rollout, so a stage that generates tasks can keep them across restarts.
+
 Shared parts of ``make_sample``:
 
 * ``SampleAssembly`` (``assembly.py``): a report and its inference records into
