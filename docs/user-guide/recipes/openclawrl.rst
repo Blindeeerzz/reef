@@ -118,9 +118,18 @@ file. The record-to-task stage takes no config.
    pipeline.record2record.config.prm_timeout_s | 120.0 | per-judge timeout in seconds
    pipeline.record2record.config.prm_concurrency | 8 | turns judged at once
    pipeline.record2record.config.prm_max_hint_candidates | 3 | hint candidates collected per turn
+   pipeline.record2record.config.tool_turn_reward | prm | the reward of a turn whose next state is a tool result: ``prm`` asks the PRM, as upstream does; ``neutral`` gives no reward, so the turn trains only from an accepted hint
    pipeline.task2batch.config.batch_size | 16 | judged turns per training step. Must equal the driver's ``--global-batch-size``.
    pipeline.task2batch.config.prm_record_file | "" | judged population, one JSON line per batch; empty disables it
    recipe.config.max_staleness | 0 | accepted lag between the producing and serving version. Env ``REEF_MAX_STALENESS``.
+
+The upstream judge prompt scores any tool output without an error as +1. A
+policy can then earn reward with tool calls that do nothing for the user. In
+the MLX GSM8K stream, the PRM scored 28 of 34 such calls +1, such as a
+background ``terminal`` command or a deleted homework file. It scored 7 of 20
+text replies +1. After about 20 steps, the policy stopped replying in text.
+``tool_turn_reward: neutral`` removes that reward. Only the student's reaction
+then rewards or penalizes a turn.
 
 With ``prm_api: openai``, a hosted provider can be the judge, because the
 judge needs only generated text. The config holds the name of the credential

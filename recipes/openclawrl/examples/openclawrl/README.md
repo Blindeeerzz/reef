@@ -50,6 +50,7 @@ results/
   2026-09-16-mlx-session-ttl/    the session TTL comparison on MLX
 serve.yaml                       Reef/Slime configuration and the recipe's PRM endpoint
 serve-mlx.yaml                   Reef/MLX configuration for one Apple Silicon Mac, with a hosted PRM
+reply_probe.json                 hermes conversations for the candidate evaluation's reply probe (serve-mlx.yaml)
 docker-compose.yaml              Reef, PRM and student-model containers with separate GPUs
 run.sh                           builds the student service image, starts the stack, runs the stream
 restamp.sh                       re-pins the 72 tasks to user_sim/'s content hash after a change there

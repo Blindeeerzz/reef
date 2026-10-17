@@ -100,6 +100,13 @@ class OpenClawRLJudgingSettings(PluginSettings):
     prm_timeout_s: float = config_option(120.0, help="The timeout of one judge call in seconds.")
     prm_concurrency: int = config_option(8, help="The turns judged at the same time.")
     prm_max_hint_candidates: int = config_option(3, help="The hint candidates collected for each turn, at most.")
+    # Upstream's judge scores any non-error tool output +1, so a policy can earn
+    # reward with tool calls that do nothing for the user.
+    tool_turn_reward: str = config_option(
+        "prm",
+        help="The reward of a turn whose next state is a tool result: 'prm' asks the PRM, as upstream does; "
+        "'neutral' gives no reward, so only the hint judge can train the turn.",
+    )
 
     def __post_init__(self) -> None:
         if self.session_ttl_s <= 0:
@@ -126,6 +133,8 @@ class OpenClawRLJudgingSettings(PluginSettings):
             raise ValueError("prm_concurrency must be positive")
         if self.prm_max_hint_candidates <= 0:
             raise ValueError("prm_max_hint_candidates must be positive")
+        if self.tool_turn_reward not in ("prm", "neutral"):
+            raise ValueError(f"tool_turn_reward must be 'prm' or 'neutral', got {self.tool_turn_reward!r}")
 
 
 def prm_clients(settings: OpenClawRLJudgingSettings, environ: Mapping[str, str]) -> tuple[Any, Any, Any]:
@@ -185,6 +194,7 @@ class OpenClawRLJudging(RecordJudging):
     ) -> None:
         self.prm, self.teacher, self.renderer = clients if clients is not None else prm_clients(settings, environ)
         self.max_hint_candidates = settings.prm_max_hint_candidates
+        self.tool_turn_reward = settings.tool_turn_reward
         self.index = SessionIndex(settings.session_ttl_s, max_sessions=settings.max_open_sessions)
         # Correlation reports itself through the log, not the record file:
         # the failure worth catching is "nothing ever bound", and a run in
@@ -263,11 +273,16 @@ class OpenClawRLJudging(RecordJudging):
                 tools=job.request_tools,
             )
         response_text = response_text or render_response_fallback(job.response_message)
-        # 2. Both PRM judges vote.
-        eval_score, hint_votes = await asyncio.gather(
-            self.prm.evaluate(response_text, job.next_state_text, job.next_state_role),
-            self.prm.evaluate_hint_votes(response_text, job.next_state_text, job.next_state_role),
-        )
+        # 2. Both PRM judges vote. With a neutral tool-turn reward, a turn
+        #    whose next state is a tool result gets no evaluative vote.
+        if job.next_state_role == "tool" and self.tool_turn_reward == "neutral":
+            eval_score = 0.0
+            hint_votes = await self.prm.evaluate_hint_votes(response_text, job.next_state_text, job.next_state_role)
+        else:
+            eval_score, hint_votes = await asyncio.gather(
+                self.prm.evaluate(response_text, job.next_state_text, job.next_state_role),
+                self.prm.evaluate_hint_votes(response_text, job.next_state_text, job.next_state_role),
+            )
         # 3. The accepted hindsight hints, shortest first, capped.
         candidates = collect_hint_candidates(hint_votes, max_cand=self.max_hint_candidates)
         # 4. Every candidate ships as a TOKEN SEQUENCE — upstream's

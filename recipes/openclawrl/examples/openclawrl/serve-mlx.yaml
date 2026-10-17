@@ -110,6 +110,12 @@ pipeline:
       # The tokenizer of the policy. The teacher renders hint-enhanced prompts
       # with it for every prm_api.
       prm_tokenizer_path: mlx-community/Qwen3.5-9B-MLX-4bit
+      # The upstream judge scores any tool output without an error as +1, so
+      # the policy learned to call tools that do nothing for the student.
+      # After about 20 steps it stopped answering in text. With neutral, a
+      # turn whose next state is a tool result gets no reward; only an
+      # accepted hint trains it.
+      tool_turn_reward: neutral
   task2batch:
     config:
       # Judged turns per optimizer step. The reference uses 16. A value of 8
@@ -123,9 +129,9 @@ storage:
   artifact-work-dir: work/mlx/artifact-work
   artifact-cache-dir: work/mlx/artifact-cache
 
-# Candidate evaluation: each candidate runs a fixed style probe before Reef
-# publishes it. Reef does not publish a candidate whose clean rate drops more
-# than the margin below the best. Without this section, Reef uses the `always`
+# Candidate evaluation: each candidate runs a fixed style probe and a reply
+# probe before Reef publishes it. Reef does not publish a candidate whose clean
+# rate or reply rate drops more than its margin below the best. Without this section, Reef uses the `always`
 # policy and publishes every step.
 #
 # The probe generates from the weights of the candidate, so it needs a training
@@ -144,3 +150,11 @@ evaluation:
     # of 0.17 accepts a drop of one problem and refuses a drop of two or more.
     # The check stops a collapse, not small changes between steps.
     regression_margin: 0.17
+    # The style probe has no tools, so it cannot see a policy that only calls
+    # tools. The reply probe holds hermes conversations where the policy has
+    # read the homework and should answer in text. Reef refuses a candidate
+    # whose reply_rate drops more than reply_margin below the best. With 8
+    # conversations, 0.25 accepts a drop of two answers and refuses three.
+    reply_probe_file: recipes/openclawrl/examples/openclawrl/reply_probe.json
+    reply_max_tokens: 512
+    reply_margin: 0.25

@@ -433,12 +433,12 @@ class _FakeTeacher:
         return [101, 102] + [int(v) for v in native_tokens[-response_token_count:]]
 
 
-def _judge_one_turn(judge, teacher):
+def _judge_one_turn(judge, teacher, *, next_state_role="user", settings=None):
     from reef.pipeline_context import PipelineContext
 
     context = PipelineContext("s")
 
-    stage = OpenClawRLRecord2Record(OpenClawRLJudgingSettings(), clients=(judge, teacher, None))
+    stage = OpenClawRLRecord2Record(settings or OpenClawRLJudgingSettings(), clients=(judge, teacher, None))
     processor = TrainingPipeline(
         context,
         record2record=stage,
@@ -451,7 +451,7 @@ def _judge_one_turn(judge, teacher):
         request_tools=None,
         response_message={"role": "assistant", "content": "the answer is 5"},
         next_state_text="too robotic, redo it",
-        next_state_role="user",
+        next_state_role=next_state_role,
         topk_indices=[[1, 2, 3, 4]],
         native_tokens=[7, 8, 9],
         response_token_count=1,
@@ -491,6 +491,21 @@ class TestHybridDispatch:
     def test_neither_signal_drops_turn(self):
         judgment = _judge_one_turn(_FakeJudge(0.0, None), _FakeTeacher(None))
         assert judgment.score is None
+
+    def test_a_neutral_tool_turn_reward_leaves_tool_turns_to_the_hint_judge(self):
+        neutral = OpenClawRLJudgingSettings(tool_turn_reward="neutral")
+
+        unhinted = _judge_one_turn(_FakeJudge(1.0, None), _FakeTeacher(None), next_state_role="tool", settings=neutral)
+        hinted = _judge_one_turn(
+            _FakeJudge(1.0, "read the file first"), _FakeTeacher([[-0.3]]), next_state_role="tool", settings=neutral
+        )
+        user_turn = _judge_one_turn(_FakeJudge(1.0, None), _FakeTeacher(None), settings=neutral)
+
+        assert unhinted.score is None
+        assert hinted.score == 0.0
+        assert hinted.teacher_cands[0]["hint"] == "read the file first"
+        # A turn that the user answers keeps its PRM reward.
+        assert user_turn.score == 1.0
 
     def test_teacher_failure_degrades_to_rl_only(self):
         judgment = _judge_one_turn(_FakeJudge(1.0, "a substantive hint here"), _FakeTeacher(None))
@@ -702,6 +717,7 @@ class TestJudgeDialects:
             ({"prm_model": ""}, "requires prm_model"),
             ({"prm_api": "anthropic"}, "prm_api must be"),
             ({"prm_api": "sglang"}, "applies only to prm_api 'openai'"),
+            ({"tool_turn_reward": "zero"}, "tool_turn_reward must be"),
         ],
     )
     def test_invalid_judge_settings_are_refused(self, overrides, message):

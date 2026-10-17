@@ -6,6 +6,7 @@ probe goes through ``MLXRuntime.probe_candidate`` and needs no model.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -24,6 +25,8 @@ CLEAN = (
 )
 MARKDOWN = "**Answer:** 72\n- April: 48\n- May: 24\n"
 EMPTY = ""  # a turn with no reply
+TEXT_ANSWER = "<think>\nThe file holds the problem.\n</think>\n\nShe sold 72 clips altogether."
+TOOL_CALL = "<tool_call>\n<function=terminal>\n<parameter=command>\necho ymd\n</parameter>\n</function>\n</tool_call>"
 
 
 @dataclass
@@ -119,6 +122,52 @@ def test_the_plugin_accepts_the_climb_and_rejects_the_collapse(probe) -> None:
     assert probe([CLEAN] * 5 + [EMPTY])[0].selected
 
 
+def write_reply_probe(tmp_path: Path, conversation_count: int = 2) -> Path:
+    path = tmp_path / "reply_probe.json"
+    conversation = [
+        {"role": "user", "content": "Hey, I have my homework in the file homework/0.txt."},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "1", "content": "Problem: ..."},
+    ]
+    path.write_text(
+        json.dumps(
+            {
+                "tools": [{"type": "function", "function": {"name": "read_file"}}],
+                "conversations": [conversation] * conversation_count,
+            }
+        )
+    )
+    return path
+
+
+def test_the_reply_probe_counts_text_answers_and_refuses_a_policy_that_stops_answering(tmp_path: Path) -> None:
+    training, engine = probe_runtime(tmp_path)
+    plugin = build_plugin(training, reply_probe_file=str(write_reply_probe(tmp_path)))
+    # The conversations are rendered with the harness tools.
+    assert engine.rendered[-1]["tools"] == [{"type": "function", "function": {"name": "read_file"}}]
+
+    def run(answers: list[str]):
+        engine.replies = [CLEAN] * 6 + answers
+        candidate = UpdateCandidate(candidate_id="c")
+        evaluation = plugin.evaluate(candidate)
+        return plugin.decide(candidate, evaluation), evaluation
+
+    first, evaluation = run([TEXT_ANSWER, TEXT_ANSWER])
+    assert first.selected
+    assert evaluation.metrics["reply_rate"] == 1.0
+    # A tool call or an empty turn is not a text answer, even with a clean style probe.
+    collapse, evaluation = run([TOOL_CALL, EMPTY])
+    assert evaluation.metrics["reply_rate"] == 0.0
+    assert not collapse.selected
+    assert collapse.reason.startswith("reply_rate 0 regressed")
+    # The refused candidate does not lower the bar: 1/2 is still more than 0.25 below 1.0.
+    assert not run([TEXT_ANSWER, TOOL_CALL])[0].selected
+
+
 def test_from_config_refuses_a_runtime_that_cannot_probe_a_candidate() -> None:
     with pytest.raises(PluginConfigError, match="mlx training runtime"):
         OpenClawRLCandidateEvaluation.from_config(
@@ -133,6 +182,9 @@ def test_from_config_refuses_a_runtime_that_cannot_probe_a_candidate() -> None:
         ({"probe_size": 11}, "probe_size must be between 1 and 10"),
         ({"max_tokens": 0}, "max_tokens must be positive"),
         ({"regression_margin": -0.1}, "regression_margin must be non-negative"),
+        ({"reply_max_tokens": 0}, "reply_max_tokens must be positive"),
+        ({"reply_margin": -0.1}, "reply_margin must be non-negative"),
+        ({"reply_probe_file": "/nonexistent/reply_probe.json"}, "cannot read reply_probe_file"),
     ],
 )
 def test_from_config_refuses_an_invalid_setting(tmp_path: Path, config, message) -> None:
