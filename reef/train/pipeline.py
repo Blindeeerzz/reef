@@ -296,7 +296,7 @@ class TrainingPipeline:
         if item.request_type is RequestType.TRAIN:
             if item.scenario != self.scenario:
                 raise ValueError("training records must belong to the pipeline's scenario")
-            request = replace(TrainingRequest.from_dict(item.payload), id=item.agent_record_id)
+            request = TrainingRequest.from_dict(item.payload, request_id=item.agent_record_id)
             if request.id not in self.consumed_requests:
                 self.training_requests.setdefault(request.id, request)
             return
