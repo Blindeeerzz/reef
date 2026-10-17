@@ -32,7 +32,7 @@ from reef.artifact.repository import (
 from reef.core.errors import ReefError, ScenarioCapacityFull, UnknownScenario
 from reef.inference.model_config import ModelConfig
 from reef.observability import ExperimentTracker, NullExperimentTracker
-from reef.observability.commits import LoadedExperimentReports
+from reef.observability.commits import ExperimentReportQueue
 from reef.recipe.base import Recipe
 from reef.scenario.admission import LoadedScenario, ScenarioAdmission, ScenarioLimits
 from reef.scenario.factory import ScenarioFactory
@@ -115,14 +115,16 @@ class ScenarioRegistry:
     ) -> None:
         self._model_configs: dict[str, ModelConfig] = {}
         self._storage = scenario_storage
-        self.loaded_experiment_reports = LoadedExperimentReports()
+        tracker = experiment_tracker if experiment_tracker is not None else NullExperimentTracker()
+        #: Delivers the experiment events of every scenario in this registry.
+        self.experiment_reports = ExperimentReportQueue(tracker)
         self._scenario_factory = ScenarioFactory(
             recipe,
             backend_factory,
             local_artifact_dir=local_artifact_dir,
             scenario_storage=scenario_storage,
-            loaded_experiment_reports=self.loaded_experiment_reports,
-            experiment_tracker=(experiment_tracker if experiment_tracker is not None else NullExperimentTracker()),
+            experiment_reports=self.experiment_reports,
+            experiment_tracker=tracker,
         )
         self._backend_factory = backend_factory
         self._recipe = recipe
@@ -296,7 +298,7 @@ class ScenarioRegistry:
 
     @contextmanager
     def lock_for(self, scenario: str, *, blocking: bool = True) -> Iterator[bool]:
-        """Yield whether access was acquired; report loaded commits after the outermost lock exits.
+        """Yield whether the scenario's lock was acquired.
 
         With ``blocking=False``, a busy scenario yields ``False`` without waiting.
         """
@@ -305,13 +307,12 @@ class ScenarioRegistry:
             if lock is None:
                 lock = RLock()
                 self._scenario_locks[scenario] = lock
-        with self.loaded_experiment_reports.scope():
-            acquired = lock.acquire(blocking=blocking)
-            try:
-                yield acquired
-            finally:
-                if acquired:
-                    lock.release()
+        acquired = lock.acquire(blocking=blocking)
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                lock.release()
 
     def set_training_mode(self, scenario: str, training_mode: str) -> Scenario:
         """Select an existing scenario's mode and store it, so reloads and restarts apply it again."""

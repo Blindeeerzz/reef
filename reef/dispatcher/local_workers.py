@@ -19,7 +19,7 @@ from typing import Literal
 from reef.dispatcher.errors import TrainingErrors, error_text, local_error_source
 from reef.runtime.interfaces import RuntimeContractError
 from reef.scenario.registry import InstanceState, ScenarioRegistry
-from reef.scenario.scenario import Scenario, SettledTrainingResultError, StaleTrainingResultError
+from reef.scenario.scenario import Scenario
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,6 @@ class LocalBackendWorker:
 class ScenarioCycles:
     lock: Lock = field(default_factory=Lock)
     waiting_for_admission: set[str | None] = field(default_factory=set)
-    reload_pending: bool = False
     replaced: list[Scenario] = field(default_factory=list)
 
 
@@ -45,22 +44,17 @@ class LocalTrainingWorkers:
     """Own local worker lifetime and cycles, dispatched turns, and scenario replacement.
 
     Service starts held or running. Opening releases held workers; stopping and closed never reopen.
-    Each scenario serializes local cycles with one lock. A colocated job takes all
-    cycle locks in name order; workers yield while it waits. A failed local cycle
-    defers reload while a dispatched batch is reserved. Replaced instances close
-    only after the cycle or dispatched turn using them releases its lock.
+    Each scenario runs one step at a time under its cycle lock: a local cycle,
+    or a dispatched turn of the training thread. A colocated job also takes
+    the cycle locks of all other scenarios in name order; workers yield while
+    it waits. Replaced instances close only after the step that uses them
+    releases its lock.
 
     Lock order: cycle locks -> registry scenario lock -> coordination lock -> training errors lock.
     Never wait for a cycle lock, join a worker, or close a scenario while holding the coordination lock.
     Registry reloads close the replaced instance while holding their scenario lock:
     closure therefore tries the cycle lock without waiting.
     """
-
-    # A dispatched commit can replace the base of a local result, and the
-    # committer then refuses the result. After this many refusals in a row,
-    # the worker stops and reports the refusals. It keeps the batch and
-    # prepares it again on its next wake.
-    stale_refusal_limit: int = 3
 
     def __init__(
         self, registry: ScenarioRegistry, errors: TrainingErrors, training_ready: Event, *, held: bool
@@ -115,10 +109,8 @@ class LocalTrainingWorkers:
             state = self.scenarios.get(scenario)
             if state is not None:
                 state.waiting_for_admission.clear()
-                state.reload_pending = False
         for worker in workers:
             worker.ready.set()
-        self.errors.forget_stale_refusals(scenario)
 
     def wait(self, scenario: str, component: str | None, ready: Event) -> bool:
         with self.lock:
@@ -209,11 +201,9 @@ class LocalTrainingWorkers:
         if not self.check_admission(current, component):
             return False
         self.errors.clear(scenario, local_error_source(component))
-        # The local workers of one scenario take turns for a whole cycle,
-        # preparation and commit, under this lock. When their commits raced,
-        # the committer refused the slower worker as stale on every cycle.
-        # Each refusal discarded a full candidate evaluation. A dispatched
-        # commit can still land during a cycle; the stale policy handles it.
+        # A scenario runs one step at a time. A local cycle holds the cycle lock
+        # from preparation to commit, and a dispatched turn holds it from
+        # reservation to acknowledgement. Thus the head does not move under a step.
         with self.cycle(scenario):
             if not self.cycles_run():
                 return False
@@ -227,8 +217,10 @@ class LocalTrainingWorkers:
             # The job whose turn this worker waited for may have left admission closed.
             if not self.check_admission(current, component):
                 return False
-            if self.reload_deferred(current):
-                return True  # The rebuilt instance holds this worker's rows unread.
+            if current.is_job_reserved:
+                # A dispatched step is still out, for example while checkpoint storage is blocked.
+                # Its turn wakes this worker when the step ends.
+                return False
             try:
                 result = current.prepare_training_step(component)
             except Exception as exc:
@@ -240,7 +232,7 @@ class LocalTrainingWorkers:
             # Keep only the short commit and recovery window under the scenario
             # registry lock. Candidate generation above can take minutes and must
             # not block record acceptance for this scenario.
-            with current.experiment_reporting(), self.registry.lock_instance(current) as state:
+            with self.registry.lock_instance(current) as state:
                 if not self.cycles_run():
                     # The service stopped under this cycle: its model calls may have failed as the routes went away.
                     logger.info(
@@ -248,54 +240,19 @@ class LocalTrainingWorkers:
                     )
                     return False
                 if state is not InstanceState.CURRENT:
-                    # A sibling trainer's failure rebuilt the scenario during this cycle, or a delete removed it.
+                    # The training thread rebuilt the scenario after a failed turn, or a delete removed it.
                     # The result belongs to the old instance, so the step ends without a commit. A rebuilt
                     # instance has not read these rows: look again on it.
                     return state is InstanceState.REPLACED
                 try:
                     current.commit(result, component=component)
-                except StaleTrainingResultError as stale:
-                    return self.retry_stale_result(current, component, stale)
-                except SettledTrainingResultError:
-                    # The step this worker would have made is in the log already; look again for the next one.
-                    logger.info("scenario %r component %r: another commit settled its result", scenario, component)
-                    return True
                 except Exception:
                     # A record may already have crossed the fsync commit point.
                     # Reload before rollback or acceptance can observe the stale
                     # in-memory step and append the same step number again.
                     self.reload_after_local_failure(current)
                     raise
-        self.errors.reset_stale_refusals_in_a_row(scenario, component)
         return True
-
-    def retry_stale_result(self, current: Scenario, component: str | None, stale: StaleTrainingResultError) -> bool:
-        """Keep the refused batch for another preparation; after a few refusals in a row, wait for the next wake.
-
-        Only a dispatched commit can still overtake a local result, because the
-        local workers take turns. A weights job can land during every local
-        cycle. Without the limit, the worker would prepare and discard
-        forever, and the status would not show it.
-        """
-        in_a_row = self.errors.count_stale_refusal(current.name, component)
-        reevaluate = stale.policy == "reevaluate"
-        current.retry_pending(component, keep_candidate=reevaluate)
-        if in_a_row < self.stale_refusal_limit:
-            logger.info(
-                "scenario %r component %r: %s; %s",
-                current.name,
-                component,
-                stale,
-                "evaluating the candidate again" if reevaluate else "preparing the batch again",
-            )
-            return True
-        message = (
-            f"StaleTrainingResultError: component {component!r} was refused {in_a_row} times in a row; "
-            "its batch is kept and prepared again on the next wake"
-        )
-        logger.warning("scenario %r: %s", current.name, message)
-        self.errors.record(current.name, message, local_error_source(component))
-        return False
 
     def fail_instruction(self, current: Scenario, cause: Exception, component: str | None = None) -> None:
         """A failed instruction step consumes the instruction with a skip row on the next step; wake for it."""
@@ -322,16 +279,23 @@ class LocalTrainingWorkers:
             # A cycle is a use of the scenario. Its idle time starts when its last cycle ends.
             self.registry.touch(scenario)
             self.close_replaced_instances(scenario)
+            # The training thread skips a scenario while a local cycle holds its lock. Wake it now.
+            current = self.registry.get_optional(scenario)
+            if current is not None and current.training_runtime is not None:
+                self.training_ready.set()
 
     def dispatched_turn(self, current: Scenario, component: str | None) -> ExitStack:
-        """Hold colocated cycle locks through execution, commit, and acknowledgement."""
+        """Hold the cycle locks of all other scenarios through a colocated job's execution, commit and acknowledgement.
+
+        The training thread holds the cycle lock of ``current`` already.
+        """
         backend = current.trainer_for(component).candidate_backend
         if backend is None or not backend.colocated:
             return ExitStack()
         names = {loaded.name for loaded in self.registry.loaded_scenarios()}
-        names.add(current.name)
         with self.lock:
             names.update(self.scenarios)
+        names.discard(current.name)
         names_in_order = sorted(names)
         self.turn_waiting.set()
         try:
@@ -370,10 +334,10 @@ class LocalTrainingWorkers:
                     return
 
     def instance_change_pending(self, scenario: str) -> bool:
-        """Whether a deferred reload of ``scenario`` waits, or a replaced instance of it waits to close."""
+        """Whether a replaced instance of ``scenario`` waits to close."""
         with self.lock:
             state = self.scenarios.get(scenario)
-            return state is not None and (state.reload_pending or bool(state.replaced))
+            return state is not None and bool(state.replaced)
 
     def take_replaced(self) -> list[Scenario]:
         """Collect remaining replacements after all workers have joined."""
@@ -384,37 +348,18 @@ class LocalTrainingWorkers:
             return replaced
 
     def reload_after_local_failure(self, current: Scenario) -> None:
-        """Reload durable state now, or after the reserved job; do not wake the failing worker."""
+        """Reload durable state after a failed local cycle; do not wake the failing worker.
+
+        The cycle holds the scenario's cycle lock, so no dispatched job is reserved.
+        """
         if not current.store.durable:
             return
         with self.registry.lock_instance(current) as state:
-            if state is not InstanceState.CURRENT:
-                return
-            if current.is_job_reserved:
-                with self.lock:
-                    self.scenarios.setdefault(current.name, ScenarioCycles()).reload_pending = True
-                logger.info("scenario %r reloads once its training job has landed", current.name)
-                return
-            self.reload(current.name, current)
-
-    def reload_deferred(self, current: Scenario) -> bool:
-        """Called under the cycle lock: reload only after the reserved job has landed."""
-        with self.lock:
-            cycles = self.scenarios.get(current.name)
-            if cycles is None or not cycles.reload_pending:
-                return False
-        with self.registry.lock_instance(current) as instance_state:
-            if instance_state is not InstanceState.CURRENT or current.is_job_reserved:
-                return False
-            self.reload(current.name, current)
-        return True
+            if state is InstanceState.CURRENT:
+                self.reload(current.name, current)
 
     def reload(self, scenario: str, current: Scenario | None) -> Scenario:
         """Rebuild durable state, retaining failed instructions that still need skip rows."""
-        with self.lock:
-            state = self.scenarios.get(scenario)
-            if state is not None:
-                state.reload_pending = False
         failures = (
             {bound.component: bound.trainer.instruction_failures() for bound in current.trainers}
             if current is not None

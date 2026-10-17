@@ -52,7 +52,7 @@ from reef.record2record import (
 )
 from reef.record2task import JudgedTasks
 from reef.runtime.interfaces import RuntimeContractError
-from reef.scenario import Scenario, StaleTrainingResultError
+from reef.scenario import Scenario
 from reef.scenario.scenario import validate_component_trainers
 from reef.service.app import create_app
 from reef.service.request_service import RequestService
@@ -74,8 +74,8 @@ from reef.train.types import TrainDataItem, TrainingBatch
 class _SlowBackend(_ComponentBackend):
     """The same cycle whose evaluation waits for the test to let it go, as a minutes long episode run would."""
 
-    def __init__(self, component: str, artifact_dir: Path, *, stale_policy: str = "merge") -> None:
-        super().__init__(component, artifact_dir, stale_policy=stale_policy)
+    def __init__(self, component: str, artifact_dir: Path) -> None:
+        super().__init__(component, artifact_dir)
         self.evaluating = threading.Event()
         self.release = threading.Event()
 
@@ -227,43 +227,26 @@ def _commit_step(scenario: Scenario, component: str) -> list[tuple[str, ...]] | 
 
 
 @pytest.mark.unit
-def test_component_trainers_meet_at_the_commit_boundary(dispatchers: _Dispatchers) -> None:
+def test_component_trainers_take_turns_on_one_release_chain(dispatchers: _Dispatchers) -> None:
     dispatcher, backends = dispatchers.open()
     scenario = _scenario(dispatcher, 1)
     assert [bound.component for bound in scenario.trainers] == [WEIGHTS, HARNESS]
     assert scenario.trainer_for(HARNESS) is scenario.trainers[1].trainer
-    base = scenario.current_artifact_ref().release_id
 
-    weights = scenario.prepare_training_step(WEIGHTS)
-    harness = scenario.prepare_training_step(HARNESS)
-    assert weights is not None and harness is not None
-    assert scenario.trainer_for(WEIGHTS).pending_base_release_id == base
-
-    scenario.commit(harness, component=HARNESS)
-    after_harness = scenario.current_artifact_ref()
-    assert _component_files(scenario, after_harness) == {WEIGHTS: "weights seed", HARNESS: "harness step 1"}
-
-    # The weights result was prepared against the base, which the harness commit replaced.
-    with pytest.raises(StaleTrainingResultError, match=WEIGHTS):
-        scenario.commit(weights, component=WEIGHTS)
-    assert scenario.scenario_step == 1
-    scenario.retry_pending(WEIGHTS)
-    assert scenario.trainer_for(WEIGHTS).pending_batch is not None
-    retried = scenario.prepare_training_step(WEIGHTS)
-    assert retried is not None and retried is not weights
-    assert backends[WEIGHTS].prepared == 2
-    assert scenario.trainer_for(WEIGHTS).pending_base_release_id == after_harness.release_id
-    scenario.commit(retried, component=WEIGHTS)
+    assert _commit_step(scenario, HARNESS) is not None
+    assert _component_files(scenario, scenario.current_artifact_ref()) == {
+        WEIGHTS: "weights seed",
+        HARNESS: "harness step 1",
+    }
+    assert _commit_step(scenario, WEIGHTS) is not None
     assert _component_files(scenario, scenario.current_artifact_ref()) == {
         WEIGHTS: "weights step 1",
         HARNESS: "harness step 1",
     }
+    assert backends[WEIGHTS].prepared == backends[HARNESS].prepared == 1
 
     records = scenario.store.history()
-    assert [(record.component, record.base_release_id) for record in records] == [
-        (HARNESS, base),
-        (WEIGHTS, after_harness.release_id),
-    ]
+    assert [record.component for record in records] == [HARNESS, WEIGHTS]
     # A commit retires no row: each trainer consumed the same rows on its own record.
     assert scenario.records.count("agent") == 2
     assert records[0].consumed_ids == records[1].consumed_ids == frozenset({"i1", "r1"})
@@ -275,62 +258,70 @@ def test_component_trainers_meet_at_the_commit_boundary(dispatchers: _Dispatcher
     assert reloaded.scenario_step == 2
     _append_records(reloaded, 2)
     assert reloaded.prepare_training_step(HARNESS) is not None
-    assert reloaded.prepare_training_step(WEIGHTS) is not None
 
 
 @pytest.mark.unit
-def test_a_local_step_of_one_trainer_does_not_hold_up_the_others_or_the_status(
+def test_the_training_thread_skips_a_scenario_while_its_local_cycle_runs(
     tmp_path: Path, dispatchers: _Dispatchers
 ) -> None:
-    """While the harness evaluates for minutes, the weights job still reserves and commits, and status still reads."""
+    """A scenario runs one step at a time: the weights turn waits for the harness cycle, and the status still reads.
+    The end of the cycle wakes the training thread, which then runs the turn."""
     slow = _SlowBackend(HARNESS, tmp_path / "candidates")
-    dispatcher, _ = dispatchers.open(backends=_dispatched_pair(tmp_path, harness=slow))
+    dispatcher, backends = dispatchers.open(
+        backends=_dispatched_pair(tmp_path, harness=slow), training=StubTrainingRuntime()
+    )
     scenario = _scenario(dispatcher)
-    base = scenario.current_artifact_ref().release_id
+    # The training thread drains once when the scenario loads; the rows arrive after that drain.
+    assert _wait_for(lambda: dispatcher.training_loop.drain_state()[1] is not None)
     _append_records(scenario, 1)
-    outcome: dict[str, Any] = {}
-
-    def harness_step() -> None:
-        outcome["result"] = scenario.prepare_training_step(HARNESS)
-
-    worker = threading.Thread(target=harness_step)
+    worker = threading.Thread(target=lambda: dispatcher.local_workers.process_step("agent", HARNESS))
     worker.start()
     assert slow.evaluating.wait(10)
-    # The harness step is mid evaluation: the dispatched trainer reserves, executes and commits meanwhile...
-    assert scenario.reserve_training_batch(WEIGHTS) is not None
-    execution = scenario.execute_reserved_training_step(WEIGHTS)
-    assert execution.outcome == "commit" and execution.result is not None
-    scenario.commit(execution.result, component=WEIGHTS)
-    served = scenario.current_artifact_ref().release_id
-    assert served != base
-    # ...and the status reads the record it made.
-    last = scenario.last_commit_for(WEIGHTS)
-    assert last is not None and last.step == 1
-    assert dispatcher.build_training_status()["scenarios"]["agent"]["scenario_step"] == 1
+    dispatcher.training_loop.ready.set()
+    time.sleep(0.5)
+    # The training thread skipped the scenario: it reserved nothing while the harness cycle holds the cycle lock.
+    assert backends[WEIGHTS].prepared == 0
+    assert scenario.trainer_for(WEIGHTS).pending_batch is None
+    assert dispatcher.build_training_status()["scenarios"]["agent"]["scenario_step"] == 0
     slow.release.set()
     worker.join(10)
     assert not worker.is_alive()
-    harness = outcome["result"]
-    assert harness is not None
-    # Its result was prepared against the base; it merges onto the release served now.
-    scenario.commit(harness, component=HARNESS)
-    assert scenario.releases()[0]["metrics"]["merged_onto"] == served
-    assert _component_files(scenario, scenario.current_artifact_ref()) == {
-        WEIGHTS: "weights step 1",
-        HARNESS: "harness step 1",
-    }
+    assert _wait_for(lambda: scenario.scenario_step == 2)
+    assert [record.component for record in scenario.store.history()] == [HARNESS, WEIGHTS]
+    assert backends[WEIGHTS].prepared == 1
+
+
+@pytest.mark.unit
+def test_the_training_thread_looks_again_after_another_holder_lets_the_cycle_lock_go(
+    tmp_path: Path, dispatchers: _Dispatchers
+) -> None:
+    """An idle check or the close of a replaced instance holds the cycle lock briefly and wakes no one. The training
+    thread that skipped the scenario meanwhile polls, so the ready batch still trains without a new record."""
+    dispatcher, backends = dispatchers.open(backends=_dispatched_pair(tmp_path), training=StubTrainingRuntime())
+    dispatcher.training_loop.background_job_poll_seconds = 0.1
+    scenario = _scenario(dispatcher)
+    assert _wait_for(lambda: dispatcher.training_loop.drain_state()[1] is not None)
+    _append_records(scenario, 1)
+    cycle_lock = dispatcher.local_workers.cycle_lock("agent")
+    with cycle_lock:
+        dispatcher.training_loop.ready.set()
+        assert _wait_for(lambda: dispatcher.training_loop.skipped_busy_scenario)
+        assert backends[WEIGHTS].prepared == 0
+    assert _wait_for(lambda: scenario.scenario_step == 1)
+    assert backends[WEIGHTS].prepared == 1
 
 
 @pytest.mark.unit
 def test_a_colocated_weights_job_waits_for_the_local_cycle_that_needs_the_engine(
     tmp_path: Path, dispatchers: _Dispatchers
 ) -> None:
-    """A colocated job holds the served engine, so it starts only after the harness cycle mid evaluation ends."""
+    """A colocated job holds the served engine, so it starts only after another scenario's harness cycle ends."""
     colocated = _ColocatedBackend(WEIGHTS, tmp_path / "candidates", "job-1")
     slow = _SlowBackend(HARNESS, tmp_path / "candidates")
     dispatcher, _ = dispatchers.open(backends={WEIGHTS: colocated, HARNESS: slow})
     scenario = _scenario(dispatcher, 1)
-    worker = threading.Thread(target=lambda: dispatcher.local_workers.process_step("agent", HARNESS))
+    _scenario(dispatcher, 1, name="other")
+    worker = threading.Thread(target=lambda: dispatcher.local_workers.process_step("other", HARNESS))
     worker.start()
     assert slow.evaluating.wait(10)
     assert scenario.reserve_training_batch(WEIGHTS) is not None
@@ -351,39 +342,6 @@ def test_a_colocated_weights_job_waits_for_the_local_cycle_that_needs_the_engine
     trainer.join(10)
     assert not trainer.is_alive()
     assert colocated.prepared == 1
-    assert executions[0].outcome == "commit"
-    assert scenario.scenario_step == 1
-
-
-@pytest.mark.unit
-def test_a_colocated_weights_job_waits_for_every_scenario_that_shares_the_engine(
-    tmp_path: Path, dispatchers: _Dispatchers
-) -> None:
-    """Admission is engine wide, so another scenario's harness cycle mid evaluation finishes first too."""
-    colocated = _ColocatedBackend(WEIGHTS, tmp_path / "candidates", "job-1")
-    slow = _SlowBackend(HARNESS, tmp_path / "candidates")
-    dispatcher, _ = dispatchers.open(backends={WEIGHTS: colocated, HARNESS: slow})
-    agent = _scenario(dispatcher, 1)
-    _scenario(dispatcher, 1, name="other")
-    worker = threading.Thread(target=lambda: dispatcher.local_workers.process_step("other", HARNESS))
-    worker.start()
-    assert slow.evaluating.wait(10)
-    assert agent.reserve_training_batch(WEIGHTS) is not None
-    executions: list[Any] = []
-
-    def job() -> None:
-        with dispatcher.local_workers.dispatched_turn(agent, WEIGHTS):
-            executions.append(agent.execute_reserved_training_step(WEIGHTS))
-
-    trainer = threading.Thread(target=job)
-    trainer.start()
-    trainer.join(1)
-    assert trainer.is_alive()
-    assert colocated.prepared == 0
-    slow.release.set()
-    worker.join(10)
-    trainer.join(10)
-    assert not trainer.is_alive()
     assert executions[0].outcome == "commit"
 
 
@@ -541,33 +499,34 @@ def test_the_app_opens_held_local_cycles_once_it_listens(tmp_path: Path, dispatc
 def test_an_instance_parked_while_its_cycle_lock_is_held_closes_when_the_holder_lets_go(
     tmp_path: Path, dispatchers: _Dispatchers, turn_fails: bool
 ) -> None:
-    """A reload lands while a colocated job holds every cycle lock: the instance it replaced closes when the job's
-    turn ends, not at shutdown."""
+    """A reload of another scenario lands while a colocated job holds its cycle lock: the instance it replaced
+    closes when the job's turn ends, not at shutdown."""
     backends = {
         WEIGHTS: _ColocatedBackend(WEIGHTS, tmp_path / "candidates", "job-1"),
         HARNESS: _ComponentBackend(HARNESS, tmp_path / "candidates"),
     }
     dispatcher, _ = dispatchers.open(backends=backends)
     scenario = _scenario(dispatcher)
+    other = _scenario(dispatcher, name="other")
     closed: list[bool] = []
-    close = scenario.close
+    close = other.close
 
     def observed_close() -> None:
         closed.append(True)
         close()
 
-    scenario.close = observed_close  # type: ignore[method-assign]
+    other.close = observed_close  # type: ignore[method-assign]
     with (
         pytest.raises(RuntimeError, match="job failed") if turn_fails else nullcontext(),
         dispatcher.local_workers.dispatched_turn(scenario, WEIGHTS),
     ):
-        dispatcher.registry.reload("agent")
+        dispatcher.registry.reload("other")
         assert closed == []
         if turn_fails:
             raise RuntimeError("job failed")
     assert closed == [True]
     with dispatcher.local_workers.lock:
-        assert dispatcher.local_workers.scenarios["agent"].replaced == []
+        assert dispatcher.local_workers.scenarios["other"].replaced == []
 
 
 @pytest.mark.unit
@@ -647,51 +606,15 @@ def test_a_failing_local_cycle_runs_once_per_wake_and_keeps_its_error_in_the_sta
 
 
 @pytest.mark.unit
-def test_a_local_failure_under_a_dispatched_job_reloads_once_the_job_has_landed(
-    tmp_path: Path, dispatchers: _Dispatchers
-) -> None:
-    """A reload under the job would hand its result to an instance that never reserved it."""
+def test_a_failed_local_cycle_reloads_the_scenario_at_once(tmp_path: Path, dispatchers: _Dispatchers) -> None:
+    """No dispatched job is out during a local cycle, so the failed cycle rebuilds the scenario right away."""
     backends = _dispatched_pair(tmp_path, harness=_AwayBackend(HARNESS, tmp_path / "candidates"))
     dispatcher, _ = dispatchers.open(backends=backends)
     scenario = _scenario(dispatcher, 1)
-    batch = scenario.reserve_training_batch(WEIGHTS)
-    assert batch is not None
     with pytest.raises(RuntimeError, match="proposer away"):
         dispatcher.local_workers.process_step("agent", HARNESS)
-    assert dispatcher.registry.get_optional("agent") is scenario
-    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
-    assert _training_components(scenario) == [WEIGHTS]
-    # The next local cycle rebuilds the scenario as its first act, then looks again on the new instance.
-    assert dispatcher.local_workers.process_step("agent", HARNESS) is True
     rebuilt = dispatcher.registry.get_optional("agent")
     assert rebuilt is not None and rebuilt is not scenario
-    assert rebuilt.scenario_step == 1
-    # With no job out, a failure reloads at once.
-    with pytest.raises(RuntimeError, match="proposer away"):
-        dispatcher.local_workers.process_step("agent", HARNESS)
-    assert dispatcher.registry.get_optional("agent") is not rebuilt
-
-
-@pytest.mark.unit
-def test_a_deferred_reload_never_lands_under_a_cycle_that_runs_on_the_instance(
-    tmp_path: Path, dispatchers: _Dispatchers
-) -> None:
-    """A cycle woken while the job is still out commits on the instance; the rebuild waits for the cycle after."""
-    backends = _dispatched_pair(tmp_path, harness=_FlakyBackend(HARNESS, tmp_path / "candidates"))
-    dispatcher, _ = dispatchers.open(backends=backends)
-    scenario = _scenario(dispatcher, 1)
-    batch = scenario.reserve_training_batch(WEIGHTS)
-    assert batch is not None
-    with pytest.raises(RuntimeError, match="away once"):
-        dispatcher.local_workers.process_step("agent", HARNESS)
-    assert dispatcher.local_workers.process_step("agent", HARNESS) is True
-    assert dispatcher.registry.get_optional("agent") is scenario
-    assert _training_components(scenario) == [HARNESS]
-    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
-    assert dispatcher.local_workers.process_step("agent", HARNESS) is True
-    rebuilt = dispatcher.registry.get_optional("agent")
-    assert rebuilt is not None and rebuilt is not scenario
-    assert _training_components(rebuilt) == [WEIGHTS, HARNESS]
 
 
 class _BlockingAwayBackend(_ComponentBackend):
@@ -1101,10 +1024,10 @@ class _DroppingBackend(_DispatchedBackend):
         return super().settle_step(prepared, decision)
 
 
-def _dropping_pair(tmp_path: Path, harness_policy: str = "refuse") -> dict[str, _ComponentBackend]:
+def _dropping_pair(tmp_path: Path) -> dict[str, _ComponentBackend]:
     return {
         WEIGHTS: _DroppingBackend(WEIGHTS, tmp_path / "candidates", "job-0"),
-        HARNESS: _ComponentBackend(HARNESS, tmp_path / "candidates", stale_policy=harness_policy),
+        HARNESS: _ComponentBackend(HARNESS, tmp_path / "candidates"),
     }
 
 
@@ -1191,26 +1114,24 @@ def _fail_first_record_of(monkeypatch: pytest.MonkeyPatch, scenario: Scenario, c
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("colocated", [False, True])
-def test_a_harness_commit_that_fails_under_a_weights_job_leaves_its_rows_to_the_harness(
-    tmp_path: Path, colocated: bool, monkeypatch: pytest.MonkeyPatch, dispatchers: _Dispatchers
+def test_a_harness_commit_that_fails_leaves_its_rows_to_the_harness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dispatchers: _Dispatchers
 ) -> None:
-    """The harness acknowledges its batch before its record is durable. When that commit fails while a weights job
-    is out, the reload waits for the job, and the job's commit leaves the harness's rows stored: after the job, the
-    rebuilt harness trains them once. A colocated job holds every cycle lock, so the harness cannot retry before the
-    job commits."""
+    """The harness acknowledges its batch before its record is durable. When that commit fails, the scenario
+    reloads at once, and the weights step after it leaves the harness's rows stored: the rebuilt harness trains
+    them once."""
     backends = _dispatched_pair(tmp_path)
-    if colocated:
-        backends[WEIGHTS] = _ColocatedBackend(WEIGHTS, tmp_path / "candidates", "job-1")
     dispatcher, _ = dispatchers.open(backends=backends)
     scenario = _scenario(dispatcher, 1)
-    batch = scenario.reserve_training_batch(WEIGHTS)
-    assert batch is not None
     _fail_first_record_of(monkeypatch, scenario, HARNESS)
     with pytest.raises(OSError, match="transient store write error"):
         dispatcher.local_workers.process_step("agent", HARNESS)
-    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
-    assert scenario.records.get("agent", "i1") is not None and scenario.records.get("agent", "r1") is not None
+    rebuilt = dispatcher.registry.get_optional("agent")
+    assert rebuilt is not None and rebuilt is not scenario
+    batch = rebuilt.reserve_training_batch(WEIGHTS)
+    assert batch is not None
+    assert dispatcher.training_loop.run_dispatched_turn(rebuilt, WEIGHTS, backends[WEIGHTS], batch) is True
+    assert rebuilt.records.get("agent", "i1") is not None and rebuilt.records.get("agent", "r1") is not None
     for _ in range(3):
         dispatcher.local_workers.process_step("agent", HARNESS)
     current = dispatcher.registry.get_optional("agent")
@@ -1241,7 +1162,7 @@ def test_a_weights_commit_that_fails_leaves_its_batch_to_the_weights_trainer_aft
 
 
 @pytest.mark.unit
-def test_a_stale_drop_under_a_failed_harness_commit_leaves_the_harness_rows_to_the_harness(
+def test_a_stale_drop_after_a_failed_harness_commit_leaves_the_harness_rows_to_the_harness(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dispatchers: _Dispatchers
 ) -> None:
     """A drop consumes its rows for the weights trainer alone: a harness batch acknowledged by a commit that failed
@@ -1250,15 +1171,17 @@ def test_a_stale_drop_under_a_failed_harness_commit_leaves_the_harness_rows_to_t
     weights = backends[WEIGHTS]
     assert isinstance(weights, _DroppingBackend)
     scenario = _scenario(dispatcher, 1)
-    batch = scenario.reserve_training_batch(WEIGHTS)
-    assert batch is not None
     _fail_first_record_of(monkeypatch, scenario, HARNESS)
     with pytest.raises(OSError, match="transient store write error"):
         dispatcher.local_workers.process_step("agent", HARNESS)
+    rebuilt = dispatcher.registry.get_optional("agent")
+    assert rebuilt is not None
+    batch = rebuilt.reserve_training_batch(WEIGHTS)
+    assert batch is not None
     weights.drop_next = True
-    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, weights, batch) is True
-    assert scenario.records.get("agent", "i1") is not None and scenario.records.get("agent", "r1") is not None
-    (receipt,) = scenario.records.consumption_receipts("agent")
+    assert dispatcher.training_loop.run_dispatched_turn(rebuilt, WEIGHTS, weights, batch) is True
+    assert rebuilt.records.get("agent", "i1") is not None and rebuilt.records.get("agent", "r1") is not None
+    (receipt,) = rebuilt.records.consumption_receipts("agent")
     assert set(receipt["consumed_ids"]) == {"i1", "r1"} and receipt["metadata"]["component"] == WEIGHTS
     for _ in range(3):
         dispatcher.local_workers.process_step("agent", HARNESS)
@@ -1562,86 +1485,6 @@ def test_rows_one_trainer_consumed_before_a_restart_still_train_the_other(dispat
 
 
 @pytest.mark.unit
-def test_dispatched_result_overtaken_by_another_trainer_is_merged(tmp_path: Path, dispatchers: _Dispatchers) -> None:
-    """The remote job has published its weights; the step lands on the release served now instead of being refused."""
-    dispatcher, backends = dispatchers.open(backends=_dispatched_pair(tmp_path))
-    scenario = _scenario(dispatcher)
-    base = scenario.current_artifact_ref().release_id
-    _append_records(scenario, 1)
-    assert scenario.reserve_training_batch(WEIGHTS) is not None
-    execution = scenario.execute_reserved_training_step(WEIGHTS)
-    assert execution.outcome == "commit" and execution.result is not None
-
-    # The harness worker commits while the weights job is out.
-    assert _commit_step(scenario, HARNESS) is not None
-    after_harness = scenario.current_artifact_ref().release_id
-    assert after_harness != base
-
-    scenario.commit(execution.result, component=WEIGHTS)
-    assert backends[WEIGHTS].prepared == 1
-    assert scenario.scenario_step == 2
-    assert _component_files(scenario, scenario.current_artifact_ref()) == {
-        WEIGHTS: "weights step 1",
-        HARNESS: "harness step 1",
-    }
-    records = scenario.store.history()
-    assert (records[-1].component, records[-1].base_release_id) == (WEIGHTS, base)
-    assert scenario.committed_training_job_id == "job-1"
-
-
-def _both_prepared(dispatchers: _Dispatchers, harness_policy: str):
-    """Both trainers prepared against the base, then the weights step moves the head."""
-    backends = {
-        WEIGHTS: _ComponentBackend(WEIGHTS, dispatchers.tmp_path / "candidates"),
-        HARNESS: _ComponentBackend(HARNESS, dispatchers.tmp_path / "candidates", stale_policy=harness_policy),
-    }
-    dispatcher, _ = dispatchers.open(backends=backends)
-    scenario = _scenario(dispatcher)
-    base = scenario.current_artifact_ref().release_id
-    _append_records(scenario, 1)
-    harness = scenario.prepare_training_step(HARNESS)
-    weights = scenario.prepare_training_step(WEIGHTS)
-    assert harness is not None and weights is not None
-    scenario.commit(weights, component=WEIGHTS)
-    return backends, scenario, harness, base
-
-
-@pytest.mark.unit
-def test_a_local_result_its_backend_calls_mergeable_lands_on_the_release_served_now(
-    dispatchers: _Dispatchers,
-) -> None:
-    backends, scenario, harness, base = _both_prepared(dispatchers, "merge")
-    scenario.commit(harness, component=HARNESS)
-    assert _component_files(scenario, scenario.current_artifact_ref()) == {
-        WEIGHTS: "weights step 1",
-        HARNESS: "harness step 1",
-    }
-    record = scenario.store.history()[-1]
-    assert (record.component, record.base_release_id) == (HARNESS, base)
-    assert backends[HARNESS].prepared == 1 and backends[HARNESS].evaluated == 1
-
-
-@pytest.mark.unit
-def test_a_local_result_its_backend_reevaluates_keeps_its_candidate(dispatchers: _Dispatchers) -> None:
-    """The proposer is not asked again; the kept candidate is evaluated against the release served now."""
-    backends, scenario, harness, base = _both_prepared(dispatchers, "reevaluate")
-    with pytest.raises(StaleTrainingResultError) as refused:
-        scenario.commit(harness, component=HARNESS)
-    assert refused.value.policy == "reevaluate"
-    scenario.retry_pending(HARNESS, keep_candidate=True)
-    again = scenario.prepare_training_step(HARNESS)
-    assert again is not None
-    assert backends[HARNESS].prepared == 1 and backends[HARNESS].evaluated == 2
-    assert backends[HARNESS].reevaluations == 1
-    scenario.commit(again, component=HARNESS)
-    assert _component_files(scenario, scenario.current_artifact_ref()) == {
-        WEIGHTS: "weights step 1",
-        HARNESS: "harness step 1",
-    }
-    assert scenario.store.history()[-1].base_release_id != base
-
-
-@pytest.mark.unit
 def test_a_weights_step_is_no_new_harness_head(dispatchers: _Dispatchers) -> None:
     """Clients pull the tree: a step that carried it forward unchanged is not announced or listed as a release."""
     dispatcher, _ = dispatchers.open()
@@ -1672,6 +1515,7 @@ def test_each_components_step_reaches_the_tracker_under_its_name(dispatchers: _D
     weights = scenario.prepare_training_step(WEIGHTS)
     assert weights is not None
     dispatcher.registry.get("agent").commit(weights, component=WEIGHTS)
+    dispatcher.registry.experiment_reports.flush()
     assert [event.context.component for event in tracker.events] == [HARNESS, WEIGHTS]
     assert [event.context.backend for event in tracker.events] == ["_ComponentBackend", "_ComponentBackend"]
     assert [event.context.step for event in tracker.events] == [1, 2]
@@ -1761,30 +1605,6 @@ def test_the_harness_catalog_is_one_lineage_of_trees(dispatchers: _Dispatchers) 
     assert required_by(catalog, catalog[-1]["release_id"]) == [{"name": "TOKEN", "kind": "env"}]
     script = service.harness_install_script(headers, adapter="pi")
     assert w1 not in script and w2 not in script and held not in script
-
-
-@pytest.mark.unit
-def test_a_merged_result_names_the_release_it_landed_on_in_its_event(
-    tmp_path: Path, dispatchers: _Dispatchers
-) -> None:
-    """The tracker event carries what the commit record carries, merged_onto included."""
-    tracker = _RecordingTracker()
-    backends = {
-        WEIGHTS: _ComponentBackend(WEIGHTS, tmp_path / "candidates"),
-        HARNESS: _ComponentBackend(HARNESS, tmp_path / "candidates", stale_policy="merge"),
-    }
-    dispatcher, _ = dispatchers.open(backends=backends, experiment_tracker=tracker)
-    scenario = _scenario(dispatcher, 1)
-    harness = scenario.prepare_training_step(HARNESS)
-    weights = scenario.prepare_training_step(WEIGHTS)
-    assert harness is not None and weights is not None
-    dispatcher.registry.get("agent").commit(weights, component=WEIGHTS)
-    served = scenario.current_artifact_ref().release_id
-    dispatcher.registry.get("agent").commit(harness, component=HARNESS)
-    assert [event.context.component for event in tracker.events] == [WEIGHTS, HARNESS]
-    assert tracker.events[-1].metrics["merged_onto"] == served
-    assert scenario.releases()[0]["metrics"]["merged_onto"] == served
-    assert "merged_onto" not in tracker.events[0].metrics
 
 
 @pytest.mark.unit
@@ -1896,17 +1716,14 @@ def test_adopted_checkpoint_is_attributed_to_the_trainer_that_made_it(
     """A checkpoint read back from the artifact head names its component, so a lost commit log resets no trainer."""
     backend_factory = _seeded_repository(tmp_path)
     dispatcher, _ = dispatchers.open(records_dir=tmp_path / "records-1", backend_factory=backend_factory)
-    scenario = _scenario(dispatcher)
-    base = scenario.current_artifact_ref().release_id
-    _append_records(scenario, 1)
+    scenario = _scenario(dispatcher, 1)
     assert _commit_step(scenario, HARNESS) is not None
     head = scenario.repository.materialize(scenario.current_artifact_ref())
     checkpoint = head.metadata[SCENARIO_METADATA_KEY]
     assert isinstance(checkpoint, Mapping)
     assert checkpoint["component"] == HARNESS
-    assert checkpoint["base_release_id"] == base
     _, _, adopted = parse_scenario_metadata(checkpoint, checkpoint_head=head.ref)
-    assert adopted is not None and adopted.component == HARNESS and adopted.base_release_id == base
+    assert adopted is not None and adopted.component == HARNESS
     dispatcher.close()
 
     # The record store is gone; the checkpoint is adopted from the head and belongs to the harness trainer.
@@ -1929,20 +1746,18 @@ class _OneTrainerRecipe(_TwoTrainerRecipe):
 
 
 @pytest.mark.unit
-def test_a_lone_trainer_names_no_component_and_no_base_release_on_record(
-    tmp_path: Path, dispatchers: _Dispatchers
-) -> None:
+def test_a_lone_trainer_names_no_component_on_record(tmp_path: Path, dispatchers: _Dispatchers) -> None:
     """A scenario of one trainer writes what it wrote before components: its commit record, the checkpoint's
-    scenario metadata and its drop receipts name neither a component nor the release its batch was reserved on."""
+    scenario metadata and its drop receipts name no component."""
     recipe = _OneTrainerRecipe(backends={HARNESS: _ComponentBackend(HARNESS, tmp_path / "candidates")})
     dispatcher, _ = dispatchers.open(recipe=recipe, backend_factory=_seeded_repository(tmp_path, (HARNESS,)))
     scenario = _scenario(dispatcher, 1, 2)
     assert _commit_step(scenario, HARNESS) is not None
     record = scenario.store.history()[-1]
-    assert (record.component, record.base_release_id, record.components) == (None, None, None)
+    assert (record.component, record.components) == (None, None)
     checkpoint = scenario.repository.materialize(scenario.current_artifact_ref()).metadata[SCENARIO_METADATA_KEY]
     assert isinstance(checkpoint, Mapping)
-    assert "component" not in checkpoint and "base_release_id" not in checkpoint
+    assert "component" not in checkpoint
     assert scenario.prepare_training_step(HARNESS) is not None
     scenario.reject_pending(component=HARNESS)
     [receipt] = scenario.records.consumption_receipts("agent")
@@ -1968,43 +1783,11 @@ def test_dispatcher_runs_one_worker_per_component(dispatchers: _Dispatchers) -> 
         WEIGHTS: "weights step 2",
         HARNESS: "harness step 2",
     }
-    assert all(record.base_release_id is not None for record in current.store.history())
-    status = dispatcher.build_training_status()
-    assert status["error"] is None
-    # Local workers take turns for a whole cycle, so neither is ever refused as stale.
-    components = status["scenarios"]["agent"]["components"]
-    assert [components[name]["stale_refusals_total"] for name in (WEIGHTS, HARNESS)] == [0, 0]
+    assert dispatcher.build_training_status()["error"] is None
 
 
 @pytest.mark.unit
-def test_stale_refusals_are_counted_and_bounded(dispatchers: _Dispatchers) -> None:
-    """A local result overtaken again and again is reported and parked, not prepared and discarded forever."""
-    dispatcher, backends = dispatchers.open()
-    scenario = _scenario(dispatcher)
-    outcomes = []
-    for step in (1, 2, 3):
-        _append_records(scenario, step)
-        # The weights result is prepared against the served release; the harness cycle then replaces it.
-        assert scenario.prepare_training_step(WEIGHTS) is not None
-        assert dispatcher.local_workers.process_step("agent", HARNESS) is True
-        outcomes.append(dispatcher.local_workers.process_step("agent", WEIGHTS))
-    assert outcomes == [True, True, False]
-    assert backends[WEIGHTS].prepared == 3
-    assert scenario.trainer_for(WEIGHTS).pending_batch is not None
-    status = dispatcher.build_training_status()
-    assert status["scenarios"]["agent"]["components"][WEIGHTS]["stale_refusals_total"] == 3
-    assert "refused 3 times in a row" in status["error"]
-
-    # The kept batch is prepared again on the next wake and commits.
-    assert dispatcher.local_workers.process_step("agent", WEIGHTS) is True
-    assert scenario.trainer_for(WEIGHTS).state == {"steps": 1}
-    status = dispatcher.build_training_status()
-    assert status["error"] is None
-    assert status["scenarios"]["agent"]["components"][WEIGHTS]["stale_refusals_total"] == 3
-
-
-@pytest.mark.unit
-def test_commit_record_carries_component_and_base_release() -> None:
+def test_commit_record_carries_its_component() -> None:
     record = CommitRecord(
         scenario="agent",
         step=3,
@@ -2014,11 +1797,9 @@ def test_commit_record_carries_component_and_base_release() -> None:
         high_water_sequence=2,
         high_water_offset=2,
         component=HARNESS,
-        base_release_id="r2",
     )
     encoded = record.to_dict()
     assert encoded["component"] == HARNESS
-    assert encoded["base_release_id"] == "r2"
     assert CommitRecord.from_dict(encoded) == record
     assert "component" not in CommitRecord.from_dict({**encoded, "component": None}).to_dict()
     with pytest.raises(CommitLogError, match="only training commits may carry component"):
@@ -2063,170 +1844,20 @@ def test_component_trainers_must_match_the_surface() -> None:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("policy", ["refuse", "reevaluate"])
-def test_a_stale_retry_of_a_batch_an_earlier_attempt_took_back_is_prepared_again_and_never_acknowledged_twice(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: str, dispatchers: _Dispatchers
-) -> None:
-    """The harness acknowledged its batch and its record write failed while a weights job was out, so its reload
-    waits. The job lands and the next one goes out at once: the retry on the same instance is refused as stale. The
-    batch stays taken, so the next cycle prepares or evaluates it again and records what the first attempt consumed,
-    instead of asking the processor for a batch it gave back."""
-    dispatcher, backends = dispatchers.open(backends=_dropping_pair(tmp_path, harness_policy=policy))
-    scenario = _scenario(dispatcher, 1)
-    first = scenario.reserve_training_batch(WEIGHTS)
-    assert first is not None
-    _fail_first_record_of(monkeypatch, scenario, HARNESS)
-    with pytest.raises(OSError, match="transient store write error"):
-        dispatcher.local_workers.process_step("agent", HARNESS)
-    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], first) is True
-    _append_records(scenario, 2)
-    second = scenario.reserve_training_batch(WEIGHTS)
-    assert second is not None
-    outcomes = [dispatcher.local_workers.process_step("agent", HARNESS) for _ in range(3)]
-    assert dispatcher.registry.get_optional("agent") is scenario
-    harness_rows = [row for row in scenario.store.history() if row.component == HARNESS]
-    assert harness_rows and sorted(harness_rows[0].consumed_ids) == ["i1", "r1"]
-    consumed = [row.consumed_ids for row in harness_rows]
-    assert all(not (a & b) for index, a in enumerate(consumed) for b in consumed[index + 1 :])
-    assert True in outcomes
-    if policy == "reevaluate":
-        assert backends[HARNESS].reevaluations >= 1
-
-
-class _SkippingBackend(_ComponentBackend):
-    """A local cycle whose proposer produced nothing: a step with no candidate."""
-
-    def prepare_step(self, batch, state, scenario_step):
-        self.prepared += 1
-        return PreparedStep.skipped(state={"steps": int(state["steps"]) + 1}, metrics={"skipped": "no proposal"})
-
-
-@pytest.mark.unit
-def test_a_skip_meets_a_moved_head_and_commits_since_it_was_evaluated_against_no_release(
+def test_a_local_cycle_stands_aside_while_a_dispatched_batch_is_reserved(
     tmp_path: Path, dispatchers: _Dispatchers
 ) -> None:
-    """A step with no candidate is not stale whatever another trainer published meanwhile: refusing it would run
-    the backend again (a failed instruction's skip would run the failed instruction) for nothing."""
-    skipping = _SkippingBackend(HARNESS, tmp_path / "candidates", stale_policy="refuse")
-    dispatcher, _ = dispatchers.open(
-        backends={WEIGHTS: _ComponentBackend(WEIGHTS, tmp_path / "candidates"), HARNESS: skipping}
-    )
+    """A dispatched step lasts from its reservation to its commit, also while checkpoint storage blocks it. The
+    harness cycle of the same scenario prepares nothing meanwhile, and runs after the turn ends."""
+    dispatcher, backends = dispatchers.open(backends=_dispatched_pair(tmp_path))
     scenario = _scenario(dispatcher, 1)
-    harness = scenario.prepare_training_step(HARNESS)
-    weights = scenario.prepare_training_step(WEIGHTS)
-    assert harness is not None and weights is not None
-    scenario.commit(weights, component=WEIGHTS)
-    scenario.commit(harness, component=HARNESS)
+    batch = scenario.reserve_training_batch(WEIGHTS)
+    assert batch is not None
+    assert dispatcher.local_workers.process_step("agent", HARNESS) is False
+    assert backends[HARNESS].prepared == 0
+    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
+    assert dispatcher.local_workers.process_step("agent", HARNESS) is True
     assert [row.component for row in scenario.store.history()] == [WEIGHTS, HARNESS]
-    assert skipping.prepared == 1
-
-
-def _harness_record_durable_then_failed(
-    dispatcher: Dispatcher, scenario: Any, monkeypatch: pytest.MonkeyPatch, fault: str = "install"
-) -> None:
-    """The harness commit reaches the log and then fails (a lost acknowledgment or a failed ref install)."""
-    committer = scenario._committer
-    name = "_append_commit_record" if fault == "append" else "_install_committed_checkpoint"
-    original = committer._append_commit_record if fault == "append" else committer._install_committed_checkpoint
-    failed: list[bool] = []
-
-    def fail_once(*args: Any, **kwargs: Any) -> Any:
-        outcome = original(*args, **kwargs)
-        if not failed:
-            failed.append(True)
-            raise OSError("acknowledgment lost")
-        return outcome
-
-    monkeypatch.setattr(committer, name, fail_once)
-    with pytest.raises(OSError, match="acknowledgment lost"):
-        dispatcher.local_workers.process_step("agent", HARNESS)
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("fault", ["append", "install"])
-def test_a_sibling_commit_durable_but_not_settled_is_settled_before_the_next_commit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str, dispatchers: _Dispatchers
-) -> None:
-    """The harness record reached the log and then its commit failed (a lost fsync acknowledgment, a failed ref
-    install) while a weights job was out, so its reload waits. The weights commit settles that record first, as
-    the harness's own retry would, and takes the next step: no conflict and no extra reload of the job."""
-    dispatcher, backends = dispatchers.open(backends=_dispatched_pair(tmp_path))
-    scenario = _scenario(dispatcher, 1, 2)
-    batch = scenario.reserve_training_batch(WEIGHTS)
-    assert batch is not None
-    _harness_record_durable_then_failed(dispatcher, scenario, monkeypatch, fault)
-    assert [row.component for row in scenario.store.history()] == [HARNESS]
-    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
-    assert [row.component for row in scenario.store.history()] == [HARNESS, WEIGHTS]
-    assert scenario.trainer_for(HARNESS).pending_batch is None
-    assert [row.step for row in scenario.store.history()] == [1, 2]
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("fault", ["append", "install"])
-def test_a_harness_cycle_in_flight_never_commits_a_result_the_weights_commit_settled(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str, dispatchers: _Dispatchers
-) -> None:
-    """The harness worker took its cached result, then waited for the registry lock the weights commit held. That
-    commit settled the harness record, so the worker's result is on record: it looks again and publishes nothing,
-    where it used to land a third step with nothing consumed and republish the harness artifact."""
-    dispatcher, backends = dispatchers.open(backends=_dispatched_pair(tmp_path))
-    scenario = _scenario(dispatcher, 1, 2)
-    batch = scenario.reserve_training_batch(WEIGHTS)
-    assert batch is not None
-    _harness_record_durable_then_failed(dispatcher, scenario, monkeypatch, fault)
-    prepared = threading.Event()
-    go = threading.Event()
-    real_prepare = scenario.prepare_training_step
-
-    def paused_prepare(component: str | None = None) -> Any:
-        result = real_prepare(component)
-        prepared.set()
-        assert go.wait(10)
-        return result
-
-    monkeypatch.setattr(scenario, "prepare_training_step", paused_prepare)
-    outcome: dict[str, Any] = {}
-
-    def harness_cycle() -> None:
-        try:
-            outcome["progressed"] = dispatcher.local_workers.process_step("agent", HARNESS)
-        except BaseException as exc:
-            outcome["error"] = exc
-
-    worker = threading.Thread(target=harness_cycle)
-    worker.start()
-    assert prepared.wait(10)
-    releases_before = len(scenario.releases())
-    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
-    go.set()
-    worker.join(10)
-    assert outcome == {"progressed": True}
-    assert [(row.step, row.component) for row in scenario.store.history()] == [(1, HARNESS), (2, WEIGHTS)]
-    assert len(scenario.releases()) == releases_before + 1
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("fault", ["append", "install"])
-def test_a_commit_that_settles_a_sibling_record_gives_each_step_its_own_event(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dispatchers: _Dispatchers, fault: str
-) -> None:
-    """The weights commit settled the harness record first: the harness step gets its event at step 1, from its
-    record, and the weights commit gets its event at step 2, the step it took."""
-    tracker = _RecordingTracker()
-    dispatcher, backends = dispatchers.open(backends=_dispatched_pair(tmp_path), experiment_tracker=tracker)
-    scenario = _scenario(dispatcher, 1, 2)
-    batch = scenario.reserve_training_batch(WEIGHTS)
-    assert batch is not None
-    _harness_record_durable_then_failed(dispatcher, scenario, monkeypatch, fault)
-    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
-    history = scenario.store.history()
-    assert [(row.step, row.component) for row in history] == [(1, HARNESS), (2, WEIGHTS)]
-    events = [(event.context.step, event.context.component, event.training_job_id) for event in tracker.events]
-    assert events == [(1, HARNESS, None), (2, WEIGHTS, "job-1")]
-    weights_event = tracker.events[1]
-    assert weights_event.context.source_artifact_ref.release_id == history[0].artifact_ref.release_id
-    assert tracker.events[0].produced_artifact_ref.release_id == history[0].artifact_ref.release_id
 
 
 @pytest.mark.unit
@@ -2327,10 +1958,7 @@ def test_service_start_notification_cannot_reopen_stopping_workers(dispatchers: 
 @pytest.mark.parametrize("next_operation", ["training", "reload", "rollback"])
 @pytest.mark.parametrize("tracker_fails", [False, True])
 def test_experiment_events_remain_ordered_across_reload(tmp_path, monkeypatch, next_operation, tracker_fails):
-    from concurrent.futures import ThreadPoolExecutor
     from threading import Event
-
-    from tests.support.experiment_reporting import ContendedReportLock
 
     tracker = _RecordingTracker()
     value, backends = _dispatcher(tmp_path, experiment_tracker=tracker)
@@ -2339,9 +1967,6 @@ def test_experiment_events_remain_ordered_across_reload(tmp_path, monkeypatch, n
     update.mkdir()
     (update / "harness.txt").write_text("updated shipped content")
     entered, release = Event(), Event()
-    report_lock = ContendedReportLock()
-    delivery = value.registry.loaded_experiment_reports.delivery_for("agent", tracker)
-    monkeypatch.setattr(delivery, "lock", report_lock)
     attempted = []
 
     def shipped(state, tree):
@@ -2359,13 +1984,6 @@ def test_experiment_events_remain_ordered_across_reload(tmp_path, monkeypatch, n
             raise ConnectionError("tracker unavailable")
         tracker.events.append(event)
 
-    def next_step():
-        if next_operation == "reload":
-            return value.registry.reload("agent")
-        if next_operation == "rollback":
-            return value.rollback("agent", initial.release_id)
-        return value.local_workers.process_step("agent", HARNESS)
-
     def record_rollback(event):
         attempted.append(event.step)
 
@@ -2373,25 +1991,21 @@ def test_experiment_events_remain_ordered_across_reload(tmp_path, monkeypatch, n
     monkeypatch.setattr(backends[HARNESS], "shipped_content_update", shipped)
     monkeypatch.setattr(tracker, "record", record)
     try:
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            first = pool.submit(value.registry.reload, "agent")
-            try:
-                assert entered.wait(5)
-                if next_operation != "reload":
-                    current = value.registry.reload("agent")
-                    if next_operation == "training":
-                        _append_records(current, 1)
-                second = pool.submit(next_step)
-                assert report_lock.waiting.wait(5), "later report did not wait for the previous observer"
-                # The next reporting operation may wait, but serving lookups must not.
-                current = pool.submit(value.get_or_create_scenario, "agent").result(timeout=2)
-                assert not first.done()
-                assert not second.done()
-                assert attempted == []
-            finally:
-                release.set()
-            first.result(timeout=5)
-            second.result(timeout=5)
+        # The reload publishes shipped content at step 1; the tracker blocks on its event.
+        value.registry.reload("agent")
+        assert entered.wait(5)
+        # The next operation lands step 2 while the tracker still blocks: nothing waits for it.
+        if next_operation == "reload":
+            value.registry.reload("agent")
+        elif next_operation == "rollback":
+            value.rollback("agent", initial.release_id)
+        else:
+            current = value.registry.reload("agent")
+            _append_records(current, 1)
+            assert value.local_workers.process_step("agent", HARNESS)
+        assert attempted == []
+        release.set()
+        value.registry.experiment_reports.flush()
         current = value.get_or_create_scenario("agent")
         assert [record.step for record in current.store.history()] == [1, 2]
         assert attempted == [1, 2]

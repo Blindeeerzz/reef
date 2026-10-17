@@ -133,14 +133,12 @@ class TrainingStatus:
                         if bound.trainer is stepping_trainer
                         else bound.trainer.pipeline_status()
                     ),
-                    "stale_refusals_total": self.errors.stale_refusal_count(scenario_name, bound.component),
                     "last_committed_step": (
                         None
                         if last is None
                         else {
                             "step": last.step,
                             "recorded_at": last.recorded_at,
-                            "base_release_id": last.base_release_id,
                             "metrics": None if last.metrics is None else dict(last.metrics),
                         }
                     ),

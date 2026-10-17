@@ -1,4 +1,4 @@
-"""Training failures that the training status and the operational metrics report.
+"""Training errors that the training status and the operational metrics report.
 
 Each error belongs to one scenario and to the thread that recorded it. That
 thread is the training thread or the local worker of one component. Only
@@ -24,7 +24,7 @@ def error_text(exc: Exception) -> str:
 
 
 class TrainingErrors:
-    """Keep training errors, failure counts and stale-result refusals.
+    """Keep training errors and failure counts.
 
     Every method takes ``lock`` and calls no other object while it holds it.
     Thus a caller can hold another lock, such as the coordination lock of the
@@ -38,9 +38,6 @@ class TrainingErrors:
         self.failure_counts: dict[str, int] = {}
         #: The last failure to build the training status. It is not specific to one scenario.
         self.status_build_error: str | None = None
-        #: Results that were refused because another trainer's commit replaced their base, per (scenario, component).
-        self.stale_refusals_in_a_row: dict[tuple[str, str | None], int] = {}
-        self.stale_refusals_total: dict[tuple[str, str | None], int] = {}
 
     def record(self, scenario: str, error: str, source: str = TRAINING_THREAD_SOURCE) -> None:
         """Keep ``error`` for ``scenario`` under ``source``, and count one failure."""
@@ -79,29 +76,3 @@ class TrainingErrors:
         """A copy of the recorded errors and the status build error."""
         with self.lock:
             return dict(self.errors), self.status_build_error
-
-    def count_stale_refusal(self, scenario: str, component: str | None) -> int:
-        """Count one refused result, and return the number of refusals in a row."""
-        key = (scenario, component)
-        with self.lock:
-            in_a_row = self.stale_refusals_in_a_row.get(key, 0) + 1
-            self.stale_refusals_in_a_row[key] = in_a_row
-            self.stale_refusals_total[key] = self.stale_refusals_total.get(key, 0) + 1
-            return in_a_row
-
-    def reset_stale_refusals_in_a_row(self, scenario: str, component: str | None) -> None:
-        """Start the count of refusals in a row again after a commit lands."""
-        with self.lock:
-            self.stale_refusals_in_a_row.pop((scenario, component), None)
-
-    def stale_refusal_count(self, scenario: str, component: str | None) -> int:
-        """The number of refused results of ``component`` since its local workers started."""
-        with self.lock:
-            return self.stale_refusals_total.get((scenario, component), 0)
-
-    def forget_stale_refusals(self, scenario: str) -> None:
-        """Remove the refusal counts of a scenario whose local workers stop."""
-        with self.lock:
-            for counts in (self.stale_refusals_in_a_row, self.stale_refusals_total):
-                for key in [key for key in counts if key[0] == scenario]:
-                    counts.pop(key)

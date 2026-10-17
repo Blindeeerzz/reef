@@ -13,8 +13,8 @@ Request handling lives in ``reef.service``; the dispatcher is transport-free.
   cycle locks with dispatched turns, and closes replaced instances.
 - ``training_loop`` runs the training thread for dispatched backends.
 - ``status`` builds the training status and runs its health checks.
-- ``errors`` keeps the training errors, failure counts and stale-result
-  refusals that the status and the operational metrics report.
+- ``errors`` keeps the training errors and failure counts that the status
+  and the operational metrics report.
 
 Lock order: cycle locks, then a scenario's registry lock, then the
 coordination lock of ``local_workers``, then the training errors lock.

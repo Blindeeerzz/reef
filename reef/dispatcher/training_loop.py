@@ -56,7 +56,9 @@ class DispatchedTrainingLoop:
     # Poll interval while a pipeline has background jobs that run (see
     # TrainingPipeline.background_jobs_running). A finished job, such as a
     # judgment, can make a batch ready, but no new record sets the ready
-    # event. Thus the thread checks for a batch at this interval.
+    # event. Thus the thread checks for a batch at this interval. The thread
+    # also polls at this interval after it skipped a scenario whose cycle lock
+    # was busy.
     background_job_poll_seconds: float = 1.0
     # One drain, plus one more after reloading the scenario from durable state.
     drain_attempts: int = 2
@@ -78,6 +80,8 @@ class DispatchedTrainingLoop:
         self.last_drain: float | None = None
         self.undrained_warned = False
         self.thread: Thread | None = None
+        #: Whether the last drain skipped a scenario because another holder had its cycle lock.
+        self.skipped_busy_scenario = False
 
     def start(self) -> None:
         """Start the training thread if it hasn't been started yet, and wake it."""
@@ -123,23 +127,26 @@ class DispatchedTrainingLoop:
     def wait_timeout(self) -> float | None:
         """How long the training thread may sleep before re-checking.
 
-        Blocked checkpoint storage retries on its own interval. While a
-        pipeline has background jobs that run, a finished job can make a
-        batch ready without a new record. Thus the thread polls at
-        ``background_job_poll_seconds``. Otherwise it sleeps until the next
+        Blocked checkpoint storage retries on its own interval. The thread
+        polls at ``background_job_poll_seconds`` in two cases. First, while a
+        pipeline has background jobs that run, because a finished job can make
+        a batch ready without a new record. Second, after the last drain
+        skipped a scenario whose cycle lock was busy, because only the end of
+        a local cycle wakes the thread. Otherwise it sleeps until the next
         accepted record.
         """
         timeout: float | None = self.storage_retry_seconds if self.storage_status is not None else None
+        poll = self.skipped_busy_scenario
         for name in self.registry.training_scenario_names:
             current = self.registry.get_optional(name)
             if current is not None and any(
                 bound.trainer.pipeline.background_jobs_running() for bound in current.trainers
             ):
-                timeout = (
-                    self.background_job_poll_seconds
-                    if timeout is None
-                    else min(timeout, self.background_job_poll_seconds)
-                )
+                poll = True
+        if poll:
+            timeout = (
+                self.background_job_poll_seconds if timeout is None else min(timeout, self.background_job_poll_seconds)
+            )
         return timeout
 
     def drain(self) -> None:
@@ -149,6 +156,7 @@ class DispatchedTrainingLoop:
         # A second failure also reloads, so the next wake finds a clean
         # scenario, but the thread does not try again. The training status
         # reports the cause.
+        self.skipped_busy_scenario = False
         for _ in range(self.drain_attempts):
             try:
                 while self.process():
@@ -194,33 +202,42 @@ class DispatchedTrainingLoop:
             raise RuntimeContractError(
                 f"training thread requires a TrainingRuntime for scenario {current.name!r}, got {type(runtime).__name__}"
             )
-        self.errors.clear(current.name)
-        # A crash may leave remote serving updated but paused after Reef's
-        # commit, or checkpointed before the weight update. Recover that
-        # pending step before deciding whether another batch is available.
         component = current.dispatched_component
         backend = current.trainer_for(component).candidate_backend
         if backend is None or not backend.dispatched:
             raise RuntimeContractError(f"training scenario {current.name!r} has no dispatched training backend")
-        backend.recover_pending_step(
-            current.scenario_step,
-            committed_training_job_id=current.committed_training_job_id,
-            committed_training_without_job_id=current.committed_training_without_job_id,
-        )
-        with self.registry.lock_instance(current) as state:
-            if state is not InstanceState.CURRENT:
-                # Reloaded since the turn began: the next turn reserves on the rebuilt instance.
-                return True
-            # Reserved under the registry lock: a local cycle's failure from here on defers its reload.
-            batch = current.reserve_training_batch(component)
-        if batch is None:
+        # A scenario runs one step at a time. While another holder has the cycle lock,
+        # skip the scenario. The end of a local cycle wakes this thread. Any other
+        # holder, such as an idle check, lets go at once, and the thread polls for it.
+        cycle_lock = self.local_workers.cycle_lock(name)
+        if not cycle_lock.acquire(blocking=False):
+            self.skipped_busy_scenario = True
             return False
         try:
-            return self.run_dispatched_turn(current, component, backend, batch)
+            self.errors.clear(current.name)
+            # A crash may leave remote serving updated but paused after Reef's
+            # commit, or checkpointed before the weight update. Recover that
+            # pending step before deciding whether another batch is available.
+            backend.recover_pending_step(
+                current.scenario_step,
+                committed_training_job_id=current.committed_training_job_id,
+                committed_training_without_job_id=current.committed_training_without_job_id,
+            )
+            with self.registry.lock_instance(current) as state:
+                if state is not InstanceState.CURRENT:
+                    # Reloaded since the turn began: the next turn reserves on the rebuilt instance.
+                    return True
+                batch = current.reserve_training_batch(component)
+            if batch is None:
+                return False
+            try:
+                return self.run_dispatched_turn(current, component, backend, batch)
+            finally:
+                # Whatever the outcome, the local cycles that waited for the job run now, on every scenario.
+                self.local_workers.wake_all()
         finally:
-            # Whatever the outcome, the local cycles that waited for the job run now, on every scenario.
-            # A cycle whose reload waited for the job rebuilds the scenario first.
-            self.local_workers.wake_all()
+            cycle_lock.release()
+            self.local_workers.close_replaced_instances(name)
 
     def run_dispatched_turn(
         self, current: Scenario, component: str | None, backend: CandidateBackend, batch: TrainingBatch
@@ -236,7 +253,7 @@ class DispatchedTrainingLoop:
             if execution.outcome not in ("drop", "commit"):
                 raise RuntimeContractError(f"training backend returned unsupported outcome: {execution.outcome!r}")
             # The registry lock keeps a local worker's reload out between the instance check and the commit.
-            with current.experiment_reporting(), self.registry.lock_instance(current) as state:
+            with self.registry.lock_instance(current) as state:
                 if state is InstanceState.REMOVED:
                     raise RuntimeContractError(
                         f"scenario {current.name!r} was deleted under its training job; the backend's job needs "
