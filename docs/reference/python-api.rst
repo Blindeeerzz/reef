@@ -802,11 +802,10 @@ record2task=..., task2batch=...)``):
   a ``JudgedTasks`` after an asynchronous ``judge`` derives new feedback.
 - ``task2batch``: the task-to-batch stage (``reef.task2batch.Task2Batch``).
   Its ``make_batch(tasks, batch_id)`` shapes the tasks of the selected
-  sets into a batch. The pipeline assigns ``batch_id``:
-  ``<scenario>:batch:<number>`` for an automatic batch and
-  ``<scenario>:instruction:<request id>`` for an instruction's batch. The
-  returned batch must keep it, or the pipeline raises ``ValueError``. The
-  number counts the batches of one pipeline; it is not a training step.
+  sets into a batch with the ID ``batch_id``. The pipeline assigns the ID.
+  An automatic batch gets ``<scenario>:batch:<number>``. An instruction's
+  batch gets ``<scenario>:instruction:<request id>``. The number counts the
+  batches of one pipeline. It is not a training step.
 
 Reef builds the stages for each scenario, in this order, with the class
 methods below; a later stage receives the stages built before it:
@@ -860,7 +859,7 @@ A reported-feedback recipe implements these hooks:
      - Assemble one valid report and its resolved inferences; raise on data errors. Return
        ``SkippedReport(reason)`` for a valid report that cannot train; the stage releases it.
    * - ``Task2Batch.make_batch(tasks, batch_id) -> TrainingBatch``
-     - Shape the flat tuple of selected tasks into a batch with the supplied ID.
+     - Shape the flat tuple of selected tasks into a batch with the ID ``batch_id``.
 
 The recipe owns the report policy. Its record stage is a subclass of
 ``ReportRecord2Record(context, grouping, *, exclusive_sources=False,

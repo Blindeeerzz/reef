@@ -85,11 +85,11 @@ class Task2Batch(ABC, Plugin):
     def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_id: str) -> TrainingBatch:
         """Build a batch from the tasks of the selected record sets, in batch order.
 
-        The pipeline assigns ``batch_id``: ``<scenario>:batch:<number>`` for an
-        automatic batch and ``<scenario>:instruction:<request id>`` for an
-        instruction's batch. The returned batch must keep it, or the pipeline
-        raises ``ValueError``. The number counts the batches that this pipeline
-        built; it starts again when the pipeline does and is not a training step.
+        Use ``batch_id`` as the ID of the returned batch. The pipeline assigns
+        it. An automatic batch gets ``<scenario>:batch:<number>``. An
+        instruction's batch gets ``<scenario>:instruction:<request id>``. The
+        number counts the batches of this pipeline and starts again when the
+        pipeline restarts. It is not a training step.
         The pipeline tracks consumption by record set, including the tasks
         that the recipe leaves out of the batch. In ``manual`` mode an
         instruction's batch has no tasks.

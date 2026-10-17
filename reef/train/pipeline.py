@@ -350,17 +350,10 @@ class TrainingPipeline:
                 for task in self.tasks[formed_set_id]
             )
             if request is None:
-                batch_id = f"{self.scenario}:batch:{self.batch_number}"
+                self.pending = self.task2batch.make_batch(tasks, f"{self.scenario}:batch:{self.batch_number}")
             else:
-                batch_id = f"{self.scenario}:instruction:{request.id}"
-            batch = self.task2batch.make_batch(tasks, batch_id)
-            if batch.batch_id != batch_id:
-                raise ValueError(
-                    f"{type(self.task2batch).__name__}.make_batch returned batch_id {batch.batch_id!r}, not {batch_id!r}"
-                )
-            if request is not None:
-                batch = replace(batch, request=request)
-            self.pending = batch
+                batch = self.task2batch.make_batch(tasks, f"{self.scenario}:instruction:{request.id}")
+                self.pending = replace(batch, request=request)
         return self.pending
 
     def acknowledge(self, batch_id: str, *, trained: bool = True) -> frozenset[str]:

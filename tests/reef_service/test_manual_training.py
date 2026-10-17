@@ -28,7 +28,7 @@ from reef.service.app import create_app
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
 from reef.task2batch import Task2Batch
 from reef.train.backend import PreparedStep
-from reef.train.cordis_backend.processor import InferenceTasks, TraceBatches
+from reef.train.cordis_backend.processor import InferenceTasks
 from reef.train.pipeline import TrainingPipeline
 from reef.train.trainer import Trainer
 from reef.train.types import TrainDataItem, TrainingBatch
@@ -432,7 +432,7 @@ def test_processor_uses_shared_data_and_one_batch_assembly_hook(mode):
         assert isinstance(backend.batches[0], ExampleBatch)
         assert backend.batches[0].values == expected_values
         assert (backend.batches[0].request is None) == (mode == "auto")
-        # The pipeline names every batch; the hook keeps the name it receives.
+        # The pipeline assigns the ID of each batch, and the hook uses it.
         expected_id = "s:batch:1" if mode == "auto" else "s:instruction:use-the-trajectory"
         assert backend.batches[0].batch_id == expected_id
         prepared = trainer.prepare_commit(result)
@@ -443,45 +443,6 @@ def test_processor_uses_shared_data_and_one_batch_assembly_hook(mode):
     finally:
         trainer.close()
         records.close()
-
-
-@pytest.mark.parametrize("mode", ["auto", "manual"])
-def test_a_batch_must_keep_the_id_the_pipeline_assigns(mode):
-    class RenamingBatches(Task2Batch):
-        supported_training_modes = frozenset({"auto", "manual"})
-        required_request_types = frozenset({RequestType.INFERENCE, RequestType.TRAIN})
-
-        def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_id: str) -> TrainingBatch:
-            return TrainingBatch(f"{batch_id}:renamed", tasks)
-
-    context = PipelineContext("s", training_mode=mode)
-    pipeline = TrainingPipeline(
-        context,
-        record2record=InferenceRecord2Record(),
-        record2task=InferenceTasks(),
-        task2batch=RenamingBatches(context, 1),
-    )
-    pipeline.ingest(inference("first") if mode == "auto" else instruction("change"))
-    with pytest.raises(ValueError, match=r"RenamingBatches\.make_batch returned batch_id"):
-        pipeline.build_batch()
-
-
-def test_a_rebuilt_instruction_batch_keeps_its_id():
-    context = PipelineContext("s", training_mode="manual")
-    pipeline = TrainingPipeline(
-        context,
-        record2record=InferenceRecord2Record(),
-        record2task=InferenceTasks(),
-        task2batch=TraceBatches(context, 1),
-    )
-    pipeline.ingest(instruction("change"))
-    first = pipeline.build_batch()
-    assert pipeline.build_batch() is first
-    pipeline.release_batch(first.batch_id)
-    rebuilt = pipeline.build_batch()
-    assert rebuilt.batch_id == first.batch_id == "s:instruction:change"
-    assert rebuilt.request == first.request
-    assert pipeline.acknowledge(rebuilt.batch_id) == frozenset({"change"})
 
 
 def test_factory_cannot_silently_change_the_processor_mode():

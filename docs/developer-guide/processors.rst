@@ -236,9 +236,9 @@ A reported-feedback recipe writes:
   directly. Use ``context.require_score()`` when the method needs a reward.
   The stage attaches the source and report ids to the returned item.
 - ``make_batch(tasks, batch_id)`` on a ``Task2Batch`` subclass: assemble
-  the flat tuple of selected tasks into a batch with the supplied
-  ``batch_id``. The pipeline tracks consumption by set, including tasks that
-  the recipe removes from training.
+  the flat tuple of selected tasks into a batch with the ID ``batch_id``.
+  The pipeline tracks consumption by set, including tasks that the recipe
+  removes from training.
 
 ``exclusive_sources`` makes a terminal report own its referenced inference
 records outright, and ``ordered_groups`` batches ready groups in key order.
