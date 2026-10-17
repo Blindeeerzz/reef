@@ -71,7 +71,7 @@ pipeline:
           # A model call on the same Reef reviews each task's tests; a task they grade on what the instruction does
           # not state is refused.
           review: refuse
-  # A batch is tasks_per_step complete task groups.
+  # A rollout batch is tasks_per_step saved tasks; it trains on their settled groups.
   task2batch:
     config:
       tasks_per_step: 2

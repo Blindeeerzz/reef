@@ -19,7 +19,6 @@ from reef.recipe.generated_tasks import GeneratedTaskTasks
 from reef.recipe.generated_tasks.processor import (
     GeneratedTaskRecord2Record,
     GenerationJob,
-    PlayJob,
     RoundSettings,
     TaskGroupSettings,
 )
@@ -270,10 +269,12 @@ def test_a_round_of_the_generated_task_recipe_runs_spade_end_to_end(tmp_path: Pa
         task_player=service,
     )
     generated = asyncio.run(generation.run(GenerationJob(receipt="generation-00000", generation=0)))
-    names = tuple(task.task_path.name for task in generated.tasks)
-    outcome = asyncio.run(generation.run(PlayJob(receipt="play-00000", task_names=names)))
+    saved_tasks = generation.task_store.tasks(split="train")
+    for saved in saved_tasks:
+        asyncio.run(generation.play_and_record(saved, labels={}))
+    delivery_error = asyncio.run(generation.deliver_results())
     generation.close()
-    assert outcome.error == "" and outcome.played == 2
+    assert len(generated.tasks) == len(saved_tasks) == 2 and delivery_error == ""
     plays = [(call["task"], call["arm"], call["plays"], call["extra"]) for call in service.plays]
     assert plays[:2] == [
         ("harbor-00000-000-inspection", "plain", 2, ()),

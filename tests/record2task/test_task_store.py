@@ -274,11 +274,13 @@ def completed(store: FileTaskStore, generation: int, *names: str, sources: tuple
 
 
 @pytest.mark.unit
-def test_play_results_make_tasks_unavailable_and_complete_a_generations_feedback(tmp_path: Path) -> None:
+def test_play_results_complete_a_generations_feedback_and_trained_tasks_are_unavailable(tmp_path: Path) -> None:
     with FileTaskStore(root=tmp_path, eval_fraction=0.0, seed=SEED) as store:
         completed(store, 0, "first-task", "second-task")
         assert [saved.generated.task.name for saved in store.available_tasks()] == ["first-task", "second-task"]
         store.record_result(generation=0, result=PlayedResult("first-task", (1.0, 0.0), reported_plays=2))
+        assert store.has_result(task_name="first-task") and len(store.available_tasks()) == 2, "it has not trained"
+        store.mark_trained(task_names=("first-task",))
         assert [saved.generated.task.name for saved in store.available_tasks()] == ["second-task"]
         assert store.deliverable_generations() == ()
         with pytest.raises(TaskStoreError, match="already has a result"):
@@ -290,9 +292,10 @@ def test_play_results_make_tasks_unavailable_and_complete_a_generations_feedback
         first, second = state.task_results()
         assert first.training_rewards == (1.0, 0.0) and first.is_played
         assert second.infrastructure_failure and second.error == "sandbox gone"
-        assert store.counts()["played/train"] == 2
+        assert store.counts()["trained/train"] == 1 and store.counts()["available/train"] == 1
     with FileTaskStore(root=tmp_path, eval_fraction=0.0, seed=SEED) as reopened:
-        assert reopened.available_tasks() == () and len(reopened.deliverable_generations()) == 1
+        assert [saved.generated.task.name for saved in reopened.available_tasks()] == ["second-task"]
+        assert len(reopened.deliverable_generations()) == 1
         reopened.mark_delivered(generation=0)
         assert reopened.deliverable_generations() == ()
 

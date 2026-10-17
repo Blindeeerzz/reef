@@ -55,7 +55,7 @@ from reef.core.plugins import PluginConfigError
 from reef.core.tasks import HarborTask, TaskGenerationRequest, TaskPlayResult, read_harbor_task
 from reef.pipeline_context import PipelineContext
 from reef.recipe.generated_tasks import GeneratedTaskRecord2Record, GeneratedTaskTasks
-from reef.recipe.generated_tasks.processor import GenerationJob, PlayJob, RoundSettings, TaskGroupSettings
+from reef.recipe.generated_tasks.processor import GenerationJob, RoundSettings, TaskGroupSettings
 from reef.record2task.generator import DuplicateTask, GeneratorError, WrittenTask
 from reef.record2task.generator.harbor import ORACLE_TIMEOUT_S
 from reef.service.deploy.orchestrator import resolve_deployment_config
@@ -596,11 +596,13 @@ def test_a_round_of_the_generated_task_recipe_runs_autoenvscaling_end_to_end(tmp
         task_player=service,
     )
     generated = asyncio.run(generation.run(GenerationJob(receipt="generation-00000", generation=0)))
-    names = tuple(task.task_path.name for task in generated.tasks)
-    outcome = asyncio.run(generation.run(PlayJob(receipt="play-00000", task_names=names)))
+    for saved in generation.task_store.tasks(split="train"):
+        asyncio.run(generation.play_and_record(saved, labels={}))
+    delivery_error = asyncio.run(generation.deliver_results())
     results = generation.task_store.generation(generation=0).results
     generation.close()
-    assert outcome.error == "" and [result.training_rewards for result in results] == [(0.5, 0.5)] * 2
+    assert len(generated.tasks) == 2 and delivery_error == ""
+    assert [result.training_rewards for result in results] == [(0.5, 0.5)] * 2
     assert [(call["task"], call["arm"], call["plays"]) for call in service.plays] == [
         (NAMES[0], "plain", 2),
         (NAMES[1], "plain", 2),

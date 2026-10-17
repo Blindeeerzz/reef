@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Self
 
-from reef.core.batches import TrainDataItem, TrainingBatch
+from reef.core.batches import TaskItem, TrainDataItem, TrainingBatch
 from reef.core.config import config_option
 from reef.core.plugins import NoSettings, Plugin, PluginConfigError, PluginSettings
 from reef.core.records_types import RequestType
@@ -90,9 +90,50 @@ class Task2Batch(ABC, Plugin):
         instruction's batch has no tasks.
         """
 
+    def status(self) -> Mapping[str, Any]:
+        """Return JSON-safe state that the pipeline adds to its status."""
+        return {}
+
     def close(self) -> None:
         """Release resources that the stage owns. Calling it more than one time is safe."""
         return
+
+
+@dataclass(frozen=True)
+class RolloutResult:
+    """The plays of one rollout batch ended: the reports of each task use's training episodes."""
+
+    batch: str
+    training_reports: Mapping[str, tuple[str, ...]]
+
+
+class RolloutTask2Batch(Task2Batch):
+    """A task-to-batch stage that rolls saved tasks out, then batches their episodes.
+
+    The pipeline takes tasks from its record stage's task pool and submits them as one rollout batch. The
+    stage plays them on a worker, and each episode's records carry the batch and the task use.
+    ``take_finished`` hands back each use's training reports when the plays end. The pipeline then batches
+    the batch's groups through ``make_batch``.
+    """
+
+    #: How long the groups of a batch whose plays ended may wait for their reports before they settle as they are.
+    settle_timeout_seconds: float = 600.0
+
+    @abstractmethod
+    def submit(self, batch: str, tasks: tuple[TaskItem, ...]) -> tuple[str, ...]:
+        """Start playing the tasks as one rollout batch; return one task use ID for each task, in order."""
+
+    @abstractmethod
+    def take_finished(self) -> tuple[RolloutResult, ...]:
+        """Return the rollout batches whose plays ended since the last call."""
+
+    @abstractmethod
+    def running(self) -> bool:
+        """Whether a rollout batch is playing."""
+
+    @abstractmethod
+    def rollout_trained(self, batch: str, task_uses: tuple[str, ...]) -> None:
+        """The groups of these task uses trained in the batch; their tasks do not roll out again."""
 
 
 class NoBatches(Task2Batch):

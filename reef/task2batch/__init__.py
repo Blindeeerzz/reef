@@ -21,12 +21,14 @@ on ``reef.core``, ``reef.observability``, ``reef.pipeline_context``, and the
 two earlier stage packages, whose classes ``Task2Batch.from_config`` receives.
 """
 
-from reef.task2batch.base import BatchSettings, NoBatches, Task2Batch
+from reef.task2batch.base import BatchSettings, NoBatches, RolloutResult, RolloutTask2Batch, Task2Batch
 from reef.task2batch.distill import DistillBatches
 
 __all__ = [
     "BatchSettings",
     "DistillBatches",
     "NoBatches",
+    "RolloutResult",
+    "RolloutTask2Batch",
     "Task2Batch",
 ]

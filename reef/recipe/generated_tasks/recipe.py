@@ -22,8 +22,8 @@ class GeneratedTaskRecipe(WeightTrainingRecipe):
     ``pipeline`` section gives their config: the rounds, the task
     generator, and the generator service in ``record2task``, the task groups
     and the source sessions in ``record2record``, and the batch size in
-    ``task2batch``. Without that section, no round runs and the recipe trains
-    on the training arm's reports only.
+    ``task2batch``. Without that section, no round runs, no task rolls out,
+    and nothing trains.
 
     Enabled rounds save tasks and fixed splits under ``state_dir/<scenario>/store/`` before play.
     Eval tasks remain saved without plays or training feedback.

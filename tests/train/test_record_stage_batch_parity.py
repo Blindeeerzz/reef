@@ -36,7 +36,6 @@ from reef.background_jobs import SupportsReceipt
 from reef.core import AgentRecord, RequestType
 from reef.core.plugins import NoSettings
 from reef.core.reports import ReportBase, TeacherContextReport
-from reef.recipe.generated_tasks.recipe import GeneratedTaskRecipe
 from reef.record2record import (
     ExclusiveReportRecord2Record,
     GroupDecision,
@@ -594,31 +593,6 @@ def coral_steps() -> list[Step]:
     ]
 
 
-def task_report(record_id: str, reference: str, task: str, score: float, *, arm: str = "plain") -> AgentRecord:
-    return report(
-        record_id,
-        reference,
-        score=score,
-        task={"name": task, "path": f"/tasks/{task}", "digest": "ab" * 32},
-        episode={"id": record_id, "labels": {"arm": arm}},
-    )
-
-
-def task_steps() -> list[Step]:
-    steps: list[Step] = []
-    for index, (task, score, arm) in enumerate(
-        (
-            ("t0", 1.0, "plain"),
-            ("t1", 0.0, "plain"),
-            ("t0", 0.0, "measure"),
-            ("t0", 0.0, "plain"),
-            ("t1", 1.0, "plain"),
-        )
-    ):
-        steps += [inference(f"i-{index}", version="r1"), task_report(f"r-{index}", f"i-{index}", task, score, arm=arm)]
-    return steps
-
-
 def distill_inference(record_id: str, question: str = "What is the boiling point of water?") -> AgentRecord:
     return AgentRecord.create(
         scenario="s",
@@ -730,7 +704,6 @@ def streams() -> dict[str, tuple[StreamRun, list[Step]]]:
     distill = stage_configs(
         record2task={"tokenizer_path": "/models/s", "max_teacher_tokens": 30}, task2batch={"batch_size": 1}
     )
-    generated = stage_configs(record2record={"plays_per_task": 2}, task2batch={"tasks_per_step": 2})
     computed = stage_configs(task2batch={"batch_size": 2})
     return {
         "ungrouped": (ungrouped_stream(), ungrouped_steps()),
@@ -751,7 +724,6 @@ def streams() -> dict[str, tuple[StreamRun, list[Step]]]:
             StreamRun(CoralRecipe.pipeline_spec(), stage_configs(record2record={"group_size": 2})),
             coral_steps(),
         ),
-        "generated_tasks": (StreamRun(GeneratedTaskRecipe.pipeline_spec(), generated), task_steps()),
         "distill_overflow": (StreamRun(DISTILL_STAGES, distill, TeacherContextReport), distill_steps()),
         "sdpo": (StreamRun(SDPORecipe.pipeline_spec(), sdpo, SDPOReport), sdpo_steps()),
         "computed_exact_version": (StreamRun(TOY_COMPUTED_STAGES, computed), computed_steps()),

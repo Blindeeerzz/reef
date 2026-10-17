@@ -385,26 +385,49 @@ released. A round that made train tasks puts them in the record stage's task
 pool. A task that an earlier generation published is rejected as a
 duplicate.
 
-When no play runs and the task pool holds tasks, the record stage takes them
-all into one play. A play job runs each task through an ``EpisodeRunner``
-(``reef.record2task.generator.runner``). The runner stages the saved task where
-it runs and plays it: ``plays_per_task`` times on the training arm, then its
-measurement arms. The play job saves the task's result. An episode with an
-error and no reward could not run; when every training episode of a task could
-not run, the task's result is an infrastructure failure, not a solver failure. When every train task of a generation has a result, the next job sends
+Saved tasks roll out as batches. The pipeline runs a second loop:
+
+1. When no rollout batch runs, the pipeline takes up to ``tasks_per_step``
+   tasks from the task pool and submits them as one rollout batch.
+2. ``GeneratedTaskBatches`` plays them on its own worker through an
+   ``EpisodeRunner`` (``reef.record2task.generator.runner``), which stages each
+   saved task and plays it: ``plays_per_task`` times on the training arm, then
+   its measurement arms. At most ``episode_capacity`` episodes are queued or
+   running at once; a task with more plays than the capacity plays in several
+   waves. Each episode carries the labels ``batch`` and ``task_use``. A task's
+   first play saves its result. An episode with an error and no reward could
+   not run; when every training episode of a task could not run, the task's
+   result is an infrastructure failure, not a solver failure.
+3. When the plays end, the rollout hands over the reports of each task use's
+   training episodes. The record stage groups the training reports by
+   ``(batch, task_use)``. A group settles when each of those reports joined it
+   or ended without training, for example because the record-to-task stage
+   skipped it. After ``settle_timeout_seconds``, the groups settle with the
+   reports they hold. A group of fewer than two episodes is discarded; several
+   reports of one episode count as one.
+4. When every group of the batch settled, the staleness check runs, and the
+   batch trains on its surviving groups. Their tasks are marked trained in the
+   task store. When no group survives, the next rollout starts, and the next
+   generation round does not wait for a batch.
+
+A report whose batch is not running, or whose arm is not the training arm,
+never trains. A report that arrives after its batch was built is released
+when the batch ends. When a submit fails, its tasks stay in the task pool. If
+a task's play fails, the other tasks of the batch play on. On a restart, the
+train tasks that did not train go back to the task pool, including the tasks of
+a rollout that the stop interrupted. The generic parts are
+``RolloutReportRecord2Record`` (``reef.record2record.rollout``) and
+``RolloutTask2Batch`` (``reef.task2batch``); any record-to-task stage that
+returns ``TaskItem`` values can feed the loop.
+
+When every train task of a generation has a result, the next job sends
 the generation's results to ``record_results``. A generation can therefore
 close after later generations started. A generation whose delivery fails waits
 for the next job, and later generations still go out.
 
 The training plays carry the arm ``plain``, and only reports with that label
 train. A generated task whose measurement arm is
-named ``plain`` comes back unplayed with an error. The record stage groups
-the training reports by ``metadata.task.name``. A group is complete at
-``plays_per_task`` episodes, and a batch holds ``tasks_per_step`` complete
-groups. A training play that reports nothing, such as a failed trial, never
-joins its group. When the task's plays end, its group is complete at the
-number of plays that reported; a group of one is discarded. The
-``task_group`` objective centers and scales each reward within its
+named ``plain`` comes back unplayed with an error. The ``task_group`` objective centers and scales each reward within its
 task group, on Tinker's ``importance_sampling`` loss. The record stage
 releases the reports of measurement arms and reports without an arm, such as a
 generator's own reports, without assembling them.
@@ -423,23 +446,20 @@ last round is released at once.
 The first round starts when the pipeline first looks for a batch. The next
 round starts after ``batches_per_round`` batches trained since the previous
 round started, and only while the task pool holds fewer than ``refill_tasks``
-tasks, so saved tasks play before more are generated. The pool counts tasks
-that wait for a play, not tasks in a play that is queued or running. A batch
-that the backend dropped as stale does not count. A round that made no train
-task and a play that played no task are followed at once, because no batch
-comes from them. The ``rounds`` limit counts the rounds that finished a
-generation; a round of replayed sessions does not count. A round whose
-generation ran out of attempts counts too, and the next round finishes the same
-generation from its saved candidates.
-
-The rounds still wait for batches. When the played groups cannot fill a batch,
-for example fewer tasks than ``tasks_per_step``, no further round starts.
+tasks, so saved tasks roll out before more are generated. The pool counts
+tasks that wait for a rollout, not tasks in a rollout that runs. A batch that
+the backend dropped as stale does not count. A round that made no train task
+and a rollout that trained nothing are followed at once, because no batch comes
+from them, and so is an empty task pool with no rollout running. The ``rounds``
+limit counts the rounds that finished a generation; a round of replayed
+sessions does not count. A round whose generation ran out of attempts counts
+too, and the next round finishes the same generation from its saved candidates.
 
 The store saves candidates before validation and records each publication, rejection and play result.
 Its generation documents own task metadata; task directories contain only Harbor files.
 The store rebuilds its cumulative ``split-manifest.json`` from publication outcomes when reopened.
 After a restart, the record-to-task stage continues with the next generation number.
-It puts the train tasks that have no result back in the task pool and sends the results that the generator did not receive, even when no other job is due.
+It puts the train tasks that did not train back in the task pool and sends the results that the generator did not receive, even when no other job is due. A task that trained before its result was saved gets an infrastructure-failure result, so its generation's feedback completes.
 A replayed session that a complete generation already used makes no new generation.
 A task whose play was running at the stop has no result, so it plays again.
 ``GET /reef/status`` shows the generator, the generation in flight, the completed generations and the last error under ``task_generation``, task counts under ``task_store``, and the task pool size.

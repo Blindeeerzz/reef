@@ -32,7 +32,10 @@ Stages:
   background worker after later traffic completes them. A recipe's
   ``RecordJudging`` holds the correlation and the judge.
 * ``InferenceRecord2Record`` (``base.py``): one set per inference record.
-* ``RoundRecord2Record`` (``rounds.py``): a ``ReportRecord2Record`` that also
+* ``RolloutReportRecord2Record`` (``rollout.py``): a ``ReportRecord2Record`` with
+  a task pool that groups rollout episodes by ``(batch, task_use)``: the record
+  stage's half of rolling out saved tasks.
+* ``RoundRecord2Record`` (``rounds.py``): a ``RolloutReportRecord2Record`` that also
   paces task-generation rounds and holds their source sessions. A recipe's
   ``RoundGrouping`` decides which reports are source sessions for the rounds.
 
@@ -64,7 +67,8 @@ from reef.record2record.reports import (
     ReportGrouping,
     ReportRecord2Record,
 )
-from reef.record2record.rounds import PlaySet, RoundGrouping, RoundRecord2Record, RoundSet
+from reef.record2record.rollout import RolloutGrouping, RolloutReportRecord2Record
+from reef.record2record.rounds import RoundGrouping, RoundRecord2Record, RoundSet
 from reef.record2record.selection import ArrivalOrder, GroupKeyOrder, SelectionPolicy
 from reef.record2record.sets import PoolItem, RecordSet, SingleRecordSet, TaskSet
 
@@ -77,7 +81,6 @@ __all__ = [
     "JudgedSet",
     "JudgingRecord2Record",
     "PassThroughRecord2Record",
-    "PlaySet",
     "Pool",
     "PoolItem",
     "Record2Record",
@@ -88,6 +91,8 @@ __all__ = [
     "ReportContext",
     "ReportGrouping",
     "ReportRecord2Record",
+    "RolloutGrouping",
+    "RolloutReportRecord2Record",
     "RoundGrouping",
     "RoundRecord2Record",
     "RoundSet",

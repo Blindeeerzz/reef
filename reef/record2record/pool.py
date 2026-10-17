@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Hashable
+from collections.abc import Callable, Hashable
 from typing import Generic, TypeVar
 
 from reef.record2record.selection import ArrivalOrder, SelectionPolicy
@@ -55,11 +55,14 @@ class Pool(Generic[ItemT]):
         """Return the reserved sets. Return an empty tuple if no batch is reserved."""
         return () if self.reserved is None else self.reserved
 
-    def reserve(self, max_set_count: int) -> tuple[ItemT, ...]:
-        """Select at most ``max_set_count`` sets as the next batch, and keep them reserved."""
+    def reserve(self, max_set_count: int, *, where: Callable[[ItemT], bool] | None = None) -> tuple[ItemT, ...]:
+        """Select at most ``max_set_count`` sets as the next batch, and keep them reserved.
+
+        With ``where``, only the sets for which it is true are candidates.
+        """
         if max_set_count < 0:
             raise ValueError("max_set_count must not be negative")
-        self.reserved = self.select(max_set_count)
+        self.reserved = self.select(max_set_count, where=where)
         return self.reserved
 
     def release_reservation(self) -> None:
@@ -78,9 +81,10 @@ class Pool(Generic[ItemT]):
         self.reserved = None
         return consumed
 
-    def select(self, max_set_count: int) -> tuple[ItemT, ...]:
+    def select(self, max_set_count: int, *, where: Callable[[ItemT], bool] | None = None) -> tuple[ItemT, ...]:
         """Apply the selection policy, and make sure that it returned held sets only, each one time."""
-        selected = self.selection.select(self.sets(), max_set_count)
+        candidates = self.sets() if where is None else tuple(item for item in self.sets() if where(item))
+        selected = self.selection.select(candidates, max_set_count)
         selected_ids = [record_set.set_id for record_set in selected]
         if len(selected) > max_set_count or len(set(selected_ids)) != len(selected_ids):
             raise ValueError(f"{type(self.selection).__name__} returned too many sets or a set more than one time")

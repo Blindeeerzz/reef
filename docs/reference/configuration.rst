@@ -1125,8 +1125,8 @@ The built-in generated-task recipe,
 objective on Tinker's ``importance_sampling`` loss, so it requires the
 ``tinker`` training backend. Its stages are ``GeneratedTaskRecord2Record``,
 ``GeneratedTaskTasks``, and ``GeneratedTaskBatches``. Without
-``pipeline.record2task.config.rounds`` no round runs, and the recipe trains on
-the training arm's reports only.
+``pipeline.record2task.config.rounds`` no round runs, no task rolls out, and
+nothing trains.
 
 .. code:: yaml
 
@@ -1158,15 +1158,15 @@ rounds, and chooses which saved tasks play:
 
 .. config::
 
-   pipeline.record2record.config.plays_per_task | 4 | training plays of each task; a group is complete at this count, or at the plays that reported when fewer did. At least 2.
+   pipeline.record2record.config.plays_per_task | 4 | training plays of each task in a rollout. At least 2.
    pipeline.record2record.config.batches_per_round | 1 | trained batches after which the next round starts
    pipeline.record2record.config.source_records_per_round | 0 | recorded sessions that each round gives the generator, at most; 0 generates from the description only
    pipeline.record2record.config.source_tag | the ``name=value`` tag that marks a source session: each of its model calls carries the header ``x-reef-tag-<name>: <value>``. Required when ``source_records_per_round`` is above 0.
-   pipeline.record2record.config.refill_tasks | 1 | the next round starts only while fewer saved tasks than this wait to play
+   pipeline.record2record.config.refill_tasks | 1 | the next round starts only while fewer saved tasks than this wait to roll out
 
-``GeneratedTaskTasks`` runs the generations and the plays, and turns the
-training plays into tasks. It plays each task ``plays_per_task`` times, as its
-record stage groups them:
+``GeneratedTaskTasks`` runs the generations, and turns the training plays
+into tasks. ``GeneratedTaskBatches`` plays each task ``plays_per_task`` times
+in a rollout:
 
 .. config::
 
@@ -1197,11 +1197,13 @@ Each store permits one writer, and composite components must use different state
 On upgrade, existing round summaries remain untouched; the new store starts fresh without importing old tasks or rounds.
 Inference records and training history remain available.
 
-``GeneratedTaskBatches`` batches complete task groups:
+``GeneratedTaskBatches`` batches complete task groups, and can roll saved tasks out first:
 
 .. config::
 
-   pipeline.task2batch.config.tasks_per_step | 4 | complete task groups in one batch
+   pipeline.task2batch.config.tasks_per_step | 4 | saved tasks of one rollout batch
+   pipeline.task2batch.config.episode_capacity | 0 | episodes of a rollout batch queued or running at once; 0 is ``tasks_per_step`` x ``plays_per_task``
+   pipeline.task2batch.config.settle_timeout_seconds | 600 | seconds a batch whose plays ended waits for its reports before its groups settle as they are
 
 Reef calls the generator class's ``from_config(config, *, scenario, environ)``
 once for each scenario. A generator that calls a remote service reads its
