@@ -22,10 +22,10 @@ across the shards (:func:`~reef.train.slime_backend.vocab_parallel.gather_log_pr
 :func:`restricted_divergence` compares the two distributions on them, either
 renormalized over the K ids, the reverse KL then estimated at the sampled
 token (:func:`sampled_reverse_kl`), or with one bucket for the rest of the
-vocabulary (:func:`append_tail_log_probability`). A family that normalizes
-its advantages has the pre-train hook center and scale the sampled reverse
-KL's gradient weights over the whole training job
-(:func:`normalized_sampled_advantages`) before the step.
+vocabulary (:func:`append_tail_log_probability`). A family can normalize
+its advantages. Then the pre-train hook centers and scales the gradient
+weights of the sampled reverse KL over the whole training job, before the
+step (:func:`normalized_sampled_advantages`).
 
 A divergence is a sum of per-shard terms that all depend on the student's
 global log-sum-exp. Letting autograd differentiate a shard's term alone
@@ -264,10 +264,11 @@ def sampled_reverse_kl(
     Without clipping, its gradient is that gap, held fixed, times the gradient
     of ``log p(y)``: the unbiased estimator of the expected loss gradient
     (the on-policy distillation loss of tinker-cookbook).
-    A given ``[R]`` ``advantage`` replaces the negated gap in the gradient,
-    such as the job-normalized one of :func:`normalized_sampled_advantages`.
-    A positive ``advantage_clip`` bounds the gradient's weight symmetrically.
-    The returned value retains the unclipped, unnormalized KL estimate.
+    An ``[R]`` ``advantage``, such as the output of
+    :func:`normalized_sampled_advantages`, replaces the negated gap in the
+    gradient. A positive ``advantage_clip`` bounds the gradient's weight
+    symmetrically. The returned value is always the unclipped, unnormalized
+    KL estimate.
     """
     gap = (student_log_prob - teacher_log_prob).detach()
     gradient_gap = gap if advantage is None else -advantage.detach()
@@ -276,7 +277,7 @@ def sampled_reverse_kl(
     return gap + gradient_gap * (student_log_prob - student_log_prob.detach())
 
 
-#: Added to the variance so a job whose differences are all equal keeps finite advantages.
+#: Added to the variance, so that a job whose differences are all equal keeps finite advantages.
 ADVANTAGE_VARIANCE_EPSILON = 1e-8
 
 
@@ -291,41 +292,36 @@ def normalized_sampled_advantages(
     data_parallel_group: Any,
     data_parallel_world: int,
 ) -> list[torch.Tensor]:
-    """Per sample, ``log t(y) - log p_rollout(y)`` centered and scaled over every trained token of the job.
+    """Per sample, ``log t(y) - log p_rollout(y)``, centered and scaled over the trained tokens of the job.
 
-    The three tensors of a sample are ``[R]`` rows at its response tokens.
-    The mean and the standard deviation cover the trained tokens (the loss
-    mask without the first ``skip_response_tokens``) of every data-parallel
-    rank, so all samples of the job share one center and one scale. Untrained
-    tokens get 0. The rollout engine's log-probs stand in for the student's:
-    with one update per on-policy batch they agree up to numerics, and they
-    are known before the step.
+    Each argument holds one ``[R]`` row per sample, at the sample's response
+    tokens. A trained token has a nonzero loss mask and is not one of the
+    first ``skip_response_tokens``. The mean and the standard deviation
+    include the trained tokens of all data-parallel ranks. Thus all samples
+    of the job use the same center and scale. Untrained tokens get 0.
+
+    The rollout engine's log-probs replace the student's. They are known
+    before the step, and with one update per on-policy batch the two agree
+    up to numerics.
     """
     differences: list[torch.Tensor] = []
     trained_masks: list[torch.Tensor] = []
-    for index, (teacher, rollout, mask) in enumerate(
-        zip(teacher_log_probs, rollout_log_probs, loss_masks, strict=True)
-    ):
-        if not teacher.numel() == rollout.numel() == mask.numel():
-            raise ValueError(
-                f"distill sample {index} has {teacher.numel()} teacher, {rollout.numel()} rollout and "
-                f"{mask.numel()} mask entries"
-            )
+    totals = torch.zeros(3, dtype=torch.float64, device=device)
+    for teacher, rollout, mask in zip(teacher_log_probs, rollout_log_probs, loss_masks, strict=True):
+        # The copy keeps the batch's own loss mask unchanged.
         trained = mask.to(device=device, dtype=torch.float64).clone()
         trained[:skip_response_tokens] = 0
-        differences.append(
-            teacher.to(device=device, dtype=torch.float64) - rollout.to(device=device, dtype=torch.float64)
-        )
-        trained_masks.append(trained)
-    totals = torch.zeros(3, dtype=torch.float64, device=device)
-    for difference, trained in zip(differences, trained_masks, strict=True):
+        difference = teacher.to(device=device, dtype=torch.float64) - rollout.to(device=device, dtype=torch.float64)
         totals += torch.stack([(difference * trained).sum(), (difference.square() * trained).sum(), trained.sum()])
+        differences.append(difference)
+        trained_masks.append(trained)
     if data_parallel_world > 1:
         dist.all_reduce(totals, op=dist.ReduceOp.SUM, group=data_parallel_group)
     difference_sum, square_sum, token_count = totals.tolist()
-    if token_count == 0:
-        return [torch.zeros_like(difference, dtype=torch.float32) for difference in differences]
+    # A job without trained tokens gets mean 0 and only zero advantages.
+    token_count = max(token_count, 1.0)
     mean = difference_sum / token_count
+    # Rounding can make the variance slightly negative.
     variance = max(square_sum / token_count - mean * mean, 0.0)
     scale = math.sqrt(variance + ADVANTAGE_VARIANCE_EPSILON)
     return [
@@ -398,9 +394,12 @@ def _topk_divergences(
     tp_group = mpu.get_tensor_model_parallel_group()
     tp_world = dist.get_world_size(group=tp_group) if dist.is_initialized() else 1
     tp_rank = dist.get_rank(group=tp_group) if dist.is_initialized() else 0
-    advantages = batch.get(ADVANTAGES_KEY) if settings.normalizes_advantages else None
-    if settings.normalizes_advantages and advantages is None:
-        raise RuntimeError(f"{ADVANTAGES_KEY} is missing: the pre-train hook did not normalize this batch")
+    if settings.normalizes_advantages:
+        advantages = batch.get(ADVANTAGES_KEY)
+        if advantages is None:
+            raise RuntimeError(f"{ADVANTAGES_KEY} is missing: the pre-train hook did not normalize this batch")
+    else:
+        advantages = None
     per_sample: list[torch.Tensor] = []
     rows_and_teacher = zip(
         student_rows_per_sample,
@@ -552,9 +551,9 @@ def distill_loss(
     if weighted.numel() == 0:
         loss = loss + 0 * logits.sum()
     if centering_settings is not None:
-        # The same advantage as the sampled reverse-KL gradient, before IS
-        # weighting: the job-normalized one, or the negated value
-        # log teacher(y) - log p(y), then the gradient's bound.
+        # Score centering uses the same advantage as the sampled reverse-KL
+        # gradient, before IS weighting: the job-normalized advantage, or the
+        # negated value log teacher(y) - log p(y). The same bound applies.
         if settings.normalizes_advantages:
             centering_advantages = [
                 advantage.to(device=sample.device)
@@ -588,8 +587,9 @@ def distill_loss(
 def distill_actor_pre_train(actor: Any, rollout_data: dict[str, Any]) -> None:
     """``--reef-actor-pre-train-hook-path`` entry point: score every teacher sequence before the step.
 
-    A family that normalizes its advantages then fills :data:`ADVANTAGES_KEY`
-    from the teacher's sampled-token log-probs and the rollout engine's.
+    For a family that normalizes its advantages, the hook then fills
+    :data:`ADVANTAGES_KEY` from the sampled-token log-probs of the teacher
+    and of the rollout engine.
     """
     if not rollout_data.get("teacher_tokens"):
         raise ValueError("every distill sample must carry teacher_tokens")
@@ -606,8 +606,8 @@ def distill_actor_pre_train(actor: Any, rollout_data: dict[str, Any]) -> None:
 
         with timer("distill_teacher"):
             compute_teacher_rows(actor, rollout_data, settings)
-    # A checkpoint teacher fills its rows on the last pipeline stage only, where the loss runs;
-    # every rank of one data-parallel group sits on the same stage.
+    # A checkpoint teacher fills its rows only on the last pipeline stage, where the loss runs.
+    # All ranks of one data-parallel group are on the same stage, so they all join the all-reduce.
     if settings.normalizes_advantages and "distill_teacher_sampled_log_probs" in rollout_data:
         from megatron.core import mpu
 

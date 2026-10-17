@@ -85,19 +85,20 @@ The raw advantage is the teacher's log-probability of the sampled token minus
 the rollout engine's. Before the optimizer step, the family subtracts the mean
 of the raw advantages and divides by their standard deviation. Both statistics
 cover every trained token of the training job, on all data-parallel ranks.
-The rollout engine's log-probabilities stand in for the student's, because
-they are known before the step. Normalization is part of the method and has no
-option. It sets the gradient scale, so a learning rate tuned on raw advantages
-can need a new value. The reported divergence remains the unnormalized
-estimate. The other divergences have no per-token advantage and are not
-normalized.
+The family uses the rollout engine's log-probabilities instead of the
+student's, because they are known before the step. Normalization is part of
+the method and has no option. It changes the gradient scale. A learning rate
+tuned on raw advantages can need a new value. The reported divergence remains
+the unnormalized estimate. The other divergences have no per-token advantage,
+so the family does not normalize them.
 
 Set ``opd-advantage-clip: 5.0`` to bound each normalized advantage to
-``[-5, 5]`` standard deviations before importance-sampling weights and sample
-weights are applied. Score centering uses the same normalized, bounded
-advantage. This option changes the gradient; the reported divergence remains
-the unclipped estimate. It requires ``opd-divergence: reverse``, positive
-``opd-top-k``, and ``opd-top-k-distribution: renormalized``.
+``[-5, 5]`` standard deviations. The bound applies before the
+importance-sampling weights and the sample weights. Score centering uses the
+same normalized, bounded advantage. This option changes the gradient. The
+reported divergence remains the unclipped estimate. The option requires
+``opd-divergence: reverse``, positive ``opd-top-k``, and
+``opd-top-k-distribution: renormalized``.
 
 The separate checkpoint is swapped into the actor's architecture for the
 teacher pass, so teacher and student must share the architecture, parallel

@@ -23,17 +23,19 @@ opd/
 
 `--opd-teacher=separate` names a checkpoint (`--opd-teacher-checkpoint`) that the teacher pass swaps into the actor's model layout, so teacher and student must share the architecture, parallel layout and token ids. `--opd-top-k=1` selects the base's sampled-token reverse-KL estimator: the loss uses the teacher's log-probability of the student's sampled token, normalized over the full vocabulary, with the score-function gradient. The other divergences and representations of the base are reachable through the inherited `--opd-*` flags; changing them changes the method.
 
-The gradient's per-token advantage is the teacher's log-probability of the
-sampled token minus the rollout engine's, centered and divided by its standard
-deviation over every trained token of the training job. Normalization has no
-flag. The reported divergence stays unnormalized.
+The gradient's raw per-token advantage is the teacher's log-probability of
+the sampled token minus the rollout engine's. The family centers these values
+and divides them by their standard deviation over every trained token of the
+training job. Normalization has no flag. The reported divergence stays
+unnormalized.
 
 For optional advantage clipping, set `opd-advantage-clip: 5.0` under
 `training.options`. It bounds the normalized advantage to `[-5, 5]` before
 importance-sampling and sample weights. Score centering uses the same
 advantage. The default is `0`, which applies no bound. Clipping requires
 sampled reverse KL with positive `opd-top-k` and
-`opd-top-k-distribution: renormalized`; the reported divergence stays unclipped.
+`opd-top-k-distribution: renormalized`. The reported divergence stays
+unclipped.
 
 ## Teacher engine
 

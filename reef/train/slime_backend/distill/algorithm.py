@@ -69,10 +69,12 @@ class DistillSettings:
     vocabulary. ``importance_sampling_level`` averages the truncated
     importance weight over the response (``sequence``) or applies it at each
     token (``token``). ``normalize_advantages`` is a family default, not a
-    flag: the sampled reverse-KL gradient then uses the teacher-minus-rollout
-    log-prob difference centered and scaled to unit standard deviation over
-    the training job's trained tokens, before ``advantage_clip``. It has no
-    effect on the other divergences, which have no per-token advantage.
+    flag. When it is set, the sampled reverse-KL gradient uses normalized
+    advantages. Each advantage is the teacher-minus-rollout log-prob
+    difference, centered and scaled to unit standard deviation over the
+    trained tokens of the training job. ``advantage_clip`` applies after the
+    normalization. The setting has no effect on the other divergences,
+    because they have no per-token advantage.
     """
 
     teacher: str = "self"
@@ -258,7 +260,7 @@ TEACHER_BATCH_KEYS = (
     "distill_teacher_topk_log_probs",
     "distill_teacher_sampled_log_probs",
 )
-#: The batch key of the job-normalized sampled reverse-KL advantages the pre-train hook fills.
+#: The batch key where the pre-train hook stores the job-normalized sampled reverse-KL advantages.
 ADVANTAGES_KEY = "distill_advantages"
 
 

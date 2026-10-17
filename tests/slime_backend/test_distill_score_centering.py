@@ -184,7 +184,7 @@ def test_opd_loss_matches_full_vocabulary_centered_gradient(
 
 
 @pytest.mark.unit
-def test_normalizing_opd_loss_requires_the_pre_train_advantages(cpu_batch_adapters) -> None:
+def test_normalizing_loss_requires_the_pre_train_advantages(cpu_batch_adapters) -> None:
     sampled = torch.tensor([1, 2])
     batch = {
         "total_lengths": [3],
@@ -231,14 +231,8 @@ def test_opd_pre_train_hook_normalizes_the_engine_scored_batch(monkeypatch: pyte
 
     distill_actor_pre_train(SimpleNamespace(args=args), rollout_data)
 
-    expected = normalized_sampled_advantages(
-        teacher,
-        rollout,
-        masks,
-        skip_response_tokens=0,
-        device="cpu",
-        data_parallel_group=None,
-        data_parallel_world=1,
-    )
-    for value, reference in zip(rollout_data[ADVANTAGES_KEY], expected, strict=True):
-        torch.testing.assert_close(value, reference)
+    advantages = torch.cat(rollout_data[ADVANTAGES_KEY])
+    trained = torch.cat(masks).bool()
+    torch.testing.assert_close(advantages[trained].mean(), torch.tensor(0.0), atol=1e-6, rtol=0)
+    torch.testing.assert_close(advantages[trained].std(unbiased=False), torch.tensor(1.0))
+    assert not advantages[~trained].any()
