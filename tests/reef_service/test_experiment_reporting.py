@@ -76,7 +76,7 @@ def test_local_tracker_read_locks(tmp_path, monkeypatch, callback, failing):
     monkeypatch.setattr(tracker, callback, blocked)
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            operation = pool.submit(value._process_local_backend_step, "agent", HARNESS)
+            operation = pool.submit(value.local_workers.process_step, "agent", HARNESS)
             try:
                 assert entered.wait(5)
                 if callback == "record":

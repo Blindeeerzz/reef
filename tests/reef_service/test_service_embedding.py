@@ -83,7 +83,7 @@ def test_build_app_serves_through_an_injected_handler_and_exposes_its_dispatcher
     asyncio.run(run())
     assert handler.paths == ["/v1/chat/completions"]
     # The app owns the dispatcher it built and closed it on cleanup.
-    assert dispatcher.workers.closed.is_set()
+    assert dispatcher.local_workers.closed.is_set()
 
 
 @pytest.mark.unit

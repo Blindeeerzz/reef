@@ -471,7 +471,7 @@ def test_stale_batch_is_discarded_and_next_valid_job_runs(start_dispatcher) -> N
 
 @pytest.mark.unit
 def test_storage_block_preserves_pending_batch_and_retries(start_dispatcher, monkeypatch) -> None:
-    monkeypatch.setattr("reef.dispatcher.Dispatcher.storage_retry_seconds", 0.01)
+    monkeypatch.setattr("reef.dispatcher.training_loop.DispatchedTrainingLoop.storage_retry_seconds", 0.01)
     runtime, dispatcher = start_dispatcher(block_storage=True)
     _submit_pair(dispatcher)
     assert runtime.started.wait(1)
@@ -544,7 +544,7 @@ def test_periodic_metrics_keep_failures_after_training_recovery(start_dispatcher
     assert sample["training/error"] == 1
     assert not tracker.events
     monkeypatch.setattr(runtime, "train_candidate", train_candidate)
-    dispatcher._training.ready.set()
+    dispatcher.training_loop.ready.set()
     _wait_for_step(dispatcher, 1)
     dispatcher.record_operational_metrics()
     final = [metrics for namespace, metrics in tracker.loggers["math"].logged if namespace == "operations"][-1]

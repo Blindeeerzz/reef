@@ -330,14 +330,14 @@ def test_a_colocated_weights_job_waits_for_the_local_cycle_that_needs_the_engine
     slow = _SlowBackend(HARNESS, tmp_path / "candidates")
     dispatcher, _ = dispatchers.open(backends={WEIGHTS: colocated, HARNESS: slow})
     scenario = _scenario(dispatcher, 1)
-    worker = threading.Thread(target=lambda: dispatcher._process_local_backend_step("agent", HARNESS))
+    worker = threading.Thread(target=lambda: dispatcher.local_workers.process_step("agent", HARNESS))
     worker.start()
     assert slow.evaluating.wait(10)
     assert scenario.reserve_training_batch(WEIGHTS) is not None
     executions: list[Any] = []
 
     def job() -> None:
-        with dispatcher.workers.dispatched_turn(scenario, WEIGHTS):
+        with dispatcher.local_workers.dispatched_turn(scenario, WEIGHTS):
             executions.append(scenario.execute_reserved_training_step(WEIGHTS))
 
     trainer = threading.Thread(target=job)
@@ -365,14 +365,14 @@ def test_a_colocated_weights_job_waits_for_every_scenario_that_shares_the_engine
     dispatcher, _ = dispatchers.open(backends={WEIGHTS: colocated, HARNESS: slow})
     agent = _scenario(dispatcher, 1)
     _scenario(dispatcher, 1, name="other")
-    worker = threading.Thread(target=lambda: dispatcher._process_local_backend_step("other", HARNESS))
+    worker = threading.Thread(target=lambda: dispatcher.local_workers.process_step("other", HARNESS))
     worker.start()
     assert slow.evaluating.wait(10)
     assert agent.reserve_training_batch(WEIGHTS) is not None
     executions: list[Any] = []
 
     def job() -> None:
-        with dispatcher.workers.dispatched_turn(agent, WEIGHTS):
+        with dispatcher.local_workers.dispatched_turn(agent, WEIGHTS):
             executions.append(agent.execute_reserved_training_step(WEIGHTS))
 
     trainer = threading.Thread(target=job)
@@ -396,13 +396,13 @@ def test_a_dispatched_turn_wakes_every_local_worker_and_yields_before_the_next_c
     for name in ("agent", "other"):
         _scenario(dispatcher, 1, name=name)
     # A job is waiting for its turn: a worker woken now runs no cycle.
-    dispatcher.workers.turn_waiting.set()
-    dispatcher._start_local_backend_worker("other", HARNESS)
+    dispatcher.local_workers.turn_waiting.set()
+    dispatcher.local_workers.start("other", HARNESS)
     time.sleep(0.5)
     assert backends[HARNESS].prepared == 0
     # The turn ends: every worker is woken and the cycle runs.
-    dispatcher.workers.turn_waiting.clear()
-    dispatcher.workers.wake_all()
+    dispatcher.local_workers.turn_waiting.clear()
+    dispatcher.local_workers.wake_all()
     _wait_for(lambda: backends[HARNESS].prepared > 0)
     assert backends[HARNESS].prepared == 1
 
@@ -412,12 +412,12 @@ def test_a_reload_after_a_training_failure_wakes_the_local_workers(tmp_path: Pat
     """The rebuilt instance holds the local components' rows unread; their workers look again."""
     dispatcher, backends = dispatchers.open(backends=_dispatched_pair(tmp_path))
     scenario = _scenario(dispatcher)
-    dispatcher.workers.turn_waiting.set()
-    dispatcher._start_local_backend_worker("agent", HARNESS)
+    dispatcher.local_workers.turn_waiting.set()
+    dispatcher.local_workers.start("agent", HARNESS)
     time.sleep(0.2)
-    dispatcher.workers.turn_waiting.clear()
+    dispatcher.local_workers.turn_waiting.clear()
     _append_records(scenario, 1)
-    dispatcher._reload_after_training_failure("agent", RuntimeError("job away"))
+    dispatcher.training_loop.reload_after_failure("agent", RuntimeError("job away"))
     _wait_for(lambda: backends[HARNESS].prepared > 0)
     assert backends[HARNESS].prepared == 1
 
@@ -444,7 +444,7 @@ def test_a_reload_after_a_weights_failure_leaves_the_harness_cycle_in_flight_its
 
     def cycle() -> None:
         try:
-            outcome.append(dispatcher._process_local_backend_step("agent", HARNESS))
+            outcome.append(dispatcher.local_workers.process_step("agent", HARNESS))
         except Exception as exc:
             errors.append(exc)
 
@@ -452,7 +452,7 @@ def test_a_reload_after_a_weights_failure_leaves_the_harness_cycle_in_flight_its
     worker.start()
     assert slow.evaluating.wait(10)
     reloading = threading.Thread(
-        target=lambda: dispatcher._reload_after_training_failure("agent", RuntimeError("weights commit refused"))
+        target=lambda: dispatcher.training_loop.reload_after_failure("agent", RuntimeError("weights commit refused"))
     )
     reloading.start()
     reloading.join(5)
@@ -467,7 +467,7 @@ def test_a_reload_after_a_weights_failure_leaves_the_harness_cycle_in_flight_its
     assert closed_under_the_cycle == [False]
     assert dispatcher.build_training_status()["error"] is None
     # The rows the cycle held train on the rebuilt instance.
-    assert dispatcher._process_local_backend_step("agent", HARNESS) is True
+    assert dispatcher.local_workers.process_step("agent", HARNESS) is True
     assert _training_components(rebuilt) == [HARNESS]
 
 
@@ -480,7 +480,7 @@ def test_a_harness_backlog_is_kept_for_the_next_start_when_the_service_stops(
     slow = _SlowBackend(HARNESS, tmp_path / "candidates")
     dispatcher, _ = dispatchers.open(backends=_dispatched_pair(tmp_path, harness=slow))
     _scenario(dispatcher, 1, 2)
-    dispatcher._start_local_backend_worker("agent", HARNESS)
+    dispatcher.local_workers.start("agent", HARNESS)
     assert slow.evaluating.wait(10)
     dispatcher.stop_local_cycles()
     closing = threading.Thread(target=dispatcher.close)
@@ -559,15 +559,15 @@ def test_an_instance_parked_while_its_cycle_lock_is_held_closes_when_the_holder_
     scenario.close = observed_close  # type: ignore[method-assign]
     with (
         pytest.raises(RuntimeError, match="job failed") if turn_fails else nullcontext(),
-        dispatcher.workers.dispatched_turn(scenario, WEIGHTS),
+        dispatcher.local_workers.dispatched_turn(scenario, WEIGHTS),
     ):
         dispatcher._registry.reload("agent")
         assert closed == []
         if turn_fails:
             raise RuntimeError("job failed")
     assert closed == [True]
-    with dispatcher._training.lock:
-        assert dispatcher.workers.scenarios["agent"].replaced == []
+    with dispatcher.local_workers.lock:
+        assert dispatcher.local_workers.scenarios["agent"].replaced == []
 
 
 @pytest.mark.unit
@@ -582,7 +582,7 @@ def test_deleting_a_scenario_whose_training_job_is_out_waits_for_the_job(
     with pytest.raises(ScenarioBusy, match="training job is out"):
         dispatcher.delete_scenario("agent")
     assert dispatcher._registry.has("agent")
-    assert dispatcher.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
+    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
     assert dispatcher.delete_scenario("agent")["scenario"] == "agent"
     assert not dispatcher._registry.has("agent")
 
@@ -598,15 +598,15 @@ def test_a_scenario_removed_under_its_training_job_is_an_error_not_a_silent_repl
     assert batch is not None
     dispatcher._registry.remove("agent")
     with pytest.raises(RuntimeContractError, match="deleted under its training job"):
-        dispatcher.run_dispatched_turn(old, WEIGHTS, backends[WEIGHTS], batch)
+        dispatcher.training_loop.run_dispatched_turn(old, WEIGHTS, backends[WEIGHTS], batch)
 
 
 @pytest.mark.unit
 def test_the_training_thread_idles_once_the_last_training_scenario_is_gone(dispatchers: _Dispatchers) -> None:
     """A wake that finds no training scenario is not a failure: nothing would ever clear its error."""
     dispatcher, _ = dispatchers.open()
-    assert dispatcher._process_training() is False
-    dispatcher._drain_training()
+    assert dispatcher.training_loop.process() is False
+    dispatcher.training_loop.drain()
     assert dispatcher.build_training_status()["error"] is None
 
 
@@ -619,9 +619,9 @@ def test_a_failed_instruction_of_a_scenario_that_is_gone_starts_no_worker(
     old = _scenario(dispatcher)
     dispatcher.delete_scenario("agent")
     monkeypatch.setattr(old.trainer_for(HARNESS), "fail_pending_instruction", lambda error: True)
-    dispatcher._fail_instruction(old, RuntimeError("episode failed"), HARNESS)
-    with dispatcher._training.lock:
-        assert dispatcher.workers.workers == {}
+    dispatcher.local_workers.fail_instruction(old, RuntimeError("episode failed"), HARNESS)
+    with dispatcher.local_workers.lock:
+        assert dispatcher.local_workers.workers == {}
 
 
 @pytest.mark.unit
@@ -633,13 +633,13 @@ def test_a_failing_local_cycle_runs_once_per_wake_and_keeps_its_error_in_the_sta
     dispatcher, _ = dispatchers.open(backends=_dispatched_pair(tmp_path, harness=away))
     # Both rows first, then one wake: an accept wakes the worker per row, which would be two wakes.
     _scenario(dispatcher, 1)
-    dispatcher._start_local_backend_worker("agent", HARNESS)
+    dispatcher.local_workers.start("agent", HARNESS)
     _wait_for(lambda: away.attempts > 0)
     time.sleep(0.5)
     assert away.attempts == 1
     assert dispatcher.build_training_status()["error"] == "agent: RuntimeError: proposer away"
     # A job's turn ended: the worker looks again, once.
-    dispatcher.workers.wake_all()
+    dispatcher.local_workers.wake_all()
     _wait_for(lambda: away.attempts > 1)
     time.sleep(0.5)
     assert away.attempts == 2
@@ -657,18 +657,18 @@ def test_a_local_failure_under_a_dispatched_job_reloads_once_the_job_has_landed(
     batch = scenario.reserve_training_batch(WEIGHTS)
     assert batch is not None
     with pytest.raises(RuntimeError, match="proposer away"):
-        dispatcher._process_local_backend_step("agent", HARNESS)
+        dispatcher.local_workers.process_step("agent", HARNESS)
     assert dispatcher._registry.get_optional("agent") is scenario
-    assert dispatcher.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
+    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
     assert _training_components(scenario) == [WEIGHTS]
     # The next local cycle rebuilds the scenario as its first act, then looks again on the new instance.
-    assert dispatcher._process_local_backend_step("agent", HARNESS) is True
+    assert dispatcher.local_workers.process_step("agent", HARNESS) is True
     rebuilt = dispatcher._registry.get_optional("agent")
     assert rebuilt is not None and rebuilt is not scenario
     assert rebuilt.scenario_step == 1
     # With no job out, a failure reloads at once.
     with pytest.raises(RuntimeError, match="proposer away"):
-        dispatcher._process_local_backend_step("agent", HARNESS)
+        dispatcher.local_workers.process_step("agent", HARNESS)
     assert dispatcher._registry.get_optional("agent") is not rebuilt
 
 
@@ -683,12 +683,12 @@ def test_a_deferred_reload_never_lands_under_a_cycle_that_runs_on_the_instance(
     batch = scenario.reserve_training_batch(WEIGHTS)
     assert batch is not None
     with pytest.raises(RuntimeError, match="away once"):
-        dispatcher._process_local_backend_step("agent", HARNESS)
-    assert dispatcher._process_local_backend_step("agent", HARNESS) is True
+        dispatcher.local_workers.process_step("agent", HARNESS)
+    assert dispatcher.local_workers.process_step("agent", HARNESS) is True
     assert dispatcher._registry.get_optional("agent") is scenario
     assert _training_components(scenario) == [HARNESS]
-    assert dispatcher.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
-    assert dispatcher._process_local_backend_step("agent", HARNESS) is True
+    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
+    assert dispatcher.local_workers.process_step("agent", HARNESS) is True
     rebuilt = dispatcher._registry.get_optional("agent")
     assert rebuilt is not None and rebuilt is not scenario
     assert _training_components(rebuilt) == [WEIGHTS, HARNESS]
@@ -725,7 +725,7 @@ def test_a_sibling_waiting_at_the_cycle_lock_looks_again_after_a_reload_under_it
 
     def fail() -> None:
         try:
-            dispatcher._process_local_backend_step("agent", WEIGHTS)
+            dispatcher.local_workers.process_step("agent", WEIGHTS)
         except RuntimeError as exc:
             failures.append(exc)
 
@@ -734,9 +734,9 @@ def test_a_sibling_waiting_at_the_cycle_lock_looks_again_after_a_reload_under_it
     assert away.entered.wait(10)
     # The sibling reads the instance, then reaches the cycle lock the failing cycle holds.
     reached = threading.Event()
-    cycle_lock = dispatcher.workers.cycle_lock
+    cycle_lock = dispatcher.local_workers.cycle_lock
     outcome: list[bool] = []
-    sibling = threading.Thread(target=lambda: outcome.append(dispatcher._process_local_backend_step("agent", HARNESS)))
+    sibling = threading.Thread(target=lambda: outcome.append(dispatcher.local_workers.process_step("agent", HARNESS)))
 
     def observed(name: str):
         lock = cycle_lock(name)
@@ -744,7 +744,7 @@ def test_a_sibling_waiting_at_the_cycle_lock_looks_again_after_a_reload_under_it
             reached.set()
         return lock
 
-    monkeypatch.setattr(dispatcher.workers, "cycle_lock", observed)
+    monkeypatch.setattr(dispatcher.local_workers, "cycle_lock", observed)
     sibling.start()
     assert reached.wait(10)
     away.go.set()
@@ -755,7 +755,7 @@ def test_a_sibling_waiting_at_the_cycle_lock_looks_again_after_a_reload_under_it
     assert rebuilt is not None and rebuilt is not scenario
     assert outcome == [True] and harness.prepared == 0
     # Looking again on the rebuilt instance commits the rows that were there all along.
-    assert dispatcher._process_local_backend_step("agent", HARNESS) is True
+    assert dispatcher.local_workers.process_step("agent", HARNESS) is True
     assert _training_components(rebuilt) == [HARNESS]
 
 
@@ -1012,7 +1012,7 @@ def test_a_report_on_an_inference_the_weights_job_trained_is_skipped_not_raised(
     assert _commit_step(scenario, HARNESS) is not None
     scenario.records.append(_report("r1b", "i1"))
     assert scenario.prepare_training_step(HARNESS) is None
-    assert dispatcher.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
+    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
     assert scenario.records.get("agent", "i1") is not None
     assert scenario.reserve_training_batch(WEIGHTS) is None
     assert "r1b" in scenario.trainer_for(WEIGHTS).skipped_record_ids
@@ -1123,7 +1123,7 @@ def test_a_batch_the_weights_backend_dropped_stays_consumed_after_a_restart(
         batch = scenario.reserve_training_batch(WEIGHTS)
         assert batch is not None
         sources = [item.source_agent_record_ids for item in batch.items]
-        assert dispatcher.run_dispatched_turn(scenario, WEIGHTS, weights, batch) is True
+        assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, weights, batch) is True
         return sources
 
     scenario = _scenario(dispatcher, 1, 2, 3)
@@ -1156,7 +1156,7 @@ def test_two_stale_drops_across_a_reload_are_two_receipts_and_the_rows_behind_th
         batch = scenario.reserve_training_batch(WEIGHTS)
         assert batch is not None
         sources = [item.source_agent_record_ids for item in batch.items]
-        assert dispatcher.run_dispatched_turn(scenario, WEIGHTS, weights, batch) is True
+        assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, weights, batch) is True
         return batch.batch_id, sources
 
     scenario = _scenario(dispatcher, 1, 2, 3)
@@ -1208,11 +1208,11 @@ def test_a_harness_commit_that_fails_under_a_weights_job_leaves_its_rows_to_the_
     assert batch is not None
     _fail_first_record_of(monkeypatch, scenario, HARNESS)
     with pytest.raises(OSError, match="transient store write error"):
-        dispatcher._process_local_backend_step("agent", HARNESS)
-    assert dispatcher.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
+        dispatcher.local_workers.process_step("agent", HARNESS)
+    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
     assert scenario.records.get("agent", "i1") is not None and scenario.records.get("agent", "r1") is not None
     for _ in range(3):
-        dispatcher._process_local_backend_step("agent", HARNESS)
+        dispatcher.local_workers.process_step("agent", HARNESS)
     current = dispatcher._registry.get_optional("agent")
     assert current is not None
     history = current.store.history()
@@ -1254,14 +1254,14 @@ def test_a_stale_drop_under_a_failed_harness_commit_leaves_the_harness_rows_to_t
     assert batch is not None
     _fail_first_record_of(monkeypatch, scenario, HARNESS)
     with pytest.raises(OSError, match="transient store write error"):
-        dispatcher._process_local_backend_step("agent", HARNESS)
+        dispatcher.local_workers.process_step("agent", HARNESS)
     weights.drop_next = True
-    assert dispatcher.run_dispatched_turn(scenario, WEIGHTS, weights, batch) is True
+    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, weights, batch) is True
     assert scenario.records.get("agent", "i1") is not None and scenario.records.get("agent", "r1") is not None
     (receipt,) = scenario.records.consumption_receipts("agent")
     assert set(receipt["consumed_ids"]) == {"i1", "r1"} and receipt["metadata"]["component"] == WEIGHTS
     for _ in range(3):
-        dispatcher._process_local_backend_step("agent", HARNESS)
+        dispatcher.local_workers.process_step("agent", HARNESS)
     current = dispatcher._registry.get_optional("agent")
     assert current is not None
     assert [sorted(record.consumed_ids) for record in current.store.history() if record.component == HARNESS] == [
@@ -1394,7 +1394,7 @@ def test_a_run_report_on_an_inference_both_trainers_trained_is_skipped_by_both(
     assert batch is not None
     assert _commit_step(scenario, HARNESS) is not None
     scenario.records.append(_report("run", "i1", "i2"))
-    assert dispatcher.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
+    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
     assert scenario.prepare_training_step(HARNESS) is None
     assert scenario.reserve_training_batch(WEIGHTS) is None
     for component in (WEIGHTS, HARNESS):
@@ -1428,7 +1428,7 @@ def test_a_job_whose_scenario_was_reloaded_under_it_is_not_committed_on_the_new_
     assert batch is not None
     new = dispatcher._registry.reload("agent")
     assert new is not old
-    assert dispatcher.run_dispatched_turn(old, WEIGHTS, backends[WEIGHTS], batch) is True
+    assert dispatcher.training_loop.run_dispatched_turn(old, WEIGHTS, backends[WEIGHTS], batch) is True
     assert _training_components(new) == []
     assert new.reserve_training_batch(WEIGHTS) is not None
 
@@ -1668,10 +1668,10 @@ def test_each_components_step_reaches_the_tracker_under_its_name(dispatchers: _D
     scenario = _scenario(dispatcher, 1)
     harness = scenario.prepare_training_step(HARNESS)
     assert harness is not None
-    dispatcher._commit_result("agent", harness, HARNESS)
+    dispatcher._registry.get("agent").commit(harness, component=HARNESS)
     weights = scenario.prepare_training_step(WEIGHTS)
     assert weights is not None
-    dispatcher._commit_result("agent", weights, WEIGHTS)
+    dispatcher._registry.get("agent").commit(weights, component=WEIGHTS)
     assert [event.context.component for event in tracker.events] == [HARNESS, WEIGHTS]
     assert [event.context.backend for event in tracker.events] == ["_ComponentBackend", "_ComponentBackend"]
     assert [event.context.step for event in tracker.events] == [1, 2]
@@ -1778,9 +1778,9 @@ def test_a_merged_result_names_the_release_it_landed_on_in_its_event(
     harness = scenario.prepare_training_step(HARNESS)
     weights = scenario.prepare_training_step(WEIGHTS)
     assert harness is not None and weights is not None
-    dispatcher._commit_result("agent", weights, WEIGHTS)
+    dispatcher._registry.get("agent").commit(weights, component=WEIGHTS)
     served = scenario.current_artifact_ref().release_id
-    dispatcher._commit_result("agent", harness, HARNESS)
+    dispatcher._registry.get("agent").commit(harness, component=HARNESS)
     assert [event.context.component for event in tracker.events] == [WEIGHTS, HARNESS]
     assert tracker.events[-1].metrics["merged_onto"] == served
     assert scenario.releases()[0]["metrics"]["merged_onto"] == served
@@ -1986,8 +1986,8 @@ def test_stale_refusals_are_counted_and_bounded(dispatchers: _Dispatchers) -> No
         _append_records(scenario, step)
         # The weights result is prepared against the served release; the harness cycle then replaces it.
         assert scenario.prepare_training_step(WEIGHTS) is not None
-        assert dispatcher._process_local_backend_step("agent", HARNESS) is True
-        outcomes.append(dispatcher._process_local_backend_step("agent", WEIGHTS))
+        assert dispatcher.local_workers.process_step("agent", HARNESS) is True
+        outcomes.append(dispatcher.local_workers.process_step("agent", WEIGHTS))
     assert outcomes == [True, True, False]
     assert backends[WEIGHTS].prepared == 3
     assert scenario.trainer_for(WEIGHTS).pending_batch is not None
@@ -1996,7 +1996,7 @@ def test_stale_refusals_are_counted_and_bounded(dispatchers: _Dispatchers) -> No
     assert "refused 3 times in a row" in status["error"]
 
     # The kept batch is prepared again on the next wake and commits.
-    assert dispatcher._process_local_backend_step("agent", WEIGHTS) is True
+    assert dispatcher.local_workers.process_step("agent", WEIGHTS) is True
     assert scenario.trainer_for(WEIGHTS).state == {"steps": 1}
     status = dispatcher.build_training_status()
     assert status["error"] is None
@@ -2077,12 +2077,12 @@ def test_a_stale_retry_of_a_batch_an_earlier_attempt_took_back_is_prepared_again
     assert first is not None
     _fail_first_record_of(monkeypatch, scenario, HARNESS)
     with pytest.raises(OSError, match="transient store write error"):
-        dispatcher._process_local_backend_step("agent", HARNESS)
-    assert dispatcher.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], first) is True
+        dispatcher.local_workers.process_step("agent", HARNESS)
+    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], first) is True
     _append_records(scenario, 2)
     second = scenario.reserve_training_batch(WEIGHTS)
     assert second is not None
-    outcomes = [dispatcher._process_local_backend_step("agent", HARNESS) for _ in range(3)]
+    outcomes = [dispatcher.local_workers.process_step("agent", HARNESS) for _ in range(3)]
     assert dispatcher._registry.get_optional("agent") is scenario
     harness_rows = [row for row in scenario.store.history() if row.component == HARNESS]
     assert harness_rows and sorted(harness_rows[0].consumed_ids) == ["i1", "r1"]
@@ -2139,7 +2139,7 @@ def _harness_record_durable_then_failed(
 
     monkeypatch.setattr(committer, name, fail_once)
     with pytest.raises(OSError, match="acknowledgment lost"):
-        dispatcher._process_local_backend_step("agent", HARNESS)
+        dispatcher.local_workers.process_step("agent", HARNESS)
 
 
 @pytest.mark.unit
@@ -2156,7 +2156,7 @@ def test_a_sibling_commit_durable_but_not_settled_is_settled_before_the_next_com
     assert batch is not None
     _harness_record_durable_then_failed(dispatcher, scenario, monkeypatch, fault)
     assert [row.component for row in scenario.store.history()] == [HARNESS]
-    assert dispatcher.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
+    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
     assert [row.component for row in scenario.store.history()] == [HARNESS, WEIGHTS]
     assert scenario.trainer_for(HARNESS).pending_batch is None
     assert [row.step for row in scenario.store.history()] == [1, 2]
@@ -2190,7 +2190,7 @@ def test_a_harness_cycle_in_flight_never_commits_a_result_the_weights_commit_set
 
     def harness_cycle() -> None:
         try:
-            outcome["progressed"] = dispatcher._process_local_backend_step("agent", HARNESS)
+            outcome["progressed"] = dispatcher.local_workers.process_step("agent", HARNESS)
         except BaseException as exc:
             outcome["error"] = exc
 
@@ -2198,7 +2198,7 @@ def test_a_harness_cycle_in_flight_never_commits_a_result_the_weights_commit_set
     worker.start()
     assert prepared.wait(10)
     releases_before = len(scenario.releases())
-    assert dispatcher.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
+    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
     go.set()
     worker.join(10)
     assert outcome == {"progressed": True}
@@ -2219,7 +2219,7 @@ def test_a_commit_that_settles_a_sibling_record_gives_each_step_its_own_event(
     batch = scenario.reserve_training_batch(WEIGHTS)
     assert batch is not None
     _harness_record_durable_then_failed(dispatcher, scenario, monkeypatch, fault)
-    assert dispatcher.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
+    assert dispatcher.training_loop.run_dispatched_turn(scenario, WEIGHTS, backends[WEIGHTS], batch) is True
     history = scenario.store.history()
     assert [(row.step, row.component) for row in history] == [(1, HARNESS), (2, WEIGHTS)]
     events = [(event.context.step, event.context.component, event.training_job_id) for event in tracker.events]
@@ -2316,12 +2316,12 @@ def test_service_start_notification_cannot_reopen_stopping_workers(dispatchers: 
     scenario = _scenario(dispatcher, 1)
     dispatcher.stop_local_cycles()
     dispatcher.open_local_cycles()
-    assert dispatcher._process_local_backend_step("agent", HARNESS) is False
+    assert dispatcher.local_workers.process_step("agent", HARNESS) is False
     assert backends[HARNESS].prepared == 0
     assert scenario.scenario_step == 0
     dispatcher.close()
-    dispatcher._start_local_backend_worker("late", HARNESS)
-    assert ("late", HARNESS) not in dispatcher.workers.workers
+    dispatcher.local_workers.start("late", HARNESS)
+    assert ("late", HARNESS) not in dispatcher.local_workers.workers
 
 
 @pytest.mark.parametrize("next_operation", ["training", "reload", "rollback"])
@@ -2364,7 +2364,7 @@ def test_experiment_events_remain_ordered_across_reload(tmp_path, monkeypatch, n
             return value._registry.reload("agent")
         if next_operation == "rollback":
             return value.rollback("agent", initial.release_id)
-        return value._process_local_backend_step("agent", HARNESS)
+        return value.local_workers.process_step("agent", HARNESS)
 
     def record_rollback(event):
         attempted.append(event.step)

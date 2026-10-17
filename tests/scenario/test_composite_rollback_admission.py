@@ -107,13 +107,13 @@ def test_a_local_cycle_stands_aside_while_admission_is_closed_and_runs_once_it_r
         for record in _records(1):
             scenario.records.append(record)
         training.inference.pause_admission()
-        assert dispatcher._process_local_backend_step("agent", HARNESS) is False
+        assert dispatcher.local_workers.process_step("agent", HARNESS) is False
         assert dispatcher._recipe.backends[HARNESS].prepared == 0
-        assert HARNESS in dispatcher.workers.scenarios["agent"].waiting_for_admission
+        assert HARNESS in dispatcher.local_workers.scenarios["agent"].waiting_for_admission
         training.inference.resume_admission()
-        assert dispatcher._process_local_backend_step("agent", HARNESS) is True
+        assert dispatcher.local_workers.process_step("agent", HARNESS) is True
         assert dispatcher._recipe.backends[HARNESS].prepared == 1
-        assert HARNESS not in dispatcher.workers.scenarios["agent"].waiting_for_admission
+        assert HARNESS not in dispatcher.local_workers.scenarios["agent"].waiting_for_admission
     finally:
         dispatcher.close()
 
@@ -128,20 +128,24 @@ def test_a_local_cycle_clears_only_the_errors_it_recorded(tmp_path: Path) -> Non
         for record in _records(1):
             scenario.records.append(record)
         dispatcher.errors.record("agent", "RuntimeError: training marker is UPDATING_WEIGHTS")
-        assert dispatcher._process_local_backend_step("agent", HARNESS) is True
-        assert dispatcher._training_errors() == ["agent: RuntimeError: training marker is UPDATING_WEIGHTS"]
+        assert dispatcher.local_workers.process_step("agent", HARNESS) is True
+        assert dispatcher.training_status.training_errors() == [
+            "agent: RuntimeError: training marker is UPDATING_WEIGHTS"
+        ]
         dispatcher.errors.record("agent", "harness away", local_error_source(HARNESS))
-        assert sorted(dispatcher._training_errors()) == [
+        assert sorted(dispatcher.training_status.training_errors()) == [
             "agent: RuntimeError: training marker is UPDATING_WEIGHTS",
             "agent: harness away",
         ]
         for record in _records(2):
             scenario.records.append(record)
         # The harness cycle clears its own error; the training thread's stays until that thread clears it.
-        assert dispatcher._process_local_backend_step("agent", HARNESS) is True
-        assert dispatcher._training_errors() == ["agent: RuntimeError: training marker is UPDATING_WEIGHTS"]
+        assert dispatcher.local_workers.process_step("agent", HARNESS) is True
+        assert dispatcher.training_status.training_errors() == [
+            "agent: RuntimeError: training marker is UPDATING_WEIGHTS"
+        ]
         dispatcher.errors.clear("agent")
-        assert dispatcher._training_errors() == []
+        assert dispatcher.training_status.training_errors() == []
     finally:
         dispatcher.close()
 
@@ -156,16 +160,16 @@ def test_a_local_cycle_that_waited_for_a_job_stands_aside_when_the_job_left_admi
             scenario.records.append(record)
         outcomes: list[bool] = []
         asked_for_the_lock = threading.Event()
-        cycle_lock = dispatcher.workers.cycle_lock
+        cycle_lock = dispatcher.local_workers.cycle_lock
 
         def signalling_lock(name: str):
             asked_for_the_lock.set()
             return cycle_lock(name)
 
-        dispatcher.workers.cycle_lock = signalling_lock  # type: ignore[method-assign]
+        dispatcher.local_workers.cycle_lock = signalling_lock  # type: ignore[method-assign]
         with cycle_lock("agent"):
             worker = threading.Thread(
-                target=lambda: outcomes.append(dispatcher._process_local_backend_step("agent", HARNESS))
+                target=lambda: outcomes.append(dispatcher.local_workers.process_step("agent", HARNESS))
             )
             worker.start()
             # Past the first admission check, waiting for the lock this thread holds.
@@ -174,7 +178,7 @@ def test_a_local_cycle_that_waited_for_a_job_stands_aside_when_the_job_left_admi
         worker.join(10)
         assert outcomes == [False]
         assert dispatcher._recipe.backends[HARNESS].prepared == 0
-        assert HARNESS in dispatcher.workers.scenarios["agent"].waiting_for_admission
+        assert HARNESS in dispatcher.local_workers.scenarios["agent"].waiting_for_admission
     finally:
         dispatcher.close()
 

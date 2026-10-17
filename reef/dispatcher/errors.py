@@ -19,6 +19,11 @@ def local_error_source(component: str | None) -> str:
     return "local" if component is None else f"local:{component}"
 
 
+def error_text(exc: Exception) -> str:
+    """The text that the training status shows for ``exc``."""
+    return f"{type(exc).__name__}: {exc}"
+
+
 @dataclass
 class TrainingErrors:
     """Recorded errors, failure counts and stale-result refusals; every method takes ``lock``.
