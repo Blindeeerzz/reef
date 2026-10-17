@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, NotRequired, TypedDict
+from typing import NotRequired, TypedDict
 
 from reef.core.requirements import parse_requires
 
@@ -52,17 +52,6 @@ def parse_client(value: object) -> ClientReport:
     return parsed
 
 
-def parse_training_request_fields(payload: Mapping[str, object]) -> tuple[str, str, str]:
-    """Read the required text, session and release strings for normalization or construction."""
-    fields: dict[str, str] = {}
-    for key in ("text", "session", "release_id"):
-        value = payload.get(key)
-        if not isinstance(value, str):
-            raise ValueError(f"{key} must be a string")
-        fields[key] = value
-    return fields["text"], fields["session"], fields["release_id"]
-
-
 def normalize_training_request_payload(payload: Mapping[str, object]) -> TrainingRequestPayload:
     """Validate a request and return its wire fields, dropping unknown keys.
 
@@ -70,15 +59,21 @@ def normalize_training_request_payload(payload: Mapping[str, object]) -> Trainin
     information is advisory: malformed entries are dropped. Text is preserved,
     absent requirements become an empty list, and an empty client is omitted.
     """
-    text, session, release_id = parse_training_request_fields(payload)
+    fields: dict[str, str] = {}
+    for key in ("text", "session", "release_id"):
+        value = payload.get(key)
+        if not isinstance(value, str):
+            raise ValueError(f"{key} must be a string")
+        fields[key] = value
+    text = fields["text"]
     if not text.strip():
         raise ValueError("text must be a non-empty string")
     if len(text) > 4000:
         raise ValueError("text must not exceed 4000 characters")
     normalized: TrainingRequestPayload = {
         "text": text,
-        "session": session,
-        "release_id": release_id,
+        "session": fields["session"],
+        "release_id": fields["release_id"],
         "requires": parse_requires(payload.get("requires")),
     }
     client = parse_client(payload.get("client"))
@@ -99,8 +94,9 @@ class TrainingRequest:
     ``client`` is the requesting client's report of its machine (see
     :func:`reef.core.training_request.parse_client`); empty when it sent none.
 
-    Construction delegates to the shared payload normalizer. Admission code
-    calls that function directly; processors create this value for their queue.
+    :meth:`from_dict` validates a payload with
+    :func:`normalize_training_request_payload`; the constructor takes values
+    that are already valid and does not check them again.
     """
 
     text: str
@@ -111,30 +107,17 @@ class TrainingRequest:
     requires: tuple[Mapping[str, str], ...] = field(default=(), hash=False)
     client: Mapping[str, str | dict[str, bool]] = field(default_factory=dict, hash=False)
 
-    def __post_init__(self) -> None:
-        normalized = normalize_training_request_payload(
-            {
-                "text": self.text,
-                "session": self.session,
-                "release_id": self.release_id,
-                "requires": self.requires,
-                "client": self.client,
-            }
-        )
-        object.__setattr__(self, "requires", tuple(normalized["requires"]))
-        object.__setattr__(self, "client", normalized.get("client", {}))
-
     @classmethod
-    def from_dict(cls, payload: Mapping[str, Any], *, request_id: str = "") -> TrainingRequest:
-        """Build a queued request, using its enclosing record's ID when supplied."""
-        text, session, release_id = parse_training_request_fields(payload)
+    def from_dict(cls, payload: Mapping[str, object], *, request_id: str = "") -> TrainingRequest:
+        """Validate a payload and build a queued request, using its enclosing record's ID when supplied."""
+        normalized = normalize_training_request_payload(payload)
         return cls(
-            text=text,
-            session=session,
-            release_id=release_id,
+            text=normalized["text"],
+            session=normalized["session"],
+            release_id=normalized["release_id"],
             id=request_id,
-            requires=payload.get("requires", ()),
-            client=payload.get("client", {}),
+            requires=tuple(normalized["requires"]),
+            client=normalized.get("client", {}),
         )
 
     def to_dict(self) -> dict[str, object]:
