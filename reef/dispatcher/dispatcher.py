@@ -1,10 +1,4 @@
-"""Process-wide coordinator that owns every scenario and its serving state.
-
-The dispatcher delegates scenario table management (creation, resolution,
-per-scenario locking) to :class:`ScenarioRegistry`, then layers record
-acceptance, background training drains, and publication on top. Request
-handling lives in ``reef.service``; the dispatcher is transport-free.
-"""
+"""The dispatcher: the process-wide owner of every scenario and its training threads."""
 
 from __future__ import annotations
 
@@ -24,9 +18,8 @@ from reef.artifact.memory import InMemoryRepositoryBackend
 from reef.artifact.repository import EnumerableRepositoryBackendFactory, RepositoryBackendFactory
 from reef.core.errors import ScenarioBusy, ScenarioCapacityFull, UnknownScenario
 from reef.core.records_types import AgentRecord, RequestType
-from reef.core.reports import ReportValidationError, validate_report_payload
-from reef.core.training_request import normalize_training_request_payload
-from reef.harness.tree.nodes import directive_shaped, secret_shaped
+from reef.dispatcher import ingest
+from reef.dispatcher.errors import TRAINING_THREAD_SOURCE, TrainingErrors, local_error_source
 from reef.observability import ExperimentTracker, NullExperimentTracker
 from reef.recipe.base import Recipe
 from reef.recipe.checkpoint_strategy import CheckpointStrategy, EveryNVersions
@@ -35,7 +28,7 @@ from reef.runtime.recovery import marker_in_flight
 from reef.scenario.admission import ScenarioAdmission
 from reef.scenario.registry import ReplacedScenarioCloser, ScenarioRegistry, ScenarioUnloader
 from reef.scenario.scenario import Scenario, SettledTrainingResultError, StaleTrainingResultError
-from reef.storage.records import RecordConflict, RecordRetention
+from reef.storage.records import RecordRetention
 from reef.storage.scenario import ScenarioStorage
 from reef.train.backend import CandidateBackend
 from reef.train.types import TrainingBatch, TrainStepResult
@@ -60,29 +53,16 @@ class _ScenarioTrainingError(Exception):
 
 #: How soon a local worker that stood aside for closed admission looks again.
 STOOD_ASIDE_RETRY_SECONDS = 5.0
-#: The training thread's name in the error record; local workers are named by their component.
-TRAINING_THREAD_SOURCE = "training"
-
-
-def local_error_source(component: str | None) -> str:
-    return "local" if component is None else f"local:{component}"
 
 
 @dataclass
 class _TrainingState:
     lock: Lock = field(default_factory=Lock)
     ready: Event = field(default_factory=Event)
-    #: The last error per (scenario, worker that recorded it): only that worker clears its own.
-    errors: dict[tuple[str, str], str] = field(default_factory=dict)
-    failure_counts: dict[str, int] = field(default_factory=dict)
-    status_build_error: str | None = None
     storage_status: Mapping[str, Any] | None = None
     last_drain: float | None = None
     undrained_warned: bool = False
     thread: Thread | None = None
-    #: Results refused because another trainer's commit replaced their base, per (scenario, component).
-    stale_refusals_in_a_row: dict[tuple[str, str | None], int] = field(default_factory=dict)
-    stale_refusals_total: dict[tuple[str, str | None], int] = field(default_factory=dict)
 
 
 @dataclass
@@ -90,26 +70,6 @@ class _LifecycleState:
     preload_thread: Thread | None = None
     metrics_thread: Thread | None = None
     idle_unload_thread: Thread | None = None
-
-
-def training_request_refusal(text: str, requires: Sequence[Mapping[str, Any]] = ()) -> str | None:
-    """Why admission refuses an instruction; the reason names the rule, never the text or the item.
-
-    The text becomes proposer input and a catalog row, so it meets the
-    screens a promoted task prompt meets; a ``requires`` name, check or
-    prompt is shown to the person and recorded in the commit, so it meets
-    them too."""
-    if secret_shaped(text):
-        return "the request text carries a credential shaped literal; a request never holds secrets"
-    if directive_shaped(text):
-        return "the request text carries an instruction override phrasing or a chat template control token"
-    for item in requires:
-        for value in (str(item.get("name", "")), str(item.get("check") or ""), str(item.get("prompt") or "")):
-            if secret_shaped(value):
-                return "a requires item carries a credential shaped literal; a request never holds secrets"
-            if directive_shaped(value):
-                return "a requires item carries an instruction override phrasing or a chat template control token"
-    return None
 
 
 @dataclass
@@ -129,9 +89,8 @@ class WorkerCoordination(ReplacedScenarioCloser):
     defers reload while a dispatched batch is reserved. Replaced instances close
     only after the cycle or dispatched turn using them releases its lock.
 
-    Lock order: cycle locks -> registry scenario lock -> coordination lock.
-    The coordination lock also protects Dispatcher training metrics. Never wait
-    for a cycle lock, join a worker, or close a scenario while holding it.
+    Lock order: cycle locks -> registry scenario lock -> coordination lock -> training errors lock.
+    Never wait for a cycle lock, join a worker, or close a scenario while holding the coordination lock.
     Registry reloads can call close_replaced while holding their scenario lock:
     closure therefore tries the cycle lock without waiting.
     """
@@ -411,6 +370,7 @@ class Dispatcher(ScenarioUnloader):
         self._registry.set_training_scenario_callback(self._start_training)
         self._registry.set_unloader(self)
         self._training = _TrainingState()
+        self.errors = TrainingErrors()
         self._lifecycle = _LifecycleState()
         self.workers = WorkerCoordination(self._registry, self._training.lock, held=hold_local_cycles)
         self._registry.set_replaced_closer(self.workers)
@@ -517,9 +477,7 @@ class Dispatcher(ScenarioUnloader):
                 )
             dropped = self._registry.remove(scenario)
             self._stop_local_backend_worker(scenario)
-            self._record_training_error(scenario, None, source=None)
-            with self._training.lock:
-                self._training.failure_counts.pop(scenario, None)
+            self.errors.forget(scenario)
             if dropped is not None:
                 for bound in dropped.trainers:
                     backend = bound.trainer.candidate_backend
@@ -723,7 +681,10 @@ class Dispatcher(ScenarioUnloader):
             )
             if current is None:
                 raise UnknownScenario(f"unknown scenario {item.scenario!r}")
-            return self._accept_record(current, item)
+            stored, inserted = ingest.append_record(current, item)
+            if inserted:
+                self.process_accepted_records(current)
+            return stored
 
     def accept_records(
         self, items: Sequence[AgentRecord], *, release_id: str | None = None
@@ -738,92 +699,10 @@ class Dispatcher(ScenarioUnloader):
             current = self.get_or_create_scenario(scenario, release_id=release_id)
             if current is None:
                 raise UnknownScenario(f"unknown scenario {scenario!r}")
-            preceding: dict[str, AgentRecord] = {}
-            for item in items:
-                self.validate_record(current, item, preceding)
-                preceding[item.agent_record_id] = item
-            try:
-                with current.operations.measure("ingest/write"):
-                    appended = current.records.append_many(items)
-            except RecordConflict:
-                current.operations.increment("ingest/rejected_conflict_total")
-                raise
-            for result in appended:
-                metric = "ingest/accepted_total" if result.inserted else "ingest/duplicates_total"
-                current.operations.increment(metric)
-            if any(result.inserted for result in appended):
+            stored, inserted = ingest.append_records(current, items)
+            if inserted:
                 self.process_accepted_records(current)
-            return tuple(result.item for result in appended)
-
-    def validate_record(
-        self, current: Scenario, item: AgentRecord, preceding: Mapping[str, AgentRecord]
-    ) -> AgentRecord | None:
-        try:
-            if item.request_type is RequestType.TRAIN:
-                if (existing := current.records.existing_receipt(item)) is not None:
-                    return existing
-                if current.training_mode == "auto":
-                    raise ValueError("explicit training requests require training_mode='manual' or 'hybrid'")
-                if all(bound.trainer.candidate_backend is None for bound in current.trainers):
-                    raise ValueError("explicit training requests require a training backend")
-                request = normalize_training_request_payload(item.payload)
-                if item.references:
-                    raise ValueError("training instructions do not reference inference receipts")
-                refusal = training_request_refusal(request["text"], request["requires"])
-                if refusal is not None:
-                    raise ValueError(refusal)
-            # Schema enforcement: reject a malformed report before it is durably
-            # appended, so the producer's POST fails with the violation naming
-            # the broken field instead of the record dying silently at training
-            # time. An undeclared schema keeps open ingress; a scenario of several
-            # components admits what any of them accepts, and each trainer releases
-            # a report shaped for another.
-            if item.request_type is RequestType.REPORT:
-                # An identical retry remains valid after capacity eviction.
-                if (existing := current.records.existing_receipt(item)) is not None:
-                    return existing
-                validate_report_payload(item.payload)
-                if (report_type := current.report_type) is not None:
-                    report_type.from_dict(item.payload)
-                if len(set(item.references)) != len(item.references):
-                    raise ReportValidationError("report references must be unique")
-                for reference in item.references:
-                    source = preceding.get(reference)
-                    if source is None:
-                        stored_reference = current.records.get_for_audit(item.scenario, reference)
-                        source = stored_reference.item if stored_reference is not None else None
-                    if source is None or source.request_type is not RequestType.INFERENCE:
-                        raise ReportValidationError(
-                            f"report reference {reference!r} must identify an existing inference in scenario {item.scenario!r}"
-                        )
-        except ReportValidationError:
-            current.operations.increment("ingest/rejected_report_total")
-            raise
-        except RecordConflict:
-            current.operations.increment("ingest/rejected_conflict_total")
-            raise
-        except ValueError:
-            current.operations.increment("ingest/rejected_request_total")
-            raise
-        return None
-
-    def _accept_record(self, current: Scenario, item: AgentRecord) -> AgentRecord:
-        if (existing := self.validate_record(current, item, {})) is not None:
-            current.operations.increment("ingest/duplicates_total")
-            return existing
-        try:
-            with current.operations.measure("ingest/write"):
-                appended = current.records.append_result(item)
-        except RecordConflict:
-            current.operations.increment("ingest/rejected_conflict_total")
-            raise
-        stored = appended.item
-        if not appended.inserted:
-            current.operations.increment("ingest/duplicates_total")
             return stored
-        current.operations.increment("ingest/accepted_total")
-        self.process_accepted_records(current)
-        return stored
 
     def process_accepted_records(self, current: Scenario) -> None:
         """Start consumption only after the accepted records are durable."""
@@ -887,10 +766,10 @@ class Dispatcher(ScenarioUnloader):
         try:
             metrics = current.trainer.operational_metrics()
             metrics.update(current.operations.snapshot())
-            with self._training.lock:
-                metrics["training/failed_attempts_total"] = self._training.failure_counts.get(current.name, 0)
-                metrics["training/error"] = int(any(key[0] == current.name for key in self._training.errors))
-                if current.training_runtime is not None:
+            metrics["training/failed_attempts_total"] = self.errors.failure_count(current.name)
+            metrics["training/error"] = int(self.errors.has_error(current.name))
+            if current.training_runtime is not None:
+                with self._training.lock:
                     metrics["training/checkpoint_storage_blocked"] = int(self._training.storage_status is not None)
             current.trainer.pipeline.experiment_logger.log(metrics, namespace="operations")
         except Exception as exc:
@@ -931,21 +810,13 @@ class Dispatcher(ScenarioUnloader):
 
     def _stop_local_backend_worker(self, scenario: str) -> None:
         self.workers.remove(scenario)
-        with self._training.lock:
-            for counts in (self._training.stale_refusals_in_a_row, self._training.stale_refusals_total):
-                for key in tuple(counts):
-                    if key[0] == scenario:
-                        counts.pop(key)
-
-    def stale_refusals_total(self, scenario: str, component: str | None) -> int:
-        with self._training.lock:
-            return self._training.stale_refusals_total.get((scenario, component), 0)
+        self.errors.forget_stale_refusals(scenario)
 
     def record_local_cycle_error(self, scenario: str, component: str | None, error: str) -> None:
         """Record a local cycle's failure, unless the scenario was deleted under it: nothing would ever clear that."""
-        with self._training.lock:
+        with self.workers.lock:
             if (scenario, component) in self.workers.workers:
-                self.note_training_error(scenario, error, local_error_source(component))
+                self.errors.record(scenario, error, local_error_source(component))
 
     def _run_local_backend_worker(self, scenario: str, component: str | None, ready: Event) -> None:
         try:
@@ -953,7 +824,7 @@ class Dispatcher(ScenarioUnloader):
                 self._drain_local_backend(scenario, component)
         except Exception as exc:
             logger.exception("local backend worker stopped unexpectedly for scenario %r", scenario)
-            self._record_training_error(scenario, self._error_text(exc), source=local_error_source(component))
+            self.errors.record(scenario, self._error_text(exc), local_error_source(component))
 
     def _drain_local_backend(self, scenario: str, component: str | None) -> None:
         try:
@@ -1001,7 +872,7 @@ class Dispatcher(ScenarioUnloader):
             raise RuntimeContractError(f"scenario {scenario!r} has no local backend")
         if not self.workers.check_admission(current, component):
             return False
-        self._record_training_error(scenario, None, source=local_error_source(component))
+        self.errors.clear(scenario, local_error_source(component))
         # Local workers of one scenario take turns for a whole cycle, prepare
         # and commit together, under this lock alone: letting their commits
         # race only had the slower worker refused as stale on every cycle, and
@@ -1060,8 +931,7 @@ class Dispatcher(ScenarioUnloader):
                     # in-memory step and append the same step number again.
                     self.workers.reload_after_local_failure(current)
                     raise
-        with self._training.lock:
-            self._training.stale_refusals_in_a_row.pop((scenario, component), None)
+        self.errors.end_stale_refusals(scenario, component)
         return True
 
     def retry_stale_result(
@@ -1074,11 +944,7 @@ class Dispatcher(ScenarioUnloader):
         would otherwise keep the local worker preparing and discarding forever
         with nothing in the status to show for it.
         """
-        key = (scenario, component)
-        with self._training.lock:
-            in_a_row = self._training.stale_refusals_in_a_row.get(key, 0) + 1
-            self._training.stale_refusals_in_a_row[key] = in_a_row
-            self._training.stale_refusals_total[key] = self._training.stale_refusals_total.get(key, 0) + 1
+        in_a_row = self.errors.count_stale_refusal(scenario, component)
         reevaluate = stale.policy == "reevaluate"
         current.retry_pending(component, keep_candidate=reevaluate)
         if in_a_row < self.stale_refusal_limit:
@@ -1095,7 +961,7 @@ class Dispatcher(ScenarioUnloader):
             "its batch is kept and prepared again on the next wake"
         )
         logger.warning("scenario %r: %s", scenario, message)
-        self._record_training_error(scenario, message, source=local_error_source(component))
+        self.errors.record(scenario, message, local_error_source(component))
         return False
 
     def _run_training(self) -> None:
@@ -1114,7 +980,7 @@ class Dispatcher(ScenarioUnloader):
         except Exception as exc:
             name = self._registry.training_scenario_name or "<unbound>"
             logger.exception("training thread stopped unexpectedly for scenario %r", name)
-            self._record_training_error(name, self._error_text(exc))
+            self.errors.record(name, self._error_text(exc))
 
     def _training_wait_timeout(self) -> float | None:
         """How long the training thread may sleep before re-checking.
@@ -1153,12 +1019,12 @@ class Dispatcher(ScenarioUnloader):
             except _ScenarioTrainingError as failure:
                 name = failure.scenario
                 logger.exception("training thread failed to commit for scenario %r", name)
-                self._record_training_error(name, self._error_text(failure.cause))
+                self.errors.record(name, self._error_text(failure.cause))
                 self._reload_after_training_failure(name, failure.cause)
             except Exception as exc:
                 name = self._registry.training_scenario_name or "<unbound>"
                 logger.exception("training thread failed to commit for scenario %r", name)
-                self._record_training_error(name, self._error_text(exc))
+                self.errors.record(name, self._error_text(exc))
                 self._reload_after_training_failure(name, exc)
 
     def _training_scenario_names(self) -> tuple[str, ...]:
@@ -1193,7 +1059,7 @@ class Dispatcher(ScenarioUnloader):
             raise RuntimeContractError(
                 f"training thread requires a TrainingRuntime for scenario {current.name!r}, got {type(runtime).__name__}"
             )
-        self._record_training_error(current.name, None)
+        self.errors.clear(current.name)
         # A crash may leave remote serving updated but paused after Reef's
         # commit, or checkpointed before the weight update. Recover that
         # pending step before deciding whether another batch is available.
@@ -1264,34 +1130,6 @@ class Dispatcher(ScenarioUnloader):
                     backend.acknowledge_commit(current.scenario_step, result.training_job_id)
         return True
 
-    def _record_training_error(
-        self, scenario: str, value: str | None, *, source: str | None = TRAINING_THREAD_SOURCE
-    ) -> None:
-        """Record ``value`` for ``scenario`` under ``source``; ``None`` clears the error that source recorded.
-
-        A local cycle that runs after the training thread's failure must not wipe that failure from the
-        status; ``source=None`` clears whatever is recorded.
-        """
-        with self._training.lock:
-            if value is None:
-                for key in [key for key in self._training.errors if key[0] == scenario]:
-                    if source is None or key[1] == source:
-                        self._training.errors.pop(key, None)
-            else:
-                self.note_training_error(scenario, value, source or TRAINING_THREAD_SOURCE)
-
-    def note_training_error(self, scenario: str, value: str, source: str) -> None:
-        """Store an error and count the failure; the caller holds the training lock."""
-        self._training.errors[(scenario, source)] = value
-        self._training.failure_counts[scenario] = self._training.failure_counts.get(scenario, 0) + 1
-
-    def _record_status_build_error(self, value: str | None) -> bool:
-        """Record a failure to build training status; return whether it changed."""
-        with self._training.lock:
-            changed = value != self._training.status_build_error
-            self._training.status_build_error = value
-            return changed
-
     @staticmethod
     def _error_text(exc: Exception) -> str:
         return f"{type(exc).__name__}: {exc}"
@@ -1349,13 +1187,13 @@ class Dispatcher(ScenarioUnloader):
                 block = self._scenario_status(scenario_name, storage_status, last_drain)
             except Exception as exc:
                 failed = True
-                if self._record_status_build_error(f"{scenario_name}: {self._error_text(exc)}"):
+                if self.errors.set_status_build_error(f"{scenario_name}: {self._error_text(exc)}"):
                     logger.exception("failed to build training status for scenario %r", scenario_name)
                 break
             if block is not None:
                 scenarios[scenario_name] = block
         if not failed:
-            self._record_status_build_error(None)
+            self.errors.set_status_build_error(None)
         errors = self._training_errors()
         return {
             "error": "\n".join(errors) or None,
@@ -1435,7 +1273,7 @@ class Dispatcher(ScenarioUnloader):
                         if bound.trainer is stepping_trainer
                         else bound.trainer.pipeline_status()
                     ),
-                    "stale_refusals_total": self.stale_refusals_total(scenario_name, bound.component),
+                    "stale_refusals_total": self.errors.stale_refusal_total(scenario_name, bound.component),
                     "last_committed_step": (
                         None
                         if last is None
@@ -1452,9 +1290,8 @@ class Dispatcher(ScenarioUnloader):
 
     def _training_errors(self) -> list[str]:
         """Every recorded training error, noticing a training thread that died silently."""
+        training_errors, status_build_error = self.errors.snapshot()
         with self._training.lock:
-            training_errors = dict(self._training.errors)
-            status_build_error = self._training.status_build_error
             training_thread = self._training.thread
         training_scenario = self._registry.training_scenario_name or "<unbound>"
         if (
@@ -1465,7 +1302,7 @@ class Dispatcher(ScenarioUnloader):
         ):
             error = "RuntimeError: training thread stopped unexpectedly"
             logger.error("%s: %s", training_scenario, error)
-            self._record_training_error(training_scenario, error)
+            self.errors.record(training_scenario, error)
             training_errors[(training_scenario, TRAINING_THREAD_SOURCE)] = error
         errors = [f"{scenario}: {training_errors[(scenario, source)]}" for scenario, source in sorted(training_errors)]
         if status_build_error is not None:

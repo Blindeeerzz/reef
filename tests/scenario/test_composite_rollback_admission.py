@@ -13,7 +13,8 @@ from tests.support.runtime_stubs import StubTrainingRuntime
 
 from reef.artifact import InMemoryRepositoryBackend
 from reef.artifact.release_chain import ReleaseNotRestorable
-from reef.dispatcher import Dispatcher, local_error_source
+from reef.dispatcher import Dispatcher
+from reef.dispatcher.errors import local_error_source
 from reef.runtime.interfaces import TrainingRuntime
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.surface import ComponentSurface, Surface, TextFileTree
@@ -126,10 +127,10 @@ def test_a_local_cycle_clears_only_the_errors_it_recorded(tmp_path: Path) -> Non
         scenario = _scenario(dispatcher, training)
         for record in _records(1):
             scenario.records.append(record)
-        dispatcher._record_training_error("agent", "RuntimeError: training marker is UPDATING_WEIGHTS")
+        dispatcher.errors.record("agent", "RuntimeError: training marker is UPDATING_WEIGHTS")
         assert dispatcher._process_local_backend_step("agent", HARNESS) is True
         assert dispatcher._training_errors() == ["agent: RuntimeError: training marker is UPDATING_WEIGHTS"]
-        dispatcher._record_training_error("agent", "harness away", source=local_error_source(HARNESS))
+        dispatcher.errors.record("agent", "harness away", local_error_source(HARNESS))
         assert sorted(dispatcher._training_errors()) == [
             "agent: RuntimeError: training marker is UPDATING_WEIGHTS",
             "agent: harness away",
@@ -139,7 +140,7 @@ def test_a_local_cycle_clears_only_the_errors_it_recorded(tmp_path: Path) -> Non
         # The harness cycle clears its own error; the training thread's stays until that thread clears it.
         assert dispatcher._process_local_backend_step("agent", HARNESS) is True
         assert dispatcher._training_errors() == ["agent: RuntimeError: training marker is UPDATING_WEIGHTS"]
-        dispatcher._record_training_error("agent", None)
+        dispatcher.errors.clear("agent")
         assert dispatcher._training_errors() == []
     finally:
         dispatcher.close()

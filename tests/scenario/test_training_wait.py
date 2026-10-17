@@ -21,7 +21,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import reef.dispatcher as dispatcher_module
+import reef.dispatcher.dispatcher as dispatcher_module
 from reef.artifact.memory import InMemoryRepositoryBackend
 from reef.dispatcher import Dispatcher
 from reef.recipe import Recipe
@@ -208,7 +208,7 @@ def test_status_reports_build_failure_instead_of_raising() -> None:
 def test_status_reports_training_and_build_failures() -> None:
     dispatcher = _dispatcher()
     _bind(dispatcher, pending=False)
-    dispatcher._record_training_error("s", "RuntimeError: backend failed")
+    dispatcher.errors.record("s", "RuntimeError: backend failed")
 
     def fail() -> bool:
         raise RuntimeError("processor status is unavailable")

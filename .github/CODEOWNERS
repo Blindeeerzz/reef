@@ -44,7 +44,7 @@
 /reef/train/ @hanfeiyu @MikeZheng777
 /reef/runtime/ @hanfeiyu @MikeZheng777
 /reef/artifact/ @hanfeiyu @MikeZheng777
-/reef/dispatcher.py @hanfeiyu @MikeZheng777
+/reef/dispatcher/ @hanfeiyu @MikeZheng777
 /recipes/openclawrl/examples/openclawrl/serve.yaml @hanfeiyu @MikeZheng777
 
 # Documentation defaults to these owners. Domain references override it.
