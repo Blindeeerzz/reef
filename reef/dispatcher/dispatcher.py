@@ -26,7 +26,7 @@ from reef.recipe.checkpoint_strategy import CheckpointStrategy, EveryNVersions
 from reef.runtime.interfaces import RuntimeContractError, TrainingRuntime
 from reef.runtime.recovery import marker_in_flight
 from reef.scenario.admission import ScenarioAdmission
-from reef.scenario.registry import ReplacedScenarioCloser, ScenarioRegistry, ScenarioUnloader
+from reef.scenario.registry import InstanceState, ScenarioLifecycle, ScenarioRegistry
 from reef.scenario.scenario import Scenario, SettledTrainingResultError, StaleTrainingResultError
 from reef.storage.records import RecordRetention
 from reef.storage.scenario import ScenarioStorage
@@ -80,7 +80,7 @@ class ScenarioCycles:
     replaced: list[Scenario] = field(default_factory=list)
 
 
-class WorkerCoordination(ReplacedScenarioCloser):
+class WorkerCoordination:
     """Own local worker lifetime, dispatched turns, and scenario replacement.
 
     Service starts held or running. Opening releases held workers; stopping and closed never reopen.
@@ -91,7 +91,7 @@ class WorkerCoordination(ReplacedScenarioCloser):
 
     Lock order: cycle locks -> registry scenario lock -> coordination lock -> training errors lock.
     Never wait for a cycle lock, join a worker, or close a scenario while holding the coordination lock.
-    Registry reloads can call close_replaced while holding their scenario lock:
+    Registry reloads close the replaced instance while holding their scenario lock:
     closure therefore tries the cycle lock without waiting.
     """
 
@@ -256,8 +256,8 @@ class WorkerCoordination(ReplacedScenarioCloser):
         """Reload durable state now, or after the reserved job; do not wake the failing worker."""
         if not current.store.durable:
             return
-        with self.registry.lock_for(current.name):
-            if self.registry.get_optional(current.name) is not current:
+        with self.registry.lock_instance(current) as state:
+            if state is not InstanceState.CURRENT:
                 return
             if current.is_job_reserved:
                 with self.lock:
@@ -269,11 +269,11 @@ class WorkerCoordination(ReplacedScenarioCloser):
     def reload_deferred(self, current: Scenario) -> bool:
         """Called under the cycle lock: reload only after the reserved job has landed."""
         with self.lock:
-            state = self.scenarios.get(current.name)
-            if state is None or not state.reload_pending:
+            cycles = self.scenarios.get(current.name)
+            if cycles is None or not cycles.reload_pending:
                 return False
-        with self.registry.lock_for(current.name):
-            if self.registry.get_optional(current.name) is not current or current.is_job_reserved:
+        with self.registry.lock_instance(current) as instance_state:
+            if instance_state is not InstanceState.CURRENT or current.is_job_reserved:
                 return False
             self.reload(current.name, current)
         return True
@@ -296,7 +296,7 @@ class WorkerCoordination(ReplacedScenarioCloser):
         return recovered
 
 
-class Dispatcher(ScenarioUnloader):
+class Dispatcher(ScenarioLifecycle):
     """Coordinate scenario creation, inference state, training, and model commits.
 
     Invariant: at most one weight-training scenario per process. Its serial
@@ -366,14 +366,12 @@ class Dispatcher(ScenarioUnloader):
             allow_implicit_creation=allow_implicit_creation,
             experiment_tracker=self._experiment_tracker,
             admission=scenario_admission,
+            lifecycle=self,
         )
-        self._registry.set_training_scenario_callback(self._start_training)
-        self._registry.set_unloader(self)
         self._training = _TrainingState()
         self.errors = TrainingErrors()
         self._lifecycle = _LifecycleState()
         self.workers = WorkerCoordination(self._registry, self._training.lock, held=hold_local_cycles)
-        self._registry.set_replaced_closer(self.workers)
         if isinstance(backend_factory, EnumerableRepositoryBackendFactory):
             self._lifecycle.preload_thread = Thread(
                 target=self._preload_scenarios,
@@ -488,6 +486,15 @@ class Dispatcher(ScenarioUnloader):
             archived = [*self._archive_scenario_state(scenario), *self._registry.archive_registration(scenario)]
         self._registry.forget_lock(scenario)
         return {"scenario": scenario, "archived": archived}
+
+    def scenario_loaded(self, instance: Scenario) -> None:
+        """Start the training thread when the registry loads a scenario that trains weights."""
+        if instance.training_runtime is not None:
+            self._start_training(instance)
+
+    def close_replaced(self, instance: Scenario) -> None:
+        """Close a reloaded scenario's old instance once no local cycle or dispatched turn runs on it."""
+        self.workers.close_replaced(instance)
 
     def scenario_is_idle(self, current: Scenario) -> bool:
         """Whether Reef can unload ``current`` with no loss of data and no stop of work.
@@ -647,8 +654,8 @@ class Dispatcher(ScenarioUnloader):
             with self._registry.lock_for(scenario):
                 current = self._registry.require(scenario)
             # Wait for earlier reports without blocking scenario resolution.
-            with current.experiment_reporting(), self._registry.lock_for(scenario):
-                if self._registry.get_optional(scenario) is not current:
+            with current.experiment_reporting(), self._registry.lock_instance(current) as state:
+                if state is not InstanceState.CURRENT:
                     # Reload or deletion won the gap before the reporting scope.
                     continue
                 return current.rollback(release_id, operation=operation)
@@ -776,12 +783,11 @@ class Dispatcher(ScenarioUnloader):
             logger.warning("operational metrics unavailable for scenario %r (%s)", current.name, type(exc).__name__)
 
     def _start_training(self, scenario: Scenario) -> None:
-        """Start the training drain thread if it hasn't been started yet.
+        """Start the training drain thread if it hasn't been started yet, and wake it.
 
-        Called by the registry whenever it resolves a training scenario — the
-        single notification point, so every resolution path (get_or_create,
-        require, preload) triggers it without the dispatcher remembering to
-        call from each entry point.
+        :meth:`scenario_loaded` calls this method whenever the registry loads a
+        training scenario, so every resolution path (get_or_create, require,
+        preload) starts the thread.
         """
         if self.workers.closed.is_set():
             return
@@ -843,10 +849,10 @@ class Dispatcher(ScenarioUnloader):
         """A failed instruction step consumes the instruction with a skip row on the next step; wake for it."""
         if not current.trainer_for(component).fail_pending_instruction(self._error_text(cause)):
             return
-        with self._registry.lock_for(current.name):
+        with self._registry.lock_instance(current) as state:
             # Wake the worker so failed instructions settle even when no new records arrive; a scenario
             # deleted or reloaded meanwhile starts no worker for an instance that is gone.
-            if self._registry.get_optional(current.name) is current:
+            if state is InstanceState.CURRENT:
                 self._wake_training(current)
 
     def _reload_after_training_failure(self, scenario: str, cause: Exception) -> None:
@@ -881,11 +887,11 @@ class Dispatcher(ScenarioUnloader):
         with self.workers.cycle(scenario):
             if not self.workers.cycles_run():
                 return False
-            loaded = self._registry.get_optional(scenario)
-            if loaded is None:
+            state = self._registry.instance_state(current)
+            if state is InstanceState.REMOVED:
                 # Deleted while this worker waited for its turn.
                 return False
-            if loaded is not current:
+            if state is InstanceState.REPLACED:
                 # Reloaded while this worker waited: look again on the rebuilt instance, whose rows are unread.
                 return True
             # The job whose turn this worker waited for may have left admission closed.
@@ -904,19 +910,18 @@ class Dispatcher(ScenarioUnloader):
             # Keep only the short commit and recovery window under the scenario
             # registry lock. Candidate generation above can take minutes and must
             # not block record acceptance for this scenario.
-            with current.experiment_reporting(), self._registry.lock_for(scenario):
+            with current.experiment_reporting(), self._registry.lock_instance(current) as state:
                 if not self.workers.cycles_run():
                     # The service stopped under this cycle: its model calls may have failed as the routes went away.
                     logger.info(
                         "scenario %r component %r: the service is stopping; the step waits", scenario, component
                     )
                     return False
-                loaded = self._registry.get_optional(scenario)
-                if loaded is not current:
+                if state is not InstanceState.CURRENT:
                     # Rebuilt under this cycle by a sibling trainer's failure, or deleted: the result belongs to the
                     # instance that prepared it, and the step ends without a commit. A rebuilt instance holds these
                     # rows unread: look again on it.
-                    return loaded is not None
+                    return state is InstanceState.REPLACED
                 try:
                     self._commit_result(scenario, result, component)
                 except StaleTrainingResultError as stale:
@@ -1072,8 +1077,8 @@ class Dispatcher(ScenarioUnloader):
             committed_training_job_id=current.committed_training_job_id,
             committed_training_without_job_id=current.committed_training_without_job_id,
         )
-        with self._registry.lock_for(name):
-            if self._registry.get_optional(name) is not current:
+        with self._registry.lock_instance(current) as state:
+            if state is not InstanceState.CURRENT:
                 # Reloaded since the turn began: the next turn reserves on the rebuilt instance.
                 return True
             # Reserved under the registry lock: a local cycle's failure from here on defers its reload.
@@ -1101,14 +1106,13 @@ class Dispatcher(ScenarioUnloader):
             if execution.outcome not in ("drop", "commit"):
                 raise RuntimeContractError(f"training backend returned unsupported outcome: {execution.outcome!r}")
             # The registry lock keeps a local worker's reload out between the instance check and the commit.
-            with current.experiment_reporting(), self._registry.lock_for(current.name):
-                loaded = self._registry.get_optional(current.name)
-                if loaded is None:
+            with current.experiment_reporting(), self._registry.lock_instance(current) as state:
+                if state is InstanceState.REMOVED:
                     raise RuntimeContractError(
                         f"scenario {current.name!r} was deleted under its training job; the backend's job needs "
                         "operator recovery"
                     )
-                if loaded is not current:
+                if state is InstanceState.REPLACED:
                     # A local worker's failure reloaded the scenario while the job ran: its result belongs to the
                     # instance that reserved the batch. The rebuilt trainer reserves the same rows and the
                     # backend replays the job under its marker, so the commit lands with the job's identity.

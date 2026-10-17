@@ -1297,7 +1297,7 @@ def test_live_commit_failure_keeps_one_retryable_batch_and_one_record(tmp_path, 
         InMemoryRepositoryBackend.factory(initial, root=tmp_path / "repository"),
         agent_record_dir=agent_record_dir,
     )
-    dispatcher._registry.set_training_scenario_callback(lambda scenario: None)
+    monkeypatch.setattr(dispatcher, "_start_training", lambda scenario: None)
     scenario = dispatcher.get_or_create_scenario("math")
     scenario.records.append(sft_inference("i1"))
     scenario.records.append(sft_report("r1", "i1"))
