@@ -13,7 +13,7 @@ names the class in its ``pipeline_spec()``.
 
 * ``NoBatches`` (``base.py``): the no-update default; it never makes a batch.
 * ``DistillBatches`` (``distill.py``): tasks as they come; the distilling
-  recipes and harness evolution use it.
+  recipes, the SFT recipe, and harness evolution use it.
 
 Everything numeric about a method, such as advantages and the loss family,
 lives in its backend training objective, not here. The package depends only

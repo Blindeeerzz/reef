@@ -9,7 +9,9 @@ Choose a destination
 
 ``reef/`` holds every shared mechanism, including the harness evolution engine
 at ``reef/train/cordis_backend/``. The built-in Reefine recipe lives under
-``reef/recipe/reefine/``. Paper-backed methods live in separate
+``reef/recipe/reefine/``. The built-in SFT recipe lives under
+``reef/recipe/sft/``, and its Slime loss family is in
+``reef/train/slime_backend/sft.py``. Paper-backed methods live in separate
 packages under ``recipes/`` (``sao``, ``tttd``, ``openclawrl``, ``skillclaw``)
 with that method's recipe, processor, training objective, and, for weight methods,
 the ``slime/`` subpackage only the training plane imports. Nothing under
