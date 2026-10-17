@@ -385,7 +385,7 @@ def test_batch_admission_is_atomic_and_ordered(tmp_path):
             )
             assert response.status == 413
             assert scenario.records.get("s", "large") is None
-            assert not dispatcher._recipe.batches
+            assert not dispatcher.recipe.batches
 
     try:
         asyncio.run(run())

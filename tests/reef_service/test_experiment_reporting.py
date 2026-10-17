@@ -76,13 +76,13 @@ def test_local_tracker_read_locks(tmp_path, monkeypatch, callback, failing):
     monkeypatch.setattr(tracker, callback, blocked)
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            operation = pool.submit(value._process_local_backend_step, "agent", HARNESS)
+            operation = pool.submit(value.local_workers.process_step, "agent", HARNESS)
             try:
                 assert entered.wait(5)
                 if callback == "record":
                     read = pool.submit(value.get_or_create_scenario, "agent")
                 else:
-                    read = pool.submit(scenario.artifact_with_metrics)
+                    read = pool.submit(scenario.release_queries.artifact_with_metrics)
                 read.result(timeout=2)
                 assert not operation.done()
             finally:
@@ -102,8 +102,8 @@ def test_shipped_content_tracker_runs_after_registration(tmp_path, monkeypatch, 
     value, backends = _dispatcher(tmp_path, experiment_tracker=tracker)
     original = _scenario(value)
     if operation == "load":
-        with value._registry.lock_for("agent"):
-            value._registry.remove("agent")
+        with value.registry.lock_for("agent"):
+            value.registry.remove("agent")
         original.close()
     update = tmp_path / "updated-harness"
     update.mkdir()
@@ -121,9 +121,9 @@ def test_shipped_content_tracker_runs_after_registration(tmp_path, monkeypatch, 
             raise ConnectionError("tracker unavailable")
 
     def load():
-        with value._registry.lock_for("agent") if nested else nullcontext():
+        with value.registry.lock_for("agent") if nested else nullcontext():
             if operation == "reload":
-                return value._registry.reload("agent")
+                return value.registry.reload("agent")
             return value.get_or_create_scenario("agent")
 
     monkeypatch.setattr(backends[HARNESS], "shipped_content_update", shipped)
@@ -178,7 +178,7 @@ def test_failed_load_still_reports_landed_commit_outside_registry_lock(tmp_path,
     monkeypatch.setattr(tracker, "record", blocked)
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            reload = pool.submit(value._registry.reload, "agent")
+            reload = pool.submit(value.registry.reload, "agent")
             try:
                 assert entered.wait(5), "landed event was lost during failed load"
                 read = pool.submit(value.get_or_create_scenario, "agent")

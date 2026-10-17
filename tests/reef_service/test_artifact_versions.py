@@ -449,7 +449,7 @@ def test_slow_correlation_tracker_does_not_block_published_artifact_reads(
         with ThreadPoolExecutor(max_workers=1) as executor:
             try:
                 assert entered.wait(5), "correlation tracker was not called"
-                read = executor.submit(scenario.artifact_with_metrics)
+                read = executor.submit(scenario.release_queries.artifact_with_metrics)
                 artifact, _ = read.result(timeout=2)
                 assert artifact.ref == initial
                 assert not recorded.is_set(), "commit must wait for correlation metadata"
@@ -514,8 +514,8 @@ def test_rollback_uses_reloaded_scenario_after_waiting_for_reporting(
 
     @contextmanager
     def reload_before_reporting():
-        with value._registry.lock_for("math"):
-            value._registry.reload("math")
+        with value.registry.lock_for("math"):
+            value.registry.reload("math")
         with reporting():
             yield
 
