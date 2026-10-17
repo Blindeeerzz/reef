@@ -56,7 +56,9 @@ class DispatchedTrainingLoop:
     # Poll interval while a pipeline has background jobs that run (see
     # TrainingPipeline.background_jobs_running). A finished job, such as a
     # judgment, can make a batch ready, but no new record sets the ready
-    # event. Thus the thread checks for a batch at this interval.
+    # event. Thus the thread checks for a batch at this interval. The thread
+    # also polls at this interval after it skipped a scenario whose cycle lock
+    # was busy.
     background_job_poll_seconds: float = 1.0
     # One drain, plus one more after reloading the scenario from durable state.
     drain_attempts: int = 2
@@ -78,6 +80,8 @@ class DispatchedTrainingLoop:
         self.last_drain: float | None = None
         self.undrained_warned = False
         self.thread: Thread | None = None
+        #: Whether the last drain skipped a scenario because another holder had its cycle lock.
+        self.skipped_busy_scenario = False
 
     def start(self) -> None:
         """Start the training thread if it hasn't been started yet, and wake it."""
@@ -123,23 +127,26 @@ class DispatchedTrainingLoop:
     def wait_timeout(self) -> float | None:
         """How long the training thread may sleep before re-checking.
 
-        Blocked checkpoint storage retries on its own interval. While a
-        pipeline has background jobs that run, a finished job can make a
-        batch ready without a new record. Thus the thread polls at
-        ``background_job_poll_seconds``. Otherwise it sleeps until the next
+        Blocked checkpoint storage retries on its own interval. The thread
+        polls at ``background_job_poll_seconds`` in two cases. First, while a
+        pipeline has background jobs that run, because a finished job can make
+        a batch ready without a new record. Second, after the last drain
+        skipped a scenario whose cycle lock was busy, because only the end of
+        a local cycle wakes the thread. Otherwise it sleeps until the next
         accepted record.
         """
         timeout: float | None = self.storage_retry_seconds if self.storage_status is not None else None
+        poll = self.skipped_busy_scenario
         for name in self.registry.training_scenario_names:
             current = self.registry.get_optional(name)
             if current is not None and any(
                 bound.trainer.pipeline.background_jobs_running() for bound in current.trainers
             ):
-                timeout = (
-                    self.background_job_poll_seconds
-                    if timeout is None
-                    else min(timeout, self.background_job_poll_seconds)
-                )
+                poll = True
+        if poll:
+            timeout = (
+                self.background_job_poll_seconds if timeout is None else min(timeout, self.background_job_poll_seconds)
+            )
         return timeout
 
     def drain(self) -> None:
@@ -149,6 +156,7 @@ class DispatchedTrainingLoop:
         # A second failure also reloads, so the next wake finds a clean
         # scenario, but the thread does not try again. The training status
         # reports the cause.
+        self.skipped_busy_scenario = False
         for _ in range(self.drain_attempts):
             try:
                 while self.process():
@@ -198,10 +206,12 @@ class DispatchedTrainingLoop:
         backend = current.trainer_for(component).candidate_backend
         if backend is None or not backend.dispatched:
             raise RuntimeContractError(f"training scenario {current.name!r} has no dispatched training backend")
-        # A scenario runs one step at a time. While a local cycle holds the cycle lock,
-        # skip the scenario: the end of that cycle wakes this thread.
+        # A scenario runs one step at a time. While another holder has the cycle lock,
+        # skip the scenario. The end of a local cycle wakes this thread. Any other
+        # holder, such as an idle check, lets go at once, and the thread polls for it.
         cycle_lock = self.local_workers.cycle_lock(name)
         if not cycle_lock.acquire(blocking=False):
+            self.skipped_busy_scenario = True
             return False
         try:
             self.errors.clear(current.name)

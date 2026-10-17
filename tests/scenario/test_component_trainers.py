@@ -292,6 +292,26 @@ def test_the_training_thread_skips_a_scenario_while_its_local_cycle_runs(
 
 
 @pytest.mark.unit
+def test_the_training_thread_looks_again_after_another_holder_lets_the_cycle_lock_go(
+    tmp_path: Path, dispatchers: _Dispatchers
+) -> None:
+    """An idle check or the close of a replaced instance holds the cycle lock briefly and wakes no one. The training
+    thread that skipped the scenario meanwhile polls, so the ready batch still trains without a new record."""
+    dispatcher, backends = dispatchers.open(backends=_dispatched_pair(tmp_path), training=StubTrainingRuntime())
+    dispatcher.training_loop.background_job_poll_seconds = 0.1
+    scenario = _scenario(dispatcher)
+    assert _wait_for(lambda: dispatcher.training_loop.drain_state()[1] is not None)
+    _append_records(scenario, 1)
+    cycle_lock = dispatcher.local_workers.cycle_lock("agent")
+    with cycle_lock:
+        dispatcher.training_loop.ready.set()
+        assert _wait_for(lambda: dispatcher.training_loop.skipped_busy_scenario)
+        assert backends[WEIGHTS].prepared == 0
+    assert _wait_for(lambda: scenario.scenario_step == 1)
+    assert backends[WEIGHTS].prepared == 1
+
+
+@pytest.mark.unit
 def test_a_colocated_weights_job_waits_for_the_local_cycle_that_needs_the_engine(
     tmp_path: Path, dispatchers: _Dispatchers
 ) -> None:
