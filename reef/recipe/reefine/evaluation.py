@@ -23,6 +23,7 @@ def evaluation_settings(
         "timeout_s",
         "max_output_tokens",
         "env_from",
+        "reviewer_params",
     }:
         raise RecipeConfigError("unknown evolution.evaluation key")
     context = config.get("request_context", {})
@@ -75,6 +76,9 @@ def evaluation_settings(
     if not isinstance(names, list) or any(not isinstance(name, str) or not name for name in names):
         raise RecipeConfigError("evaluation.env_from must be a list of environment variable names")
     environment = {name: os.environ[name] for name in names if name in os.environ}
+    reviewer_params = config.get("reviewer_params", {})
+    if not isinstance(reviewer_params, Mapping) or not all(isinstance(key, str) for key in reviewer_params):
+        raise RecipeConfigError("evaluation.reviewer_params must map request field names to values")
     if (
         not isinstance(reviewer, str)
         or not reviewer
@@ -92,6 +96,7 @@ def evaluation_settings(
             float(timeout),
             max_tokens,
             environment=environment,
+            reviewer_params=dict(reviewer_params),
         )
     except ValueError as exc:
         raise RecipeConfigError(str(exc)) from exc

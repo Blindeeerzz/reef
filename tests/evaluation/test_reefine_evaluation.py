@@ -57,7 +57,7 @@ class EvaluationBackend(ReefineBackend):
 
     @property
     def harness_description(self):
-        return {"adapter": self.adapter, "entry_kinds": ["skill", "rules"], "facts": None}
+        return {"adapter": self.adapter, "entry_kinds": ["skill", "rules"], "facts": None, "messages_per_task": 3}
 
     def show_evaluation_checks(self, checks):
         self.progress.append(checks)
@@ -152,11 +152,11 @@ def test_invalid_plan_and_missing_request_never_approve(tmp_path):
         item = candidate(tmp_path / str(missing))
         if missing:
             item = replace(item, context=replace(item.context, request=None))
-            model.responses.pop(0)
+            # No plan call and, without a request episode, no request judgment call.
+            del model.responses[0:2]
         else:
-            model.responses[0] = {"prompt": "", "checks": []}
-        # Without a request episode there is no request judgment call.
-        model.responses.pop(0 if missing else 1)
+            # The invalid plan is asked for once more and stays invalid; no request episode is judged.
+            model.responses[0:2] = [{"prompt": "", "checks": []}, {"prompt": "", "checks": []}]
         backend.results.pop(0)
         measured = plugin.evaluate(item)
         assert not plugin.decide(item, measured).selected
@@ -267,13 +267,40 @@ def test_a_reply_that_is_not_json_is_asked_once_more_in_a_fresh_conversation(tmp
     assert len(calls) == 2 and calls[0] == calls[1]
 
 
-def test_long_tool_output_is_cut_before_the_review_reads_it():
-    paper = "A" * 3000 + "MIDDLE" + "Z" * 50_000
-    events = [{"role": "user", "content": "task"}, {"tool": paper}, *({"n": "x" * 3000} for _ in range(300))]
+def test_a_trajectory_within_the_budget_reaches_the_review_whole_except_binary_data():
+    image = "iVBORw0KGgo1" * 400
+    events = [{"content": "task"}, {"tool": "P" * 50_000}, {"image": image}, {"content": "final answer " * 400}]
     kept = shortened_trajectory(events)
-    assert kept[0] == {"role": "user", "content": "task"}
-    assert "MIDDLE" not in json.dumps(kept[1]) and "characters omitted" in kept[1]["tool"]
-    assert len(json.dumps(kept)) <= 410_000 and {"omitted_events": len(events) + 1 - len(kept)} in kept
+    assert kept[1] == {"tool": "P" * 50_000} and kept[3] == events[3]
+    assert kept[2]["image"].startswith("[binary data such as an image")
+
+
+def test_a_long_trajectory_cuts_its_longest_texts_first_and_keeps_short_answers():
+    paper = "A" * 300_000 + "MIDDLE" + "Z" * 300_000
+    answer = "The answer cites [1] and [2]. " * 200
+    kept = shortened_trajectory([{"content": "task"}, {"tool": paper}, {"tool": "B" * 60_000}, {"content": answer}])
+    assert kept[0] == {"content": "task"} and kept[3] == {"content": answer}
+    assert "MIDDLE" not in kept[1]["tool"] and "characters omitted" in kept[1]["tool"]
+    assert len(json.dumps(kept)) <= 410_000
+
+
+def test_a_plan_that_breaks_the_message_limit_is_asked_for_once_more(tmp_path):
+    plugin, model, backend = evaluation(tmp_path)
+    backend.models = ModelBindings(model)
+    model.responses.insert(0, {"tasks": [{"messages": ["one", "two"], "checks": ["shown"]}]})
+    original = type(backend).harness_description
+    type(backend).harness_description = property(
+        lambda self: {"adapter": "claude", "entry_kinds": ["rules"], "facts": None, "messages_per_task": 1}
+    )
+    try:
+        item = candidate(tmp_path)
+        measured = plugin.evaluate(item)
+    finally:
+        type(backend).harness_description = original
+    assert plugin.decide(item, measured).selected
+    assert "previous_plan_problem" in model.messages_seen[1][0]["content"]
+    replies = json.loads((tmp_path / "reefine-evaluation" / "plan-replies.json").read_text())
+    assert len(replies) == 2
 
 
 def test_files_written_outside_the_workspace_reach_the_review_without_invalidating_the_run(tmp_path):

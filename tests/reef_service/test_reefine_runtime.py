@@ -105,8 +105,8 @@ def test_formal_checks_control_publication_and_progress_route(tmp_path, monkeypa
         {"passed": True, "reason": "change reviewed independently"},
     ]
     if case == "invalid_plan":
-        replies[0] = {"prompt": "", "checks": []}
-        replies.pop(1)
+        # The plan is asked for once more and stays invalid, so no request episode is judged.
+        replies[0:2] = [{"prompt": "", "checks": []}, {"prompt": "", "checks": []}]
     if case == "harness_limit":
         replies[0]["limits"] = [{"requirement": "refuse other tools", "reason": "not possible on this harness"}]
     responses = iter(replies)

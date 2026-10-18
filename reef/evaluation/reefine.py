@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
@@ -148,6 +149,9 @@ class ReefineEvaluationSettings:
     max_output_tokens: int = 8192
     scorer_version: str = "1"
     environment: Mapping[str, str] = field(default_factory=dict, repr=False)
+    #: Extra request fields for the evaluation's own model calls, in the reviewer endpoint's dialect, such as a
+    #: reasoning effort.
+    reviewer_params: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
@@ -189,7 +193,7 @@ class ReefineEvaluation(SelectionPlugin):
         models = self.backend.evaluation_models
         reviewer = models[self.settings.reviewer_model]
         checks = [
-            CheckResult("request-plan", "request", "plan", expected="a real episode covering the original request"),
+            CheckResult("request-plan", "request", "plan", expected="tasks that show the requested behavior"),
             CheckResult("request-behavior", "request", "candidate", expected="all requested behavior"),
         ]
         for index, task in enumerate(self.settings.protected_tasks):
@@ -231,28 +235,41 @@ class ReefineEvaluation(SelectionPlugin):
                 plan_started = time.monotonic()
                 try:
                     context = self.settings.request_context
-                    reply = self.ask_json(
-                        reviewer,
-                        self.instructions.plan,
-                        {
-                            "request": request.text,
-                            "prompt": context.prompt,
-                            "files": dict(context.files or {}),
-                            "harness": dict(self.backend.harness_description),
-                        },
-                        deadline,
-                    )
-                    tasks, limits, untested = validate_plan(reply)
+                    harness = dict(self.backend.harness_description)
+                    messages_per_task = int(str(harness.get("messages_per_task", 1)))
+                    payload: dict[str, object] = {
+                        "request": request.text,
+                        "prompt": context.prompt,
+                        "files": dict(context.files or {}),
+                        "harness": harness,
+                    }
+                    replies = []
+                    # A plan that breaks its limits is asked for once more, with the problem, before it counts.
+                    for attempt in range(2):
+                        reply = self.ask_json(reviewer, self.instructions.plan, payload, deadline)
+                        replies.append(reply)
+                        (records / "plan-replies.json").write_text(json.dumps(replies, indent=2) + "\n", encoding="utf-8")
+                        try:
+                            tasks, limits, untested = validate_plan(reply, messages_per_task)
+                            break
+                        except ValueError as exc:
+                            if attempt == 1:
+                                raise
+                            payload = {**payload, "previous_plan_problem": str(exc)}
                     if context.prompt and tasks:
                         # The operator's prompt replaces the generated messages and keeps every generated check.
                         tasks = [
                             {"messages": [context.prompt], "checks": [item for task in tasks for item in task["checks"]]}
                         ]
                     plan = {"tasks": tasks, "limits": limits, "untested": untested}
+                    # The plan row says what was planned; only the task rows below observe behavior.
                     checks[plan_index] = replace(
                         checks[plan_index],
                         status="pass",
-                        observed="; ".join(item for task in tasks for item in task["checks"]),
+                        observed=(
+                            f"planned {len(tasks)} task(s), {len(limits)} limit(s) and "
+                            f"{len(untested)} untested item(s); no behavior is observed in this row"
+                        ),
                         seconds=time.monotonic() - plan_started,
                     )
                     # Behavior the harness cannot deliver, or that no single message can show here, is reported and
@@ -417,8 +434,8 @@ class ReefineEvaluation(SelectionPlugin):
                     self.instructions.change_review,
                     {
                         "request": "" if request is None else request.text,
-                        "current": candidate.current_files,
-                        "candidate": candidate.candidate_files,
+                        "serving_release_files": candidate.current_files,
+                        "candidate_files": candidate.candidate_files,
                         "requires": list(candidate.requires),
                         "checks": [check.to_dict() for check in checks[:-1]],
                     },
@@ -574,7 +591,12 @@ class ReefineEvaluation(SelectionPlugin):
             if remaining <= 0:
                 raise ValueError("evaluation time budget exhausted")
             try:
-                reply = model.chat(messages, timeout_s=remaining, max_tokens=self.settings.max_output_tokens)
+                reply = model.chat(
+                    messages,
+                    timeout_s=remaining,
+                    max_tokens=self.settings.max_output_tokens,
+                    **self.settings.reviewer_params,
+                )
             except ModelBindingError as exc:
                 if attempt == 1 or (exc.status is not None and exc.status not in {408, 429, 500, 502, 503, 504}):
                     raise
@@ -675,22 +697,26 @@ def grade_health_text(task: str, text: str | None) -> float:
 
 
 def validate_plan(
-    value: Mapping[str, object],
+    value: Mapping[str, object], messages_per_task: int = 1
 ) -> tuple[list[dict[str, list[str]]], list[dict[str, str]], list[dict[str, str]]]:
     """The plan's tasks (each the messages of one fresh session and the checks they show), limits and untested items."""
     tasks = value.get("tasks")
-    if not isinstance(tasks, list) or len(tasks) > 5:
-        raise ValueError("request plan needs a list of at most 5 tasks")
+    if not isinstance(tasks, list):
+        raise ValueError("request plan needs a list of tasks")
+    if len(tasks) > 5:
+        raise ValueError(f"request plan has {len(tasks)} tasks; at most 5 are allowed")
     parsed_tasks = []
     for task in tasks:
         messages = task.get("messages") if isinstance(task, Mapping) else None
         checks = task.get("checks") if isinstance(task, Mapping) else None
         if (
             not isinstance(messages, list)
-            or not 1 <= len(messages) <= 3
+            or not 1 <= len(messages) <= messages_per_task
             or any(not isinstance(message, str) or not message.strip() or len(message) > 4000 for message in messages)
         ):
-            raise ValueError("each request task needs 1 to 3 nonempty messages of at most 4000 characters")
+            raise ValueError(
+                f"each request task needs 1 to {messages_per_task} nonempty messages of at most 4000 characters"
+            )
         if (
             not isinstance(checks, list)
             or not 1 <= len(checks) <= 20
@@ -718,36 +744,56 @@ def validate_plan(
     return parsed_tasks, reported[0], reported[1]
 
 
-#: Characters kept of one long text in a trajectory the reviewer reads, and of the whole trajectory.
-TEXT_KEPT_CHARACTERS = 4000
+#: Characters of trajectory text a reviewer reads at most.
 TRAJECTORY_KEPT_CHARACTERS = 400_000
+#: Base64-style data without spaces that mixes digits and both letter cases, such as an encoded page image.
+BINARY_TEXT = re.compile(r"(?=[^\s]*\d)(?=[^\s]*[a-z])(?=[^\s]*[A-Z])[A-Za-z0-9+/=]{2000,}")
 
 
-def shortened_text(text: str) -> str:
-    """Keep the start and end of a long text, such as a downloaded paper printed by a tool."""
-    if len(text) <= TEXT_KEPT_CHARACTERS:
-        return text
-    head = text[: TEXT_KEPT_CHARACTERS * 3 // 4]
-    tail = text[-(TEXT_KEPT_CHARACTERS // 4) :]
-    return f"{head}\n[... {len(text) - len(head) - len(tail)} characters omitted ...]\n{tail}"
-
-
-def shortened_value(value: object) -> object:
+def text_leaves(value: object) -> list[str]:
     if isinstance(value, str):
-        return shortened_text(value)
+        return [value]
     if isinstance(value, Mapping):
-        return {key: shortened_value(item) for key, item in value.items()}
+        return [text for item in value.values() for text in text_leaves(item)]
     if isinstance(value, (list, tuple)):
-        return [shortened_value(item) for item in value]
+        return [text for item in value for text in text_leaves(item)]
+    return []
+
+
+def shortened_value(value: object, cap: int | None) -> object:
+    """Binary data such as a page image becomes a note a reviewer can read; with a ``cap``, a longer text keeps
+    its start and end."""
+    if isinstance(value, str):
+        if BINARY_TEXT.fullmatch(value):
+            return f"[binary data such as an image, {len(value)} characters, not shown]"
+        if cap is None or len(value) <= cap:
+            return value
+        head, tail = value[: cap * 3 // 4], value[-(cap // 4) :]
+        return f"{head}\n[... {len(value) - len(head) - len(tail)} characters omitted ...]\n{tail}"
+    if isinstance(value, Mapping):
+        return {key: shortened_value(item, cap) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [shortened_value(item, cap) for item in value]
     return value
 
 
 def shortened_trajectory(trajectory: Sequence[Mapping[str, object]]) -> list[object]:
-    """The trajectory with long texts cut, then its middle events dropped while it is longer than the reviewer
-    should read; the first and last events, which hold the task and the answer, stay."""
-    events = [shortened_value(event) for event in trajectory]
+    """The trajectory a reviewer reads. Binary data is always replaced by a note. Only when the rest is longer than
+    a reviewer should read are texts cut, the longest first, to the largest length that fits; short texts such as
+    the agent's own answer stay whole. Middle events are dropped only when cutting is not enough."""
+    events = [shortened_value(event, None) for event in trajectory]
+    lengths = sorted((len(text) for event in events for text in text_leaves(event)), reverse=True)
+    if sum(lengths) > TRAJECTORY_KEPT_CHARACTERS:
+        low, high = 1000, lengths[0]
+        while low < high:
+            middle = (low + high + 1) // 2
+            if sum(min(length, middle) for length in lengths) <= TRAJECTORY_KEPT_CHARACTERS:
+                low = middle
+            else:
+                high = middle - 1
+        events = [shortened_value(event, low) for event in events]
     sizes = [len(json.dumps(event)) for event in events]
-    if sum(sizes) <= TRAJECTORY_KEPT_CHARACTERS:
+    if sum(sizes) <= TRAJECTORY_KEPT_CHARACTERS * 1.2:
         return events
     head: list[object] = []
     tail: list[object] = []
