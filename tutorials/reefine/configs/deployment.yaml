@@ -33,8 +33,8 @@ recipe:
         # Episodes start with a minimal environment. Forward proxies explicitly when the host needs them.
         env_from: [HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, NO_PROXY, http_proxy, https_proxy, all_proxy, no_proxy]
         protected_tasks:
-          - 'Use your shell tool to run `printf protected-ok` and report its exact output.'
-          - 'Use your write tool to create note.txt containing `protected-note`, then use your read tool to read it and report the content.'
+          - 'Run the shell command `printf protected-ok` and report its exact output.'
+          - 'Create note.txt containing `protected-note`, then read the file back and report its content.'
       # Every step's proposer calls, parsed proposal and evaluation episodes, so a row can be read back.
       step_record_dir: tutorials/reefine/work/deployment/steps
       # The proposal inbox of POST /reef/harness/proposals; the default is .reef/proposals under the service's directory.

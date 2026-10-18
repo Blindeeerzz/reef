@@ -225,6 +225,10 @@ AGENT_PROMPT = (
 
 EVALUATION_PLAN_PROMPT = """You define a behavioral test for a harness change.
 Write the prompt and check descriptions in English.
+The candidate harness already contains the change. The prompt is an ordinary task that a person gives the agent
+while using that harness, chosen so the requested behavior must show; it must not ask the agent to make, edit or
+describe the harness change. The episode starts in an empty workspace unless the operator supplies files: when the
+task needs inputs, the prompt sets them up, for example by asking the agent to create a small file first.
 Use only the original request, the operator-supplied workspace and the harness description. Do not judge a candidate.
 Return exactly {"prompt": "one concrete application task", "checks": ["observable requirement", ...],
 "limits": [{"requirement": "requested behavior", "reason": "why this harness cannot deliver it"}, ...]}.

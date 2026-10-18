@@ -170,7 +170,7 @@ on other tasks cannot compensate for a failed protected task.
          initialize_git: true
          version: '1'
        protected_tasks:
-         - Use your shell tool to run `printf protected-ok` and report its output.
+         - Run the shell command `printf protected-ok` and report its output.
          - Write note.txt containing protected-note, then read it and report the content.
      models:
        reviewer:
