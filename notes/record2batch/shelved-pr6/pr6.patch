@@ -1,0 +1,1525 @@
+From 9a214097ab727a4c2377b26ca47190bb2dba3060 Mon Sep 17 00:00:00 2001
+From: Simon Yu <simon011130@gmail.com>
+Date: Sun, 18 Oct 2026 03:56:15 +0000
+Subject: [PATCH] feat(record2batch): save task uses, record batch outcomes in
+ commits, and recover rollouts
+
+Each rollout of a saved task is a task use in the task store. A use runs,
+is rolled out, enters a training batch with the reports that made its
+samples, and ends trained, stale_rejected, untrainable or cancelled. A
+task returns to the task pool after an untrained use, until
+max_task_attempts untrained uses retire it.
+
+The trainer writes the batch's task uses and training reports to the
+commit metrics and the stale consumption receipt under record2batch.
+On restart, recovery reads them before records replay: a verified commit
+that consumed the reports marks its uses trained, a stale receipt marks
+them stale_rejected, a playing use is cancelled, and a batch whose plays
+ended re-forms from the replayed reports without another rollout.
+Consumed training reports with no recorded outcome stop the restart.
+---
+ docs/developer-guide/processors.rst       |  48 ++++-
+ docs/reference/configuration.rst          |   1 +
+ reef/recipe/generated_tasks/processor.py  | 205 ++++++++++++++----
+ reef/record2task/store.py                 | 165 +++++++++++++--
+ reef/scenario/factory.py                  |  25 +++
+ reef/scenario/scenario.py                 |   8 +
+ reef/task2batch/__init__.py               |  14 +-
+ reef/task2batch/base.py                   |  68 ++++++
+ reef/train/pipeline.py                    |  57 ++++-
+ reef/train/trainer.py                     |  22 +-
+ tests/record2record/test_rollout.py       | 113 +++++++++-
+ tests/record2task/test_task_store.py      |  40 ++++
+ tests/reef_recipe/test_generated_tasks.py | 241 +++++++++++++++++++++-
+ 13 files changed, 936 insertions(+), 71 deletions(-)
+
+diff --git a/docs/developer-guide/processors.rst b/docs/developer-guide/processors.rst
+index 813679d0..5296c13a 100644
+--- a/docs/developer-guide/processors.rst
++++ b/docs/developer-guide/processors.rst
+@@ -418,12 +418,48 @@ batches instead of play sets. The pipeline then runs a second loop:
+ 
+ A report whose batch is not running, or whose arm is not the training arm,
+ never trains. A report that arrives after its batch was built is released
+-when the batch ends. When a submit fails, its tasks stay in the task pool. A
+-task whose play or result save fails goes back to the task pool when the
+-rollout ends; the other tasks of the batch play on. The generic parts are ``RolloutRecord2Record``
+-(``reef.record2record.rollout``) and ``RolloutTask2Batch``
+-(``reef.task2batch``); any record-to-task stage that returns ``TaskItem``
+-values can feed the loop.
++when the batch ends. When a submit fails, its tasks stay in the task pool. If
++a task's play or result save fails, the other tasks of the batch play on. The
++generic parts are ``RolloutRecord2Record`` (``reef.record2record.rollout``)
++and ``RolloutTask2Batch`` (``reef.task2batch``); any record-to-task stage that
++returns ``TaskItem`` values can feed the loop.
++
++Each rollout of a task is a task use, saved in the task store under
++``uses/``. A use runs, is rolled out with its reported episode count, enters
++a training batch with the reports that made its samples, and ends in one of
++these states:
++
++- ``trained``: the batch trained. The task does not roll out again.
++- ``stale_rejected``: the backend dropped the batch as stale.
++- ``untrainable``: the use's group was discarded or dropped before the batch
++  formed.
++- ``cancelled``: a restart interrupted the use while it played.
++
++After an untrained end, the task goes back to the task pool. After
++``max_task_attempts`` untrained uses it retires. The generator's feedback
++comes from a task's first play only. A task that retires before any play is
++reported to it as an infrastructure failure.
++
++A training commit records the batch's task uses and their training reports
++in ``metrics.record2batch``; a stale consumption receipt records them in its
++metadata. A use ends ``trained`` or ``stale_rejected`` only after that commit
++or receipt is durable. On restart, before records replay, recovery settles
++each unfinished use from this record. A commit's consumed IDs alone never
++prove that a use trained, because they also hold released and skipped
++records.
++
++- A use that a commit names, and whose reports that commit consumed, is
++  ``trained``. This includes a commit held for review: its reports never
++  replay, so the batch cannot form again. A use that a stale receipt names is ``stale_rejected``. A
++  use of such a batch that the record does not name is ``untrainable``.
++- A use that was still playing is ``cancelled``, and its task returns to the
++  task pool.
++- A batch whose plays ended, with no commit or receipt, re-forms from the
++  replayed reports without another rollout. This includes a batch whose
++  commit failed or was interrupted.
++- If a commit consumed a use's training reports but recorded no outcome for
++  its batch, recovery stops with an error rather than guess. Check the commit
++  log before restarting.
+ 
+ When every train task of a generation has a result, the next job sends
+ the generation's results to ``record_results``. A generation can therefore
+diff --git a/docs/reference/configuration.rst b/docs/reference/configuration.rst
+index f4752644..072d9ad0 100644
+--- a/docs/reference/configuration.rst
++++ b/docs/reference/configuration.rst
+@@ -1180,6 +1180,7 @@ record stage groups them:
+    pipeline.record2task.config.state_dir | where each scenario keeps its task store. Required with rounds.
+    pipeline.record2task.config.eval_fraction | 0.0 | fraction of new source groups held out before play; between 0 and 1
+    pipeline.record2task.config.split_seed | 0 | fixed seed for the task store's train/eval split
++   pipeline.record2task.config.max_task_attempts | 2 | rollouts of a task that may end untrained before the task retires
+    pipeline.record2task.config.served_model | the model the task player asks for; the deployment's by default
+    pipeline.record2task.config.scaffold_tolerance | 8 | masked tokens the sample assembly may realign before a response, for a thinking template's scaffold
+    pipeline.record2task.config.generation_attempts | 3 | attempts of a generation whose generator or checks fail to run; after them the round is deferred
+diff --git a/reef/recipe/generated_tasks/processor.py b/reef/recipe/generated_tasks/processor.py
+index 823b8440..db63836a 100644
+--- a/reef/recipe/generated_tasks/processor.py
++++ b/reef/recipe/generated_tasks/processor.py
+@@ -64,8 +64,17 @@ from reef.record2task import Record2Task, ReportTasks, TaskResult
+ from reef.record2task.assembly import SampleAssembly, SampleAssemblySettings
+ from reef.record2task.generator.client import DuplicateTask, Generator, GeneratorError, HttpGenerator, TaskNameConflict
+ from reef.record2task.generator.runner import Episode, GeneratorEpisodeRunner
+-from reef.record2task.store import FileTaskStore, PlayedResult, StoredTask, TaskConflict
+-from reef.task2batch import RolloutResult, RolloutTask2Batch
++from reef.record2task.store import (
++    ACTIVE_USE_STATES,
++    FileTaskStore,
++    PlayedResult,
++    StoredTask,
++    TaskConflict,
++    TaskStoreError,
++    TaskUse,
++    UseState,
++)
++from reef.task2batch import RecoveredRollout, RolloutBatchOutcome, RolloutResult, RolloutTask2Batch
+ from reef.train.types import TaskItem, TrainDataItem, TrainingBatch, TrajectoryItem
+ 
+ logger = logging.getLogger(__name__)
+@@ -322,6 +331,9 @@ class RoundSettings(PluginSettings):
+         DEFAULT_EVAL_FRACTION, help="The fraction of new source components held out before rollout."
+     )
+     split_seed: int = config_option(DEFAULT_SPLIT_SEED, help="The fixed seed for the task store's train/eval split.")
++    max_task_attempts: int = config_option(
++        2, help="How many rollouts of a task may end untrained before the task is retired."
++    )
+     scaffold_tolerance: int = config_option(
+         DEFAULT_SCAFFOLD_TOLERANCE, help="Masked tokens the sample assembly may realign before a response."
+     )
+@@ -462,7 +474,10 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
+             logger.info("scenario %r generates tasks with %s", self.scenario, type(self.task_generator).__name__)
+         self.task_store = (
+             FileTaskStore(
+-                root=self.state_dir / STORE_DIRECTORY, eval_fraction=settings.eval_fraction, seed=settings.split_seed
++                root=self.state_dir / STORE_DIRECTORY,
++                eval_fraction=settings.eval_fraction,
++                seed=settings.split_seed,
++                max_task_attempts=settings.max_task_attempts,
+             )
+             if self.state_dir is not None and self.rounds > 0
+             else None
+@@ -741,17 +756,19 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
+             result = TaskPlayResult(saved.generated.task, error=str(exc) or type(exc).__name__)
+             result = replace(result, infrastructure_failure=True)
+             reported = 0
+-        self.task_store.record_result(
+-            generation=saved.generation,
+-            result=PlayedResult(
+-                task_name=name,
+-                training_rewards=result.training_rewards,
+-                measurement_rewards=dict(result.measurement_rewards),
+-                error=result.error,
+-                infrastructure_failure=result.infrastructure_failure,
+-                reported_plays=reported,
+-            ),
+-        )
++        # The generator learns from a task's first play; a later rollout of the task only trains.
++        if not self.task_store.has_result(task_name=name):
++            self.task_store.record_result(
++                generation=saved.generation,
++                result=PlayedResult(
++                    task_name=name,
++                    training_rewards=result.training_rewards,
++                    measurement_rewards=dict(result.measurement_rewards),
++                    error=result.error,
++                    infrastructure_failure=result.infrastructure_failure,
++                    reported_plays=reported,
++                ),
++            )
+         return result, reported
+ 
+     async def played(
+@@ -918,8 +935,6 @@ class GeneratedTaskBatches(RolloutTask2Batch, BackgroundJobRunner):
+         self.episode_capacity = 0
+         self.worker = worker
+         self.running_batch: str | None = None
+-        #: The task names of each submitted rollout batch, until its job ends.
+-        self.batch_tasks: dict[str, frozenset[str]] = {}
+         #: The capacity of the rollout batch that plays, for status.
+         self.capacity: EpisodeCapacity | None = None
+         if not self.is_rolling_out:
+@@ -941,16 +956,14 @@ class GeneratedTaskBatches(RolloutTask2Batch, BackgroundJobRunner):
+         return TrainingBatch(f"{self.scenario}:generated-tasks:{batch_number}", tasks)
+ 
+     def submit(self, batch: str, tasks: tuple[TaskItem, ...]) -> tuple[str, ...]:
+-        task_uses = tuple(f"{batch}/{task.task_path.name}" for task in tasks)
+-        job = RolloutJob(
+-            receipt=batch,
+-            task_uses=tuple((task_use, task.task_path.name) for task_use, task in zip(task_uses, tasks, strict=True)),
+-        )
++        store = self.require_store()
++        uses = store.begin_uses(batch=batch, task_names=tuple(task.task_path.name for task in tasks))
++        job = RolloutJob(receipt=batch, task_uses=tuple((use.use_id, use.task_name) for use in uses))
+         if self.worker is None or not self.worker.submit(job):
++            store.abandon_uses(uses)
+             raise RuntimeError(f"the rollout worker is closed or broken; rollout {batch} cannot run")
+         self.running_batch = batch
+-        self.batch_tasks[batch] = frozenset(task.task_path.name for task in tasks)
+-        return task_uses
++        return tuple(use.use_id for use in uses)
+ 
+     def take_finished(self) -> tuple[RolloutResult, ...]:
+         if self.worker is None:
+@@ -958,23 +971,145 @@ class GeneratedTaskBatches(RolloutTask2Batch, BackgroundJobRunner):
+         finished: list[RolloutResult] = []
+         for outcome in self.worker.poll():
+             self.running_batch = None
++            reported_plays: Mapping[str, int] = {}
+             if isinstance(outcome, RolloutOutcome):
+-                finished.append(RolloutResult(outcome.receipt, outcome.reported_plays))
++                reported_plays = outcome.reported_plays
+             else:
+                 logger.error("generated-task rollout %s did not finish on scenario %r", outcome.receipt, self.scenario)
+-                finished.append(RolloutResult(outcome.receipt, {}))
+-            self.put_back_unplayed(self.batch_tasks.pop(outcome.receipt, frozenset()))
+-            if self.record2task is not None:
+-                self.record2task.deliver_later()
++            store = self.require_store()
++            for use in store.uses(batch=outcome.receipt):
++                if use.state == "running":
++                    store.update_use(
++                        replace(use, state="rolled_out", reported_plays=reported_plays.get(use.use_id, 0))
++                    )
++            finished.append(RolloutResult(outcome.receipt, reported_plays))
++            self.require_record2task().deliver_later()
+         return tuple(finished)
+ 
+-    def put_back_unplayed(self, task_names: frozenset[str]) -> None:
+-        """Return the tasks of an ended rollout that have no saved result to the task pool."""
+-        if self.record2record is None or self.record2task is None or self.record2task.task_store is None:
+-            return
+-        for saved in self.record2task.task_store.available_tasks():
+-            if saved.generated.task.name in task_names:
+-                self.record2record.add_tasks((task_item(saved),), group_key=saved.generation)
++    def rollout_training(self, batch: str, training_reports: Mapping[str, tuple[str, ...]]) -> None:
++        store = self.require_store()
++        for use in store.uses(batch=batch):
++            if use.use_id in training_reports:
++                store.update_use(replace(use, state="training", training_report_ids=training_reports[use.use_id]))
++
++    def rollout_ended(self, outcome: RolloutBatchOutcome) -> None:
++        store = self.require_store()
++        for use in store.uses(batch=outcome.batch):
++            if use.state not in ACTIVE_USE_STATES:
++                continue
++            if use.use_id not in outcome.training_reports:
++                store.update_use(replace(use, state="untrainable"))
++            elif outcome.trained:
++                store.update_use(replace(use, state="trained"))
++            else:
++                store.update_use(replace(use, state="stale_rejected"))
++        self.return_tasks(store.uses(batch=outcome.batch))
++
++    def recover(
++        self, outcomes: tuple[RolloutBatchOutcome, ...], consumed_ids: frozenset[str]
++    ) -> RecoveredRollout | None:
++        """Settle the uses that a restart interrupted, from the outcomes that commits and stale receipts recorded.
++
++        A use that a commit names trained, and one that a stale receipt names was dropped. A use of such a batch
++        that the outcome does not name could not train. A use that was still playing is cancelled. A batch whose
++        plays ended, and whose reports no commit consumed, re-forms from the replayed reports.
++        """
++        if not self.is_rolling_out or self.record2task is None or self.record2task.task_store is None:
++            return None
++        store = self.record2task.task_store
++        # A commit is the stronger record: a batch it names trained, whatever else names the batch.
++        ended: dict[str, RolloutBatchOutcome] = {}
++        for recorded in outcomes:
++            if recorded.batch not in ended or recorded.trained:
++                ended[recorded.batch] = recorded
++        active = tuple(use for use in store.uses() if use.state in ACTIVE_USE_STATES)
++        for use in active:
++            if (
++                use.batch not in ended
++                and use.state != "running"
++                and consumed_ids.intersection(use.training_report_ids)
++            ):
++                raise TaskStoreError(
++                    f"task use {use.use_id} of rollout {use.batch} trained on reports that a commit consumed, "
++                    "but no commit or stale receipt records the batch; check the commit log before restarting"
++                )
++        settled: list[TaskUse] = []
++        rolled_out: list[TaskUse] = []
++        for use in active:
++            outcome = ended.get(use.batch)
++            if outcome is not None:
++                report_ids = outcome.training_reports.get(use.use_id)
++                if report_ids is None:
++                    state: UseState = "untrainable"
++                elif outcome.trained:
++                    state = "trained"
++                else:
++                    state = "stale_rejected"
++                store.update_use(replace(use, state=state))
++                settled.append(use)
++            elif use.state == "running":
++                store.update_use(replace(use, state="cancelled"))
++                settled.append(use)
++            else:
++                rolled_out.append(use)
++        batches = {use.batch for use in rolled_out}
++        # One rollout runs at a time, so at most one batch can re-form.
++        resumed = next(iter(batches)) if len(batches) == 1 else None
++        if len(batches) > 1:
++            logger.warning(
++                "scenario %r cancels rollouts %s: only one rollout re-forms", self.scenario, sorted(batches)
++            )
++        for use in rolled_out:
++            if use.batch != resumed:
++                store.update_use(replace(use, state="cancelled"))
++                settled.append(use)
++        self.return_tasks(tuple(settled))
++        if resumed is None:
++            return None
++        resumed_uses = tuple(use for use in store.uses(batch=resumed) if use.state in ACTIVE_USE_STATES)
++        return RecoveredRollout(
++            batch=resumed,
++            task_uses=tuple(use.use_id for use in resumed_uses),
++            reported_plays={use.use_id: use.reported_plays or 0 for use in resumed_uses},
++        )
++
++    def return_tasks(self, uses: tuple[TaskUse, ...]) -> None:
++        """Put the tasks of ended uses that may roll out again back in the task pool; a retired task gets a result.
++
++        The generator's feedback waits for a result of every train task, so a task retired before any play
++        records an infrastructure failure.
++        """
++        store = self.require_store()
++        available = {saved.generated.task.name: saved for saved in store.available_tasks()}
++        for use in uses:
++            saved = available.get(use.task_name)
++            if saved is not None:
++                self.require_record2record().add_tasks((task_item(saved),), group_key=saved.generation)
++        # Every retired task is checked, so a stop inside an earlier return leaves no task without its result.
++        for saved in store.tasks(split="train"):
++            name = saved.generated.task.name
++            if store.is_retired(task_name=name) and not store.has_result(task_name=name):
++                store.record_result(
++                    generation=saved.generation,
++                    result=PlayedResult(task_name=name, error="retired before a play", infrastructure_failure=True),
++                )
++        self.require_record2task().deliver_later()
++
++    def require_store(self) -> FileTaskStore:
++        store = self.require_record2task().task_store
++        if store is None:
++            raise RuntimeError("a rollout needs the record-to-task stage's task store")
++        return store
++
++    def require_record2task(self) -> GeneratedTaskTasks:
++        if self.record2task is None:
++            raise RuntimeError("a rollout needs the generated-task record-to-task stage")
++        return self.record2task
++
++    def require_record2record(self) -> GeneratedTaskRecord2Record:
++        if self.record2record is None:
++            raise RuntimeError("a rollout needs the generated-task record stage")
++        return self.record2record
+ 
+     def running(self) -> bool:
+         return self.running_batch is not None
+diff --git a/reef/record2task/store.py b/reef/record2task/store.py
+index 3ca00517..4ad94d9d 100644
+--- a/reef/record2task/store.py
++++ b/reef/record2task/store.py
+@@ -36,9 +36,15 @@ LOCK_FILE = ".lock"
+ STAGING_DIRECTORY = ".staging"
+ TASK_DIRECTORY = "tasks"
+ GENERATION_DIRECTORY = "generations"
++USE_DIRECTORY = "uses"
+ MANIFEST_FILE = "split-manifest.json"
+ GENERATION_PREFIX = "gen-"
+ SplitName = Literal["train", "eval"]
++UseState = Literal["running", "rolled_out", "training", "trained", "stale_rejected", "untrainable", "cancelled"]
++#: The states of a use whose task may still train in it.
++ACTIVE_USE_STATES = frozenset({"running", "rolled_out", "training"})
++#: The states of a use that ended without training; each one counts as an attempt of its task.
++UNTRAINED_USE_STATES = frozenset({"stale_rejected", "untrainable", "cancelled"})
+ 
+ 
+ class TaskStoreError(ReefError):
+@@ -155,6 +161,23 @@ class GenerationState:
+         return tuple(task_results)
+ 
+ 
++@dataclass(frozen=True)
++class TaskUse:
++    """One rollout of a saved train task in one batch, and what became of it.
++
++    A use runs, is rolled out with the training episodes that reached Reef, enters a training batch with the
++    reports that made its samples, and ends ``trained``, ``stale_rejected``, ``untrainable`` or ``cancelled``.
++    """
++
++    use_id: str
++    task_name: str
++    generation: int
++    batch: str
++    state: UseState = "running"
++    reported_plays: int | None = None
++    training_report_ids: tuple[str, ...] = ()
++
++
+ @dataclass(frozen=True)
+ class StoredTask:
+     """A published task and its fixed split, independent of execution status."""
+@@ -182,6 +205,7 @@ class StoredTask:
+ 
+ SETTINGS_DOCUMENT = TypeAdapter(StoreSettings)
+ GENERATION_DOCUMENT = TypeAdapter(GenerationState)
++USE_DOCUMENT = TypeAdapter(TaskUse)
+ SPLIT_DOCUMENT = TypeAdapter(dict[str, object])
+ 
+ 
+@@ -218,7 +242,11 @@ class TaskStore(ABC):
+ 
+     @abstractmethod
+     def available_tasks(self) -> tuple[StoredTask, ...]:
+-        """List the train tasks of complete generations that have no play result yet."""
++        """List the train tasks of complete generations that may roll out.
++
++        A task without uses is available until it has a play result. A task with uses is available while none
++        of them is active or trained and fewer than ``max_task_attempts`` of them ended untrained.
++        """
+ 
+     @abstractmethod
+     def find_generation(self, *, source_record_ids: tuple[str, ...]) -> GenerationState | None:
+@@ -240,6 +268,30 @@ class TaskStore(ABC):
+     def record_result(self, *, generation: int, result: PlayedResult) -> None:
+         """Save the play result of one train task."""
+ 
++    @abstractmethod
++    def has_result(self, *, task_name: str) -> bool:
++        """Whether a train task has its play result."""
++
++    @abstractmethod
++    def begin_uses(self, *, batch: str, task_names: tuple[str, ...]) -> tuple[TaskUse, ...]:
++        """Save one running use of each named train task in the rollout batch, in order."""
++
++    @abstractmethod
++    def update_use(self, use: TaskUse) -> None:
++        """Save a use's new state; an ended use does not change again."""
++
++    @abstractmethod
++    def abandon_uses(self, uses: tuple[TaskUse, ...]) -> None:
++        """Remove uses that never started, as when the rollout could not be submitted; no attempt is counted."""
++
++    @abstractmethod
++    def uses(self, *, batch: str | None = None) -> tuple[TaskUse, ...]:
++        """List the uses, optionally of one rollout batch, in the order they began."""
++
++    @abstractmethod
++    def is_retired(self, *, task_name: str) -> bool:
++        """Whether a train task ended untrained in ``max_task_attempts`` uses, so it does not roll out again."""
++
+     @abstractmethod
+     def deliverable_generations(self) -> tuple[GenerationState, ...]:
+         """Return the generations whose feedback is complete and not yet delivered, oldest first."""
+@@ -265,14 +317,18 @@ class FileTaskStore(TaskStore):
+     candidate without another authoring call.
+     """
+ 
+-    def __init__(self, *, root: Path, eval_fraction: float, seed: int) -> None:
++    def __init__(self, *, root: Path, eval_fraction: float, seed: int, max_task_attempts: int = 2) -> None:
+         TaskSplit(train=(), eval=(), eval_fraction=eval_fraction, seed=seed)
++        if max_task_attempts < 1:
++            raise ValueError("max_task_attempts must be positive")
++        self.max_task_attempts = max_task_attempts
+         self.root = root
+         self.task_root = root / TASK_DIRECTORY
+         self.manifest_path = root / MANIFEST_FILE
+         self.settings = StoreSettings(version=STORE_VERSION, eval_fraction=eval_fraction, seed=seed)
+         self.lock = threading.RLock()
+         self.generations: dict[int, GenerationState] = {}
++        self.task_uses: dict[str, TaskUse] = {}
+         self.root.mkdir(parents=True, exist_ok=True)
+         self.writer_lock = (root / LOCK_FILE).open("a+b")
+         try:
+@@ -314,6 +370,9 @@ class FileTaskStore(TaskStore):
+         for path in sorted((self.root / GENERATION_DIRECTORY).glob(f"{GENERATION_PREFIX}*.json")):
+             generation = GENERATION_DOCUMENT.validate_json(path.read_bytes())
+             self.generations[generation.generation] = generation
++        for path in sorted((self.root / USE_DIRECTORY).glob("*.json")):
++            use = USE_DOCUMENT.validate_json(path.read_bytes())
++            self.task_uses[use.use_id] = use
+         for saved in self.tasks():
+             if read_harbor_task(path=saved.path).digest != saved.generated.task.digest:
+                 raise TaskStoreError(f"published task {saved.path} has a different digest from its generation")
+@@ -443,15 +502,80 @@ class FileTaskStore(TaskStore):
+             return tuple(saved for saved in saved_by_name.values() if split is None or saved.split == split)
+ 
+     def available_tasks(self) -> tuple[StoredTask, ...]:
+-        """Return the unplayed train tasks of complete generations, oldest generation first."""
++        """Return the train tasks of complete generations that may roll out, oldest generation first."""
+         with self.lock:
+-            played = {result.task_name for state in self.generations.values() for result in state.results}
+             return tuple(
+                 saved
+                 for saved in sorted(self.tasks(split="train"), key=lambda saved: saved.generation)
+-                if self.generations[saved.generation].is_complete and saved.generated.task.name not in played
++                if self.generations[saved.generation].is_complete and self.is_available(saved.generated.task.name)
++            )
++
++    def is_available(self, task_name: str) -> bool:
++        """Apply the availability rule of ``available_tasks`` to one train task."""
++        states = [use.state for use in self.task_uses.values() if use.task_name == task_name]
++        if not states:
++            return not self.has_result(task_name=task_name)
++        if any(state in ACTIVE_USE_STATES or state == "trained" for state in states):
++            return False
++        return sum(state in UNTRAINED_USE_STATES for state in states) < self.max_task_attempts
++
++    def is_retired(self, *, task_name: str) -> bool:
++        with self.lock:
++            untrained = [
++                use
++                for use in self.task_uses.values()
++                if use.task_name == task_name and use.state in UNTRAINED_USE_STATES
++            ]
++            return len(untrained) >= self.max_task_attempts
++
++    def has_result(self, *, task_name: str) -> bool:
++        with self.lock:
++            return any(
++                result.task_name == task_name for state in self.generations.values() for result in state.results
+             )
+ 
++    def begin_uses(self, *, batch: str, task_names: tuple[str, ...]) -> tuple[TaskUse, ...]:
++        with self.lock:
++            generation_of = {saved.generated.task.name: saved.generation for saved in self.tasks(split="train")}
++            for name in task_names:
++                if name not in generation_of:
++                    raise TaskStoreError(f"task {name!r} is not a saved train task")
++                if not self.is_available(name):
++                    raise TaskStoreError(f"task {name!r} is not available for another use")
++            begun: list[TaskUse] = []
++            for name in task_names:
++                count = sum(use.task_name == name for use in self.task_uses.values())
++                use = TaskUse(
++                    use_id=f"use-{name}-{count:03d}", task_name=name, generation=generation_of[name], batch=batch
++                )
++                self.save_use(use)
++                begun.append(use)
++            return tuple(begun)
++
++    def update_use(self, use: TaskUse) -> None:
++        with self.lock:
++            saved = self.task_uses.get(use.use_id)
++            if saved is None:
++                raise TaskStoreError(f"unknown task use {use.use_id!r}")
++            if saved.state not in ACTIVE_USE_STATES:
++                raise TaskStoreError(f"task use {use.use_id!r} already ended {saved.state}")
++            self.save_use(use)
++
++    def abandon_uses(self, uses: tuple[TaskUse, ...]) -> None:
++        with self.lock:
++            for use in uses:
++                if self.task_uses.get(use.use_id) != use or use.state != "running":
++                    raise TaskStoreError(f"task use {use.use_id!r} has started and cannot be abandoned")
++            self.require_writer()
++            for use in uses:
++                (self.root / USE_DIRECTORY / f"{use.use_id}.json").unlink()
++                self.task_uses.pop(use.use_id)
++            self.sync_directory(path=self.root / USE_DIRECTORY)
++
++    def uses(self, *, batch: str | None = None) -> tuple[TaskUse, ...]:
++        with self.lock:
++            return tuple(use for use in self.task_uses.values() if batch is None or use.batch == batch)
++
+     def find_generation(self, *, source_record_ids: tuple[str, ...]) -> GenerationState | None:
+         """Return the generation of exactly these source records; description-only generations match nothing."""
+         with self.lock:
+@@ -504,23 +628,29 @@ class FileTaskStore(TaskStore):
+             self.save_generation(state=replace(self.generations[generation], is_delivered=True))
+ 
+     def counts(self) -> dict[str, int]:
+-        """Count train tasks by play state, eval tasks, and rejected and unvalidated candidates."""
++        """Count train tasks by use state, eval tasks, and rejected and unvalidated candidates."""
+         with self.lock:
+-            played = {result.task_name for state in self.generations.values() for result in state.results}
+-            counts = Counter(
+-                (
+-                    "held_out/eval"
+-                    if saved.split == "eval"
+-                    else "played/train" if saved.generated.task.name in played else "available/train"
+-                )
+-                for saved in self.tasks()
+-            )
++            counts = Counter(self.task_state(saved) for saved in self.tasks())
+             counts["rejected"] = sum(
+                 bool(outcome.error) for state in self.generations.values() for outcome in state.outcomes
+             )
+             counts["candidate"] = sum(len(state.pending_indices) for state in self.generations.values())
+             return dict(counts)
+ 
++    def task_state(self, saved: StoredTask) -> str:
++        """The count key of one published task."""
++        name = saved.generated.task.name
++        states = {use.state for use in self.task_uses.values() if use.task_name == name}
++        if saved.split == "eval":
++            return "held_out/eval"
++        if "trained" in states:
++            return "trained/train"
++        if states & ACTIVE_USE_STATES:
++            return "in_use/train"
++        if self.is_available(name):
++            return "available/train"
++        return "retired/train" if states else "played/train"
++
+     def split(self) -> TaskSplit:
+         """Build the cumulative split from authoritative publication outcomes."""
+         return TaskSplit(
+@@ -549,6 +679,11 @@ class FileTaskStore(TaskStore):
+         self.write_atomic(path=path, content=GENERATION_DOCUMENT.dump_json(state))
+         self.generations[state.generation] = state
+ 
++    def save_use(self, use: TaskUse) -> None:
++        """Replace the use document before exposing its new state."""
++        self.write_atomic(path=self.root / USE_DIRECTORY / f"{use.use_id}.json", content=USE_DOCUMENT.dump_json(use))
++        self.task_uses[use.use_id] = use
++
+     def write_atomic(self, *, path: Path, content: bytes) -> None:
+         """Publish one durable file, leaving the previous checkpoint on failure."""
+         with self.lock:
+diff --git a/reef/scenario/factory.py b/reef/scenario/factory.py
+index fe40cc11..22518e19 100644
+--- a/reef/scenario/factory.py
++++ b/reef/scenario/factory.py
+@@ -46,6 +46,7 @@ from reef.storage.commits import SCENARIO_METADATA_KEY, CommitRecord, parse_scen
+ from reef.storage.scenario import ScenarioStorage, ScenarioStore
+ from reef.surface.base import Surface
+ from reef.surface.files import REPOSITORY_FILES
++from reef.task2batch import ROLLOUT_METADATA_KEY, RolloutBatchOutcome
+ from reef.train.trainer import ComponentTrainer
+ 
+ 
+@@ -65,6 +66,8 @@ class RecoveredTrainerState:
+     algorithm_state: Mapping[str, Any] | None
+     high_water: tuple[int, int] | None
+     consumed_ids: frozenset[str]
++    #: The rollout outcomes that its commits (trained) and its stale receipts recorded, in log order.
++    rollout_outcomes: tuple[RolloutBatchOutcome, ...] = ()
+ 
+ 
+ def recovered_trainer_states(
+@@ -85,12 +88,25 @@ def recovered_trainer_states(
+     """
+     records = committed_records(store, head_record)
+     consumed_by_component: dict[str | None, set[str]] = {}
++    outcomes_by_component: dict[str | None, list[RolloutBatchOutcome]] = {}
+     for record in records:
+         consumed_by_component.setdefault(record.component, set()).update(record.consumed_ids)
++        rollout = (record.metrics or {}).get(ROLLOUT_METADATA_KEY)
++        if isinstance(rollout, Mapping):
++            outcome = RolloutBatchOutcome.from_metadata(rollout, trained=True)
++            # A use trained in this commit only if the commit consumed every report that made its samples. A commit
++            # held for review counts too: its reports never replay, so the batch cannot form again.
++            if all(set(report_ids) <= record.consumed_ids for report_ids in outcome.training_reports.values()):
++                outcomes_by_component.setdefault(record.component, []).append(outcome)
+     for receipt in store.records.consumption_receipts(scenario):
+         named = receipt["metadata"].get("component")
+         owner = named if isinstance(named, str) else None
+         consumed_by_component.setdefault(owner, set()).update(receipt["consumed_ids"])
++        rollout = receipt["metadata"].get(ROLLOUT_METADATA_KEY)
++        if receipt["metadata"].get("outcome") == "stale" and isinstance(rollout, Mapping):
++            outcomes_by_component.setdefault(owner, []).append(
++                RolloutBatchOutcome.from_metadata(rollout, trained=False)
++            )
+     components = surface.names or (RECORDS_COMPONENT,)
+     alone = len(components) == 1
+     states: dict[str, RecoveredTrainerState] = {}
+@@ -107,6 +123,12 @@ def recovered_trainer_states(
+                 if alone
+                 else frozenset(consumed_by_component.get(component, ()))
+             ),
++            rollout_outcomes=tuple(
++                outcome
++                for owner, outcomes in outcomes_by_component.items()
++                if owner == component or (alone and owner is None)
++                for outcome in outcomes
++            ),
+         )
+     return states
+ 
+@@ -419,6 +441,9 @@ class ScenarioFactory:
+             for bound in trainers:
+                 # Scenario() checked that every trainer names a component the surface serves: each has a state.
+                 recovered = recovered_states[bound.component]
++                scenario.recover_rollouts(
++                    recovered.rollout_outcomes, recovered.consumed_ids, component=bound.component
++                )
+                 if recovered.high_water is not None:
+                     scenario.reingest(
+                         up_to_sequence=recovered.high_water[0],
+diff --git a/reef/scenario/scenario.py b/reef/scenario/scenario.py
+index ecb5f7d6..c8286d4b 100644
+--- a/reef/scenario/scenario.py
++++ b/reef/scenario/scenario.py
+@@ -23,6 +23,7 @@ from reef.storage.commits import SCENARIO_METADATA_KEY, CommitRecord
+ from reef.storage.records import RecordStore
+ from reef.storage.scenario import ScenarioStore
+ from reef.surface.base import Surface
++from reef.task2batch import RolloutBatchOutcome
+ from reef.train.backend import StepExecution
+ from reef.train.trainer import ComponentTrainer, Trainer
+ from reef.train.types import TrainingBatch, TrainStepResult
+@@ -246,6 +247,13 @@ class Scenario:
+         with self._committer.lock:
+             self.trainer_for(component).retry_pending(keep_candidate=keep_candidate)
+ 
++    def recover_rollouts(
++        self, outcomes: tuple[RolloutBatchOutcome, ...], consumed_ids: frozenset[str], component: str | None = None
++    ) -> None:
++        """Settle a trainer's task uses of earlier runs from its committed rollout outcomes, before replay."""
++        with self._committer.lock:
++            self.trainer_for(component).recover_rollouts(outcomes, consumed_ids)
++
+     def reingest(self, *, up_to_sequence: int, consumed_ids: frozenset[str], component: str | None = None) -> None:
+         """Rebuild processor memory from retained rows behind a recovered watermark."""
+         with self._committer.lock:
+diff --git a/reef/task2batch/__init__.py b/reef/task2batch/__init__.py
+index 0ec4b69f..4132dd60 100644
+--- a/reef/task2batch/__init__.py
++++ b/reef/task2batch/__init__.py
+@@ -21,13 +21,25 @@ on ``reef.core``, ``reef.observability``, ``reef.pipeline_context``, and the
+ two earlier stage packages, whose classes ``Task2Batch.from_config`` receives.
+ """
+ 
+-from reef.task2batch.base import BatchSettings, NoBatches, RolloutResult, RolloutTask2Batch, Task2Batch
++from reef.task2batch.base import (
++    ROLLOUT_METADATA_KEY,
++    BatchSettings,
++    NoBatches,
++    RecoveredRollout,
++    RolloutBatchOutcome,
++    RolloutResult,
++    RolloutTask2Batch,
++    Task2Batch,
++)
+ from reef.task2batch.distill import DistillBatches
+ 
+ __all__ = [
++    "ROLLOUT_METADATA_KEY",
+     "BatchSettings",
+     "DistillBatches",
+     "NoBatches",
++    "RecoveredRollout",
++    "RolloutBatchOutcome",
+     "RolloutResult",
+     "RolloutTask2Batch",
+     "Task2Batch",
+diff --git a/reef/task2batch/base.py b/reef/task2batch/base.py
+index 4c04dc07..db597564 100644
+--- a/reef/task2batch/base.py
++++ b/reef/task2batch/base.py
+@@ -99,6 +99,56 @@ class Task2Batch(ABC, Plugin):
+         return
+ 
+ 
++#: The key of a rollout batch's training metadata in commit metrics and stale consumption receipts.
++ROLLOUT_METADATA_KEY = "record2batch"
++
++
++@dataclass(frozen=True)
++class RolloutBatchOutcome:
++    """Which task uses of one rollout batch trained, or were dropped stale, and on which reports.
++
++    The trainer writes it with the commit or the stale receipt of the batch. Recovery reads it back: only this
++    record proves what became of a use, because a commit's consumed IDs also hold released and skipped records.
++    """
++
++    batch: str
++    trained: bool
++    #: The reports that made each use's training samples, by task use.
++    training_reports: Mapping[str, tuple[str, ...]]
++
++    def metadata(self) -> dict[str, Any]:
++        """The JSON-safe metadata, without the outcome, which the commit or the receipt already states."""
++        return {
++            "batch_id": self.batch,
++            "uses": [
++                {"task_use_id": task_use, "training_report_ids": list(report_ids)}
++                for task_use, report_ids in self.training_reports.items()
++            ],
++        }
++
++    @classmethod
++    def from_metadata(cls, metadata: Mapping[str, Any], *, trained: bool) -> RolloutBatchOutcome:
++        """Read the metadata of a commit (``trained``) or of a stale receipt."""
++        uses = metadata["uses"]
++        return cls(
++            batch=str(metadata["batch_id"]),
++            trained=trained,
++            training_reports={
++                str(use["task_use_id"]): tuple(str(report_id) for report_id in use["training_report_ids"])
++                for use in uses
++            },
++        )
++
++
++@dataclass(frozen=True)
++class RecoveredRollout:
++    """A rollout batch whose plays ended before a restart and whose batch did not train or drop: it re-forms."""
++
++    batch: str
++    task_uses: tuple[str, ...]
++    reported_plays: Mapping[str, int]
++
++
+ @dataclass(frozen=True)
+ class RolloutResult:
+     """The plays of one rollout batch ended: how many training episodes of each task use reached Reef."""
+@@ -133,6 +183,24 @@ class RolloutTask2Batch(Task2Batch):
+     def running(self) -> bool:
+         """Whether a rollout batch is playing."""
+ 
++    def rollout_training(self, batch: str, training_reports: Mapping[str, tuple[str, ...]]) -> None:
++        """The batch's surviving groups form a training batch: these reports, by task use, make its samples."""
++        return
++
++    def rollout_ended(self, outcome: RolloutBatchOutcome) -> None:
++        """The batch trained or was dropped. A task use missing from ``outcome`` could not train."""
++        return
++
++    def recover(
++        self, outcomes: tuple[RolloutBatchOutcome, ...], consumed_ids: frozenset[str]
++    ) -> RecoveredRollout | None:
++        """Settle the task uses of earlier runs from the committed outcomes, before records replay.
++
++        Return the rollout batch that re-forms from replayed reports, if one does. ``consumed_ids`` holds every
++        record that a commit or a receipt consumed.
++        """
++        return None
++
+ 
+ class NoBatches(Task2Batch):
+     """Make no batch: the no-update default. A pipeline with it never becomes ready."""
+diff --git a/reef/train/pipeline.py b/reef/train/pipeline.py
+index 530a305a..cee5f015 100644
+--- a/reef/train/pipeline.py
++++ b/reef/train/pipeline.py
+@@ -40,7 +40,7 @@ from reef.record2record import PassThroughRecord2Record, Record2Record, RecordSe
+ from reef.record2record.rollout import BatchFilter, RolloutRecord2Record
+ from reef.record2record.staleness import producing_runtime_load_ids
+ from reef.record2task import NoTasks, Record2Task, TaskResult
+-from reef.task2batch import NoBatches, RolloutTask2Batch, Task2Batch
++from reef.task2batch import NoBatches, RolloutBatchOutcome, RolloutTask2Batch, Task2Batch
+ from reef.train.types import TrainDataItem, TrainingBatch
+ 
+ logger = logging.getLogger(__name__)
+@@ -151,6 +151,8 @@ class ActiveRollout:
+ 
+     batch: str
+     task_uses: tuple[str, ...]
++    #: Once the batch is built: the reports that make each use's training samples, by task use.
++    training_reports: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+ 
+ 
+ @dataclass(frozen=True)
+@@ -213,6 +215,8 @@ class TrainingPipeline:
+         #: The stages that roll tasks out, when this pipeline rolls them out.
+         self.rollout_stages: RolloutStages | None = None
+         self.rollout: ActiveRollout | None = None
++        #: Whether the task uses of earlier runs were settled; a pipeline that rolls tasks out does it once.
++        self.rollouts_recovered = False
+         if isinstance(self.task2batch, RolloutTask2Batch) and self.task2batch.rolls_out:
+             if not isinstance(self.record2record, RolloutRecord2Record):
+                 raise TypeError(
+@@ -390,6 +394,9 @@ class TrainingPipeline:
+ 
+     def rollout_ready(self, stages: RolloutStages) -> bool:
+         """Advance the rollout loop; return True when a settled rollout batch can train."""
++        if not self.rollouts_recovered:
++            # No committed outcome reached this pipeline, so none exists.
++            self.recover_rollouts((), frozenset())
+         self.record_finished_plays(stages)
+         if self.pending is not None:
+             return True
+@@ -400,6 +407,9 @@ class TrainingPipeline:
+                 return True
+             # No group of the batch can train.
+             stages.record2record.end_rollout(self.rollout.batch, trained=False)
++            stages.task2batch.rollout_ended(
++                RolloutBatchOutcome(self.rollout.batch, trained=False, training_reports={})
++            )
+             self.rollout = None
+         self.start_rollout(stages)
+         return False
+@@ -441,6 +451,41 @@ class TrainingPipeline:
+         stages.record2record.begin_rollout(batch, task_uses)
+         self.rollout = ActiveRollout(batch, task_uses)
+ 
++    def recover_rollouts(self, outcomes: tuple[RolloutBatchOutcome, ...], consumed_ids: frozenset[str]) -> None:
++        """Settle the task uses of earlier runs before records replay; a batch that re-forms becomes the rollout.
++
++        ``outcomes`` are the rollout outcomes of this trainer's commits and stale receipts, and ``consumed_ids``
++        every record they consumed. A pipeline that does not roll tasks out ignores them.
++        """
++        if self.rollout_stages is None or self.rollouts_recovered:
++            return
++        self.rollouts_recovered = True
++        recovered = self.rollout_stages.task2batch.recover(outcomes, consumed_ids)
++        if recovered is None:
++            return
++        record2record = self.rollout_stages.record2record
++        record2record.begin_rollout(recovered.batch, recovered.task_uses)
++        for task_use in recovered.task_uses:
++            record2record.plays_reported((recovered.batch, task_use), recovered.reported_plays.get(task_use, 0))
++        self.rollout = ActiveRollout(recovered.batch, recovered.task_uses)
++
++    def batch_metadata(self) -> Mapping[str, Any] | None:
++        """The rollout metadata of the batch handed out, for its commit or stale receipt; None for another batch."""
++        if self.pending is None or self.rollout is None:
++            return None
++        return RolloutBatchOutcome(
++            self.rollout.batch, trained=True, training_reports=self.rollout.training_reports
++        ).metadata()
++
++    def settle_batch(self, metadata: Mapping[str, Any] | None, *, trained: bool) -> None:
++        """The commit (``trained``) or the stale receipt of a batch is durable: hand its rollout outcome over.
++
++        ``metadata`` is what ``batch_metadata`` returned for the batch; None for a batch that did not roll out.
++        """
++        if self.rollout_stages is None or metadata is None:
++            return
++        self.rollout_stages.task2batch.rollout_ended(RolloutBatchOutcome.from_metadata(metadata, trained=trained))
++
+     def build_batch(self) -> TrainingBatch:
+         if self.pending is None:
+             if not self.ready():
+@@ -452,11 +497,18 @@ class TrainingPipeline:
+                 if self.training_mode != "auto" and self.training_requests
+                 else None
+             )
+-            if self.rollout is not None:
++            if self.rollout is not None and self.rollout_stages is not None:
+                 # A rollout batch trains on all of its groups that survived, however many there are.
+                 selected = self.record2record.pool.reserve(
+                     len(self.record2record.pool), where=BatchFilter(self.rollout.batch)
+                 )
++                training_reports = {
++                    record_set.group_key[1]: tuple(str(report_id) for report_id in record_set.formed_set_ids())
++                    for record_set in selected
++                    if isinstance(record_set.group_key, tuple)
++                }
++                self.rollout = replace(self.rollout, training_reports=training_reports)
++                self.rollout_stages.task2batch.rollout_training(self.rollout.batch, training_reports)
+             else:
+                 # In manual mode an instruction runs alone; in hybrid it takes the sets that an automatic batch would.
+                 selected = self.record2record.pool.reserve(
+@@ -486,6 +538,7 @@ class TrainingPipeline:
+         consumed = self.record2record.consume(consumed_sets, trained=trained)
+         self.forget_ended_sets()
+         if self.rollout is not None and self.rollout_stages is not None:
++            # The outcome reaches the rollout stage in ``settle_batch``, once the commit or the receipt is durable.
+             self.rollout_stages.record2record.end_rollout(self.rollout.batch, trained=trained)
+             self.rollout = None
+         if self.pending.request is not None:
+diff --git a/reef/train/trainer.py b/reef/train/trainer.py
+index e60e597f..e136de9b 100644
+--- a/reef/train/trainer.py
++++ b/reef/train/trainer.py
+@@ -30,6 +30,7 @@ from reef.observability import ExperimentLogger, NullExperimentLogger
+ from reef.observability.operations import OperationMetrics
+ from reef.pipeline_context import PipelineContext
+ from reef.storage.records import RecordStore
++from reef.task2batch import ROLLOUT_METADATA_KEY, RolloutBatchOutcome
+ from reef.train.backend import CandidateBackend, PreparedStep, StepExecution
+ from reef.train.pipeline import InstructionFailure, TrainingPipeline
+ from reef.train.types import PreparedCommit, TrainingBatch, TrainStepResult
+@@ -54,6 +55,8 @@ class _PendingStep:
+     prepared: PreparedStep | None = None
+     #: The values ``result`` held before commit metrics replaced it: a caller may still hold one.
+     earlier_results: tuple[TrainStepResult, ...] = ()
++    #: The pipeline's rollout metadata of the batch, taken at reservation, before acknowledgement forgets it.
++    batch_metadata: Mapping[str, Any] | None = None
+ 
+     @property
+     def batch_id(self) -> str:
+@@ -499,7 +502,12 @@ class Trainer:
+         if not self._pipeline.ready():
+             return None
+         batch = self._build_validated_batch()
+-        self._pending = _PendingStep(batch=batch, result=None, base_release_id=base_release_id)
++        self._pending = _PendingStep(
++            batch=batch,
++            result=None,
++            base_release_id=base_release_id,
++            batch_metadata=self._pipeline.batch_metadata(),
++        )
+         return batch
+ 
+     def retry_pending(self, *, keep_candidate: bool = False) -> None:
+@@ -526,6 +534,7 @@ class Trainer:
+                 result=None,
+                 consumed_ids=taken,
+                 prepared=pending.prepared if keep_candidate else None,
++                batch_metadata=pending.batch_metadata,
+             )
+ 
+     @property
+@@ -600,6 +609,8 @@ class Trainer:
+             metrics = dict(result.metrics)
+             if loss.record_count > 0:
+                 metrics.update({"records/evicted_count": loss.record_count, "records/data_incomplete": 1})
++            if self._pending.batch_metadata is not None:
++                metrics[ROLLOUT_METADATA_KEY] = dict(self._pending.batch_metadata)
+             request = self._pending.batch.request
+             if request is not None:
+                 # The backend's own dict, when it wrote one, carries what its proposer added to ``requires``.
+@@ -640,6 +651,7 @@ class Trainer:
+             if self._pending.prepared_commit is not prepared:
+                 raise RuntimeError("prepared commit does not match the pending training step")
+             self._pipeline.release_records(prepared.released_ids)
++            self._pipeline.settle_batch(self._pending.batch_metadata, trained=True)
+             self._state = dict(prepared.algorithm_state)
+             self.consumed_record_ids.update(prepared.consumed_ids)
+             self.skipped_record_ids.difference_update(prepared.consumed_ids)
+@@ -683,6 +695,8 @@ class Trainer:
+                 consumed = self._pipeline.acknowledge(batch_id, trained=False)
+             released = self._pipeline.releasable_record_ids()
+             metadata: dict[str, Any] = {"outcome": "stale", "metrics": dict(metrics or {})}
++            if self._pending.batch_metadata is not None:
++                metadata[ROLLOUT_METADATA_KEY] = dict(self._pending.batch_metadata)
+             if component is not None:
+                 metadata["component"] = component
+             self._records.record_consumption(
+@@ -693,6 +707,7 @@ class Trainer:
+             )
+             self.consumed_record_ids.update(consumed | released)
+             self._pipeline.release_records(released)
++            self._pipeline.settle_batch(self._pending.batch_metadata, trained=False)
+             self._pending = None
+ 
+     def commit_applied(self, state: Mapping[str, Any]) -> None:
+@@ -714,6 +729,11 @@ class Trainer:
+                 if self._candidate_backend is not None:
+                     self._candidate_backend.close()
+ 
++    def recover_rollouts(self, outcomes: tuple[RolloutBatchOutcome, ...], consumed_ids: frozenset[str]) -> None:
++        """Settle the pipeline's task uses of earlier runs from this trainer's committed outcomes, before replay."""
++        with self._lock:
++            self._pipeline.recover_rollouts(outcomes, consumed_ids)
++
+     def reingest(self, *, up_to_sequence: int, consumed_ids: frozenset[str]) -> None:
+         """Rebuild pipeline memory from retained rows at or below a watermark.
+ 
+diff --git a/tests/record2record/test_rollout.py b/tests/record2record/test_rollout.py
+index efc9fbad..6328b9cf 100644
+--- a/tests/record2record/test_rollout.py
++++ b/tests/record2record/test_rollout.py
+@@ -7,7 +7,9 @@ from pathlib import Path
+ import pytest
+ from tests.support._trajectories import policy_trajectory
+ from tests.train.test_record_stage_batch_parity import inference, report
++from tests.train.test_trainer import _PreparingBackend
+ 
++from reef.artifact import ArtifactRef
+ from reef.core import AgentRecord
+ from reef.core.reports import ScoredRolloutReport
+ from reef.core.reports.base import ReportBase
+@@ -16,8 +18,12 @@ from reef.record2record import PassThroughRecord2Record, ReportContext
+ from reef.record2record.rollout import RolloutGrouping, RolloutReportRecord2Record
+ from reef.record2task import ReportTasks
+ from reef.record2task.reports import SkippedReport
+-from reef.task2batch import RolloutResult, RolloutTask2Batch
+-from reef.train import PipelineContext
++from reef.scenario.factory import recovered_trainer_states
++from reef.storage.commits import CommitRecord
++from reef.storage.sqlite import SQLiteRecordStore
++from reef.surface.base import Surface
++from reef.task2batch import ROLLOUT_METADATA_KEY, RolloutBatchOutcome, RolloutResult, RolloutTask2Batch
++from reef.train import PipelineContext, Trainer
+ from reef.train.pipeline import TrainingPipeline
+ from reef.train.types import TaskItem, TrainDataItem, TrainingBatch
+ 
+@@ -272,3 +278,106 @@ def test_a_training_report_that_the_contract_refuses_counts_toward_its_group() -
+     rollout.finish({task_use: 3})
+     assert pipeline.ready() and "rep-c" in pipeline.releasable_record_ids()
+     assert len(pipeline.build_batch().items) == 2
++
++
++def stored_episode(records: SQLiteRecordStore, batch: str, task_use: str, episode_id: str) -> None:
++    records.append(inference(f"rec-{episode_id}"))
++    labels = {"arm": "plain", "batch": batch, "task_use": task_use}
++    records.append(
++        report(f"rep-{episode_id}", f"rec-{episode_id}", score=1.0, episode={"id": episode_id, "labels": labels})
++    )
++
++
++def rollout_trainer(records: SQLiteRecordStore) -> tuple[Trainer, FakeRollout]:
++    rollouts: list[FakeRollout] = []
++
++    def pipeline_factory(context: PipelineContext) -> TrainingPipeline:
++        stage = RolloutReportRecord2Record(context, RolloutGrouping(), exclusive_sources=True)
++        stage.add_tasks((TaskItem(Path("task-0")),), group_key=0)
++        rollouts.append(FakeRollout(context, 1))
++        return TrainingPipeline(context, record2record=stage, record2task=EpisodeTasks(), task2batch=rollouts[-1])
++
++    trainer = Trainer.build("s", records, pipeline_factory=pipeline_factory, candidate_backend=_PreparingBackend())
++    return trainer, rollouts[0]
++
++
++def reserved_rollout(records: SQLiteRecordStore) -> tuple[Trainer, str, str]:
++    trainer, rollout = rollout_trainer(records)
++    assert trainer.reserve_training_batch() is None, "the first look starts the rollout"
++    ((batch, (task_use,)),) = rollout.submitted
++    for episode_id in ("a", "b"):
++        stored_episode(records, batch, task_use, episode_id)
++    rollout.finish({task_use: 2})
++    assert trainer.reserve_training_batch() is not None
++    return trainer, batch, task_use
++
++
++@pytest.mark.unit
++def test_a_commit_records_which_task_uses_trained_on_which_reports() -> None:
++    records = SQLiteRecordStore()
++    trainer, batch, task_use = reserved_rollout(records)
++    prepared = trainer.prepare_commit(trainer.execute_reserved_step(0).result)
++    assert prepared.metrics[ROLLOUT_METADATA_KEY] == {
++        "batch_id": batch,
++        "uses": [{"task_use_id": task_use, "training_report_ids": ["rep-a", "rep-b"]}],
++    }
++
++
++@pytest.mark.unit
++def test_a_stale_receipt_records_the_task_uses_and_recovery_reads_it_back() -> None:
++    records = SQLiteRecordStore()
++    trainer, batch, task_use = reserved_rollout(records)
++    trainer.reject_pending({"reason": "stale"})
++    (receipt,) = records.consumption_receipts("s")
++    assert receipt["metadata"][ROLLOUT_METADATA_KEY]["batch_id"] == batch
++
++    class ReceiptsOnly:
++        def __init__(self) -> None:
++            self.records = records
++
++        def history(self) -> tuple[CommitRecord, ...]:
++            return ()
++
++    (state,) = recovered_trainer_states(ReceiptsOnly(), "s", None, Surface()).values()
++    assert state.rollout_outcomes == (
++        RolloutBatchOutcome(batch, trained=False, training_reports={task_use: ("rep-a", "rep-b")}),
++    )
++
++
++@pytest.mark.unit
++def test_only_a_commit_that_consumed_the_reports_proves_a_use_trained() -> None:
++    metadata = {"batch_id": "b1", "uses": [{"task_use_id": "u1", "training_report_ids": ["r1", "r2"]}]}
++
++    def commit(step: int, consumed: frozenset[str], *, pending: bool = False) -> CommitRecord:
++        return CommitRecord(
++            scenario="s",
++            step=step,
++            artifact_ref=ArtifactRef(f"content:{step}", f"release:{step}", "base"),
++            checkpoint=False,
++            algorithm_state={},
++            high_water_sequence=step,
++            high_water_offset=0,
++            consumed_ids=consumed,
++            pending=pending,
++            metrics={ROLLOUT_METADATA_KEY: metadata},
++        )
++
++    class History:
++        def __init__(self, *commits: CommitRecord) -> None:
++            self.commits = commits
++            self.records = SQLiteRecordStore()
++
++        def history(self) -> tuple[CommitRecord, ...]:
++            return self.commits
++
++    def outcomes(*commits: CommitRecord) -> tuple[RolloutBatchOutcome, ...]:
++        (state,) = recovered_trainer_states(History(*commits), "s", None, Surface()).values()
++        return state.rollout_outcomes
++
++    assert outcomes(commit(1, frozenset({"r1", "r2", "released"}))) == (
++        RolloutBatchOutcome("b1", trained=True, training_reports={"u1": ("r1", "r2")}),
++    )
++    assert outcomes(commit(1, frozenset({"r1"}))) == (), "the commit did not consume every training report"
++    assert outcomes(commit(1, frozenset({"r1", "r2"}), pending=True)) == (
++        RolloutBatchOutcome("b1", trained=True, training_reports={"u1": ("r1", "r2")}),
++    ), "a commit held for review consumed the reports, so the batch cannot form again"
+diff --git a/tests/record2task/test_task_store.py b/tests/record2task/test_task_store.py
+index 55d9dab4..fadb0c89 100644
+--- a/tests/record2task/test_task_store.py
++++ b/tests/record2task/test_task_store.py
+@@ -310,3 +310,43 @@ def test_an_incomplete_generation_offers_no_task_and_is_found_by_its_sources(tmp
+         assert found is not None and found.generation == 1 and not found.is_complete
+         assert store.find_generation(source_record_ids=()) is None
+         assert store.next_generation() == 2
++
++
++def published(store: FileTaskStore) -> str:
++    store.begin_generation(generation=0, source_record_ids=(SOURCE_ID,))
++    store.save_candidates(generation=0, candidates=(candidate(),))
++    store.publish_task(generation=0, index=0)
++    store.complete_generation(generation=0)
++    return TASK_NAME
++
++
++@pytest.mark.unit
++def test_a_task_in_use_is_not_available_and_returns_after_an_untrained_use_until_it_retires(tmp_path: Path) -> None:
++    with FileTaskStore(root=tmp_path, eval_fraction=0.0, seed=SEED, max_task_attempts=2) as store:
++        name = published(store)
++        (first,) = store.begin_uses(batch="b1", task_names=(name,))
++        assert first.use_id == f"use-{name}-000" and store.available_tasks() == ()
++        with pytest.raises(TaskStoreError, match="not available"):
++            store.begin_uses(batch="b2", task_names=(name,))
++        store.update_use(dataclasses.replace(first, state="stale_rejected"))
++        assert [saved.generated.task.name for saved in store.available_tasks()] == [name]
++        (second,) = store.begin_uses(batch="b2", task_names=(name,))
++        store.update_use(dataclasses.replace(second, state="untrainable"))
++        assert store.available_tasks() == () and store.is_retired(task_name=name)
++        assert store.counts()["retired/train"] == 1
++        with pytest.raises(TaskStoreError, match="already ended"):
++            store.update_use(dataclasses.replace(second, state="trained"))
++
++
++@pytest.mark.unit
++def test_a_trained_task_never_rolls_out_again_and_uses_survive_reopening(tmp_path: Path) -> None:
++    with FileTaskStore(root=tmp_path, eval_fraction=0.0, seed=SEED) as store:
++        name = published(store)
++        (use,) = store.begin_uses(batch="b1", task_names=(name,))
++        store.update_use(dataclasses.replace(use, state="training", training_report_ids=("r1", "r2")))
++    with FileTaskStore(root=tmp_path, eval_fraction=0.0, seed=SEED) as reopened:
++        (use,) = reopened.uses(batch="b1")
++        assert use.state == "training" and use.training_report_ids == ("r1", "r2")
++        assert reopened.counts()["in_use/train"] == 1
++        reopened.update_use(dataclasses.replace(use, state="trained"))
++        assert reopened.available_tasks() == () and reopened.counts()["trained/train"] == 1
+diff --git a/tests/reef_recipe/test_generated_tasks.py b/tests/reef_recipe/test_generated_tasks.py
+index 2188ad62..9c9fab2f 100644
+--- a/tests/reef_recipe/test_generated_tasks.py
++++ b/tests/reef_recipe/test_generated_tasks.py
+@@ -53,9 +53,12 @@ from reef.record2record import GroupDecision, PassThroughRecord2Record, ReportCo
+ from reef.record2task import NoTasks
+ from reef.record2task.generator.client import GeneratorError
+ from reef.record2task.generator.runner import Episode
+-from reef.record2task.store import FileTaskStore, PlayedResult
+-from reef.storage.sqlite import SQLiteScenarioStorage
++from reef.record2task.store import FileTaskStore, PlayedResult, TaskStoreError
++from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
++from reef.task2batch import RolloutBatchOutcome
++from reef.train import Trainer
+ from reef.train.algos.registry import resolve_objective
++from reef.train.backend import CandidateBackend, PreparedStep
+ from reef.train.pipeline import PipelineConfig, TrainingPipeline
+ from reef.train.types import TrainingBatch, trajectory_groups
+ 
+@@ -1023,6 +1026,14 @@ def rollout_rounds(
+     return built, player, rollout_worker
+ 
+ 
++def committed(p: TrainingPipeline, *, trained: bool = True) -> None:
++    """Acknowledge the built batch and settle it, as the trainer does once its commit or receipt is durable."""
++    batch = p.build_batch()
++    metadata = p.batch_metadata()
++    p.acknowledge(batch.batch_id, trained=trained)
++    p.settle_batch(metadata, trained=trained)
++
++
+ def rolled_out(p: TrainingPipeline, task: str, task_use: str, batch: str, index: int, score: float) -> None:
+     """One rollout episode's inference record and report, labelled with its batch and task use."""
+     name = f"{task}-{index}"
+@@ -1045,10 +1056,10 @@ def test_saved_tasks_roll_out_as_one_batch_and_train_on_its_labelled_episodes(tm
+     assert p.ready(), "both groups settled at the episodes that the plays reported"
+     built = p.build_batch()
+     assert len(built.items) == 4 and not p.status()["rollout"]["is_playing"]
+-    p.acknowledge(built.batch_id)
++    committed(p)
+     assert p.status()["rollout"] is None
+     assert task_generator.result_generations == [0], "the generation's results went out after its rollout"
+-    assert p.status()["task_store"]["played/train"] == 2
++    assert p.status()["task_store"]["trained/train"] == 2
+ 
+ 
+ def test_a_task_with_more_plays_than_the_capacity_plays_in_waves(tmp_path: Path) -> None:
+@@ -1376,7 +1387,7 @@ def test_a_rollout_that_trains_nothing_lets_the_next_round_start(tmp_path: Path)
+     assert p.status()["task_generation"]["completed"] == 2, "the failed rollout ends without a batch to wait for"
+ 
+ 
+-def test_a_task_whose_result_cannot_be_saved_goes_back_to_the_pool_and_the_batch_plays_on(tmp_path: Path) -> None:
++def test_a_task_whose_result_cannot_be_saved_returns_to_the_pool_when_its_batch_ends(tmp_path: Path) -> None:
+     p, _, rollout_worker = rollout_rounds(tmp_path, ScriptedGenerator([generated(0, 0, 1, hint=False)]))
+     store = p.record2task.task_store
+     record_result = store.record_result
+@@ -1389,8 +1400,220 @@ def test_a_task_whose_result_cannot_be_saved_goes_back_to_the_pool_and_the_batch
+     store.record_result = failing_record_result
+     for _ in range(3):
+         p.ready()
+-    assert len(rollout_worker.submitted) == 1
++    (job,) = rollout_worker.submitted
++    assert len(p.record2record.task_pool) == 0, "the task returns when its batch ends, not when its plays end"
++    use, task = next((use, task) for use, task in job.task_uses if task == "harbor-00000-001")
++    rolled_out(p, task, use, job.receipt, 0, 1.0)
++    rolled_out(p, task, use, job.receipt, 1, 0.0)
++    assert p.ready()
++    committed(p)
+     pooled = {task_set.item.task_path.name for task_set in p.record2record.task_pool.sets()}
+-    assert pooled == {"harbor-00000-000"}, "the task without a result is back in the task pool"
+-    assert p.status()["rollout"] is not None, "the batch waits for the episodes of the task that played"
+-    assert {result.task_name for result in store.generation(generation=0).results} == {"harbor-00000-001"}
++    assert pooled == {"harbor-00000-000"}
++    assert {use.task_name: use.state for use in store.uses()} == {
++        "harbor-00000-000": "untrainable",
++        "harbor-00000-001": "trained",
++    }
++
++
++def rolled_out_batch(tmp_path: Path, task_generator: ScriptedGenerator | None = None, **config: object):
++    """A rollout pipeline whose first batch of two tasks has played and reported two episodes per task."""
++    p, _, rollout_worker = rollout_rounds(
++        tmp_path, task_generator or ScriptedGenerator([generated(0, 0, 1, hint=False)]), **config
++    )
++    for _ in range(3):
++        p.ready()
++    (job,) = rollout_worker.submitted
++    return p, job
++
++
++def episodes(p: TrainingPipeline, job: RolloutJob) -> None:
++    for task_use, task in job.task_uses:
++        rolled_out(p, task, task_use, job.receipt, 0, 1.0)
++        rolled_out(p, task, task_use, job.receipt, 1, 0.0)
++
++
++def use_states(p: TrainingPipeline) -> dict[str, str]:
++    return {use.task_name: use.state for use in p.record2task.task_store.uses()}
++
++
++def pooled(p: TrainingPipeline) -> set[str]:
++    return {task_set.item.task_path.name for task_set in p.record2record.task_pool.sets()}
++
++
++def test_a_batch_dropped_stale_returns_its_tasks_until_they_retire(tmp_path: Path) -> None:
++    p, job = rolled_out_batch(tmp_path, max_task_attempts=1)
++    episodes(p, job)
++    committed(p, trained=False)
++    assert set(use_states(p).values()) == {"stale_rejected"}
++    assert pooled(p) == set(), "one attempt allowed, so both tasks retire"
++    assert p.status()["task_store"]["retired/train"] == 2
++
++
++def test_a_stale_task_with_attempts_left_rolls_out_again(tmp_path: Path) -> None:
++    p, job = rolled_out_batch(tmp_path)
++    episodes(p, job)
++    committed(p, trained=False)
++    assert pooled(p) == {"harbor-00000-000", "harbor-00000-001"}
++    p.ready()
++    assert {use.use_id for use in p.record2task.task_store.uses() if use.state == "running"} == {
++        "use-harbor-00000-000-001",
++        "use-harbor-00000-001-001",
++    }
++
++
++def test_the_batch_metadata_names_each_use_and_the_reports_that_made_its_samples(tmp_path: Path) -> None:
++    p, job = rolled_out_batch(tmp_path)
++    episodes(p, job)
++    p.build_batch()
++    metadata = p.batch_metadata()
++    assert metadata["batch_id"] == job.receipt
++    assert {use["task_use_id"]: sorted(use["training_report_ids"]) for use in metadata["uses"]} == {
++        task_use: [f"rep-{task}-0", f"rep-{task}-1"] for task_use, task in job.task_uses
++    }
++    assert set(use_states(p).values()) == {"training"}
++
++
++def restarted(tmp_path: Path, earlier: TrainingPipeline):
++    """Close a pipeline, as a stop does, and build another on its state directory."""
++    earlier.close()
++    return rollout_rounds(tmp_path, ScriptedGenerator())
++
++
++def test_a_restart_cancels_a_rollout_that_was_still_playing_and_pools_its_tasks(tmp_path: Path) -> None:
++    p, _, _ = rollout_rounds(tmp_path, ScriptedGenerator([generated(0, 0, 1, hint=False)]))
++    p.ready()
++    p.ready()
++    assert set(use_states(p).values()) == {"running"}
++    again, _, _ = restarted(tmp_path, p)
++    again.recover_rollouts((), frozenset())
++    assert set(use_states(again).values()) == {"cancelled"}
++    assert pooled(again) == {"harbor-00000-000", "harbor-00000-001"}
++
++
++def test_a_rollout_whose_plays_ended_re_forms_after_a_restart_without_another_rollout(tmp_path: Path) -> None:
++    p, job = rolled_out_batch(tmp_path)
++    again, _, rollout_worker = restarted(tmp_path, p)
++    again.recover_rollouts((), frozenset())
++    assert again.status()["rollout"]["batch"] == job.receipt
++    episodes(again, job)
++    assert again.ready() and rollout_worker.submitted == []
++    committed(again)
++    assert set(use_states(again).values()) == {"trained"}
++
++
++def test_a_commit_that_recorded_the_batch_marks_its_uses_trained_after_a_restart(tmp_path: Path) -> None:
++    p, job = rolled_out_batch(tmp_path)
++    episodes(p, job)
++    p.build_batch()
++    outcome = RolloutBatchOutcome.from_metadata(p.batch_metadata(), trained=True)
++    reports = frozenset(report_id for report_ids in outcome.training_reports.values() for report_id in report_ids)
++    again, _, rollout_worker = restarted(tmp_path, p)
++    again.recover_rollouts((outcome,), reports)
++    assert set(use_states(again).values()) == {"trained"}
++    assert pooled(again) == set() and again.status()["rollout"] is None
++    assert not again.ready() and rollout_worker.submitted == []
++
++
++def test_a_stale_receipt_that_recorded_the_batch_returns_its_tasks_after_a_restart(tmp_path: Path) -> None:
++    p, job = rolled_out_batch(tmp_path)
++    episodes(p, job)
++    p.build_batch()
++    outcome = RolloutBatchOutcome.from_metadata(p.batch_metadata(), trained=False)
++    again, _, _ = restarted(tmp_path, p)
++    again.recover_rollouts((outcome,), frozenset())
++    assert set(use_states(again).values()) == {"stale_rejected"}
++    assert pooled(again) == {"harbor-00000-000", "harbor-00000-001"}
++
++
++def test_consumed_training_reports_without_a_recorded_outcome_stop_the_restart(tmp_path: Path) -> None:
++    p, job = rolled_out_batch(tmp_path)
++    episodes(p, job)
++    p.build_batch()
++    reports = frozenset(use["training_report_ids"][0] for use in p.batch_metadata()["uses"])
++    again, _, _ = restarted(tmp_path, p)
++    with pytest.raises(TaskStoreError, match="no commit or stale receipt records the batch"):
++        again.recover_rollouts((), reports)
++
++
++def test_a_stop_after_acknowledgement_but_before_the_commit_re_forms_the_batch(tmp_path: Path) -> None:
++    p, job = rolled_out_batch(tmp_path)
++    episodes(p, job)
++    # The trainer acknowledges while it prepares the commit; the process stops before the commit is durable.
++    p.acknowledge(p.build_batch().batch_id)
++    assert set(use_states(p).values()) == {"training"}, "only a durable commit or receipt ends a use"
++    again, _, rollout_worker = restarted(tmp_path, p)
++    again.recover_rollouts((), frozenset())
++    episodes(again, job)
++    assert again.ready() and rollout_worker.submitted == []
++    committed(again)
++    assert set(use_states(again).values()) == {"trained"}
++
++
++class SkippingBackend(CandidateBackend):
++    """A dispatched backend whose steps keep the state and train nothing."""
++
++    @property
++    def dispatched(self) -> bool:
++        return True
++
++    def initial_state(self):
++        return {}
++
++    def prepare_step(self, batch, state, scenario_step):
++        return PreparedStep.skipped(state=dict(state), metrics={})
++
++    def evaluate(self, candidate):
++        raise AssertionError("no candidate")
++
++    def settle_step(self, prepared, decision):
++        raise AssertionError("no candidate")
++
++    def abort_step(self, prepared):
++        del prepared
++
++
++def test_a_batch_whose_commit_failed_and_that_was_then_dropped_stale_ends_stale(tmp_path: Path) -> None:
++    records = SQLiteRecordStore()
++    workers: list[InlineWorker] = []
++
++    def pipeline_factory(context: PipelineContext) -> TrainingPipeline:
++        built, _, rollout_worker = rollout_rounds(tmp_path, ScriptedGenerator([generated(0, 0, 1, hint=False)]))
++        workers.append(rollout_worker)
++        return built
++
++    trainer = Trainer.build("tasks", records, pipeline_factory=pipeline_factory, candidate_backend=SkippingBackend())
++    for _ in range(3):
++        assert trainer.reserve_training_batch() is None
++    (job,) = workers[0].submitted
++    for task_use, task in job.task_uses:
++        for index, score in ((0, 1.0), (1, 0.0)):
++            name = f"{task}-{index}"
++            records.append(inference(f"rec-{name}"))
++            records.append(
++                report(f"rep-{name}", f"rec-{name}", task, score, labels={"batch": job.receipt, "task_use": task_use})
++            )
++    assert trainer.reserve_training_batch() is not None
++    trainer.prepare_commit(trainer.execute_reserved_step(0).result)
++    trainer.retry_pending()
++    trainer.reject_pending({"reason": "stale"})
++    store = trainer.pipeline.record2task.task_store
++    assert {use.state for use in store.uses()} == {"stale_rejected"}
++
++
++def test_a_refused_submit_counts_no_attempt_and_the_tasks_roll_out_once_the_worker_takes_jobs(tmp_path: Path) -> None:
++    p, _, rollout_worker = rollout_rounds(
++        tmp_path, ScriptedGenerator([generated(0, 0, 1, hint=False)]), max_task_attempts=1
++    )
++    p.ready()
++    rollout_worker.generation = None
++    with pytest.raises(RuntimeError, match="rollout worker is closed or broken"):
++        p.ready()
++    assert use_states(p) == {} and pooled(p) == {"harbor-00000-000", "harbor-00000-001"}
++    rollout_worker.generation = p.task2batch
++    p.ready()
++    assert set(use_states(p).values()) == {"running"}
++
++
++def test_a_rollout_pipeline_without_rounds_has_no_task_store_and_opens(tmp_path: Path) -> None:
++    p, _, _ = rollout_rounds(tmp_path, ScriptedGenerator(), rounds=0)
++    assert p.record2task.task_store is None and not p.ready()
+-- 
+2.34.1
+
