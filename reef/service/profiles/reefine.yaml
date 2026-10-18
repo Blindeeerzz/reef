@@ -35,7 +35,8 @@ recipe:
       version_check: true
       # An evolved extension runs in pi's process with your privileges, so it waits for a promote.
       review_kinds: [code_extension]
-      # Independent request, health, protected-task and review checks decide publication.
+      # Independent request, protected-task and review checks decide publication; the tasks below are the
+      # default protected tasks. Behavior the harness cannot deliver is a limit and holds a release for review.
       # The served model is reused by default in a fresh reviewer context; configure
       # evolution.models and evolution.evaluation.reviewer_model for another model.
       selection: reefine

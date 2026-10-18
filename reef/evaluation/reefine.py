@@ -553,7 +553,10 @@ class ReefineEvaluation(SelectionPlugin):
             task_environment=self.settings.environment,
         )
         if result.residue:
-            raise ValueError("episode left files outside the workspace or allowed state")
+            raise ValueError(
+                f"episode left {len(result.residue)} file(s) outside the workspace or allowed state, "
+                f"such as {result.residue[0]}"
+            )
         return result
 
     def judge_episode(
