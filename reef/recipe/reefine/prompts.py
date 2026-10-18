@@ -268,7 +268,8 @@ What to test:
   not name how a step is done, such as how to leave a mode, use the form how_to_use gives, as a person who read it
   would; without one, ask for the step in plain words. Never take a form from a clarification or from the harness
   facts' design advice, and never take a requirement from how_to_use. Type a command the request names the way
-  the harness facts say this harness types commands, such as a different leading character.
+  the harness facts say this harness types commands, such as a different leading character; how_to_use never
+  renames a command the request names.
 - Prefer one message per task. Use several tasks when one session cannot show all the behavior, such as behavior
   both with and without a mode, and several messages in a task only when a person must type them in turn.
 - Checks name only what the task's messages show; each task is judged against its own checks.
@@ -345,7 +346,7 @@ A clarification answer marked as a default is an assumption, not a requirement, 
 is no reason to reject. A change the harness needs to deliver the request, such as a setting that also applies
 outside a mode, is not unrelated when how_to_use (the change's How to use note) discloses it. A command in the
 form the harness description gives for this harness, such as a different leading character, is the requested
-command.
+command; a command under another name is not.
 Checks in the limit group name behavior this harness cannot deliver: do not reject for missing it, but reject a
 change whose files or replies claim to deliver it. Saying that the agent declines or refuses something by following
 its rules is not such a claim; a claim says the harness blocks, removes or guarantees it. Checks in the untested
