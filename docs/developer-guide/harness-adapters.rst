@@ -1352,9 +1352,20 @@ Descriptor fields
 
 - ``name`` identifies the adapter. ``binary`` is the executable, and
   ``argv`` supplies its arguments for one headless prompt. Reef substitutes
-  ``{prompt}`` in ``argv``. With ``follow_up_messages: true`` the binary also
-  takes further messages right after the prompt and sends them in order in the
-  same session, so an episode can play a person's short exchange (pi does).
+  ``{prompt}`` in ``argv``.
+- An episode can play a person's short exchange of several messages in one
+  session. An adapter declares one of two ways to send the later messages:
+
+  * ``follow_up_messages: true``: the binary takes further messages right
+    after the prompt and sends them in order in one run (pi).
+  * ``continue_argv``: the arguments of one more run that sends a message,
+    at ``{prompt}``, to the latest session in the episode root. Reef runs it
+    once per further message and stops at the first run that fails (Claude
+    Code, Codex, opencode and hermes).
+
+  An adapter with neither sends one message per episode.
+- ``offline_env`` names the ``env`` variables that keep an episode offline.
+  An online episode leaves them out (pi's ``PI_OFFLINE``).
 - ``files`` maps node kinds to output paths, such as
   ``skills/{name}/SKILL.md``. ``rules`` and ``skill`` paths are required.
   Each ``files.config.<target>`` gives a config file's ``path``, its

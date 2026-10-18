@@ -22,6 +22,9 @@ env:
   PI_CODING_AGENT_SESSION_DIR: "{root}/sessions"
   PI_OFFLINE: "1"
   PI_SKIP_VERSION_CHECK: "1"
+# An online episode, such as a Reefine request task, drops PI_OFFLINE so the
+# changed extensions load as they do for a person.
+offline_env: [PI_OFFLINE]
 # An interactive run through reef-pi: online (it talks to reef), but reef pins
 # pi's version, so pi's own update notice would only mislead.
 client_env:

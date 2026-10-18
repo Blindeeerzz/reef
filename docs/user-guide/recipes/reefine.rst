@@ -73,7 +73,8 @@ How it works
    the original request and the harness's description: the entry kinds a
    change may contain and the harness's facts. The plan splits the request
    into tasks. A task is what a person types in one new session: one message,
-   or up to three on a harness that takes several in one run (pi). Each task
+   or up to three on a harness whose adapter sends further messages in the
+   same session (pi, Claude Code, Codex, opencode and hermes). Each task
    runs in a fresh session and is judged on its own checks. Requested behavior
    that the harness cannot deliver is listed as a limit with its reason, and
    behavior that no task here can show, such as a restart, is listed as not
@@ -128,8 +129,9 @@ Behavior and configuration
 * ``evolution.selection: reefine`` is the default. The requested behavior,
   the protected tasks and the change review must pass. Request episodes run
   on every adapter. A limit does not fail the candidate, but it holds a
-  passing release for your review. On pi, request episodes run online. Other
-  adapters run them with their usual episode settings, and Codex episodes
+  passing release for your review. Request episodes run online, so pi
+  episodes drop ``PI_OFFLINE``. Other adapters run them with their usual
+  episode settings, and Codex episodes
   keep web search and sandbox network access off. A request that needs the
   network therefore cannot pass on Codex yet.
   Explicit ``selection: floor`` retains the old health-only selection for

@@ -11,6 +11,7 @@ import stat
 import sys
 import tempfile
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -595,4 +596,26 @@ def test_follow_up_messages_follow_the_prompt_on_an_adapter_that_takes_them(tmp_
     argv = json.loads((retained / "workspace" / "argv.json").read_text())
     assert argv[argv.index("-p") + 1 :] == ["/mode on", "what is new"]
     with pytest.raises(EpisodeError, match="one message per episode"):
-        run_episode(get_adapter("claude"), {}, "/mode on", follow_ups=("what is new",))
+        run_episode(get_adapter("dsh"), {}, "/mode on", follow_ups=("what is new",))
+
+
+def test_continue_argv_sends_each_follow_up_in_one_more_run_until_a_run_fails(tmp_path: Path) -> None:
+    script = PI_FAKE.replace(
+        'assert args[:2] == ["--mode", "json"], args',
+        'with Path("runs.jsonl").open("a") as runs:\n    runs.write(json.dumps(args) + "\\n")',
+    )
+    descriptor = replace(get_adapter("pi"), follow_up_messages=False, continue_argv=("--continue", "-p", "{prompt}"))
+    retained = tmp_path / "retained"
+    result = run_episode(
+        descriptor,
+        pi_files(),
+        "/mode on",
+        binary=fake_binary(tmp_path, script),
+        follow_ups=("fail", "never sent"),
+        keep_dir=retained,
+        keep_workspace=True,
+    )
+    runs = [json.loads(line) for line in (retained / "workspace" / "runs.jsonl").read_text().splitlines()]
+    assert runs == [["--mode", "json", "-p", "/mode on"], ["--continue", "-p", "fail"]]
+    assert result.exit_code == 3
+    assert result.stdout.count("agent_start") == 2

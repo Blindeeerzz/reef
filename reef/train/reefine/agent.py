@@ -245,7 +245,9 @@ def launch_pi(
     for path in state:
         path.mkdir(parents=True, exist_ok=True)
     session_env = {
-        key: value.replace("{root}", str(root)) for key, value in host.descriptor.env.items() if key != "PI_OFFLINE"
+        key: value.replace("{root}", str(root))
+        for key, value in host.descriptor.env.items()
+        if key not in host.descriptor.offline_env
     }
     session_env["HOME"] = str(root)
     # The harness's own binary first, so a nested `pi -p` finds the pinned one.

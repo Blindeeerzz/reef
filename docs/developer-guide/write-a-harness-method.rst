@@ -361,8 +361,8 @@ and checks the actual test/edit/review order in the trajectory.
 ``run_episode`` accepts optional ``workspace_files``, ``initialize_git``,
 ``keep_workspace``, ``online`` and ``task_environment`` inputs. Defaults preserve existing episode
 behavior. Reefine request and protected-task episodes pass ``online``, except
-prompts that start with ``[health]``. On pi, an online episode drops
-``PI_OFFLINE``; other adapters keep their descriptor's episode settings. Online
+prompts that start with ``[health]``. An online episode leaves out the
+descriptor's ``offline_env`` variables, such as pi's ``PI_OFFLINE``. Online
 runs put the configured binary directory on ``PATH`` so child sessions use the
 same install. Retention skips symlinks and Git metadata and
 rejects output above 1000 files or 50 MiB. Unavailable trajectories and model

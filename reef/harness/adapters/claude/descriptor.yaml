@@ -23,6 +23,8 @@ install:
   version: "2.1.257"
   binary_path: "node_modules/.bin/claude"
 argv: ["-p", "{prompt}", "--output-format", "json", "--permission-mode", "auto"]
+# A further message continues the latest session of the episode's workspace.
+continue_argv: ["-p", "--continue", "{prompt}", "--output-format", "json", "--permission-mode", "auto"]
 env:
   CLAUDE_CONFIG_DIR: "{root}/claude"
   DISABLE_AUTOUPDATER: "1"
