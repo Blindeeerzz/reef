@@ -16,6 +16,7 @@ from reef.evaluation.reefine import (
     EvaluationInstructions,
     ReefineEvaluation,
     ReefineEvaluationSettings,
+    shortened_trajectory,
     validate_plan,
     validate_review,
 )
@@ -93,7 +94,7 @@ def evaluation(tmp_path, request_pass=True, current_pass=True, candidate_pass=Tr
     model = ReviewModel("http://unused", "demo-model")
     model.messages_seen = []
     model.responses = [
-        {"prompt": "run a command", "checks": ["command before output"]},
+        {"tasks": [{"messages": ["run a command"], "checks": ["command before output"]}]},
         {"passed": request_pass, "reason": "observed request"},
         {"passed": current_pass, "reason": "current result"},
         {"passed": candidate_pass, "reason": "candidate result"},
@@ -140,7 +141,7 @@ def test_success_uses_fresh_review_context_and_writes_progress_and_record(tmp_pa
     assert measured.metrics["evaluation_report"]["same_model"] is True
     assert measured.metrics["evaluation_report"]["requires"] == [{"name": "curl", "kind": "binary"}]
     behavior = next(
-        check for check in measured.metrics["evaluation_report"]["checks"] if check["id"] == "request-behavior"
+        check for check in measured.metrics["evaluation_report"]["checks"] if check["id"] == "request-behavior-0"
     )
     assert behavior["expected"] == "command before output"
 
@@ -180,8 +181,7 @@ def test_a_harness_limit_is_reported_not_run_and_holds_a_passing_release_for_rev
     plugin, model, backend = evaluation(tmp_path)
     backend.adapter = "claude"
     model.responses[0] = {
-        "prompt": "run a command",
-        "checks": ["command before output"],
+        "tasks": [{"messages": ["run a command"], "checks": ["command before output"]}],
         "limits": [{"requirement": "refuse every other tool", "reason": "a command cannot take a tool away"}],
     }
     item = candidate(tmp_path)
@@ -191,7 +191,7 @@ def test_a_harness_limit_is_reported_not_run_and_holds_a_passing_release_for_rev
     assert "cannot deliver: refuse every other tool" in decision.reason
     checks = {check["id"]: check for check in measured.metrics["evaluation_report"]["checks"]}
     assert checks["limit-0"]["status"] == "unsupported" and checks["limit-0"]["group"] == "limit"
-    assert checks["request-behavior"]["status"] == "pass"
+    assert checks["request-behavior-0"]["status"] == "pass"
     # Any harness is planned and run; the request judge reads the limits so it does not fail for them.
     assert '"adapter": "claude"' in model.messages_seen[0][0]["content"]
     assert "a command cannot take a tool away" in model.messages_seen[1][0]["content"]
@@ -201,8 +201,7 @@ def test_a_harness_limit_is_reported_not_run_and_holds_a_passing_release_for_rev
 def test_a_request_made_only_of_limits_runs_no_episode_and_is_rejected(tmp_path):
     plugin, model, backend = evaluation(tmp_path)
     model.responses[0] = {
-        "prompt": "",
-        "checks": [],
+        "tasks": [],
         "limits": [{"requirement": "refuse every other tool", "reason": "a command cannot take a tool away"}],
     }
     model.responses.pop(1)
@@ -213,6 +212,68 @@ def test_a_request_made_only_of_limits_runs_no_episode_and_is_rejected(tmp_path)
     assert not decision.selected and not decision.requires_review
     statuses = {check["id"]: check["status"] for check in measured.metrics["evaluation_report"]["checks"]}
     assert statuses["request-behavior"] == "not_run" and statuses["limit-0"] == "unsupported"
+
+
+def test_each_task_runs_in_its_own_session_and_every_task_must_pass(tmp_path):
+    plugin, model, backend = evaluation(tmp_path)
+    model.responses[0] = {
+        "tasks": [
+            {"messages": ["/mode on", "what is new"], "checks": ["the mode answers with a search"]},
+            {"messages": ["create a.txt"], "checks": ["a.txt is created outside the mode"]},
+        ]
+    }
+    model.responses.insert(2, {"passed": False, "reason": "a.txt was not created"})
+    backend.results.insert(1, episode("second task"))
+    seen = []
+    original = plugin.episode
+
+    def recorded(candidate, side, messages, *args):
+        seen.append(messages)
+        return original(candidate, side, messages, *args)
+
+    plugin.episode = recorded
+    item = candidate(tmp_path)
+    measured = plugin.evaluate(item)
+    statuses = {check["id"]: check["status"] for check in measured.metrics["evaluation_report"]["checks"]}
+    assert statuses["request-behavior-0"] == "pass" and statuses["request-behavior-1"] == "fail"
+    assert seen[:2] == [["/mode on", "what is new"], ["create a.txt"]]
+    assert '"checks": ["a.txt is created outside the mode"]' in model.messages_seen[2][0]["content"]
+    assert not plugin.decide(item, measured).selected
+
+
+def test_untested_behavior_is_shown_and_does_not_hold_a_passing_release(tmp_path):
+    plugin, model, backend = evaluation(tmp_path)
+    model.responses[0]["untested"] = [{"requirement": "the mode is off after a restart", "reason": "no restart here"}]
+    item = candidate(tmp_path)
+    measured = plugin.evaluate(item)
+    decision = plugin.decide(item, measured)
+    assert decision.selected and not decision.requires_review
+    assert "not tested here: the mode is off after a restart" in decision.reason
+    checks = {check["id"]: check for check in measured.metrics["evaluation_report"]["checks"]}
+    assert checks["untested-0"]["status"] == "untested" and checks["untested-0"]["group"] == "untested"
+
+
+def test_a_reply_that_is_not_json_is_asked_once_more_in_a_fresh_conversation(tmp_path, monkeypatch):
+    plugin, model = evaluation(tmp_path)[:2]
+    replies = iter(['{"passed": true, "reason": "unescaped "quote""}', '{"passed": true, "reason": "fine"}'])
+    calls = []
+
+    def chat(self, messages, **params):
+        calls.append(messages)
+        return next(replies)
+
+    monkeypatch.setattr(ReviewModel, "chat", chat)
+    assert plugin.ask_json(model, "review", {}, time.monotonic() + 10)["reason"] == "fine"
+    assert len(calls) == 2 and calls[0] == calls[1]
+
+
+def test_long_tool_output_is_cut_before_the_review_reads_it():
+    paper = "A" * 3000 + "MIDDLE" + "Z" * 50_000
+    events = [{"role": "user", "content": "task"}, {"tool": paper}, *({"n": "x" * 3000} for _ in range(300))]
+    kept = shortened_trajectory(events)
+    assert kept[0] == {"role": "user", "content": "task"}
+    assert "MIDDLE" not in json.dumps(kept[1]) and "characters omitted" in kept[1]["tool"]
+    assert len(json.dumps(kept)) <= 410_000 and {"omitted_events": len(events) + 1 - len(kept)} in kept
 
 
 def test_files_written_outside_the_workspace_reach_the_review_without_invalidating_the_run(tmp_path):
@@ -227,10 +288,12 @@ def test_files_written_outside_the_workspace_reach_the_review_without_invalidati
 @pytest.mark.parametrize(
     "plan",
     [
-        {"prompt": "task", "checks": ["x"], "limits": [{"requirement": "y"}]},
-        {"prompt": "task", "checks": ["x"], "limits": "none"},
-        {"prompt": "", "checks": ["x"]},
-        {"prompt": "", "checks": [], "limits": []},
+        {"tasks": [{"messages": ["x"], "checks": ["y"]}], "limits": [{"requirement": "y"}]},
+        {"tasks": [{"messages": ["x"], "checks": ["y"]}], "untested": "none"},
+        {"tasks": [{"messages": [], "checks": ["y"]}]},
+        {"tasks": [{"messages": ["a", "b", "c", "d"], "checks": ["y"]}]},
+        {"tasks": [], "limits": []},
+        {"prompt": "x", "checks": ["y"]},
     ],
 )
 def test_malformed_plan_is_invalid(plan):

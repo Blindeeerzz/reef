@@ -575,3 +575,24 @@ def test_workspace_fixture_cannot_escape_episode(tmp_path: Path, path: str) -> N
 def test_task_environment_cannot_replace_harness_relocation(tmp_path: Path) -> None:
     with pytest.raises(EpisodeError, match="outside the harness environment"):
         run_episode(get_adapter("pi"), pi_files(), "task", task_environment={"HOME": "/outside"})
+
+
+def test_follow_up_messages_follow_the_prompt_on_an_adapter_that_takes_them(tmp_path: Path) -> None:
+    script = PI_FAKE.replace(
+        'prompt = args[args.index("-p") + 1]',
+        'prompt = args[args.index("-p") + 1]\nPath("argv.json").write_text(json.dumps(args))',
+    )
+    retained = tmp_path / "retained"
+    run_episode(
+        get_adapter("pi"),
+        pi_files(),
+        "/mode on",
+        binary=fake_binary(tmp_path, script),
+        follow_ups=("what is new",),
+        keep_dir=retained,
+        keep_workspace=True,
+    )
+    argv = json.loads((retained / "workspace" / "argv.json").read_text())
+    assert argv[argv.index("-p") + 1 :] == ["/mode on", "what is new"]
+    with pytest.raises(EpisodeError, match="one message per episode"):
+        run_episode(get_adapter("claude"), {}, "/mode on", follow_ups=("what is new",))

@@ -128,6 +128,7 @@ def run_episode(
     keep_workspace: bool = False,
     online: bool = False,
     task_environment: Mapping[str, str] | None = None,
+    follow_ups: tuple[str, ...] = (),
 ) -> EpisodeResult:
     """Run one headless episode of ``descriptor``'s harness over ``files``.
 
@@ -150,7 +151,11 @@ def run_episode(
     binary available to child agents; the default keeps existing offline episodes.
     ``task_environment`` explicitly forwards operator-selected variables,
     such as network proxies, without replacing the harness relocation environment.
+    ``follow_ups`` are further messages of the same session, sent after ``prompt``; only an adapter that declares
+    ``follow_up_messages`` takes them.
     """
+    if follow_ups and not descriptor.follow_up_messages:
+        raise EpisodeError(f"adapter {descriptor.name!r} sends one message per episode")
     executor = executor or LocalExecutor()
     # Adapters can validate a conditional boundary (for example, remote task
     # containers with a sandboxed runner). Otherwise keep the default refusal
@@ -250,7 +255,11 @@ def run_episode(
                 value = os.environ.get(key) or default.replace("{home}", str(Path.home()))
                 if value:
                     env[key] = value
-        argv = [binary or descriptor.binary, *(token.replace("{prompt}", prompt) for token in descriptor.argv)]
+        argv = [binary or descriptor.binary]
+        for token in descriptor.argv:
+            argv.append(token.replace("{prompt}", prompt))
+            if token == "{prompt}":
+                argv.extend(follow_ups)
         try:
             outcome = execute(
                 executor,

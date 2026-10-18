@@ -124,6 +124,7 @@ STATUS_LABELS = {
     "invalid": "error",
     "not_run": "not run",
     "unsupported": "not possible",
+    "untested": "not tested",
     "pending": "waiting",
 }
 
@@ -136,10 +137,14 @@ def check_label(check: Mapping[str, object]) -> str:
         return "Test plan"
     if name == "request-behavior":
         return "Requested behavior"
+    if name.startswith("request-behavior-"):
+        return f"Requested behavior {int(name.removeprefix('request-behavior-')) + 1}"
     if name == "change-review":
         return "Change review"
     if group == "limit":
         return "Not possible here"
+    if group == "untested":
+        return "Not tested here"
     if group == "regression":
         index = name.removeprefix("regression-")
         return f"Protected task {int(index) + 1}" if index.isdigit() else "Protected tasks"

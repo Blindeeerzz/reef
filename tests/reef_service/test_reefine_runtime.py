@@ -98,7 +98,7 @@ def test_formal_checks_control_publication_and_progress_route(tmp_path, monkeypa
         },
     )
     replies = [
-        {"prompt": "request task", "checks": ["requested behavior"]},
+        {"tasks": [{"messages": ["request task"], "checks": ["requested behavior"]}]},
         {"passed": case != "request_failure", "reason": "request behavior checked"},
         {"passed": True, "reason": "protected behavior checked"},
         {"passed": case != "protected_regression", "reason": "protected behavior checked"},

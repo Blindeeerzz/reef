@@ -88,6 +88,7 @@ class ReefineBackend(CordisBackend, ServedCompositionConsumer, ReefineEvaluation
             "adapter": self._descriptor.name,
             "entry_kinds": list(request_kinds(self._descriptor.name)),
             "facts": None if facts is None else asdict(facts),
+            "messages_per_task": 3 if self._descriptor.follow_up_messages else 1,
         }
 
     def show_evaluation_checks(self, checks: tuple[Mapping[str, object], ...]) -> None:
