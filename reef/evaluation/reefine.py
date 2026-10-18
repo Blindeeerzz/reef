@@ -274,12 +274,12 @@ class ReefineEvaluation(SelectionPlugin):
                         checks[plan_index],
                         status="pass",
                         observed=(
-                            f"{len(tasks)} task(s) planned, {len(limits)} not possible here, {len(untested)} not "
-                            "tested here; this row observes no behavior"
+                            f"{len(tasks)} {'task' if len(tasks) == 1 else 'tasks'} planned, {len(limits)} not "
+                            f"possible here, {len(untested)} not tested here; this row observes no behavior"
                         ),
                         seconds=time.monotonic() - plan_started,
                     )
-                    # Behavior the harness cannot deliver, or that no single message can show here, is reported and
+                    # Behavior the harness cannot deliver, or that no task can show here, is reported and
                     # never run; each task runs in its own fresh session.
                     checks[plan_index + 1 : plan_index + 2] = [
                         *(

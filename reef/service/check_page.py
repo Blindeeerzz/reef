@@ -49,7 +49,7 @@ GROUPS = (
     ("request", "Requested behavior"),
     ("limit", "Not possible on this harness"),
     ("untested", "Not tested here"),
-    ("regression", "Existing tasks"),
+    ("regression", "Protected tasks"),
     ("review", "Change review"),
 )
 

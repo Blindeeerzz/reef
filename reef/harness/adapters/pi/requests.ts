@@ -585,8 +585,8 @@ export default function requests(pi) {
   const forgetRequest = (recordId) => writeStoredRequests(storedRequests().filter((entry) => entry.id !== recordId));
 
   // The report for a settled step: the result line and what the review left uncovered. It is appended to the
-  // session as a custom message, which the chat renders and the session file keeps, and shown as a notice, the
-  // one line a person sees at once but the next status line may overwrite.
+  // session as a custom message, which the chat renders at once and the session file keeps; a notice of the same
+  // line would show it twice.
   const deliverReport = (step, rows, text, ctx) => {
     const lines = [settledText(step, rows, clip(text.trim(), 60))];
     const uncovered = uncoveredOf(rows[step]);
@@ -595,7 +595,6 @@ export default function requests(pi) {
     if (uncovered.length && !evaluated) lines.push(`Not covered: ${uncovered.join("; ")}`);
     const content = lines.join("\n");
     pi.sendMessage({ customType: REPORT_MESSAGE_TYPE, content, display: true }, { triggerTurn: false });
-    ctx.ui.notify(lines[0], "info");
   };
 
   // The wrapper the next steps run through: the one run_agent exported, else the one the install wrote outside
