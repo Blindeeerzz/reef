@@ -86,7 +86,9 @@ How it works
    that passes with limits waits for your review. When the requested behavior
    passes but the change review finds a problem it does not call unsafe, such
    as an addition the request did not ask for, the candidate waits for your
-   review with that finding; an unsafe change is rejected. A task of several messages
+   review with that finding; an unsafe change is rejected. A task whose session
+   does not finish in time fails; the review reads what the session recorded
+   until then, so the reason can say why. A task of several messages
    does not run on a harness whose adapter sends one message per session
    (dsh, native and terminus); it is shown as not tested, and a candidate that
    passes the other checks waits for your review. Other behavior that was not

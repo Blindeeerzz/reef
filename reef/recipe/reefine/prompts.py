@@ -26,7 +26,10 @@ REQUEST_PROMPT = (
     "2. List what triggers the behavior and what state the harness must know, and where each comes from: "
     "a command the user runs, a session event, an environment variable, a check. A request that names a "
     "state (away, busy, offline, focused, ...) needs an explicit way for the user to turn it on and off, "
-    "an agent_command or a tool; never a rule that assumes the state holds.\n"
+    "an agent_command or a tool; never a rule that assumes the state holds. When the change starts another "
+    "agent of this same harness, such as a reviewer run through the harness's own command, that agent loads the "
+    "same entries: give it one plain job, tell it not to start another agent, and give any step that repeats, "
+    "such as reviewing again after a fix, a point where it stops.\n"
     "3. List what only the user can provide (a phone number, a credential, a permission, an account): each "
     "is a requires item, described below, with a prompt sentence that tells the user what to enter or "
     "grant. {env_value}\n"
@@ -324,6 +327,10 @@ its check. The candidate's own rules, such as a fallback that skips a step, do n
 Reading a long document in parts is reading it, and output the harness cut for display does not show a step was
 skipped. Binary content a tool returned to the agent, such as the page images of a PDF it read, reached the agent
 even though this record does not show it.
+unfinished_after_seconds, when present, means the session was stopped because it was still running after that many
+seconds, and the trajectory is what it recorded until then. Fail the episode, and start the reason with why it did
+not finish as far as the record shows, such as agents that keep starting each other or a step that repeats without
+end.
 workspace_is_git_repository says whether the task's workspace started as a git repository. When a step failed
 because the evaluation environment lacked something the request depends on, such as a git repository for a diff,
 the failure stands, but start the reason with what the environment lacked and how to provide it: for a git

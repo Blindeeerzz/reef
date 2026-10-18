@@ -37,7 +37,7 @@ from reef.harness.adapters.descriptor import AdapterDescriptor
 from reef.harness.client.check_display import check_label
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindingError, ModelBindings
 from reef.harness.episodes.run import EpisodeError, EpisodeResult, TrajectoryKeepError, run_episode
-from reef.harness.episodes.trajectory import TrajectoryError, final_assistant_text
+from reef.harness.episodes.trajectory import TrajectoryError, final_assistant_text, reader_for
 from reef.harness.step_result import evaluation_report
 from reef.sandbox.process import EpisodeExecutor, EpisodeTimeout
 
@@ -403,14 +403,32 @@ class ReefineEvaluation(SelectionPlugin):
                         OSError,
                     ) as exc:
                         if isinstance(exc.__cause__, EpisodeTimeout):
-                            # The candidate's session did not finish: a failure of the change, told in plain words.
+                            # The candidate's session did not finish: a failure of the change. The review reads the
+                            # record kept so far, so the reason can say why, such as agents starting each other.
                             seconds = time.monotonic() - before
+                            reason = f"The task did not finish: the session was still running after {seconds:.0f} s."
+                            try:
+                                kept = reader_for(descriptor.trajectory_format)(record_dir)
+                                if kept:
+                                    reason = self.judge_episode(
+                                        reviewer,
+                                        request.text,
+                                        {**planned, "limits": limits, "untested": untested},
+                                        EpisodeResult(0, "", "", kept, ()),
+                                        candidate.candidate_files,
+                                        candidate.requires,
+                                        deadline,
+                                        git_repository=context.initialize_git,
+                                        unfinished_after_seconds=seconds,
+                                    )[1]
+                            except (TrajectoryError, ValueError, ModelBindingError, OSError):
+                                pass
                             checks[check_index] = replace(
                                 checks[check_index],
                                 status="fail",
                                 score=0.0,
-                                reason=f"The task did not finish: the session was still running after {seconds:.0f} s.",
-                                seconds=seconds,
+                                reason=reason,
+                                seconds=time.monotonic() - before,
                             )
                         else:
                             checks[check_index] = replace(
@@ -745,6 +763,7 @@ class ReefineEvaluation(SelectionPlugin):
         deadline: float,
         *,
         git_repository: bool,
+        unfinished_after_seconds: float | None = None,
     ) -> tuple[bool, str]:
         if result.exit_code != 0:
             return False, f"harness exited {result.exit_code}: {result.stderr[-500:]}"
@@ -762,6 +781,11 @@ class ReefineEvaluation(SelectionPlugin):
                 "stderr": result.stderr[-2000:],
                 "files_outside_workspace": list(result.residue[:50]),
                 "workspace_is_git_repository": git_repository,
+                **(
+                    {}
+                    if unfinished_after_seconds is None
+                    else {"unfinished_after_seconds": round(unfinished_after_seconds)}
+                ),
             },
             deadline,
         )

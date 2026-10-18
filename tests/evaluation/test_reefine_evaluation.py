@@ -163,6 +163,21 @@ def test_a_request_task_that_does_not_finish_fails_in_plain_words(tmp_path, monk
     assert behavior["status"] == "fail"
     assert behavior["reason"].startswith("The task did not finish: the session was still running after")
     assert "--mode" not in behavior["reason"] and not plugin.decide(item, measured).selected
+    # With a record kept before the stop, the review reads it and says why the session did not finish.
+    plugin, model = evaluation(tmp_path)[:2]
+    model.responses[1] = {"passed": False, "reason": "The reviewer agent kept starting reviewer agents."}
+
+    def unfinished_with_record(candidate, side, messages, files, initialize_git, record_dir, deadline):
+        record_dir.mkdir(parents=True, exist_ok=True)
+        event = {"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": "x"}]}}
+        (record_dir / "session.jsonl").write_text(json.dumps(event) + "\n")
+        raise EpisodeError("episode timed out after 600s") from EpisodeTimeout("600s")
+
+    monkeypatch.setattr(plugin, "episode", unfinished_with_record)
+    measured = plugin.evaluate(item)
+    behavior = next(c for c in measured.metrics["evaluation_report"]["checks"] if c["id"] == "request-behavior-0")
+    assert behavior["status"] == "fail" and behavior["reason"] == "The reviewer agent kept starting reviewer agents."
+    assert '"unfinished_after_seconds"' in model.messages_seen[1][0]["content"]
 
 
 def test_the_plan_reads_the_changes_how_to_use_note(tmp_path):
