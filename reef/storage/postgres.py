@@ -1,7 +1,7 @@
-"""PostgreSQL records, commits, settings, pooled transactions, and scenario storage lifecycle.
+"""PostgreSQL records, commits, settings, generated tasks, pooled transactions, and scenario storage lifecycle.
 
 Every per-scenario table is keyed by a store generation, so archiving a
-scenario retires its records, commits and settings together. The database
+scenario retires its records, commits, settings and tasks together. The database
 alone holds a scenario's state; the local directory holds no scenario state.
 """
 
@@ -22,6 +22,7 @@ from typing import Any, Self
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     Float,
     ForeignKey,
@@ -57,6 +58,7 @@ from reef.storage.migrations import archive_imported_files, legacy_model_configs
 from reef.storage.records import RecordLoss, RecordRetention
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage
 from reef.storage.sql_records import RecordTables, SQLRecordRetention, SQLRecordStore
+from reef.storage.sql_tasks import SQLTaskStorage, TaskTables
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +150,55 @@ def _record_tables(metadata: MetaData) -> RecordTables:
     return RecordTables(records, consumed, receipts, eviction, settings)
 
 
+def task_tables(metadata: MetaData) -> TaskTables:
+    def store_columns() -> tuple[Column[str], Column[str]]:
+        return (
+            Column("storage_id", String(32), ForeignKey("record_store.storage_id"), primary_key=True),
+            Column("store_name", Text, primary_key=True),
+        )
+
+    return TaskTables(
+        stores=Table(
+            "task_store",
+            metadata,
+            *store_columns(),
+            Column("eval_fraction", Float(53), nullable=False),
+            Column("seed", BigInteger, nullable=False),
+        ),
+        generations=Table(
+            "task_generation",
+            metadata,
+            *store_columns(),
+            Column("generation", BigInteger, primary_key=True),
+            Column("source_record_ids_json", Text, nullable=False),
+            Column("candidate_count", BigInteger),
+            Column("is_complete", Boolean, nullable=False),
+        ),
+        candidates=Table(
+            "task_candidate",
+            metadata,
+            *store_columns(),
+            Column("generation", BigInteger, primary_key=True),
+            Column("candidate_index", BigInteger, primary_key=True),
+            Column("task_name", Text, nullable=False),
+            Column("digest", String(64), nullable=False),
+            Column("generated_json", Text, nullable=False),
+            Column("split", Text),
+            Column("error", Text),
+        ),
+        published=Table(
+            "generated_task",
+            metadata,
+            *store_columns(),
+            Column("task_name", Text, primary_key=True),
+            Column("digest", String(64), nullable=False),
+            Column("split", Text, nullable=False),
+            Column("generation", BigInteger, nullable=False),
+            Column("candidate_index", BigInteger, nullable=False),
+        ),
+    )
+
+
 class PostgresRecordDatabase:
     """Own a connection pool and shared tables in one deployment's SQL schema.
 
@@ -171,6 +222,7 @@ class PostgresRecordDatabase:
         )
         version = Table("schema_version", metadata, Column("version", Integer, primary_key=True))
         self.tables = _record_tables(metadata)
+        self.task_tables = task_tables(metadata)
         #: One row per committed step, as the JSON object a commit log line holds.
         self.commits = Table(
             "scenario_commit",
@@ -193,17 +245,18 @@ class PostgresRecordDatabase:
                 connection.execute(CreateSchema(schema, if_not_exists=True))
                 version.create(connection, checkfirst=True)
                 versions: list[int] = list(connection.execute(select(version.c.version)).scalars().all())
-                if versions and versions not in ([1], [2], [3], [4]):
+                if versions and versions not in ([1], [2], [3], [4], [5]):
                     raise ReefError("unsupported PostgreSQL record schema version")
-                # Version 4 adds the commit and settings tables; create_all adds them to older schemas.
+                # Version 4 adds the commit and settings tables, version 5 the task tables;
+                # create_all adds them to older schemas.
                 metadata.create_all(connection)
                 migrate_record_storage(connection, self.tables.records, self.tables.consumption)
                 for index in self.tables.records.indexes:
                     index.create(connection, checkfirst=True)
-                if versions and versions != [4]:
-                    connection.execute(version.update().values(version=4))
+                if versions and versions != [5]:
+                    connection.execute(version.update().values(version=5))
                 elif not versions:
-                    connection.execute(version.insert().values(version=4))
+                    connection.execute(version.insert().values(version=5))
         except BaseException:
             self._engine.dispose()
             raise
@@ -368,6 +421,10 @@ class PostgresRecordStore(SQLRecordStore):
         statement = insert(table).values(rows).on_conflict_do_nothing().returning(next(iter(table.primary_key)))
         return connection.execute(statement).first() is not None
 
+    def task_storage(self) -> SQLTaskStorage:
+        """The generated task stores of this store generation."""
+        return SQLTaskStorage(self, replace(self._database.task_tables, scope={"storage_id": self.storage_id}))
+
     def close(self) -> None:
         with self._lock:
             if not self._closed:
@@ -473,7 +530,7 @@ class PostgresStorageSettings(PluginSettings):
 
 
 class PostgresScenarioStorage(ScenarioStorage):
-    """Keep every scenario's records, commits and settings in one PostgreSQL schema.
+    """Keep every scenario's records, commits, settings and tasks in one PostgreSQL schema.
 
     On start, it imports the commit logs and model configuration files that
     older versions kept under ``directory`` and moves them under
@@ -508,7 +565,7 @@ class PostgresScenarioStorage(ScenarioStorage):
             records = PostgresRecordStore(self._database, name=scenario)
             try:
                 commits = PostgresCommitTable(self._database, records.storage_id)
-                return CommitHistoryScenarioStore(scenario, records, commits)
+                return CommitHistoryScenarioStore(scenario, records, commits, tasks=records.task_storage())
             except BaseException:
                 records.close()
                 raise

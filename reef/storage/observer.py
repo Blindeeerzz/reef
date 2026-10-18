@@ -20,6 +20,7 @@ from reef.core.records_types import AgentRecord, RequestType
 from reef.storage.commits import CommitRecord
 from reef.storage.records import AppendResult, ConsumptionReceipt, RecordLoss, RecordStore, StoredRecord
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage, ScenarioStore
+from reef.storage.tasks import SplitSettings, TaskStore
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,9 @@ class ObservedScenarioStore(ScenarioStore):
     @property
     def durable(self) -> bool:
         return self._inner.durable
+
+    def task_store(self, name: str, *, split: SplitSettings) -> TaskStore:
+        return self._inner.task_store(name, split=split)
 
     def history(self) -> tuple[CommitRecord, ...]:
         return self._inner.history()

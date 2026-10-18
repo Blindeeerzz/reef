@@ -1017,7 +1017,7 @@ def test_stale_batches_survive_restart_without_retiring_records(tmp_path):
                 pipeline_factory=threshold_pipeline,
                 candidate_backend=_PreparingBackend(),
             )
-            with closing(CommitHistoryScenarioStore("math", records)) as session:
+            with closing(CommitHistoryScenarioStore("math", records, tasks=records.task_storage())) as session:
                 consumed = recovered_trainer_states(session, "math", None, Surface())[RECORDS_COMPONENT].consumed_ids
                 trainer.reingest(up_to_sequence=0, consumed_ids=consumed)
                 batch = trainer.reserve_training_batch()

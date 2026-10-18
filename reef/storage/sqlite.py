@@ -15,7 +15,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Self
 
-from sqlalchemy import REAL, URL, Column, Index, Integer, MetaData, Table, Text, create_engine, inspect
+from sqlalchemy import REAL, URL, Boolean, Column, Index, Integer, MetaData, Table, Text, create_engine, inspect
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import NullPool
@@ -27,6 +27,7 @@ from reef.storage.migrations import archive_imported_files, legacy_model_configs
 from reef.storage.records import RecordRetention
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage
 from reef.storage.sql_records import RecordTables, SQLRecordRetention, SQLRecordStore
+from reef.storage.sql_tasks import SQLTaskStorage, TaskTables
 
 _METADATA = MetaData()
 _AGENT_RECORD = Table(
@@ -83,6 +84,47 @@ _SCENARIO_SETTING = Table(
     _METADATA,
     Column("name", Text, primary_key=True),
     Column("value_json", Text, nullable=False),
+)
+# Generated task stores, keyed by store name within the scenario's database.
+TASK_TABLES = TaskTables(
+    stores=Table(
+        "task_store",
+        _METADATA,
+        Column("store_name", Text, primary_key=True),
+        Column("eval_fraction", REAL, nullable=False),
+        Column("seed", Integer, nullable=False),
+    ),
+    generations=Table(
+        "task_generation",
+        _METADATA,
+        Column("store_name", Text, primary_key=True),
+        Column("generation", Integer, primary_key=True),
+        Column("source_record_ids_json", Text, nullable=False),
+        Column("candidate_count", Integer),
+        Column("is_complete", Boolean, nullable=False),
+    ),
+    candidates=Table(
+        "task_candidate",
+        _METADATA,
+        Column("store_name", Text, primary_key=True),
+        Column("generation", Integer, primary_key=True),
+        Column("candidate_index", Integer, primary_key=True),
+        Column("task_name", Text, nullable=False),
+        Column("digest", Text, nullable=False),
+        Column("generated_json", Text, nullable=False),
+        Column("split", Text),
+        Column("error", Text),
+    ),
+    published=Table(
+        "generated_task",
+        _METADATA,
+        Column("store_name", Text, primary_key=True),
+        Column("task_name", Text, primary_key=True),
+        Column("digest", Text, nullable=False),
+        Column("split", Text, nullable=False),
+        Column("generation", Integer, nullable=False),
+        Column("candidate_index", Integer, nullable=False),
+    ),
 )
 logger = logging.getLogger(__name__)
 
@@ -195,6 +237,10 @@ class SQLiteRecordStore(SQLRecordStore):
         values: Mapping[str, object] | Sequence[Mapping[str, object]],
     ) -> bool:
         return connection.execute(table.insert().prefix_with("OR IGNORE"), values).rowcount > 0
+
+    def task_storage(self) -> SQLTaskStorage:
+        """The generated task stores kept in this database."""
+        return SQLTaskStorage(self, TASK_TABLES)
 
     def close(self) -> None:
         with self._lock:
@@ -312,9 +358,10 @@ class SQLiteRecordRetention:
 class SQLiteScenarioStorage(ScenarioStorage):
     """Open existing hashed SQLite and JSONL paths and manage their lifecycle.
 
-    Each scenario has one database file for its records and settings and one
-    JSONL commit log. Without a directory, all state is in memory. Records and
-    commits then last for one session, and settings last for the storage.
+    Each scenario has one database file for its records, settings and generated
+    tasks, and one JSONL commit log. Without a directory, all state is in memory.
+    Records, commits and tasks then last for one session, and settings last for
+    the storage.
     """
 
     def __init__(self, directory: Path | None = None) -> None:
@@ -364,7 +411,7 @@ class SQLiteScenarioStorage(ScenarioStorage):
             commit_log = None if self._directory is None else CommitLog(self._directory / f"{key}.commits.jsonl")
             records = SQLiteRecordStore(database)
             try:
-                return CommitHistoryScenarioStore(scenario, records, commit_log)
+                return CommitHistoryScenarioStore(scenario, records, commit_log, tasks=records.task_storage())
             except BaseException:
                 records.close()
                 raise

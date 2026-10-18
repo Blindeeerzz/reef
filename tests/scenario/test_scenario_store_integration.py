@@ -18,6 +18,7 @@ from reef.storage.commits import CommitRecord
 from reef.storage.records import RecordRetention, RecordStore
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage, ScenarioStore
 from reef.storage.sqlite import SQLiteScenarioStorage
+from reef.storage.tasks import SplitSettings, TaskStore
 from reef.train.trainer import Trainer
 from reef.train.types import TrainStepResult
 
@@ -39,6 +40,9 @@ class OpaqueStore(ScenarioStore):
     @property
     def durable(self) -> bool:
         return self._inner.durable
+
+    def task_store(self, name: str, *, split: SplitSettings) -> TaskStore:
+        return self._inner.task_store(name, split=split)
 
     def history(self) -> tuple[CommitRecord, ...]:
         return self._inner.history()

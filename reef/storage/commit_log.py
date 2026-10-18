@@ -24,6 +24,7 @@ from reef.core.errors import ReefError
 from reef.storage.commits import RECORD_KIND, CommitLogError, CommitRecord
 from reef.storage.records import RecordStore
 from reef.storage.scenario import ScenarioStore, ScenarioStoreConflict
+from reef.storage.tasks import SplitSettings, TaskStorage, TaskStore
 
 
 def same_commit(left: CommitRecord, right: CommitRecord) -> bool:
@@ -273,10 +274,11 @@ class CommitLog(CommitHistory):
 
 
 class CommitHistoryScenarioStore(ScenarioStore):
-    """Own one records connection and an optional durable commit history.
+    """Own one records connection, its task stores, and an optional durable commit history.
 
     Passing no commit history preserves the existing in-memory configuration. Its
     commits still enforce step fencing and retries for the session lifetime.
+    ``tasks`` opens the task stores; they usually share the records' database.
     ``initial_step`` supports existing scenarios constructed at a saved step.
     """
 
@@ -286,6 +288,7 @@ class CommitHistoryScenarioStore(ScenarioStore):
         records: RecordStore,
         commit_history: CommitHistory | None = None,
         *,
+        tasks: TaskStorage,
         initial_step: int = 0,
     ) -> None:
         if not isinstance(scenario, str) or not scenario:
@@ -294,6 +297,7 @@ class CommitHistoryScenarioStore(ScenarioStore):
             raise ValueError("initial_step must be a non-negative integer")
         self._scenario = scenario
         self._records = records
+        self._tasks = tasks
         self._commit_history = commit_history
         self._initial_step = initial_step
         self._memory_history: list[CommitRecord] = []
@@ -313,6 +317,11 @@ class CommitHistoryScenarioStore(ScenarioStore):
     @property
     def durable(self) -> bool:
         return self._commit_history is not None
+
+    def task_store(self, name: str, *, split: SplitSettings) -> TaskStore:
+        with self._lock:
+            self._ensure_open()
+            return self._tasks.task_store(name, split=split)
 
     @property
     def commit_history(self) -> CommitHistory | None:
