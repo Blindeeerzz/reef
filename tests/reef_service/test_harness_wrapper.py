@@ -2364,7 +2364,13 @@ def test_wait_names_the_release_how_to_use_and_a_declined_step_is_answered_with_
     assert out[2] == "reef-claude: how to use: Type $chat in the session."
     assert out[3] == "reef-claude: not covered: no idle check; two way replies"
     # With an evaluation its checks decide; the proposer's notes stay on the page so they do not read as the result.
-    untested = {"id": "untested-0", "group": "untested", "status": "untested", "expected": "the mode after a restart"}
+    untested = {
+        "id": "untested-0",
+        "group": "untested",
+        "status": "untested",
+        "expected": "the mode after a restart",
+        "reason": "no restart happens here.",
+    }
     metrics = {"selected": True, "proposal_notes": notes, "evaluation_report": {"checks": [untested]}}
     reef = _FakeReef(answer, rows=[CREATION_ROW, _step_row("rel-2222-selected", metrics)])
     (tmp_path / "evaluated").mkdir()
@@ -2374,7 +2380,7 @@ def test_wait_names_the_release_how_to_use_and_a_declined_step_is_answered_with_
     reef.close()
     out = capsys.readouterr().out.splitlines()
     heading = out.index("reef-claude: not tested here:")
-    assert out[heading + 1] == "  - the mode after a restart"
+    assert out[heading + 1] == "  - the mode after a restart (no restart happens here)"
     assert not any("not covered" in line for line in out)
     declined = {"declined": "the design says no entry this harness takes can deliver the request", "design": design}
     row = _step_row("rel-0", {"skipped": "no proposal", "proposal_notes": declined})

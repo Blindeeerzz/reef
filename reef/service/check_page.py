@@ -115,7 +115,8 @@ def check_html(
         body += "".join(f"<li>{escape(requirement)}</li>" for requirement in requirements) + "</ol>"
     elif expected:
         # Live progress carries the plan as text; keep its clauses intact without inventing individual results.
-        expected = expected.replace("; ", ";\n") if isinstance(expected, str) else expected
+        if isinstance(expected, str) and check.get("group") == "request":
+            expected = expected.replace("; ", ";\n")
         body += (
             '<span class="evaluation-label">What the evaluator checks</span>'
             f'<p class="evaluation-observed">{escape(expected)}</p>'

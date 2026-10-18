@@ -2090,8 +2090,10 @@ def report_request(
     checks = report.get("checks") if isinstance(report, Mapping) else None
     for group, heading in (("limit", "not possible on this harness"), ("untested", "not tested here")):
         # The evaluation's own findings, one point per line, before the proposer's notes.
+        # Each point with its reason, so the list says why without the page.
         points = [
-            str(check.get("expected"))
+            str(check.get("expected")).strip().rstrip(".")
+            + (f" ({str(check.get('reason')).strip().rstrip('.')})" if check.get("reason") else "")
             for check in (checks if isinstance(checks, list) else [])
             if isinstance(check, Mapping) and check.get("group") == group
         ]

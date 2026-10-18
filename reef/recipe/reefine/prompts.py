@@ -230,7 +230,8 @@ The candidate harness already contains the change. A task is what a person types
 harness: its messages, sent in order, chosen so part of the requested behavior must show. No message may ask the
 agent to make, edit or describe the harness change. Each task starts in an empty workspace unless the operator
 supplies files; when a task needs inputs, its first message sets them up with their exact content, such as the
-full text of a file to create, so the setup cannot change what is tested. Setup never performs a step the request
+full text of a file to create, so the setup cannot change what is tested. Every file a message names must come from
+an earlier part of the task or from the operator's files. Setup never performs a step the request
 asks for: it does not write the test, run the check or make the change the behavior is about.
 Use only the original request, the operator-supplied workspace and the harness description. Do not judge a candidate.
 Return exactly {"tasks": [{"messages": ["what the person types", ...], "checks": ["observable requirement", ...]}, ...],
@@ -247,8 +248,9 @@ What to test:
   such as a count the request does not give or the words of a message the request does not quote. A task that shows the behavior is absent where the request does not
   apply is allowed.
 - The request may end with clarifications. An answer the person did not choose, such as one marked as a default,
-  is an assumption, not a requirement: do not test it. Facts about the harness come from the harness description;
-  a clarification that states otherwise does not change them.
+  is an assumption, not a requirement: do not test it, and do not take a command form or message wording from it.
+  Facts about the harness come from the harness description; a clarification that states otherwise does not change
+  them.
 - The harness facts describe the harness and how changes there are usually built. Their design advice, such as
   how a mode shows that it is on or the words of an off command, is not a requirement; test it only when the
   request asks for it.
@@ -261,7 +263,8 @@ What to test:
   request, or name its steps, so the behavior must come from the change. A command the change adds is typed by name.
 - Write commands the way the request names them. Do not invent a different form, such as extra words after a
   command the request gives without them. A person may type a command as its own message. When the request does
-  not name how a step is done, such as how to leave a mode, the message asks for it in plain words.
+  not name how a step is done, such as how to leave a mode, the message asks for it in plain words, even when the
+  harness facts or a clarification suggest a command for it.
 - Prefer one message per task. Use several tasks when one session cannot show all the behavior, such as behavior
   both with and without a mode, and several messages in a task only when a person must type them in turn.
 - Checks name only what the task's messages show; each task is judged against its own checks.
@@ -288,7 +291,9 @@ BEHAVIOR_REVIEW_PROMPT = """Independently grade the recorded application episode
 Write the reason in English.
 Return exactly {"passed": true or false, "reason": "specific observed results and missing requirements"}.
 When the episode fails, start the reason with what is missing or wrong, then what was observed. Name the cause you
-observed: when a step the task depends on did not happen, such as a mode that never turned on, say so.
+observed: when a step the task depends on did not happen, such as a mode that never turned on, say so. When the task
+itself was broken, such as a message that names a file nothing created, fail it and say the task was broken, not
+that the agent failed.
 The plan is one task of the evaluation: the messages the person typed, in order, and the checks this episode must
 show. Every message was typed as given; a command the harness handles itself may leave no line in the trajectory,
 so judge it by its effect on what follows. Judge every one of its checks, reading them in the light of the original request; other parts of the request
@@ -304,7 +309,10 @@ A final claim is not proof. Work handed to another agent must actually complete;
 failures. When the request asks for sourced answers, require successful retrieval and reading of the sources, and
 claims supported by the cited source text.
 When the episode lacks a tool the agent would usually use, such as git history or a test runner, and the request
-does not name that tool, an equivalent method that shows the same result meets the check.
+does not name that tool, an equivalent method that shows the same result meets the check: content the missing tool
+would produce, such as a diff, counts when it reaches the step in another form, and a participant's remark that the
+tool was missing is not a failure. Judge each check no stricter than the original request: a check worded more
+strictly, such as every page of a paper the request only asks to read, is met by what the request asks.
 files_outside_workspace lists files the run wrote in its own episode directory outside the workspace; writes
 elsewhere on the machine are not listed. Tool caches are expected there; a write to the harness's own files or
 configuration is a failure. When a step fails only because a declared requirement that the person supplies at
