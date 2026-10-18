@@ -57,7 +57,7 @@ class EvaluationBackend(ReefineBackend):
 
     @property
     def harness_description(self):
-        return {"adapter": self.adapter, "entry_kinds": ["skill", "rules"], "facts": None, "messages_per_task": 3}
+        return {"adapter": self.adapter, "entry_kinds": ["skill", "rules"], "facts": None}
 
     def show_evaluation_checks(self, checks):
         self.progress.append(checks)
@@ -242,7 +242,7 @@ def test_each_task_runs_in_its_own_session_and_every_task_must_pass(tmp_path):
 
 
 def test_untested_behavior_is_shown_and_does_not_hold_a_passing_release(tmp_path):
-    plugin, model, backend = evaluation(tmp_path)
+    plugin, model = evaluation(tmp_path)[:2]
     model.responses[0]["untested"] = [{"requirement": "the mode is off after a restart", "reason": "no restart here"}]
     item = candidate(tmp_path)
     measured = plugin.evaluate(item)
@@ -284,23 +284,36 @@ def test_a_long_trajectory_cuts_its_longest_texts_first_and_keeps_short_answers(
     assert len(json.dumps(kept)) <= 410_000
 
 
-def test_a_plan_that_breaks_the_message_limit_is_asked_for_once_more(tmp_path):
-    plugin, model, backend = evaluation(tmp_path)
-    backend.models = ModelBindings(model)
-    model.responses.insert(0, {"tasks": [{"messages": ["one", "two"], "checks": ["shown"]}]})
-    original = type(backend).harness_description
-    type(backend).harness_description = property(
-        lambda self: {"adapter": "claude", "entry_kinds": ["rules"], "facts": None, "messages_per_task": 1}
-    )
-    try:
-        item = candidate(tmp_path)
-        measured = plugin.evaluate(item)
-    finally:
-        type(backend).harness_description = original
+def test_a_plan_that_breaks_a_rule_is_asked_for_once_more(tmp_path):
+    plugin, model = evaluation(tmp_path)[:2]
+    model.responses.insert(0, {"tasks": [{"messages": ["one"], "checks": ["shown"]}] * 6})
+    item = candidate(tmp_path)
+    measured = plugin.evaluate(item)
     assert plugin.decide(item, measured).selected
     assert "previous_plan_problem" in model.messages_seen[1][0]["content"]
     replies = json.loads((tmp_path / "reefine-evaluation" / "plan-replies.json").read_text())
     assert len(replies) == 2
+
+
+def test_a_task_of_several_messages_waits_for_review_on_an_adapter_that_sends_one(tmp_path):
+    plugin, model, backend = evaluation(tmp_path)
+    backend.adapter = "dsh"
+    model.responses[0] = {
+        "tasks": [
+            {"messages": ["/mode on", "what is new"], "checks": ["the mode answers"]},
+            {"messages": ["run a command"], "checks": ["command before output"]},
+        ]
+    }
+    item = candidate(tmp_path)
+    measured = plugin.evaluate(item)
+    decision = plugin.decide(item, measured)
+    statuses = {check["id"]: check["status"] for check in measured.metrics["evaluation_report"]["checks"]}
+    assert statuses["request-behavior-0"] == "untested" and statuses["request-behavior-1"] == "pass"
+    assert decision.selected and decision.requires_review
+    assert decision.reason == (
+        "All checks that ran passed. Requested behavior 1 was not run: this task sends 2 messages in one session, "
+        "and the dsh adapter sends one message per session. Review the release before you install it."
+    )
 
 
 def test_files_written_outside_the_workspace_reach_the_review_without_invalidating_the_run(tmp_path):
@@ -318,7 +331,7 @@ def test_files_written_outside_the_workspace_reach_the_review_without_invalidati
         {"tasks": [{"messages": ["x"], "checks": ["y"]}], "limits": [{"requirement": "y"}]},
         {"tasks": [{"messages": ["x"], "checks": ["y"]}], "untested": "none"},
         {"tasks": [{"messages": [], "checks": ["y"]}]},
-        {"tasks": [{"messages": ["a", "b", "c", "d"], "checks": ["y"]}]},
+        {"tasks": [{"messages": ["a", " "], "checks": ["y"]}]},
         {"tasks": [], "limits": []},
         {"prompt": "x", "checks": ["y"]},
     ],

@@ -237,7 +237,6 @@ class ReefineEvaluation(SelectionPlugin):
                 try:
                     context = self.settings.request_context
                     harness = dict(self.backend.harness_description)
-                    messages_per_task = int(str(harness.get("messages_per_task", 1)))
                     payload: dict[str, object] = {
                         "request": request.text,
                         "prompt": context.prompt,
@@ -249,9 +248,11 @@ class ReefineEvaluation(SelectionPlugin):
                     for attempt in range(2):
                         reply = self.ask_json(reviewer, self.instructions.plan, payload, deadline)
                         replies.append(reply)
-                        (records / "plan-replies.json").write_text(json.dumps(replies, indent=2) + "\n", encoding="utf-8")
+                        (records / "plan-replies.json").write_text(
+                            json.dumps(replies, indent=2) + "\n", encoding="utf-8"
+                        )
                         try:
-                            tasks, limits, untested = validate_plan(reply, messages_per_task)
+                            tasks, limits, untested = validate_plan(reply)
                             break
                         except ValueError as exc:
                             if attempt == 1:
@@ -260,7 +261,10 @@ class ReefineEvaluation(SelectionPlugin):
                     if context.prompt and tasks:
                         # The operator's prompt replaces the generated messages and keeps every generated check.
                         tasks = [
-                            {"messages": [context.prompt], "checks": [item for task in tasks for item in task["checks"]]}
+                            {
+                                "messages": [context.prompt],
+                                "checks": [item for task in tasks for item in task["checks"]],
+                            }
                         ]
                     plan = {"tasks": tasks, "limits": limits, "untested": untested}
                     # The plan row says what was planned; only the task rows below observe behavior.
@@ -330,10 +334,23 @@ class ReefineEvaluation(SelectionPlugin):
                 )
             else:
                 context = self.settings.request_context
+                descriptor = self.backend.episode_descriptor
                 for task_index, planned in enumerate(tasks):
                     check_index = next(
                         i for i, check in enumerate(checks) if check.id == f"request-behavior-{task_index}"
                     )
+                    if len(planned["messages"]) > 1 and not (
+                        descriptor.follow_up_messages or descriptor.continue_argv
+                    ):
+                        # The adapter cannot continue a session, so the task is shown as not run and waits for review.
+                        checks[check_index] = replace(
+                            checks[check_index],
+                            status="untested",
+                            reason=f"this task sends {len(planned['messages'])} messages in one session, and the "
+                            f"{descriptor.name} adapter sends one message per session",
+                        )
+                        self.update_progress(checks)
+                        continue
                     self.begin(checks, check_index)
                     before = time.monotonic()
                     record_dir = records / f"request-{task_index}"
@@ -489,6 +506,7 @@ class ReefineEvaluation(SelectionPlugin):
         untested = []
         # Rows reported but never run carry their own status; every other row must pass.
         reported_status = {"limit": "unsupported", "untested": "untested"}
+        skipped = []
         if not isinstance(checks, list) or not checks:
             failures.append("evaluation returned no checks")
         else:
@@ -502,6 +520,12 @@ class ReefineEvaluation(SelectionPlugin):
                 failures.append("evaluation is missing a required check group")
             limits = [check for check in checks if isinstance(check, Mapping) and check.get("group") == "limit"]
             untested = [check for check in checks if isinstance(check, Mapping) and check.get("group") == "untested"]
+            # A request task the adapter cannot run is reported as untested and holds the release for review.
+            skipped = [
+                check
+                for check in checks
+                if isinstance(check, Mapping) and check.get("group") == "request" and check.get("status") == "untested"
+            ]
             if isinstance(candidate, ReefineCandidate):
                 plan = report.get("plan") if isinstance(report, Mapping) else None
                 tasks = plan.get("tasks") if isinstance(plan, Mapping) else None
@@ -530,21 +554,31 @@ class ReefineEvaluation(SelectionPlugin):
                 )
                 for check in checks
                 if not isinstance(check, Mapping)
-                or check.get("status") != reported_status.get(str(check.get("group")), "pass")
+                or (
+                    check.get("status") != reported_status.get(str(check.get("group")), "pass")
+                    and check not in skipped
+                )
             )
         selected = not failures
         if not selected:
             reason = ". ".join(failures) + "."
-        elif limits:
-            reason = (
-                "All required checks passed. Part of the request is not possible on this harness: "
-                + "; ".join(str(check.get("expected")).strip().rstrip(".") for check in limits)
-                + ". Review the release before you install it."
-            )
         else:
-            reason = "All required checks passed."
+            reason = "All checks that ran passed." if skipped else "All required checks passed."
+            if limits:
+                reason += " Part of the request is not possible on this harness: " + "; ".join(
+                    str(check.get("expected")).strip().rstrip(".") for check in limits
+                )
+                reason += "."
+            for check in skipped:
+                reason += f" {check_label(check)} was not run: {str(check.get('reason')).strip().rstrip('.')}."
+            if limits or skipped:
+                reason += " Review the release before you install it."
         if selected and untested:
-            reason += " Not tested here: " + "; ".join(str(check.get("expected")).strip().rstrip(".") for check in untested) + "."
+            reason += (
+                " Not tested here: "
+                + "; ".join(str(check.get("expected")).strip().rstrip(".") for check in untested)
+                + "."
+            )
         feedback = []
         if isinstance(checks, list):
             feedback = [
@@ -564,7 +598,7 @@ class ReefineEvaluation(SelectionPlugin):
             reason=reason,
             evaluation=evaluation,
             metrics={"request_feedback": feedback},
-            requires_review=selected and bool(limits),
+            requires_review=selected and bool(limits or skipped),
         )
 
     def begin(self, checks: list[CheckResult], index: int) -> None:
@@ -700,7 +734,7 @@ def grade_health_text(task: str, text: str | None) -> float:
 
 
 def validate_plan(
-    value: Mapping[str, object], messages_per_task: int = 1
+    value: Mapping[str, object],
 ) -> tuple[list[dict[str, list[str]]], list[dict[str, str]], list[dict[str, str]]]:
     """The plan's tasks (each the messages of one fresh session and the checks they show), limits and untested items."""
     tasks = value.get("tasks")
@@ -714,12 +748,10 @@ def validate_plan(
         checks = task.get("checks") if isinstance(task, Mapping) else None
         if (
             not isinstance(messages, list)
-            or not 1 <= len(messages) <= messages_per_task
+            or not messages
             or any(not isinstance(message, str) or not message.strip() or len(message) > 4000 for message in messages)
         ):
-            raise ValueError(
-                f"each request task needs 1 to {messages_per_task} nonempty messages of at most 4000 characters"
-            )
+            raise ValueError("each request task needs at least one nonempty message of at most 4000 characters")
         if (
             not isinstance(checks, list)
             or not 1 <= len(checks) <= 20

@@ -235,9 +235,8 @@ Use only the original request, the operator-supplied workspace and the harness d
 Return exactly {"tasks": [{"messages": ["what the person types", ...], "checks": ["observable requirement", ...]}, ...],
 "limits": [{"requirement": "requested behavior", "reason": "why this harness cannot deliver it"}, ...],
 "untested": [{"requirement": "requested behavior", "reason": "why no task here can show it"}, ...]}.
-Write at most 5 tasks and at most 20 checks per task, and at most messages_per_task messages in a task: the
-harness description gives that number for this harness. When previous_plan_problem is present, your last plan
-broke a rule; write a plan that keeps it.
+Write at most 5 tasks and at most 20 checks per task, and keep each task short. When previous_plan_problem is
+present, your last plan broke a rule; write a plan that keeps it.
 The harness description names the harness that runs the change, the entry kinds a change there may contain, and its
 facts: its tools, commands and how a mode works there (null when unknown; then judge from the entry kinds).
 
@@ -258,8 +257,7 @@ What to test:
   one that applies only if a tool exists, "if any", or "when there is nothing to list", and never a check that is
   always true in a new session; when the request needs a capability, check that it works.
 - Write commands the way the request names them. Do not invent a different form, such as extra words after a
-  command the request gives without them. A person may type a command as its own message when the harness takes
-  several messages in a task.
+  command the request gives without them. A person may type a command as its own message.
 - Prefer one message per task. Use several tasks when one session cannot show all the behavior, such as behavior
   both with and without a mode, and several messages in a task only when a person must type them in turn.
 - Checks name only what the task's messages show; each task is judged against its own checks.
@@ -272,8 +270,7 @@ Limits and untested behavior:
 - Put requested behavior under untested only when no task can show it here, such as a restart of the harness or a
   service the evaluation does not reach. A new session is itself observable: its first message shows how the
   harness behaves at start. A change of state, such as behavior after leaving a mode, needs a task that first
-  enters that state; when the harness takes one message per task, list it as untested. Never list untested
-  behavior as a limit.
+  enters that state. Never list untested behavior as a limit.
 
 Cover runtime behavior in the original request, including ordering and real tool execution.
 Declared setup requirements are artifact metadata, reviewed separately. Do not turn them into extra

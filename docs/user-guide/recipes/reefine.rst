@@ -72,17 +72,19 @@ How it works
    they cannot approve or reject publication. An independent evaluator then plans the checks from
    the original request and the harness's description: the entry kinds a
    change may contain and the harness's facts. The plan splits the request
-   into tasks. A task is what a person types in one new session: one message,
-   or up to three on a harness whose adapter sends further messages in the
-   same session (pi, Claude Code, Codex, opencode and hermes). Each task
-   runs in a fresh session and is judged on its own checks. Requested behavior
+   into tasks. A task is what a person types in one new session: usually one
+   message, or a short exchange when a person must type several in turn. Each
+   task runs in a fresh session and is judged on its own checks. Requested behavior
    that the harness cannot deliver is listed as a limit with its reason, and
    behavior that no task here can show, such as a restart, is listed as not
    tested. Neither is run. The evaluator also runs protected tasks on both the
    serving release and the candidate, and a fresh model review of the change.
    A failed, invalid or unrun required check rejects the candidate. A candidate
-   that passes with limits waits for your review; behavior that was not tested
-   is shown and does not change the decision. A request with no task to run is
+   that passes with limits waits for your review. A task of several messages
+   does not run on a harness whose adapter sends one message per session
+   (dsh, native and terminus); it is shown as not tested, and a candidate that
+   passes the other checks waits for your review. Other behavior that was not
+   tested is shown and does not change the decision. A request with no task to run is
    rejected. Both pages show each task, the limits, what was not tested,
    comparisons and the selection reason.
 

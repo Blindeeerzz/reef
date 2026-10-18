@@ -1363,7 +1363,9 @@ Descriptor fields
     once per further message and stops at the first run that fails (Claude
     Code, Codex, opencode and hermes).
 
-  An adapter with neither sends one message per episode.
+  An adapter with neither sends one message per episode. Reefine then does
+  not run a task of several messages: it reports the task as not tested and
+  holds a passing release for review.
 - ``offline_env`` names the ``env`` variables that keep an episode offline.
   An online episode leaves them out (pi's ``PI_OFFLINE``).
 - ``files`` maps node kinds to output paths, such as
