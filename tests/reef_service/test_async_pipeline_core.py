@@ -267,11 +267,10 @@ def _wait_for_error(dispatcher: Dispatcher) -> str:
 
 @pytest.mark.unit
 def test_empty_checkpoint_result_fails_closed() -> None:
-    # The invariant lives on the result type, so a completed job that cannot
-    # name its exported checkpoint cannot be constructed at all -- it can never
-    # reach the committer and be published as a durable version.
-    with pytest.raises(ValueError, match="must report the checkpoint path"):
+    # A job names its saved checkpoint, or None if it saved no checkpoint. An empty path is not correct.
+    with pytest.raises(ValueError, match="checkpoint_path must be a non-empty string"):
         TrainingJobResult(outcome="complete", runtime_load_id="v1", checkpoint_path="")
+    assert TrainingJobResult(outcome="complete", runtime_load_id="v1").checkpoint_path is None
 
 
 @pytest.mark.unit
