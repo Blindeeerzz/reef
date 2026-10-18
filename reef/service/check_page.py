@@ -216,7 +216,7 @@ def checks_html(checks: object, report: object = None, reason: object = None, *,
         str(check.get("status")) not in {"pass", "unsupported", "untested", "running", "pending"} for check in counted
     )
     if failed:
-        counts.append(f"{failed} need attention")
+        counts.append(f"{failed} {'needs' if failed == 1 else 'need'} attention")
     body = (
         '<section class="card evaluation-card"><h2>Independent evaluation</h2>'
         '<p class="evaluation-intro">Check the requested behavior first, then the existing capabilities '
