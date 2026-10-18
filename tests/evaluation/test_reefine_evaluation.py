@@ -25,6 +25,7 @@ from reef.harness.episodes.model_binding import ModelBinding, ModelBindingError,
 from reef.harness.episodes.run import EpisodeError, EpisodeResult
 from reef.recipe.errors import RecipeConfigError
 from reef.recipe.reefine.evaluation import evaluation_settings
+from reef.sandbox.process import EpisodeTimeout
 from reef.train.reefine.backend import ReefineBackend, ReefineCandidate
 from reef.train.reefine.proposer import request_with_feedback
 
@@ -147,6 +148,21 @@ def test_a_change_review_problem_that_is_not_unsafe_holds_a_passing_release_for_
     measured = plugin.evaluate(item)
     review = next(c for c in measured.metrics["evaluation_report"]["checks"] if c["id"] == "change-review")
     assert review["status"] == "invalid" and not plugin.decide(item, measured).selected
+
+
+def test_a_request_task_that_does_not_finish_fails_in_plain_words(tmp_path, monkeypatch):
+    plugin = evaluation(tmp_path)[0]
+
+    def unfinished(*args, **kwargs):
+        raise EpisodeError("episode timed out after 600s: ['pi', '--mode', 'json']") from EpisodeTimeout("600s")
+
+    monkeypatch.setattr(plugin, "episode", unfinished)
+    item = candidate(tmp_path)
+    measured = plugin.evaluate(item)
+    behavior = next(c for c in measured.metrics["evaluation_report"]["checks"] if c["id"] == "request-behavior-0")
+    assert behavior["status"] == "fail"
+    assert behavior["reason"].startswith("The task did not finish: the session was still running after")
+    assert "--mode" not in behavior["reason"] and not plugin.decide(item, measured).selected
 
 
 def test_the_plan_reads_the_changes_how_to_use_note(tmp_path):

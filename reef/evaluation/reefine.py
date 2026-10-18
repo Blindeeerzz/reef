@@ -39,7 +39,7 @@ from reef.harness.episodes.model_binding import ModelBinding, ModelBindingError,
 from reef.harness.episodes.run import EpisodeError, EpisodeResult, TrajectoryKeepError, run_episode
 from reef.harness.episodes.trajectory import TrajectoryError, final_assistant_text
 from reef.harness.step_result import evaluation_report
-from reef.sandbox.process import EpisodeExecutor
+from reef.sandbox.process import EpisodeExecutor, EpisodeTimeout
 
 
 @dataclass(frozen=True)
@@ -402,9 +402,23 @@ class ReefineEvaluation(SelectionPlugin):
                         ModelBindingError,
                         OSError,
                     ) as exc:
-                        checks[check_index] = replace(
-                            checks[check_index], status="invalid", reason=str(exc), seconds=time.monotonic() - before
-                        )
+                        if isinstance(exc.__cause__, EpisodeTimeout):
+                            # The candidate's session did not finish: a failure of the change, told in plain words.
+                            seconds = time.monotonic() - before
+                            checks[check_index] = replace(
+                                checks[check_index],
+                                status="fail",
+                                score=0.0,
+                                reason=f"The task did not finish: the session was still running after {seconds:.0f} s.",
+                                seconds=seconds,
+                            )
+                        else:
+                            checks[check_index] = replace(
+                                checks[check_index],
+                                status="invalid",
+                                reason=str(exc),
+                                seconds=time.monotonic() - before,
+                            )
                     self.update_progress(checks)
             self.update_progress(checks)
             for index, task in enumerate(self.settings.protected_tasks):
