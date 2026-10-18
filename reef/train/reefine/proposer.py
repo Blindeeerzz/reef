@@ -1279,16 +1279,23 @@ def slipped_json(reply: str) -> str | None:
     The outermost value starts at the first bracket or brace. When it does not
     decode, a value that decodes later stands for the answer only when the
     text before it closed every bracket it opened (a stray bracket in prose),
-    never when it sits inside the broken value."""
+    never when it sits inside the broken value. Objects written one after
+    another, rather than in one array, are a slip too: the first array found
+    would be a list nested in one of them."""
     starts = [at for at in (reply.find("["), reply.find("{")) if at >= 0]
     if not starts:
         return None
     start = min(starts)
+    decoder = json.JSONDecoder()
     try:
-        json.JSONDecoder().raw_decode(reply, start)
-        return None
+        value, end = decoder.raw_decode(reply, start)
     except json.JSONDecodeError as error:
         failure = error
+    else:
+        rest = reply[end:].lstrip(" \t\r\n,")
+        if isinstance(value, dict) and isinstance(decoded_at(decoder, rest, 0) if rest[:1] == "{" else None, dict):
+            return "the reply holds several JSON objects one after another, not one array"
+        return None
     found = json_found(reply)
     if found is not None and open_brackets(reply[start : found[0]]) <= 0:
         return None
