@@ -157,9 +157,10 @@ def check_html(
                 f"<p>{escape(observed)}</p></details>"
             )
         else:
+            # A limit or an untested item ran nothing: its text is the reason, not an observation.
+            label = "Why" if check.get("group") in ("limit", "untested") else "Observed result / reason"
             body += (
-                '<span class="evaluation-label">Observed result / reason</span>'
-                f'<p class="evaluation-observed">{escape(observed)}</p>'
+                f'<span class="evaluation-label">{label}</span><p class="evaluation-observed">{escape(observed)}</p>'
             )
     return body + "</div>"
 
