@@ -269,9 +269,9 @@ def run_episode(
             [binary or descriptor.binary, *(token.replace("{prompt}", message) for token in descriptor.continue_argv)]
             for message in (follow_ups if descriptor.continue_argv else ())
         ]
-        deadline = time.monotonic() + timeout
+        started = time.monotonic()
         outputs = []
-        for run_argv in runs:
+        for index, run_argv in enumerate(runs):
             try:
                 outcome = execute(
                     executor,
@@ -279,7 +279,8 @@ def run_episode(
                     root=root,
                     workspace=workspace,
                     env=env,
-                    timeout=max(deadline - time.monotonic(), 1.0),
+                    # A later message gets what the earlier runs left of the episode's timeout.
+                    timeout=max(timeout - (time.monotonic() - started), 1.0) if index else timeout,
                     writable_paths=writable_paths,
                     readonly_paths=tuple(root / PurePosixPath(relative) for relative in written),
                 )
