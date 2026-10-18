@@ -378,6 +378,7 @@ class ReefineEvaluation(SelectionPlugin):
                             candidate.candidate_files,
                             candidate.requires,
                             deadline,
+                            git_repository=context.initialize_git,
                         )
                         if context.verifier is not None:
                             verified = context.verifier.verify(result, record_dir / "workspace")
@@ -432,6 +433,7 @@ class ReefineEvaluation(SelectionPlugin):
                             candidate.current_files if side == "current" else candidate.candidate_files,
                             (),
                             deadline,
+                            git_repository=False,
                         )
                         scores[side] = float(passed)
                     passed = scores["candidate"] >= scores["current"] and scores["candidate"] == 1.0
@@ -712,6 +714,8 @@ class ReefineEvaluation(SelectionPlugin):
         harness_files: Mapping[str, str],
         requires: tuple[Mapping[str, object], ...],
         deadline: float,
+        *,
+        git_repository: bool,
     ) -> tuple[bool, str]:
         if result.exit_code != 0:
             return False, f"harness exited {result.exit_code}: {result.stderr[-500:]}"
@@ -728,6 +732,7 @@ class ReefineEvaluation(SelectionPlugin):
                 "trajectory": shortened_trajectory(result.trajectory),
                 "stderr": result.stderr[-2000:],
                 "files_outside_workspace": list(result.residue[:50]),
+                "workspace_is_git_repository": git_repository,
             },
             deadline,
         )

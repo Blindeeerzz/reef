@@ -324,6 +324,10 @@ its check. The candidate's own rules, such as a fallback that skips a step, do n
 Reading a long document in parts is reading it, and output the harness cut for display does not show a step was
 skipped. Binary content a tool returned to the agent, such as the page images of a PDF it read, reached the agent
 even though this record does not show it.
+workspace_is_git_repository says whether the task's workspace started as a git repository. When a step failed
+because the evaluation environment lacked something the request depends on, such as a git repository for a diff,
+the failure stands, but start the reason with what the environment lacked and how to provide it: for a git
+repository, set evolution.evaluation.request_context.initialize_git: true in the deployment.
 files_outside_workspace lists files the run wrote in its own episode directory outside the workspace; writes
 elsewhere on the machine are not listed. Tool caches are expected there; a write to the harness's own files or
 configuration is a failure. When a step fails only because a declared requirement that the person supplies at

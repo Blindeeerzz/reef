@@ -120,6 +120,12 @@ def test_failed_required_check_rejects(tmp_path, field):
     assert measured.metrics["evaluation_report"]["current_release_id"] == "served-release"
 
 
+def test_the_behavior_review_is_told_whether_the_workspace_is_a_git_repository(tmp_path):
+    plugin, model = evaluation(tmp_path)[:2]
+    plugin.evaluate(candidate(tmp_path))
+    assert '"workspace_is_git_repository": false' in model.messages_seen[1][0]["content"]
+
+
 def test_the_plan_reads_the_changes_how_to_use_note(tmp_path):
     plugin, model = evaluation(tmp_path)[:2]
     item = replace(candidate(tmp_path), usage="Type /chat off to leave the mode.")

@@ -199,7 +199,9 @@ model IDs and whether they match. Matching IDs do not verify matching model weig
 
 ``fixture_dir`` contains text files and must exist at startup. Symlinks and
 files larger than 1 MiB are rejected; total input is limited to 1000 files and 50 MiB. ``initialize_git`` commits the fixture
-in an isolated episode repository, so a review can read a relevant diff.
+in an isolated episode repository, so a review can read a relevant diff. Without
+it the task workspace has no repository. A request that needs one, such as a
+review of the diff, then fails, and the reason says to set ``initialize_git``.
 An optional ``request_context.verifier`` names a zero-argument
 ``RequestVerifier`` class for trusted checks; the evaluator also performs its
 model review. Without a prompt, the evaluator generates an application task.
