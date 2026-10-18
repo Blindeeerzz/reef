@@ -279,8 +279,8 @@ The extension points those packages expose are in `Python API
   ``reef/core/tasks/``. What a method asks the designer for, and what it does
   with the results, stays in the method's task generator under ``recipes/``.
 - Does it implement storage? Put it in ``reef/storage/``. ``sql_records.py``
-  shares SQL record and retention operations, and ``sql_tasks.py`` the task
-  store operations in the same database; ``sqlite.py`` supplies SQLite
+  shares SQL record and retention operations. ``sql_tasks.py`` shares the
+  task tables and task store operations in the same database. ``sqlite.py`` supplies SQLite
   schema, connections, transactions, and file maintenance. ``postgres.py`` supplies
   PostgreSQL tables, the commit table, pooled transactions, and retention.
   ``commit_log.py`` owns the ``CommitHistory`` base, the JSONL ``CommitLog``, and

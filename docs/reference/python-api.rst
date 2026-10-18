@@ -421,9 +421,9 @@ directory preserves SQLite schemas, JSONL format, and scenario filenames.
 The storage service keeps all per-scenario state. This includes the
 ``ScenarioSettings`` of each scenario: the model configuration and the
 selected training mode. The scenario registry uses ``read_settings`` and
-``write_settings``. It also includes the tasks that record-to-task stages
-generate (see `Generated task stores`_). ``archive`` retires the settings and
-tasks with the records and commits.
+``write_settings``. The per-scenario state also includes the tasks that
+record-to-task stages generate (see `Generated task stores`_). ``archive``
+retires the settings and tasks with the records and commits.
 
 ``Recipe.with_model_config(config)`` accepts the concrete ``ModelConfig`` from
 ``reef.inference.model_config``. ``ModelConfig.from_value(value)`` validates the
@@ -454,7 +454,7 @@ Concrete storage classes live under ``reef.storage``:
 ``commit_log.CommitHistoryScenarioStore`` accepts a ``RecordStore``, a
 ``TaskStorage`` (``tasks=``), and a ``CommitHistory``, either the JSONL
 ``commit_log.CommitLog`` or the ``postgres.PostgresCommitTable``. The bundled
-record stores supply their ``TaskStorage`` from ``task_storage()``; ``sqlite.SQLiteScenarioStorage`` and
+record stores give their ``TaskStorage`` from ``task_storage()``; ``sqlite.SQLiteScenarioStorage`` and
 ``postgres.PostgresScenarioStorage`` assemble their respective backends. The
 scenario package depends only on storage contracts. The storage contract is:
 
@@ -557,22 +557,23 @@ Generated task stores
 ~~~~~~~~~~~~~~~~~~~~~
 
 A record-to-task stage that generates tasks saves them in a ``TaskStore``
-before any rollout, so generation and rollout recover independently. The
-contract and its values are in ``reef.storage.tasks``. SQLite keeps the task
-tables in the scenario's database file. PostgreSQL keeps them in the
-deployment schema, keyed by store generation. Record retention does not
-delete tasks, because a task holds its own content.
+before any rollout. Thus generation and rollout can recover independently
+after a restart. The contract and its values are in ``reef.storage.tasks``.
 
-``session.task_store(name, split=SplitSettings(eval_fraction=..., seed=...))``
-opens one store. Each record-to-task stage uses its own ``name``; the
-components of a composite recipe use distinct names. The first open saves
-the split settings, and a later open with different settings raises
-``TaskStoreError``.
+To open a store, call
+``session.task_store(name, split=SplitSettings(eval_fraction=..., seed=...))``.
+Each record-to-task stage uses its own ``name``. Thus the components of a
+composite recipe use different names. The first open saves the split
+settings. A later open with different settings raises ``TaskStoreError``.
 
-A store holds generations. Each generation holds its source record ids,
-its candidate tasks (``GeneratedTask`` values), and one outcome for each
-candidate: published to the ``train`` or ``eval`` split, or rejected with a
-reason. The stage chooses the split; the store keeps it.
+A store holds generations. A generation holds its source record ids and its
+candidates. Each ``TaskCandidate`` holds a ``GeneratedTask`` and its outcome:
+
+- A published candidate has a ``split``, ``train`` or ``eval``. The stage
+  chooses the split, and the store keeps it.
+- A rejected candidate has an ``error`` that gives the reason.
+- A pending candidate has neither. After a restart, the stage validates the
+  candidates in ``GenerationState.pending_indices``.
 
 .. list-table::
    :header-rows: 1
@@ -581,31 +582,38 @@ reason. The stage chooses the split; the store keeps it.
    * - Member
      - Contract
    * - ``begin_generation(generation=..., source_record_ids=...)``
-     - Create the generation checkpoint, or return it on a retry with the same
-       source record ids.
+     - Create the checkpoint of a generation. A retry with the same source
+       record ids returns the checkpoint.
    * - ``save_candidates(generation=..., candidates=...)``
      - Save the candidates once, before validation or play.
    * - ``publish_task(generation=..., index=..., split=...)``
-     - Publish one candidate and return its ``StoredTask``. A task name is
-       published once: a later candidate with the same content must name the
-       same split and gets the published task.
+     - Publish one candidate and return its ``StoredTask``. Each task name is
+       published once. A later candidate with the same content must give the
+       same split. It then returns the published task.
    * - ``reject_task(generation=..., index=..., reason=...)``
      - Save the rejection of one candidate.
    * - ``complete_generation(generation=...)``
-     - Mark the generation complete after every candidate has an outcome.
+     - Mark the generation complete. Each candidate must have an outcome.
    * - ``generation(generation)``, ``generations()``
-     - Read checkpoints; ``GenerationState.pending_indices`` lists the
-       candidates that a restarted stage must still validate.
+     - Return one checkpoint or all checkpoints.
    * - ``tasks(split=None)``
-     - Published tasks in generation and candidate order, optionally of one
-       split.
+     - Return the published tasks in generation and candidate order. Give a
+       ``split`` to return only the tasks of that split.
 
-Every write is durable when it returns, and an identical retry is a no-op.
-A write that conflicts with the stored state raises ``TaskStoreError``; a
-task name that is published with other content or in the other split raises
-its subclass ``TaskConflict``. The caller serializes the writers of one
-store. A ``StoredTask`` holds the complete task. To run it, write the task
+Each write is durable when it returns. An identical retry of a write changes
+nothing. A write that conflicts with the stored state raises
+``TaskStoreError``. If a task name is published with other content or in the
+other split, the store raises ``TaskConflict``, a subclass of
+``TaskStoreError``. The caller serializes the writers of one store.
+
+A ``StoredTask`` holds the complete task. To run the task, write its
 directory with ``reef.core.tasks.write_harbor_task``.
+
+SQLite keeps the task tables in the database file of the scenario.
+PostgreSQL keeps them in the deployment schema, with a key for each store
+generation. Thus ``archive`` retires the tasks with the records and commits.
+Record retention does not delete tasks, because each task holds its own
+content.
 
 Artifact backends
 -----------------

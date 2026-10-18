@@ -9,14 +9,7 @@ import pytest
 from reef.core.tasks import GeneratedTask, HarborTask, PlayArm
 from reef.storage.postgres import PostgresScenarioStorage
 from reef.storage.sqlite import SQLiteScenarioStorage
-from reef.storage.tasks import (
-    CandidateOutcome,
-    GenerationState,
-    SplitSettings,
-    StoredTask,
-    TaskConflict,
-    TaskStoreError,
-)
+from reef.storage.tasks import GenerationState, SplitSettings, StoredTask, TaskCandidate, TaskConflict, TaskStoreError
 
 SPLIT = SplitSettings(eval_fraction=0.25, seed=7)
 
@@ -64,7 +57,9 @@ def test_a_generation_records_candidates_and_outcomes(session):
     assert store.begin_generation(generation=0, source_record_ids=("record-1", "record-2")) == GenerationState(
         generation=0, source_record_ids=("record-1", "record-2")
     )
-    assert store.save_candidates(generation=0, candidates=candidates).candidates == candidates
+    assert store.save_candidates(generation=0, candidates=candidates).candidates == tuple(
+        TaskCandidate(item) for item in candidates
+    )
     alpha = store.publish_task(generation=0, index=0, split="train")
     store.publish_task(generation=0, index=1, split="eval")
     store.reject_task(generation=0, index=2, reason="the oracle failed")
@@ -74,11 +69,10 @@ def test_a_generation_records_candidates_and_outcomes(session):
     assert completed == GenerationState(
         generation=0,
         source_record_ids=("record-1", "record-2"),
-        candidates=candidates,
-        outcomes=(
-            CandidateOutcome(0, split="train"),
-            CandidateOutcome(1, split="eval"),
-            CandidateOutcome(2, error="the oracle failed"),
+        candidates=(
+            TaskCandidate(candidates[0], split="train"),
+            TaskCandidate(candidates[1], split="eval"),
+            TaskCandidate(candidates[2], error="the oracle failed"),
         ),
         is_complete=True,
     )
@@ -101,13 +95,16 @@ def test_identical_retries_change_nothing(session):
 
     state = store.generation(3)
     assert state is not None and state.is_complete
-    assert state.outcomes == (CandidateOutcome(0, split="train"), CandidateOutcome(1, error="invalid"))
+    assert state.candidates == (
+        TaskCandidate(candidates[0], split="train"),
+        TaskCandidate(candidates[1], error="invalid"),
+    )
     assert len(store.tasks()) == 1
 
 
 def test_conflicting_generation_writes_are_refused(session):
     store = session.task_store("tasks", split=SPLIT)
-    with pytest.raises(TaskStoreError, match="has not begun"):
+    with pytest.raises(TaskStoreError, match="does not exist"):
         store.save_candidates(generation=0, candidates=(generated("alpha"),))
     store.begin_generation(generation=0, source_record_ids=("record-1",))
     with pytest.raises(TaskStoreError, match="other source records"):
@@ -117,7 +114,7 @@ def test_conflicting_generation_writes_are_refused(session):
         store.save_candidates(generation=0, candidates=(generated("alpha"),))
     with pytest.raises(TaskStoreError, match="no candidate 2"):
         store.publish_task(generation=0, index=2, split="train")
-    with pytest.raises(TaskStoreError, match="unfinished candidates"):
+    with pytest.raises(TaskStoreError, match="candidates without outcome"):
         store.complete_generation(generation=0)
 
     store.publish_task(generation=0, index=0, split="train")
@@ -126,7 +123,7 @@ def test_conflicting_generation_writes_are_refused(session):
         store.publish_task(generation=0, index=0, split="eval")
     with pytest.raises(TaskStoreError, match="is published"):
         store.reject_task(generation=0, index=0, reason="invalid")
-    with pytest.raises(TaskStoreError, match="was rejected"):
+    with pytest.raises(TaskStoreError, match="is rejected"):
         store.publish_task(generation=0, index=1, split="train")
     with pytest.raises(TaskStoreError, match="another reason"):
         store.reject_task(generation=0, index=1, reason="duplicate")
@@ -145,7 +142,7 @@ def test_a_task_name_is_published_once(session):
     with pytest.raises(TaskConflict, match="published to eval, not train"):
         store.publish_task(generation=1, index=0, split="train")
     assert store.publish_task(generation=1, index=1, split="eval") == first
-    with pytest.raises(TaskConflict, match="published with digest"):
+    with pytest.raises(TaskConflict, match="published with other content"):
         store.publish_task(generation=1, index=2, split="eval")
     assert store.tasks() == (first,)
 

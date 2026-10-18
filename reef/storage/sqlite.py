@@ -15,7 +15,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Self
 
-from sqlalchemy import REAL, URL, Boolean, Column, Index, Integer, MetaData, Table, Text, create_engine, inspect
+from sqlalchemy import REAL, URL, Column, Index, Integer, MetaData, Table, Text, create_engine, inspect
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import NullPool
@@ -27,7 +27,7 @@ from reef.storage.migrations import archive_imported_files, legacy_model_configs
 from reef.storage.records import RecordRetention
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage
 from reef.storage.sql_records import RecordTables, SQLRecordRetention, SQLRecordStore
-from reef.storage.sql_tasks import SQLTaskStorage, TaskTables
+from reef.storage.sql_tasks import SQLTaskStorage, task_tables
 
 _METADATA = MetaData()
 _AGENT_RECORD = Table(
@@ -85,47 +85,7 @@ _SCENARIO_SETTING = Table(
     Column("name", Text, primary_key=True),
     Column("value_json", Text, nullable=False),
 )
-# Generated task stores, keyed by store name within the scenario's database.
-TASK_TABLES = TaskTables(
-    stores=Table(
-        "task_store",
-        _METADATA,
-        Column("store_name", Text, primary_key=True),
-        Column("eval_fraction", REAL, nullable=False),
-        Column("seed", Integer, nullable=False),
-    ),
-    generations=Table(
-        "task_generation",
-        _METADATA,
-        Column("store_name", Text, primary_key=True),
-        Column("generation", Integer, primary_key=True),
-        Column("source_record_ids_json", Text, nullable=False),
-        Column("candidate_count", Integer),
-        Column("is_complete", Boolean, nullable=False),
-    ),
-    candidates=Table(
-        "task_candidate",
-        _METADATA,
-        Column("store_name", Text, primary_key=True),
-        Column("generation", Integer, primary_key=True),
-        Column("candidate_index", Integer, primary_key=True),
-        Column("task_name", Text, nullable=False),
-        Column("digest", Text, nullable=False),
-        Column("generated_json", Text, nullable=False),
-        Column("split", Text),
-        Column("error", Text),
-    ),
-    published=Table(
-        "generated_task",
-        _METADATA,
-        Column("store_name", Text, primary_key=True),
-        Column("task_name", Text, primary_key=True),
-        Column("digest", Text, nullable=False),
-        Column("split", Text, nullable=False),
-        Column("generation", Integer, nullable=False),
-        Column("candidate_index", Integer, nullable=False),
-    ),
-)
+TASK_TABLES = task_tables(_METADATA)
 logger = logging.getLogger(__name__)
 
 _TABLES = RecordTables(_AGENT_RECORD, _CONSUMED_RECORD, CONSUMPTION_RECEIPTS, RECORD_EVICTION, _SCENARIO_SETTING)

@@ -22,7 +22,6 @@ from typing import Any, Self
 
 from sqlalchemy import (
     BigInteger,
-    Boolean,
     Column,
     Float,
     ForeignKey,
@@ -58,7 +57,7 @@ from reef.storage.migrations import archive_imported_files, legacy_model_configs
 from reef.storage.records import RecordLoss, RecordRetention
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage
 from reef.storage.sql_records import RecordTables, SQLRecordRetention, SQLRecordStore
-from reef.storage.sql_tasks import SQLTaskStorage, TaskTables
+from reef.storage.sql_tasks import SQLTaskStorage, task_tables
 
 logger = logging.getLogger(__name__)
 
@@ -150,55 +149,6 @@ def _record_tables(metadata: MetaData) -> RecordTables:
     return RecordTables(records, consumed, receipts, eviction, settings)
 
 
-def task_tables(metadata: MetaData) -> TaskTables:
-    def store_columns() -> tuple[Column[str], Column[str]]:
-        return (
-            Column("storage_id", String(32), ForeignKey("record_store.storage_id"), primary_key=True),
-            Column("store_name", Text, primary_key=True),
-        )
-
-    return TaskTables(
-        stores=Table(
-            "task_store",
-            metadata,
-            *store_columns(),
-            Column("eval_fraction", Float(53), nullable=False),
-            Column("seed", BigInteger, nullable=False),
-        ),
-        generations=Table(
-            "task_generation",
-            metadata,
-            *store_columns(),
-            Column("generation", BigInteger, primary_key=True),
-            Column("source_record_ids_json", Text, nullable=False),
-            Column("candidate_count", BigInteger),
-            Column("is_complete", Boolean, nullable=False),
-        ),
-        candidates=Table(
-            "task_candidate",
-            metadata,
-            *store_columns(),
-            Column("generation", BigInteger, primary_key=True),
-            Column("candidate_index", BigInteger, primary_key=True),
-            Column("task_name", Text, nullable=False),
-            Column("digest", String(64), nullable=False),
-            Column("generated_json", Text, nullable=False),
-            Column("split", Text),
-            Column("error", Text),
-        ),
-        published=Table(
-            "generated_task",
-            metadata,
-            *store_columns(),
-            Column("task_name", Text, primary_key=True),
-            Column("digest", String(64), nullable=False),
-            Column("split", Text, nullable=False),
-            Column("generation", BigInteger, nullable=False),
-            Column("candidate_index", BigInteger, nullable=False),
-        ),
-    )
-
-
 class PostgresRecordDatabase:
     """Own a connection pool and shared tables in one deployment's SQL schema.
 
@@ -222,7 +172,7 @@ class PostgresRecordDatabase:
         )
         version = Table("schema_version", metadata, Column("version", Integer, primary_key=True))
         self.tables = _record_tables(metadata)
-        self.task_tables = task_tables(metadata)
+        self.task_tables = task_tables(metadata, foreign_key="record_store.storage_id")
         #: One row per committed step, as the JSON object a commit log line holds.
         self.commits = Table(
             "scenario_commit",
@@ -247,8 +197,8 @@ class PostgresRecordDatabase:
                 versions: list[int] = list(connection.execute(select(version.c.version)).scalars().all())
                 if versions and versions not in ([1], [2], [3], [4], [5]):
                     raise ReefError("unsupported PostgreSQL record schema version")
-                # Version 4 adds the commit and settings tables, version 5 the task tables;
-                # create_all adds them to older schemas.
+                # Version 4 adds the commit and settings tables. Version 5 adds the task tables.
+                # create_all adds them to an older schema.
                 metadata.create_all(connection)
                 migrate_record_storage(connection, self.tables.records, self.tables.consumption)
                 for index in self.tables.records.indexes:

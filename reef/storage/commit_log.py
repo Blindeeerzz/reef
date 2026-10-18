@@ -278,7 +278,7 @@ class CommitHistoryScenarioStore(ScenarioStore):
 
     Passing no commit history preserves the existing in-memory configuration. Its
     commits still enforce step fencing and retries for the session lifetime.
-    ``tasks`` opens the task stores; they usually share the records' database.
+    ``tasks`` opens the task stores. Usually, they are in the same database as the records.
     ``initial_step`` supports existing scenarios constructed at a saved step.
     """
 
@@ -321,7 +321,7 @@ class CommitHistoryScenarioStore(ScenarioStore):
     def task_store(self, name: str, *, split: SplitSettings) -> TaskStore:
         with self._lock:
             self._ensure_open()
-            return self._tasks.task_store(name, split=split)
+            return self._tasks.open(name, split=split)
 
     @property
     def commit_history(self) -> CommitHistory | None:

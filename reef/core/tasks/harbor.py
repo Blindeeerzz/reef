@@ -132,7 +132,10 @@ class HarborTask:
             raise HarborTaskError(f"the task is not valid Unicode text: {exc.reason}") from exc
 
     def document(self) -> dict[str, object]:
-        """Every field as JSON values; ``HarborTask(**document)`` rebuilds the task, given its ids as a tuple."""
+        """Return the fields of the task as JSON values.
+
+        To rebuild the task, call ``HarborTask(**document)`` with ``source_agent_record_ids`` as a tuple.
+        """
         return {
             "name": self.name,
             "instruction": self.instruction,

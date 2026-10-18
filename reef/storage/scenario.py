@@ -65,10 +65,10 @@ class ScenarioStore(ABC):
     def task_store(self, name: str, *, split: SplitSettings) -> TaskStore:
         """Open the generated task store ``name`` of this scenario.
 
-        One record-to-task stage owns each name, so the components of a
-        composite recipe use distinct names. The first open saves ``split``;
-        a later open with different settings raises ``TaskStoreError``. The
-        store closes with this session and survives restarts when ``durable``.
+        Each record-to-task stage uses its own name. Thus the components of a
+        composite recipe use different names. The first open saves ``split``.
+        A later open with different settings raises ``TaskStoreError``. The
+        store closes with this session. It survives a restart if ``durable`` is true.
         """
 
     @abstractmethod

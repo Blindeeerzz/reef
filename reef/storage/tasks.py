@@ -1,14 +1,14 @@
-"""Storage contract for the tasks that a record-to-task stage generates for one scenario.
+"""Storage contract for the tasks that a record-to-task stage generates.
 
-A stage saves each generation job here before any rollout. A generation holds
-its source record ids, then its candidate tasks, then one outcome for each
-candidate: published to the train or eval split, or rejected with a reason.
-A published task keeps its split for the life of the store. The stage chooses
-the split; the store keeps it and refuses writes that conflict with it.
+A stage saves each generation job in a task store before any rollout. A
+generation holds its source record ids and its candidate tasks. Each candidate
+then gets one outcome: the stage publishes it to the train or eval split, or
+rejects it with a reason. The stage chooses the split. The store keeps it and
+refuses writes that conflict with it.
 
-Task stores belong to the scenario's storage session. Archiving the scenario
-retires them with its records and commits. Record retention does not delete
-them, because a task holds its own content.
+A task store belongs to a scenario session. Archiving the scenario retires its
+task stores with its records and commits. Record retention does not delete
+tasks, because each task holds its own content.
 """
 
 from __future__ import annotations
@@ -25,16 +25,16 @@ SPLIT_NAMES: tuple[SplitName, ...] = ("train", "eval")
 
 
 class TaskStoreError(ReefError):
-    """A task store write conflicts with the stored state, or names state that the store does not hold."""
+    """A write conflicts with the stored state, or it names state that the store does not hold."""
 
 
 class TaskConflict(TaskStoreError):
-    """A task name already identifies different task content, or the task is already in the other split."""
+    """A task name is already published with different content or in the other split."""
 
 
 @dataclass(frozen=True)
 class SplitSettings:
-    """The split configuration of a task store. The store keeps it unchanged for its whole life."""
+    """The split settings of a task store. They do not change for the life of the store."""
 
     eval_fraction: float
     seed: int
@@ -49,55 +49,66 @@ class SplitSettings:
 
 
 @dataclass(frozen=True)
-class CandidateOutcome:
-    """What became of one candidate: published to ``split``, or rejected with ``error``."""
+class TaskCandidate:
+    """One candidate of a generation and its outcome.
 
-    index: int
+    A published candidate has a ``split``. A rejected candidate has an
+    ``error``. A pending candidate has neither.
+    """
+
+    generated: GeneratedTask
     split: SplitName | None = None
     error: str = ""
 
     def __post_init__(self) -> None:
-        if isinstance(self.index, bool) or not isinstance(self.index, int) or self.index < 0:
-            raise ValueError("a candidate index must be a non-negative integer")
-        if self.split is None:
-            if not isinstance(self.error, str) or not self.error:
-                raise ValueError("a rejected candidate needs a reason")
-        elif self.split not in SPLIT_NAMES or self.error:
-            raise ValueError("a published candidate has a split, 'train' or 'eval', and no error")
+        if self.split is not None and self.split not in SPLIT_NAMES:
+            raise ValueError("split must be 'train', 'eval' or None")
+        if self.split is not None and self.error:
+            raise ValueError("a published candidate has no error")
+
+    @property
+    def is_pending(self) -> bool:
+        return self.split is None and not self.error
 
 
 @dataclass(frozen=True)
 class GenerationState:
     """The checkpoint of one generation job.
 
-    ``candidates`` is ``None`` until the stage saves them; an empty tuple means
-    the job produced no candidate. ``outcomes`` holds at most one outcome for
-    each candidate index.
+    ``candidates`` is ``None`` until the stage saves them. An empty tuple
+    means that the job produced no candidate.
     """
 
     generation: int
     source_record_ids: tuple[str, ...]
-    candidates: tuple[GeneratedTask, ...] | None = None
-    outcomes: tuple[CandidateOutcome, ...] = ()
+    candidates: tuple[TaskCandidate, ...] | None = None
     is_complete: bool = False
 
     def __post_init__(self) -> None:
-        indices = [outcome.index for outcome in self.outcomes]
-        if len(indices) != len(set(indices)) or any(index >= len(self.candidates or ()) for index in indices):
-            raise ValueError("generation outcomes must name distinct saved candidates")
+        if isinstance(self.generation, bool) or not isinstance(self.generation, int) or self.generation < 0:
+            raise ValueError("generation must be a non-negative integer")
+        record_ids = self.source_record_ids
+        if (
+            not isinstance(record_ids, tuple)
+            or any(not isinstance(record_id, str) or not record_id for record_id in record_ids)
+            or len(set(record_ids)) != len(record_ids)
+        ):
+            raise ValueError("source_record_ids must be a tuple of distinct non-empty strings")
         if self.is_complete and (self.candidates is None or self.pending_indices):
-            raise ValueError("a complete generation has an outcome for every candidate")
+            raise ValueError("a complete generation has an outcome for each candidate")
 
     @property
     def pending_indices(self) -> tuple[int, ...]:
-        """Candidate indices that have no outcome yet."""
-        completed = {outcome.index for outcome in self.outcomes}
-        return tuple(index for index in range(len(self.candidates or ())) if index not in completed)
+        """The indices of the candidates that have no outcome."""
+        return tuple(index for index, candidate in enumerate(self.candidates or ()) if candidate.is_pending)
 
 
 @dataclass(frozen=True)
 class StoredTask:
-    """A published task with its split, and the generation candidate that first published it."""
+    """A published task and its split.
+
+    ``generation`` and ``index`` identify the candidate that published the task first.
+    """
 
     generated: GeneratedTask
     split: SplitName
@@ -106,80 +117,80 @@ class StoredTask:
 
 
 class TaskStore(ABC):
-    """The generation checkpoints and published tasks of one record-to-task stage.
+    """The generations and published tasks of one record-to-task stage.
 
-    A store is part of a scenario session and closes with it. Every write is
-    durable when it returns, and an identical retry of a write is a no-op.
+    A store is part of a scenario session and closes with it. Each write is
+    durable when it returns. An identical retry of a write changes nothing.
     The caller serializes the writers of one store.
     """
 
     @abstractmethod
     def begin_generation(self, *, generation: int, source_record_ids: tuple[str, ...]) -> GenerationState:
-        """Create the checkpoint of a generation, or return it when the job is retried.
+        """Create the checkpoint of a generation, or return the checkpoint on a retry.
 
-        Raises ``TaskStoreError`` when the generation exists with other source record ids.
+        Raises ``TaskStoreError`` if the generation exists with other source record ids.
         """
 
     @abstractmethod
     def save_candidates(self, *, generation: int, candidates: tuple[GeneratedTask, ...]) -> GenerationState:
-        """Save the candidates of a begun generation before any of them is validated or played.
+        """Save the candidates of a generation before validation or play.
 
-        Raises ``TaskStoreError`` when the generation has not begun or already holds other candidates.
+        Raises ``TaskStoreError`` if the generation does not exist or has other candidates.
         """
 
     @abstractmethod
-    def generation(self, generation: int) -> GenerationState | None:
-        """The checkpoint of one generation, or ``None`` when it has not begun."""
-
-    @abstractmethod
-    def generations(self) -> tuple[GenerationState, ...]:
-        """Every generation checkpoint, in generation order."""
-
-    @abstractmethod
     def publish_task(self, *, generation: int, index: int, split: SplitName) -> StoredTask:
-        """Publish one saved candidate to ``split`` and return the published task.
+        """Publish one candidate to ``split`` and return the published task.
 
-        A task name is published once. Another candidate with the same task
-        content must name the same split, and gets the task that is already
-        published. Raises ``TaskConflict`` when the name is published with
-        other content or in the other split. Raises ``TaskStoreError`` when the
-        candidate does not exist or already has another outcome.
+        Each task name is published once. A later candidate with the same
+        content must name the same split, and it returns the published task.
+        Raises ``TaskConflict`` if the name is published with other content or
+        in the other split. Raises ``TaskStoreError`` if the candidate does not
+        exist or is rejected.
         """
 
     @abstractmethod
     def reject_task(self, *, generation: int, index: int, reason: str) -> None:
-        """Save the rejection of one saved candidate.
+        """Save the rejection of one candidate.
 
-        Raises ``TaskStoreError`` when the candidate does not exist or already has another outcome.
+        Raises ``TaskStoreError`` if the candidate does not exist or has another outcome.
         """
 
     @abstractmethod
     def complete_generation(self, *, generation: int) -> GenerationState:
-        """Mark a generation complete. Raises ``TaskStoreError`` while a candidate has no outcome."""
+        """Mark a generation complete. Raises ``TaskStoreError`` if a candidate has no outcome."""
+
+    @abstractmethod
+    def generation(self, generation: int) -> GenerationState | None:
+        """Return the checkpoint of one generation, or ``None`` if the generation does not exist."""
+
+    @abstractmethod
+    def generations(self) -> tuple[GenerationState, ...]:
+        """Return all generation checkpoints in generation order."""
 
     @abstractmethod
     def tasks(self, *, split: SplitName | None = None) -> tuple[StoredTask, ...]:
-        """Published tasks in publication order, optionally of one split."""
+        """Return the published tasks in generation and candidate order, optionally of one split."""
 
 
 class TaskStorage(ABC):
-    """Opens the task stores of one scenario. Each store has its own name and split settings."""
+    """Opens the task stores of one scenario. Each store has a name and its own split settings."""
 
     @abstractmethod
-    def task_store(self, name: str, *, split: SplitSettings) -> TaskStore:
+    def open(self, name: str, *, split: SplitSettings) -> TaskStore:
         """Open the task store ``name``.
 
-        The first open saves ``split``. Raises ``TaskStoreError`` when a later
-        open names different split settings.
+        The first open saves ``split``. Raises ``TaskStoreError`` if a later
+        open gives different split settings.
         """
 
 
 __all__ = [
-    "CandidateOutcome",
     "GenerationState",
     "SplitName",
     "SplitSettings",
     "StoredTask",
+    "TaskCandidate",
     "TaskConflict",
     "TaskStorage",
     "TaskStore",
