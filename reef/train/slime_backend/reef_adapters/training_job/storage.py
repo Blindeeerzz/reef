@@ -85,6 +85,17 @@ def critic_checkpoint_due(rollout_id: int, interval: int) -> bool:
     return (rollout_id + 1) % interval == 0
 
 
+def checkpoint_due(scenario_step: int, interval: int) -> bool:
+    """Return True if the job that trains ``scenario_step`` saves the paired checkpoint.
+
+    Each ``interval``-th scenario version saves. With ``interval`` 1, each
+    job saves. The count uses scenario versions, not rollout IDs, as
+    ``reef.checkpoint_every_n_versions`` does. A rejected job uses a rollout
+    ID but makes no version.
+    """
+    return (scenario_step + 1) % interval == 0
+
+
 class CheckpointStorage:
     """Own paired Slime HF and Megatron checkpoints under one local byte cap."""
 
