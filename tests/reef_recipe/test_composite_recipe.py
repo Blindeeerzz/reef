@@ -14,7 +14,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 from tests.support._threshold_processor import ThresholdBatches, threshold_pipeline
 
-from reef.artifact import Artifact, InMemoryRepositoryBackend
+from reef.artifact import Artifact, GitLFSRepositoryBackendFactory, InMemoryRepositoryBackend
 from reef.artifact.artifact import ArtifactValidator
 from reef.artifact.composite import compose_release
 from reef.core import AgentRecord, RequestType
@@ -420,7 +420,7 @@ def test_composite_recipe_refuses_a_checkpoint_cadence() -> None:
             {},
             config={**base, "artifact": {"checkpoint_every_n_versions": 5}, "components": components},
         )
-    with pytest.raises(RecipeConfigError, match=r"components\.harness\.config\.checkpoint_every_n_versions"):
+    with pytest.raises(RecipeConfigError, match=r"does not consume config key\(s\) 'checkpoint_every_n_versions'"):
         build_recipe(
             base["implementation"],
             {},
@@ -437,7 +437,7 @@ def test_composite_recipe_refuses_a_checkpoint_cadence() -> None:
         build_recipe(
             base["implementation"], {}, config={**base, "checkpoint_every_n_versions": 5, "components": components}
         )
-    with pytest.raises(RecipeConfigError, match=r"components\.harness\.config\.artifact\.checkpoint_every_n_versions"):
+    with pytest.raises(RecipeConfigError, match=r"does not consume config key\(s\) 'artifact'"):
         build_recipe(
             base["implementation"],
             {},
@@ -483,7 +483,6 @@ def test_composite_scenario_serves_config_defaults_and_reports_components(tmp_pa
         recipe,
         InMemoryRepositoryBackend.factory(initial, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "staged",
-        agent_record_dir=tmp_path / "records",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "records"),
     )
     try:
@@ -519,7 +518,6 @@ def test_composite_scenario_serves_config_defaults_and_reports_components(tmp_pa
 
         rows = scenario.releases()
         assert rows[0]["component"] == "harness"
-        assert rows[0]["base_release_id"] == rows[1]["release_id"]
         assert "component" not in rows[1]
         # The config component runs no step: the one commit is the harness's, naming the rows it consumed.
         assert scenario.store.history()[-1].consumed_ids == frozenset({"i1", "r1"})
@@ -543,7 +541,6 @@ def _serve(recipe: CompositeRecipe, tmp_path: Path) -> Dispatcher:
         recipe,
         InMemoryRepositoryBackend.factory(initial, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "staged",
-        agent_record_dir=tmp_path / "records",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "records"),
     )
 
@@ -941,7 +938,7 @@ def test_only_a_composite_evaluates_through_the_service(
 
     monkeypatch.setattr(assembly, "_serving_recipe", lambda *args: recipe)
     monkeypatch.setattr(assembly, "Dispatcher", dispatcher)
-    monkeypatch.setattr(assembly.GitLFSRepositoryBackend, "factory", lambda *args, **kwargs: lambda name: object())
+    monkeypatch.setattr(GitLFSRepositoryBackendFactory, "from_config", lambda *args, **kwargs: lambda name: object())
     settings = ServiceConfig(recipe="recipe", agent_record_dir=str(tmp_path), port=8900)
     assembly.build_dispatcher(settings, hold_local_cycles=True, evaluation_token="episode")
     if composite:

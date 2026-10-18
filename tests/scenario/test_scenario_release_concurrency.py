@@ -17,7 +17,7 @@ from reef.dispatcher import Dispatcher
 from reef.evaluation import EvaluationResult, UpdateCandidate
 from reef.recipe import Recipe
 from reef.scenario import Scenario
-from reef.storage.commit_log import CommitLogScenarioStore
+from reef.storage.commit_log import CommitHistoryScenarioStore
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train import CandidateBackend, PreparedStep, Trainer, TrainStepResult
 
@@ -90,7 +90,6 @@ def local_scenario(tmp_path):
         _LocalRecipe(backend=backend),
         InMemoryRepositoryBackend.factory(initial, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "staged",
-        agent_record_dir=tmp_path / "records",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "records"),
     )
     scenario = dispatcher.get_or_create_scenario("math")
@@ -166,10 +165,10 @@ def test_release_reads_remain_live_during_local_training(local_scenario, phase, 
             # A queued writer must wait on the operation lock without first
             # taking the publication lock and starving the read-side callers.
             catalog = executor.submit(scenario.releases)
-            latest = executor.submit(scenario.artifact_with_metrics)
-            historical = executor.submit(scenario.artifact_with_metrics, initial_ref.release_id)
-            version = executor.submit(scenario.artifact_for_version, current_ref.release_id)
-            old_version = executor.submit(scenario.artifact_for_version, initial_ref.release_id)
+            latest = executor.submit(scenario.release_queries.artifact_with_metrics)
+            historical = executor.submit(scenario.release_queries.artifact_with_metrics, initial_ref.release_id)
+            version = executor.submit(scenario.release_queries.artifact_for_version, current_ref.release_id)
+            old_version = executor.submit(scenario.release_queries.artifact_for_version, initial_ref.release_id)
 
             assert catalog.result(timeout=2) == expected_releases
             artifact, metrics = latest.result(timeout=2)
@@ -193,7 +192,7 @@ def test_release_reads_remain_live_during_local_training(local_scenario, phase, 
         if operation == "commit":
             assert writer.result(timeout=2) == {"steps": 2}
             assert scenario.scenario_step == 2
-            assert scenario.artifact_with_metrics()[1] == {"score": 2.0}
+            assert scenario.release_queries.artifact_with_metrics()[1] == {"score": 2.0}
         else:
             with pytest.raises(ReefError, match="pending commit"):
                 writer.result(timeout=2)
@@ -215,8 +214,8 @@ def test_release_reads_wait_for_complete_publication(local_scenario, monkeypatch
     resume_publication = Event()
 
     assert scenario.store.durable
-    assert isinstance(scenario.store, CommitLogScenarioStore)
-    journal = scenario.store.commit_log
+    assert isinstance(scenario.store, CommitHistoryScenarioStore)
+    journal = scenario.store.commit_history
     assert journal is not None
     target = journal if phase == "journal" else scenario.trainer
     method = "append" if phase == "journal" else "commit_applied"
@@ -236,15 +235,15 @@ def test_release_reads_wait_for_complete_publication(local_scenario, monkeypatch
 
     def read_latest():
         readers_started[1].set()
-        return scenario.artifact_with_metrics()
+        return scenario.release_queries.artifact_with_metrics()
 
     def read_historical():
         readers_started[2].set()
-        return scenario.artifact_with_metrics(previous_ref.release_id)
+        return scenario.release_queries.artifact_with_metrics(previous_ref.release_id)
 
     def read_version():
         readers_started[3].set()
-        return scenario.artifact_for_version(previous_ref.release_id)
+        return scenario.release_queries.artifact_for_version(previous_ref.release_id)
 
     with ThreadPoolExecutor(max_workers=5) as executor:
         writer = (
@@ -386,8 +385,8 @@ def test_rollback_exposes_pointer_failure_after_its_commit(local_scenario, monke
 def test_committed_record_retry_reports_pointer_failure_without_repeating_step(local_scenario, monkeypatch):
     scenario, _ = local_scenario
     result = _prepare(scenario)
-    assert isinstance(scenario.store, CommitLogScenarioStore)
-    journal = scenario.store.commit_log
+    assert isinstance(scenario.store, CommitHistoryScenarioStore)
+    journal = scenario.store.commit_history
     assert journal is not None
     append = journal.append
 

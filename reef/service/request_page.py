@@ -14,8 +14,8 @@ backend reports no phase, ``settling`` while the row that consumed the
 record lands), lists what the proposer has done so far (the step's
 activity: model calls, and an agent's tool calls, checks and trials), and
 reloads itself every ``REFRESH_SECONDS``, so a person opens the link right
-after asking and watches. The chrome, the palette and
-the status wording come from :mod:`reef.service.page_chrome`, which the
+after asking and watches. The layout, the palette and
+the status wording come from :mod:`reef.service.page_layout`, which the
 version page draws with too; this module adds only its own sections' style.
 """
 
@@ -28,7 +28,7 @@ from reef.core.requirements import required_by
 from reef.harness.step_result import design_sections, floor_tasks_note, next_action, reef_installs, rejection_text
 from reef.service.check_page import STYLE as EVALUATION_STYLE
 from reef.service.check_page import checks_html, evaluation_html
-from reef.service.page_chrome import document, escape, requires_table, stamp, status_span
+from reef.service.page_layout import document, escape, requires_table, stamp, status_span
 from reef.service.release_page import (
     DECLINED_WORDS,
     declined,
@@ -44,7 +44,7 @@ from reef.train.cordis_backend.contracts import StepProgress
 #: Seconds between the page's own reloads while the request is not settled.
 REFRESH_SECONDS = 5
 
-# What the shared chrome does not draw: the progress strip, the two-column layout and the mutation list.
+# What the shared layout does not draw: the progress strip, the two-column layout and the mutation list.
 STYLE = """
 main{max-width:1200px;margin:auto;padding:48px 40px 24px}
 .checks-card{grid-column:1 / -1}
@@ -175,7 +175,7 @@ def activity_html(progress: StepProgress, now: float) -> str:
 def request_state(record: Mapping[str, object], progress: StepProgress | None, consumed: bool) -> str:
     """Read the backend phase or reserved batch; an unreserved request is queued."""
     if progress is not None and progress.request_id == record["agent_record_id"]:
-        return "evaluating" if progress.phase == "gating" else progress.phase
+        return progress.phase
     if consumed:
         return "running"
     return "queued"
@@ -360,7 +360,7 @@ def review_html(metrics: Mapping[str, object], rejected: bool = False) -> str:
     kept = kept_answer(notes)
     return (
         f'<section class="card review-card">\n<h2>Review</h2>\n<p>Coverage of the request: '
-        f'{status_span(str(review.get("result", review.get("verdict")) or "unknown"))}</p>\n'
+        f'{status_span(str(review.get("result") or "unknown"))}</p>\n'
         + ("" if kept is None else f"<p>{escape(kept)}; the others are in the step record.</p>\n")
         + (
             (

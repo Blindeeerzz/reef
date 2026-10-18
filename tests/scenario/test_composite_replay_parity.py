@@ -18,16 +18,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from tests.scenario.test_component_trainers import (
-    HARNESS,
-    WEIGHTS,
-    _ComponentBackend,
-    _JudgedAtOnce,
-    _Judgment,
-    _TwoTrainerRecipe,
-)
+from tests.scenario.test_component_trainers import _JudgedAtOnce, _Judgment
 from tests.support._threshold_processor import threshold_pipeline
 from tests.support._trajectories import policy_trajectory
+from tests.support.component_trainers import HARNESS, WEIGHTS, _ComponentBackend, _TwoTrainerRecipe
 
 from recipes.tttd import TTTDBatches, TTTDGridSettings, TTTDGroupedRolloutReport, TTTDRecord2Record, TTTDTasks
 from reef.artifact import ArtifactRef, InMemoryRepositoryBackend
@@ -96,15 +90,15 @@ class _SessionTasks(JudgedTasks):
 class SessionBatches(Task2Batch):
     """Batches the judged turns of ``_SessionJudging``."""
 
-    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
-        return TrainingBatch(f"{self.scenario}:session:{batch_number}", tasks)
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_id: str) -> TrainingBatch:
+        return TrainingBatch(batch_id, tasks)
 
 
 def session_pipeline(context: PipelineContext, batch_size: int = 1) -> TrainingPipeline:
     """Trains the judged turns of ``_SessionJudging``; a turn marked declined is unusable."""
     return TrainingPipeline(
         context,
-        record2record=JudgingRecord2Record(context, _SessionJudging(), _JudgedAtOnce()),
+        record2record=JudgingRecord2Record(_SessionJudging(), _JudgedAtOnce()),
         record2task=_SessionTasks(),
         task2batch=SessionBatches(context, batch_size),
     )
@@ -186,7 +180,6 @@ def _dispatcher(tmp_path: Path, pipelines: dict[str, Any]) -> Dispatcher:
         _Recipe(backends=backends, pipelines=tuple(pipelines.items())),
         InMemoryRepositoryBackend.factory(initial, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "staged",
-        agent_record_dir=tmp_path / "records",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "records"),
     )
 
@@ -247,7 +240,7 @@ def _retry_after_a_sibling_commit(tmp_path: Path, reload: bool) -> tuple[Any, ..
         assert _step(scenario, HARNESS) is None  # A-retry retired as a retry, A judged unusable
         assert _step(scenario, WEIGHTS) == [("A", "rA")]
         if reload:
-            scenario = dispatcher._registry.reload("agent")
+            scenario = dispatcher.registry.reload("agent")
         return _step(scenario, HARNESS), _stored(scenario)
     finally:
         dispatcher.close()
@@ -283,7 +276,7 @@ def _discarded_step(tmp_path: Path, reload: bool) -> tuple[Any, ...]:
         for _ in range(3):
             _step(scenario, WEIGHTS)
         if reload:
-            scenario = dispatcher._registry.reload("agent")
+            scenario = dispatcher.registry.reload("agent")
         assert _step(scenario, HARNESS) is None
         trained = _step(scenario, WEIGHTS)
         metrics = scenario.trainer_for(HARNESS).pipeline.operational_metrics()
@@ -322,7 +315,7 @@ def _another_roles_report(tmp_path: Path, reload: bool) -> tuple[Any, ...]:
         assert _step(scenario, HARNESS) is None  # r3 is another role's: released with i3
         assert _step(scenario, WEIGHTS) == [("X",)]
         if reload:
-            scenario = dispatcher._registry.reload("agent")
+            scenario = dispatcher.registry.reload("agent")
         assert _step(scenario, HARNESS) is None
         scenario.records.append(_turn("i3b", "s", 2))
         trained = _step(scenario, WEIGHTS)
@@ -360,7 +353,7 @@ def _retry_at_a_discarded_step(tmp_path: Path, point: str, reload: bool) -> tupl
             for _ in range(3):
                 _step(scenario, WEIGHTS)
         if reload:
-            scenario = dispatcher._registry.reload("agent")
+            scenario = dispatcher.registry.reload("agent")
         # The client retries step 0 at both slots, clean this time.
         for record in (
             _inference("iX"),
@@ -430,7 +423,7 @@ def _tttd_failed_step(tmp_path: Path, reload: bool) -> tuple[Any, ...]:
             scenario.records.append(record)
         first = _step(scenario, HARNESS)
         if reload:
-            scenario = dispatcher._registry.reload("agent")
+            scenario = dispatcher.registry.reload("agent")
         # The controller samples step 0 again, on one release.
         for record in (
             _tttd_inference("j0", "rel-2"),

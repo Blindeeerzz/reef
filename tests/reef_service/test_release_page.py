@@ -31,13 +31,13 @@ from reef.harness.episodes.run import EpisodeResult
 from reef.harness.step_result import design_sections
 from reef.recipe.cordis import CordisRecipe
 from reef.service.app import create_app
-from reef.service.page_chrome import status_label
+from reef.service.page_layout import status_label
 from reef.service.release_page import before_release_id, build_release_page, result_of, served_step
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.train.cordis_backend import Mutation
 
 MODULE = Path(__file__).parents[2] / "reef" / "service" / "release_page.py"
-CHROME = Path(__file__).parents[2] / "reef" / "service" / "page_chrome.py"
+LAYOUT = Path(__file__).parents[2] / "reef" / "service" / "page_layout.py"
 
 OLD_CODE = "export default function hello(pi) {\n  if (1 < 2) return;\n}\n"
 NEW_CODE = 'export default function hello(pi) {\n  if (1 < 2) return;\n  pi.on("session_start", () => {});\n}\n'
@@ -93,7 +93,6 @@ def _dispatcher(tmp_path: Path, *, keep_records: bool = False) -> Dispatcher:
         recipe,
         factory,
         local_artifact_dir=tmp_path / "local",
-        agent_record_dir=tmp_path / "agent-record",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "agent-record"),
     )
 
@@ -337,7 +336,7 @@ def test_the_chain_lists_the_steps_evaluated_against_a_release_as_its_children(t
         dispatcher.close()
 
 
-def test_the_page_carries_the_shared_chrome_and_links_the_other_steps_with_the_query_it_was_opened_with() -> None:
+def test_the_page_carries_the_shared_layout_and_links_the_other_steps_with_the_query_it_was_opened_with() -> None:
     """The version page and the request page are one design: the same logo, header and status words.
 
     A person opens either from a browser, which sends no header, so the
@@ -455,7 +454,7 @@ def test_an_unknown_step_is_404_naming_the_range_and_a_non_number_is_404(tmp_pat
 
 def test_the_page_module_is_ascii_and_the_builder_escapes_every_angle_bracket() -> None:
     MODULE.read_text(encoding="utf-8").encode("ascii")
-    CHROME.read_text(encoding="utf-8").encode("ascii")
+    LAYOUT.read_text(encoding="utf-8").encode("ascii")
     creation = {"release_id": "rel-0", "parent_release_id": None, "operation": "creation", "current": False}
     row = {
         "release_id": "rel-1",
@@ -751,13 +750,12 @@ def test_a_review_that_did_not_run_is_named_on_the_version_page() -> None:
     assert "carried no result object" in review
 
 
-@pytest.mark.parametrize("review_key", ["result", "verdict"])
-def test_the_page_shows_the_proposers_design_and_review_and_escapes_them(review_key) -> None:
+def test_the_page_shows_the_proposers_design_and_review_and_escapes_them() -> None:
     creation = {"release_id": "rel-0", "parent_release_id": None, "operation": "creation"}
     notes = {
         "design": "Add an <away> command.\n\nA rule alone would assume the state holds.",
         "review": {
-            review_key: "partial",
+            "result": "partial",
             "covered": ["the /away command toggles the state", "the rule reads a < b"],
             "uncovered": ["no <b>notice</b> when the state clears"],
         },
@@ -887,10 +885,9 @@ def test_a_row_without_a_design_or_a_review_has_no_such_section() -> None:
         assert _sections(page) == plain and "Design" not in page.partition("<script")[0]
 
 
-@pytest.mark.parametrize("sides_key", ["evaluation_sides", "gate_sides"])
 @pytest.mark.parametrize("legacy_policy_version", [False, True])
 def test_the_result_lists_the_floor_metrics_and_omits_the_current_score_when_no_current_side_ran(
-    sides_key: str, legacy_policy_version: bool
+    legacy_policy_version: bool,
 ) -> None:
     creation = {"release_id": "rel-0", "parent_release_id": None, "operation": "creation"}
     row = {
@@ -902,7 +899,7 @@ def test_the_result_lists_the_floor_metrics_and_omits_the_current_score_when_no_
             "passed": 1,
             "failed": 0,
             "floor_score": 1.0,
-            sides_key: ["candidate"],
+            "evaluation_sides": ["candidate"],
             "candidate_score": 1.0,
             "episode_failures": 0,
             "candidate_agents": {"root": {"turns": 1, "input_tokens": 300, "output_tokens": 20}},

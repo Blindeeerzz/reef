@@ -84,7 +84,7 @@ The public layout groups fields by their owner:
 * ``recipe.config``: fields declared by that recipe.
 * ``recipe.runtime``: the runtime type and its declared settings.
 * ``training``: backend selection, bridge startup/request timeouts, Ray connection and native Slime ``options``.
-* ``storage``: artifact repository, work/cache directories and record retention.
+* ``storage``: artifact backend and repository, work/cache directories and record retention.
 * ``execution`` / ``executors``: role placement and named executor profiles.
 * ``evaluation`` / ``observability``: their existing component-owned settings.
 * ``pipeline``: the stage classes that replace a weight-training recipe's own, with their config.
@@ -358,8 +358,7 @@ Override an individual native flag with
 ``reef serve -c training.yaml --training.options.lr 0.000002``. The normalized
 options reach ``reef.service.training_driver`` through the same effective config
 as the HTTP child. The driver passes them through its existing recipe-specific
-argument handling and Slime's native parser. Automatic training launches use
-only this effective config and ignore an ambient ``SLIME_ARGS_FILE``.
+argument handling and Slime's native parser.
 
 ``inference.handler-config`` has a different owner: it configures Reef's
 selected ``inference.handler-factory`` adapter, for example its tool parser.
@@ -650,6 +649,7 @@ The HTTP service reads these fields from the ``recipe``, ``reef``,
    reef.served-url | | the URL a composite recipe's own evaluation calls (episodes and the proposer) reach this service at; the default is loopback on the bind port, so set it when episodes run on another host. A recipe of one component calls its runtime's endpoint directly and ignores it
    reef.console-origins | [] | exact browser console origins allowed to access the HTTP service; disabled by default
    reef.token | the bearer token the service accepts. Use ``tokens: [...]`` to accept several while rotating.
+   reef.allow-unauthenticated | false | when true, serve without a token on a ``reef.host`` that other machines can reach. When false, Reef does not start on such an address without a token. A loopback address, such as ``127.0.0.1``, ``::1`` or ``localhost``, needs no token
    reef.allow-implicit-scenario-creation | true | when false, an unknown scenario is HTTP 404
    inference.model-path | a local HF model directory or a repo id, downloaded on start
    inference.upstream-url | the OpenAI-compatible provider, with no ``/v1`` suffix
@@ -665,25 +665,26 @@ persistent.
 
 .. config::
 
-   storage.artifact-repository | .reef/artifacts.git | the Git-backed release chain
+   storage.artifact-backend | git_lfs | where releases are stored: ``git_lfs``, or a ``ConfigurableRepositoryBackendFactory`` plugin reference
+   storage.artifact-repository | .reef/artifacts.git | the Git LFS repository of the release chain; only for ``git_lfs``
    storage.artifact-work-dir | .reef/artifact-work | materialization scratch
    storage.artifact-cache-dir | .reef/artifact-cache | fetched artifact cache
-   storage.agent-record-dir | .reef/agent-record | the record store
-   storage.agent-record-retention-days | 7.0 | deprecated compatibility setting; automatic cleanup no longer expires data by age
+   storage.agent-record-dir | .reef/agent-record | the SQLite scenario storage: records, commit logs and settings
+   storage.record-backend | sqlite | where scenario records, commits and settings live: ``sqlite``, ``postgres``, or a ``ScenarioStorage`` plugin reference
    storage.agent-record-retention-max-bytes | 21474836480 | 20 GiB shared across all record bodies, including unconsumed records
 
 .. warning::
 
-   On ephemeral storage, a restart loses the record store, the commit logs, and
-   every version.
+   On ephemeral storage, a restart loses the scenario storage (with SQLite) and
+   every version. See `Back up a deployment
+   <../user-guide/operate.rst#back-up-a-deployment>`__.
 
 Training completion updates consumption progress without retiring stored bodies.
 Storage manages cleanup independently: the HTTP service runs a sweep at startup
 and every 60 seconds. When the total record-body size exceeds the configured
 budget, storage evicts the oldest records by stored creation time, breaking ties
 by append sequence. Both consumed and unconsumed data are eligible; processors
-cannot protect disk records from capacity eviction. The deprecated
-``storage.agent-record-retention-days`` option is accepted but has no cleanup effect.
+cannot protect disk records from capacity eviction. Records do not expire by age.
 
 The budget measures UTF-8 JSON payloads, references and artifact references
 across active and archived scenarios. SQLite shares it across the record
@@ -980,7 +981,6 @@ Reef refuses ``batch_size`` and ``batch_policy`` under ``recipe.config``.
    evolution.binary | a path to the harness binary; unset, backend construction installs the adapter's pinned version through the vendor's channel under ``$REEF_HARNESS_PREFIX`` (default ``~/.local/share/reef-harness``)
    evolution.episode_timeout_s | 600 | seconds one evaluation episode may run
    evolution.episode_repeats | 1 | episode pairings per task per step; each repeat tallies on its own
-   evolution.on_stale | merge | what a step's result becomes when another component's commit (a weights step, in a composite) replaced the release it was evaluated against: ``merge`` commits it onto the release served now, since each pairing compared candidate and current under the same conditions when it ran (the commit metrics then carry ``merged_onto``); ``reevaluate`` keeps the candidate and runs its episodes again against the new release, under the next attempt directory of the step record; ``refuse`` drops the result and proposes again
    evolution.forbid_residue | false | when true, an episode leaving files outside the cleanup whitelist scores as one that could not run
    evolution.max_steps | 0 | stop automatic evolve steps once this many steps ran, instruction steps included; 0 disables the limit; an instruction from ``POST /reef/train`` still runs past it
    evolution.max_failure_streak | 0 | stop automatic evolve steps after this many consecutive rejected steps, instruction steps included; 0 disables the limit; an instruction from ``POST /reef/train`` still runs while the breaker is open
@@ -991,7 +991,6 @@ Reef refuses ``batch_size`` and ``batch_policy`` under ``recipe.config``.
    execution.evolution.workers | 1 | fixed worker-group size; CPU auto selects ``uni`` for one and ``mp`` for multiple
    execution.evolution.backend | auto | worker placement, independent of the ``local/sandbox`` episode isolation policy; ``local`` retains shared-memory callbacks
    execution.evolution.resources | | ``cpus_per_worker`` and ``gpus_per_worker``; omitted values retain component defaults; GPUs select Ray under ``auto`` and cannot reduce declared GPU needs
-   evolution.episode_workers / worker_executor / worker_resources | | deprecated compatibility aliases; conflicting resource values are rejected; legacy worker_executor cannot accompany role-level workers/resources
    evolution.sandbox | | for ``sandbox``: ``egress_hosts`` and ``limits`` (``cpu_seconds``, ``memory_bytes``, ``processes``, ``file_bytes``); for ``e2b``: ``e2b_api_key_env`` (default ``E2B_API_KEY``), optional ``e2b_api_key``, ``e2b_template`` and ``forward_ports`` (explicit worker-loopback TCP ports). E2B rejects nonempty ``egress_hosts``/``limits``; template resources and outbound internet apply. Both accept ``env_from``
    evolution.promote_failures | false | when true, a failing trace's prompt becomes a permanent evaluation task, so no later candidate can win while bringing the failure back; the seed tasks stay the floor
    evolution.max_promoted_tasks | 50 | the cap on promoted tasks; admission stops there so the suite is bounded
@@ -1005,7 +1004,7 @@ Reef refuses ``batch_size`` and ``batch_policy`` under ``recipe.config``.
    evolution.requests | false | appends the adapter's harness requests extension and its extension API skill after the notice (the reserved entries ``reef-requests`` and ``reef-pi-extension-api``), so a ``reef-pi`` session gets ``/reefine <request>`` in the TUI (submits to ``POST /reef/train``, which needs ``recipe.config.training_mode: hybrid`` or ``manual``) and the method reads the API reference before it writes an extension; on ``claude``, ``codex``, ``opencode``, ``hermes`` and ``dsh`` it appends one ``agent_command`` named ``reefine`` under the same reserved id, which has the session's model file the request with ``reef-<adapter> evolve``, wait with ``reef-<adapter> wait`` and offer ``reef-<adapter> update``; an adapter with no command surface (``terminus``, ``native``) refuses boot (a seed entry: a deployment that boots from a recovered state keeps its tree, as with ``version_check``); the tutorial's ``tutorials/evolve-your-harness/configs/deployment.yaml`` sets it, with ``version_check: true`` and ``review_kinds: [code_extension]``
    evolution.proposals_dir | .reef/proposals | where agent proposals from ``POST /reef/harness/proposals`` wait for the next evolve step: one directory per scenario under it (``<dir>/<scenario>``, made absolute at build, created when the first proposal arrives), with ``claimed/``, ``refused/`` and ``settled/`` beside the pending files
    evolution.max_pending_proposals | 8 | how many admitted proposals one scenario holds; the route answers ``admitted: false`` with reason ``inbox full`` beyond it, and with reason ``manual mode takes instructions only`` on a scenario in ``recipe.config.training_mode: manual``
-   evolution.step_record_dir | | off by default; when set, every step writes its record under ``<dir>/<scenario>/<step>`` (the path is made absolute at build): ``proposer.json`` (each model call the proposer made: ``model``, ``messages`` and ``params`` for a ``chat`` or ``body`` for a ``complete``, then ``reply`` and the provider ``response`` for a built-in ``chat`` binding, ``response`` for ``complete``, or ``error``, and ``seconds``; the response retains provider reasoning/thinking fields when returned; long text is clipped with a marker and a credential shaped literal is replaced by ``[redacted credential]``), ``mutations.json`` (the parsed proposal with its full options, refused or not, redacted the same way) and ``episodes/<side>-<task index>/`` (each evaluation episode's trajectory files as the adapter writes them, copied out of its root before the root is removed, plus ``episode.json`` with the task, the exit code, stdout and stderr, the residue, the score, the failure and the stage path; a repeat adds ``-<repeat>``); a recheck step writes ``episodes/`` only and has no proposer files; a step skipped on the step cap or the failure streak writes nothing; a step directory is never reused, so a retried step lands in ``<step>-2``, then ``<step>-3``, and a kept candidate evaluated again under ``on_stale: reevaluate`` writes its ``episodes/`` under the next attempt directory with ``reevaluation.json`` naming the first; nothing prunes the directory; an unwritable path refuses boot and a record copy that fails aborts the step instead of scoring it
+   evolution.step_record_dir | | off by default; when set, every step writes its record under ``<dir>/<scenario>/<step>`` (the path is made absolute at build): ``proposer.json`` (each model call the proposer made: ``model``, ``messages`` and ``params`` for a ``chat`` or ``body`` for a ``complete``, then ``reply`` and the provider ``response`` for a built-in ``chat`` binding, ``response`` for ``complete``, or ``error``, and ``seconds``; the response retains provider reasoning/thinking fields when returned; long text is clipped with a marker and a credential shaped literal is replaced by ``[redacted credential]``), ``mutations.json`` (the parsed proposal with its full options, refused or not, redacted the same way) and ``episodes/<side>-<task index>/`` (each evaluation episode's trajectory files as the adapter writes them, copied out of its root before the root is removed, plus ``episode.json`` with the task, the exit code, stdout and stderr, the residue, the score, the failure and the stage path; a repeat adds ``-<repeat>``); a recheck step writes ``episodes/`` only and has no proposer files; a step skipped on the step cap or the failure streak writes nothing; a step directory is never reused, so a retried step lands in ``<step>-2``, then ``<step>-3``; nothing prunes the directory; an unwritable path refuses boot and a record copy that fails aborts the step instead of scoring it
 
 The served model's binding is appended at render time; it never enters the
 published files. The seed defines the baseline the first mutation is measured
@@ -1361,9 +1360,9 @@ The following names are relative to ``operations/``:
        store. ``failed_total`` counts append exceptions, including conflicts;
        validation rejections before append do not count as write failures.
    * - ``runtime/stale_batches_total``
-     - Training submissions the runtime rejects as stale, such as an exact
-       version mismatch or an exceeded bounded-staleness window. This does not
-       count compatible older samples as errors or increment on status reads.
+     - Candidates the training backend refuses as stale, such as a Tinker
+       candidate whose base checkpoint changed while it trained. Samples that
+       the record-to-record stage drops for ``max_staleness`` do not count.
    * - ``records/unread_count``
      - Training-visible records after the processor's read cursor. These may
        still need feedback or filtering; this is not a ready-batch count.

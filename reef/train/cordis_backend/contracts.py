@@ -63,10 +63,6 @@ class StepProgressReader(ABC):
     def step_progress(self) -> StepProgress | None: ...
 
 
-# Compatibility for adapters that implement the earlier interface name.
-ProposalGate = ProposalValidator
-
-
 class ServedCompositionConsumer(ABC):
     """Receive the actual serving head before preparation, including stale re-evaluation."""
 

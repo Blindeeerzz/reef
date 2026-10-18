@@ -36,7 +36,8 @@ from reef.core.components import (
 )
 from reef.core.errors import ReefError
 from reef.inference.model_config import ModelConfig
-from reef.observability import ExperimentTracker
+from reef.observability import ExperimentTracker, NullExperimentTracker
+from reef.observability.commits import CommitExperimentObserver, ExperimentReportQueue
 from reef.recipe.base import Recipe
 from reef.recipe.checkpoint_strategy import EveryNVersions
 from reef.scenario.binding import ScenarioBinding
@@ -121,12 +122,16 @@ class ScenarioFactory:
         local_artifact_dir: Path | None = None,
         experiment_tracker: ExperimentTracker,
         scenario_storage: ScenarioStorage,
+        experiment_reports: ExperimentReportQueue | None = None,
     ) -> None:
         self._recipe = recipe
         self._backend_factory = backend_factory
         self._local_artifact_dir = local_artifact_dir
         self._experiment_tracker = experiment_tracker
         self._storage = scenario_storage
+        self.experiment_reports = (
+            experiment_reports if experiment_reports is not None else ExperimentReportQueue(experiment_tracker)
+        )
 
     def has_registration(self, scenario: str) -> bool:
         """True when the scenario is durably registered with the backend."""
@@ -376,6 +381,18 @@ class ScenarioFactory:
                     f"scenario {name!r} runs a trainer per component: each recovers from its own commits, "
                     "which needs durable commit storage"
                 )
+            experiment_observer = None
+            if not isinstance(self._experiment_tracker, NullExperimentTracker):
+                experiment_observer = CommitExperimentObserver(
+                    self._experiment_tracker,
+                    scenario=name,
+                    recipe=recipe.name,
+                    source_artifact_ref=repository.require_current_artifact(),
+                    scenario_step=scenario_step,
+                    store=store,
+                    reports=self.experiment_reports,
+                )
+                store = experiment_observer.store
             scenario = Scenario(
                 name=name,
                 model_config=model_config,
@@ -394,6 +411,7 @@ class ScenarioFactory:
                 scenario_step=scenario_step,
                 store=store,
                 recovered_head_record=head_record,
+                experiment_observer=experiment_observer,
             )
             # Replay retained, unconsumed rows behind each trainer's watermark
             # before resuming its cursor. Retention may keep already-consumed

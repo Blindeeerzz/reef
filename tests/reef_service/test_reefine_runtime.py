@@ -75,13 +75,6 @@ def test_pending_algorithm_entries_are_not_the_current_serving_tree(tmp_path):
     assert candidate.current_entries == (serving,)
     assert candidate.requires == ({"name": "curl", "kind": "binary"},)
     assert "Unpublished" not in json.dumps(candidate.candidate_files)
-    new_entry = {"id": "other", "name": "rules", "config": {"text": "Newly published rules."}}
-    backend.set_served_composition(ServedComposition("head-2", (serving, new_entry)))
-    refreshed = backend.prepare_reevaluation(prepared).candidate
-    assert refreshed.context.current.release_id == "head-2"
-    assert refreshed.current_entries == (serving, new_entry)
-    assert "Newly published" in json.dumps(refreshed.current_files)
-    assert any(entry["id"] == "workflow" for entry in refreshed.candidate_entries)
     assert candidate.context.current.release_id == "head-1"
 
 
@@ -124,7 +117,6 @@ def test_formal_checks_control_publication_and_progress_route(tmp_path, monkeypa
     dispatcher = Dispatcher(
         replace(recipe, training_mode="manual"),
         factory,
-        agent_record_dir=tmp_path / "agent-record",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "agent-record"),
     )
     scenario = dispatcher.get_or_create_scenario("agents")

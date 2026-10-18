@@ -14,7 +14,7 @@ from unittest.mock import Mock
 import pytest
 from tests.support.config_helpers import load_harness_deployment as load_config
 
-from reef.dispatcher import training_request_refusal
+from reef.dispatcher.ingest import training_request_refusal
 from reef.evaluation.reefine import ReefineEvaluation
 from reef.harness.tree.nodes import directive_shaped, secret_shaped
 from reef.recipe import reefine

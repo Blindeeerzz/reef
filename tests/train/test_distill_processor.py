@@ -18,7 +18,8 @@ from reef.artifact.artifact import LiveWeightArtifactRef
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import TeacherContextReport
 from reef.core.trajectories import source_record_id
-from reef.record2task.distill import DistillRecord2Record, DistillSettings, DistillTasks, TeacherRenderer
+from reef.record2record import ExclusiveReportRecord2Record
+from reef.record2task.distill import DistillSettings, DistillTasks, TeacherRenderer
 from reef.record2task.samples import recorded_response
 from reef.task2batch import DistillBatches
 from reef.train import PipelineContext
@@ -72,12 +73,6 @@ def tokenizer(monkeypatch: pytest.MonkeyPatch) -> CountingTokenizer:
     return fake
 
 
-class FeedbackBatches(DistillBatches):
-    """A recipe's batches, named ``feedback``."""
-
-    batch_label = "feedback"
-
-
 class FeedbackTasks(DistillTasks):
     """A recipe's composition: the student's own answer and the teacher context as a system message, no tools."""
 
@@ -126,7 +121,7 @@ def _processor(**config: Any) -> TrainingPipeline:
     settings = DistillSettings(**{"tokenizer_path": "/models/science", **config})
     return TrainingPipeline(
         context,
-        record2record=DistillRecord2Record(context),
+        record2record=ExclusiveReportRecord2Record(context),
         record2task=DistillTasks(settings),
         task2batch=DistillBatches(context, 1),
     )
@@ -151,7 +146,7 @@ def test_by_default_the_teacher_reads_the_request_as_recorded(tokenizer: Countin
     prompt_ids = tokenizer.count_ids(rendered)
     assert list(sample.training["teacher_tokens"]) == [*prompt_ids, 1, 2, 3]
     assert list(sample.training["tokens"]) == list(STUDENT_TOKENS)
-    assert batch.batch_id == "science:teacher:1"
+    assert batch.batch_id == "science:batch:1"
     assert processor.operational_metrics()["teacher_overflow_reports"] == 0
 
 
@@ -160,9 +155,9 @@ def test_a_recipe_composes_the_teacher_request_from_the_response_and_the_context
     context = PipelineContext("science", TeacherContextReport)
     processor = TrainingPipeline(
         context,
-        record2record=DistillRecord2Record(context),
+        record2record=ExclusiveReportRecord2Record(context),
         record2task=FeedbackTasks(DistillSettings(tokenizer_path="/models/science")),
-        task2batch=FeedbackBatches(context, 1),
+        task2batch=DistillBatches(context, 1),
     )
     processor.ingest(_inference("i1"))
     processor.ingest(_report("r1", ("i1",), teacher_context="Too low."))
@@ -174,7 +169,7 @@ def test_a_recipe_composes_the_teacher_request_from_the_response_and_the_context
     assert rendered[1:] == [{"role": "user", "content": QUESTION}]
     assert tools is None
     assert list(batch.items[0].training["teacher_tokens"]) == [*tokenizer.count_ids(rendered), 1, 2, 3]
-    assert batch.batch_id == "science:feedback:1"
+    assert batch.batch_id == "science:batch:1"
 
 
 @pytest.mark.unit

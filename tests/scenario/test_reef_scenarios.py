@@ -10,6 +10,7 @@ from reef.core import AgentRecord, RequestType
 from reef.dispatcher import Dispatcher, build_default_dispatcher
 from reef.recipe import Recipe
 from reef.recipe.checkpoint_strategy import EveryNVersions
+from reef.scenario.registry import InstanceState
 from reef.storage.sqlite import SQLiteScenarioStorage
 
 
@@ -32,7 +33,6 @@ def test_scenario_owns_recipe_derived_policy_and_base_artifact() -> None:
 
     assert not hasattr(scenario, "recipe")
     assert scenario.repository.base_artifact.release_id
-    assert scenario._committer.checkpoint_strategy is not None
     assert scenario.repository.current_artifact == scenario.repository.checkpoint_artifact
 
 
@@ -79,15 +79,17 @@ def test_each_scenario_keeps_recipe_derived_checkpoint_policy(tmp_path) -> None:
     fast = fast_dispatcher.get_or_create_scenario("fast")
     slow = slow_dispatcher.get_or_create_scenario("slow")
 
-    assert fast._committer.checkpoint_strategy.n == 1
-    assert slow._committer.checkpoint_strategy.n == 3
+    assert fast._committer._checkpoint_strategy.n == 1
+    assert slow._committer._checkpoint_strategy.n == 3
 
 
 def test_scenario_metadata_round_trips() -> None:
-    from reef.storage.commits import parse_scenario_metadata
+    from reef.storage.commits import parse_scenario_metadata, scenario_metadata_for
 
     scenario = build_default_dispatcher(scenario_storage=SQLiteScenarioStorage()).get_or_create_scenario("math")
-    metadata = scenario.to_metadata()
+    metadata = scenario_metadata_for(
+        name=scenario.name, base_artifact=scenario.repository.base_artifact, scenario_step=scenario.scenario_step
+    )
 
     assert metadata["format"] == "reef-scenario/4"
     assert "scenario" not in metadata["base_artifact"]
@@ -109,11 +111,13 @@ def test_scenario_metadata_round_trips() -> None:
 
 
 def test_rollback_metadata_preserves_its_operation() -> None:
-    from reef.storage.commits import parse_scenario_metadata
+    from reef.storage.commits import parse_scenario_metadata, scenario_metadata_for
 
     scenario = build_default_dispatcher(scenario_storage=SQLiteScenarioStorage()).get_or_create_scenario("math")
     assert scenario is not None
-    metadata = scenario.to_metadata()
+    metadata = scenario_metadata_for(
+        name=scenario.name, base_artifact=scenario.repository.base_artifact, scenario_step=scenario.scenario_step
+    )
     metadata["operation"] = "rollback"
     metadata["rollback_target_release_id"] = "checkpoint-v1"
 
@@ -139,7 +143,6 @@ def test_dispatcher_restores_agent_record_from_configured_directory(tmp_path) ->
     agent_record_dir = tmp_path / "agent-record"
     first = build_default_dispatcher(
         backend_factory=backend,
-        agent_record_dir=agent_record_dir,
         scenario_storage=SQLiteScenarioStorage(agent_record_dir),
     )
     record = AgentRecord.create(
@@ -153,7 +156,6 @@ def test_dispatcher_restores_agent_record_from_configured_directory(tmp_path) ->
 
     second = build_default_dispatcher(
         backend_factory=backend,
-        agent_record_dir=agent_record_dir,
         scenario_storage=SQLiteScenarioStorage(agent_record_dir),
     )
 
@@ -167,7 +169,6 @@ def test_dispatcher_restores_algorithm_state_from_artifact_metadata(tmp_path) ->
     agent_record_dir = tmp_path / "agent-record"
     first = build_default_dispatcher(
         backend_factory=backend,
-        agent_record_dir=agent_record_dir,
         scenario_storage=SQLiteScenarioStorage(agent_record_dir),
     )
     first.accept_record(
@@ -184,7 +185,6 @@ def test_dispatcher_restores_algorithm_state_from_artifact_metadata(tmp_path) ->
 
     second = build_default_dispatcher(
         backend_factory=backend,
-        agent_record_dir=agent_record_dir,
         scenario_storage=SQLiteScenarioStorage(agent_record_dir),
     )
     recovered = second.get_or_create_scenario("math")
@@ -245,11 +245,32 @@ def test_dispatcher_reload_closes_the_dropped_scenario_instance() -> None:
     original = dropped.close
     dropped.close = lambda: (closed.append("dropped"), original())[-1]
 
-    recovered = dispatcher._registry.reload("math")
+    recovered = dispatcher.registry.reload("math")
 
     assert closed == ["dropped"]
     assert recovered is not dropped
     assert dispatcher.get_or_create_scenario("math") is recovered
+
+
+def test_lock_instance_tells_a_replaced_instance_from_a_removed_one() -> None:
+    dispatcher = build_default_dispatcher(scenario_storage=SQLiteScenarioStorage())
+    registry = dispatcher.registry
+    try:
+        dropped = dispatcher.get_or_create_scenario("math")
+        with registry.lock_instance(dropped) as state:
+            assert state is InstanceState.CURRENT
+
+        recovered = registry.reload("math")
+        with registry.lock_instance(dropped) as state:
+            assert state is InstanceState.REPLACED
+
+        with registry.lock_for("math"):
+            registry.unload("math")
+        recovered.close()
+        with registry.lock_instance(recovered) as state:
+            assert state is InstanceState.REMOVED
+    finally:
+        dispatcher.close()
 
 
 @pytest.mark.parametrize("operation", [None, "training", "rollback", "promote"])

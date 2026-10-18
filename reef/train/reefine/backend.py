@@ -12,11 +12,9 @@ from reef.evaluation.reefine import EvaluationContext
 from reef.evaluation.reefine import ReefineCandidate as ReefineCandidate
 from reef.evaluation.reefine import ReefineEvaluationBackend
 from reef.harness.adapters.descriptor import AdapterDescriptor
-from reef.harness.episodes.executor import EpisodeExecutor
 from reef.harness.episodes.model_binding import ModelBindings
 from reef.harness.episodes.run import EpisodeResult
-from reef.harness.tree.mutations import admit_mutations
-from reef.harness.tree.render import render_composition
+from reef.sandbox.process import EpisodeExecutor
 from reef.train.backend import PreparedStep
 from reef.train.cordis_backend.backend import CordisBackend
 from reef.train.cordis_backend.contracts import ServedComposition, ServedCompositionConsumer
@@ -54,7 +52,6 @@ class ReefineBackend(CordisBackend, ServedCompositionConsumer, ReefineEvaluation
                     current_entries=candidate.current_entries,
                     mutations=candidate.mutations,
                     evaluation_tasks=candidate.evaluation_tasks,
-                    gate_tasks=candidate.gate_tasks,
                     recheck=candidate.recheck,
                     proposal_id=candidate.proposal_id,
                     record_dir=candidate.record_dir,
@@ -63,27 +60,6 @@ class ReefineBackend(CordisBackend, ServedCompositionConsumer, ReefineEvaluation
                 ),
             )
         return prepared
-
-    def prepare_reevaluation(self, prepared: PreparedStep) -> PreparedStep:
-        candidate = prepared.candidate
-        if not isinstance(candidate, ReefineCandidate) or self.served_composition is None:
-            raise TypeError("Reefine re-evaluation requires a candidate and the serving composition")
-        current = self.served_composition
-        if self._model_resolver is not None:
-            self._models = self._model_resolver.resolve()
-            self._episode_evaluator.use_models(self._models)
-        entries, refusal = admit_mutations(current.entries, candidate.mutations, self._descriptor)
-        if refusal is not None:
-            raise ValueError(f"candidate no longer admitted against {current.release_id}: {refusal}")
-        refreshed = replace(
-            candidate,
-            current_entries=current.entries,
-            current_files=render_composition(self._nodes_from(current.entries), self._descriptor),
-            candidate_entries=tuple(entries),
-            candidate_files=render_composition(self._nodes_from(entries), self._descriptor),
-            context=replace(candidate.context, current=current),
-        )
-        return super().prepare_reevaluation(replace(prepared, candidate=refreshed))
 
     @property
     def evaluation_models(self) -> ModelBindings:

@@ -165,6 +165,7 @@ def _dispatcher(
     api: str = "openai",
     adapter: str = "pi",
     model_metadata: dict[str, ModelMetadata] | None = None,
+    allow_implicit_creation: bool = True,
 ) -> Dispatcher:
     proposals = iter(mutations)
     binary = tmp_path / "fake-pi"
@@ -193,8 +194,8 @@ def _dispatcher(
         InMemoryRepositoryBackend.factory(bootstrap, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "local",
         # The commit log is what puts gate metrics on the release catalog.
-        agent_record_dir=tmp_path / "agent-record",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "agent-record"),
+        allow_implicit_creation=allow_implicit_creation,
     )
     dispatcher.get_or_create_scenario("delivery")
     return dispatcher
@@ -998,7 +999,7 @@ if mode == "static":
     # The record without the check offs is what RELEASE_FILE_CHECKSUM was baked from.
     record.pop("setup", None)
     print(hashlib.sha256((json.dumps(record, indent=2) + "\n").encode("utf-8")).hexdigest())
-elif mode in ("check", "gate"):
+elif mode == "check":
     checked = {item["name"]: item for item in setup}
     def met(item):
         # A check off records the check it stood for; one without it (an older release file) counts by name.
@@ -2573,6 +2574,24 @@ def test_install_route_creates_a_randomly_named_harness_scenario_when_header_is_
 
 
 @pytest.mark.unit
+def test_install_route_creates_no_scenario_when_implicit_creation_is_off(tmp_path) -> None:
+    dispatcher = _dispatcher(tmp_path, (), allow_implicit_creation=False)
+
+    async def run() -> None:
+        client = TestClient(TestServer(create_app(dispatcher, inference_handler=_EchoBackend())))
+        await client.start_server()
+        try:
+            response = await client.get("/reef/harness/install", params={"adapter": "pi"})
+            assert response.status == 404
+            assert "POST /reef/scenarios" in await response.text()
+            assert dispatcher.list_scenarios() == ()
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.unit
 def test_install_route_without_scenario_returns_404_when_no_harness_recipe_exists(tmp_path) -> None:
     bootstrap = tmp_path / "bootstrap"
     bootstrap.mkdir()
@@ -2580,7 +2599,6 @@ def test_install_route_without_scenario_returns_404_when_no_harness_recipe_exist
         Recipe(),
         InMemoryRepositoryBackend.factory(bootstrap, root=tmp_path / "repository"),
         local_artifact_dir=tmp_path / "local",
-        agent_record_dir=None,
         scenario_storage=SQLiteScenarioStorage(None),
     )
     dispatcher.get_or_create_scenario("weights-only")
@@ -2944,7 +2962,7 @@ def test_the_served_tree_carries_the_entries_list_where_the_adapter_declares_one
             assert entries[1] == {"id": "r1", "name": "rules", "config": {"text": "marker rules"}}
             scenario = dispatcher.get_or_create_scenario("delivery")
             assert scenario is not None
-            committed = scenario.entries_for_version(manifest["release_id"])
+            committed = scenario.release_queries.entries_for_version(manifest["release_id"])
             assert committed is not None and text == json.dumps(list(committed), indent=2, sort_keys=True) + "\n"
             assert "pi-agent/tree.json" not in render_composition(NODES_V1, get_adapter("pi"))
         finally:
@@ -2985,7 +3003,7 @@ def test_a_pi_release_carries_no_entries_list_and_a_seed_with_reefs_own_entries_
             # The entries live in the commit log, where the proposals route and the step's proposer read them.
             scenario = dispatcher.get_or_create_scenario("delivery")
             assert scenario is not None
-            entries = scenario.entries_for_version(manifest["release_id"])
+            entries = scenario.release_queries.entries_for_version(manifest["release_id"])
             assert entries is not None and list(entries) == [notice, *ENTRIES_V1]
             assert tree_files(get_adapter("pi"), entries) == {}
         finally:

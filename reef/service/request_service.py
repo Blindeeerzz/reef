@@ -20,7 +20,7 @@ from reef.artifact.artifact import Artifact, ArtifactError, ArtifactNotFound, Ar
 from reef.core.errors import ReefError, UnknownScenario
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.requirements import ancestor_requiring_nothing, required_by
-from reef.core.training_request import TrainingRequest
+from reef.core.training_request import normalize_training_request_payload
 from reef.dispatcher import Dispatcher
 from reef.harness.adapters import available_adapters, get_adapter
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindingError
@@ -108,8 +108,7 @@ def normalize_request_payload(
 ) -> tuple[Mapping[str, Any], tuple[str, ...]]:
     """Normalize a typed Reef payload; a native provider body passes through."""
     if request_type is RequestType.TRAIN:
-        request = TrainingRequest.from_dict(payload)
-        return request.to_dict(), ()
+        return normalize_training_request_payload(payload), ()
     if request_type is not RequestType.REPORT:
         return dict(payload), ()
     report = ReportPayload.from_dict(payload)
@@ -248,16 +247,6 @@ class RequestService:
             references=references,
         )
         return parsed, item
-
-    async def infer(
-        self,
-        headers: Mapping[str, str],
-        payload: dict[str, Any],
-        path: str,
-        handler: InferenceHandler,
-    ) -> dict[str, Any]:
-        response, _ = await self.infer_with_data(headers, payload, path, handler)
-        return response
 
     async def infer_with_data(
         self,
@@ -658,7 +647,7 @@ class RequestService:
         scenario: Scenario,
         release_id: str | None = None,
     ) -> dict[str, Any]:
-        artifact, evaluation_metrics = scenario.artifact_with_metrics(release_id)
+        artifact, evaluation_metrics = scenario.release_queries.artifact_with_metrics(release_id)
         tree = scenario.surface.files
         if tree is None:
             raise ArtifactNotFound(
@@ -679,7 +668,6 @@ class RequestService:
             "content_id": artifact.ref.content_id,
             "files": dict(files),
             "evaluation": evaluation_metrics,
-            "gate": evaluation_metrics,  # Legacy clients read this manifest field.
             # The union over the chain, not this evaluation's list: a release whose request named nothing still installs an earlier extension.
             "requires": required_by(list(reversed(scenario.releases())), artifact.ref.release_id),
         }
@@ -717,7 +705,7 @@ class RequestService:
         files_component = scenario.surface.files_component
         if scenario.surface.single or files_component is None:
             return rows, next((str(row["release_id"]) for row in rows if not row.get("pending")), None)
-        creation = scenario.creation_components(scenario.scenario_step)
+        creation = scenario.release_queries.creation_components(scenario.scenario_step)
         kept: list[dict[str, Any]] = []
         kept_ids: set[str] = set()
         carried_by: dict[str, str] = {}  # each release not kept, to the kept release whose tree it carried
@@ -830,7 +818,7 @@ class RequestService:
             }
         # The entries the head commit logged, which the served tree.json carries too, not the trainer's live
         # state, which a step in flight has already moved; the seed before the first commit.
-        logged = scenario.entries_for_version(head)
+        logged = scenario.release_queries.entries_for_version(head)
         info = scenario.surface.harness
         if logged is None and info is not None:
             logged = info.seed_entries
@@ -909,13 +897,13 @@ class RequestService:
         before_files: Mapping[str, str] | None = None
         if before is not None:
             info = scenario.surface.harness
-            logged = scenario.entries_for_version(before)
+            logged = scenario.release_queries.entries_for_version(before)
             if logged is None and info is not None:
                 logged = info.seed_entries
             before_entries = logged or ()
             tree = scenario.surface.files
             try:
-                artifact, _ = scenario.artifact_with_metrics(before)
+                artifact, _ = scenario.release_queries.artifact_with_metrics(before)
                 before_files = None if tree is None else tree.read_files(artifact)
             except ArtifactError:
                 before_files = None
@@ -1051,7 +1039,8 @@ class RequestService:
         behavior; a known adapter whose descriptor declares no install
         section raises DescriptorError (HTTP 400) naming it. Unlike the other
         harness reads, a missing or empty scenario header creates a new,
-        randomly named file-serving scenario.
+        randomly named file-serving scenario, unless the deployment turned
+        implicit scenario creation off.
         """
         if not adapter:
             raise ReefError("the harness install route requires an 'adapter' query parameter naming an adapter")
@@ -1100,16 +1089,16 @@ class RequestService:
         composition as before.
         """
         service_url = install_service_url(headers)
-        evaluation_metrics = manifest.get("evaluation", manifest.get("gate")) or {}
+        evaluation_metrics = manifest.get("evaluation") or {}
         model = (
-            (evaluation_metrics.get("evaluation_context", evaluation_metrics.get("gated_against")) or {}).get("model")
+            (evaluation_metrics.get("evaluation_context") or {}).get("model")
             if isinstance(evaluation_metrics, Mapping)
             else None
         )
         info = scenario.surface.harness
         if not isinstance(model, str) or not model:
             model = None if info is None else info.served_model
-        entries = scenario.entries_for_version(manifest["release_id"])
+        entries = scenario.release_queries.entries_for_version(manifest["release_id"])
         if entries is None and info is not None:
             entries = info.seed_entries
         if not service_url or not model or not entries:
@@ -1153,13 +1142,12 @@ class RequestService:
                 raise ArtifactNotFound("no harness recipes are available")
 
             scenario_name = _random_harness_scenario_name()
-            scenario = self._dispatcher.get_or_create_scenario(
-                scenario_name,
-                release_id=release_id,
-                allow_implicit_creation=True,
-            )
+            scenario = self._dispatcher.get_or_create_scenario(scenario_name, release_id=release_id)
             if scenario is None:
-                raise ReefError("implicit harness scenario creation returned no scenario")
+                raise UnknownScenario(
+                    "this deployment creates no scenario implicitly: create one with POST /reef/scenarios "
+                    f"and name it in the {SCENARIO_HEADER} header"
+                )
             return scenario
 
         parsed = parse_request_headers(headers, RequestType.INFERENCE)
@@ -1232,7 +1220,7 @@ def recorded_ref(scenario: Scenario, parsed: RequestHeaders, served: ArtifactRef
         or scenario.training_runtime is not None
     ):
         return served
-    return scenario.ref_for_version(claimed) or served
+    return scenario.release_queries.ref_for_version(claimed) or served
 
 
 def _with_tags(payload: Mapping[str, Any], parsed: RequestHeaders) -> Mapping[str, Any]:

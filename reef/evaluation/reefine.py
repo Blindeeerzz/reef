@@ -30,11 +30,11 @@ from reef.core.training_request import TrainingRequest
 from reef.evaluation.evaluators import SelectionPlugin
 from reef.evaluation.harness import HarnessCandidate, verifier_reward
 from reef.harness.adapters.descriptor import AdapterDescriptor
-from reef.harness.episodes.executor import EpisodeExecutor
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindingError, ModelBindings
 from reef.harness.episodes.run import EpisodeError, EpisodeResult, TrajectoryKeepError, run_episode
 from reef.harness.episodes.trajectory import TrajectoryError, final_assistant_text
 from reef.harness.step_result import evaluation_report
+from reef.sandbox.process import EpisodeExecutor
 
 
 @dataclass(frozen=True)
@@ -183,7 +183,7 @@ class ReefineEvaluation(SelectionPlugin):
         deadline = started + self.settings.timeout_seconds
         models = self.backend.evaluation_models
         reviewer = models[self.settings.reviewer_model]
-        tasks = candidate.evaluation_tasks or candidate.gate_tasks
+        tasks = candidate.evaluation_tasks
         checks = [
             CheckResult(f"health-{index}", "health", "candidate", expected=task) for index, task in enumerate(tasks)
         ]
@@ -445,9 +445,7 @@ class ReefineEvaluation(SelectionPlugin):
                 failures.append("evaluation is missing a required check group")
             if isinstance(candidate, ReefineCandidate):
                 expected_ids = {"request-plan", "request-behavior", "change-review"}
-                expected_ids.update(
-                    f"health-{index}" for index in range(len(candidate.evaluation_tasks or candidate.gate_tasks))
-                )
+                expected_ids.update(f"health-{index}" for index in range(len(candidate.evaluation_tasks)))
                 expected_ids.update(f"regression-{index}" for index in range(len(self.settings.protected_tasks)))
                 ids = [check.get("id") for check in checks if isinstance(check, Mapping)]
                 if set(ids) != expected_ids or len(ids) != len(expected_ids):

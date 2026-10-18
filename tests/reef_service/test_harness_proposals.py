@@ -74,7 +74,6 @@ def _dispatcher(tmp_path: Path, recipe: Recipe) -> Dispatcher:
     return Dispatcher(
         recipe,
         factory,
-        agent_record_dir=tmp_path / "agent-record",
         scenario_storage=SQLiteScenarioStorage(tmp_path / "agent-record"),
     )
 
@@ -381,7 +380,7 @@ def test_the_route_admits_against_the_head_commits_entries_not_the_live_state(tm
         assert result is not None
         scenario.commit(result)
         head = scenario.repository.require_current_artifact().release_id
-        logged = scenario.entries_for_version(head)
+        logged = scenario.release_queries.entries_for_version(head)
         assert logged is not None and [entry["id"] for entry in logged] == ["models", "settings", "r1"]
         state = scenario.trainer.state
         assert isinstance(state, dict)

@@ -3,7 +3,7 @@
 from collections.abc import Mapping, Sequence
 
 from reef.harness.step_result import evaluation_report
-from reef.service.page_chrome import escape
+from reef.service.page_layout import escape
 
 STYLE = """
 .evaluation-card{grid-column:1 / -1}.evaluation-card h2{margin-bottom:8px}

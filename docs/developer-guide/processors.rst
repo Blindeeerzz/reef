@@ -87,7 +87,7 @@ The trainer calls it on its own thread, under its lock; no call may block:
   them again. ``trained=False`` says the backend dropped the batch as stale,
   for a record stage that paces work on what trained.
 
-The pipeline also merges the three stages' ``status()``, metrics, background
+The pipeline also merges the record and task stages' ``status()``, metrics, background
 work (``background_jobs_running()``), and ``close()``. ``releasable_record_ids()``
 returns the completed records that no held set references, and
 ``release_records(ids)`` frees their memory after a successful commit. New
@@ -122,6 +122,27 @@ A record that the stage ends, for example a report in a taken slot or a set
 that is too stale, appears in ``releasable_record_ids()``. The next commit
 names it, so the record never trains after a restart.
 
+Every record stage runs the staleness check. No other part of Reef checks the
+version of training data. The check has these steps:
+
+1. When the scenario reserves a batch, it gives the pipeline the runtime load
+   ID that serves its committed release (``observe_serving_runtime_load_id``).
+   The stage keeps these versions, oldest first.
+2. Before each batch, the stage ends every held set that has data more than
+   ``max_staleness`` versions behind the current version (``drop_stale_sets``).
+
+The lag counts only the versions of this scenario. A publication of another
+scenario on a shared engine does not age the data. These rules also apply:
+
+* A sample without a recorded version is stale.
+* A sample from a version that the stage did not see is stale. A rebuilt
+  trainer knows only the versions that it sees after the rebuild.
+* While the serving version is unknown, for example before the first
+  publication, no data is stale.
+
+A stage that holds combined sets overrides ``drop_held_set`` to end a whole
+set. ``ReportRecord2Record`` does this for a ready group.
+
 .. list-table::
    :header-rows: 1
 
@@ -131,8 +152,10 @@ names it, so the record never trains after a restart.
      - nothing; the default of a pipeline that trains no weights
    * - ``ReportRecord2Record``
      - report validation, groups and slots, the manual-mode limit, source release
+   * - ``ExclusiveReportRecord2Record``
+     - a ``ReportRecord2Record`` that trains every report by itself; a report that ends owns its inference records
    * - ``JudgingRecord2Record``
-     - correlation, the judging worker, and the ``max_staleness`` check
+     - correlation and the judging worker
    * - ``InferenceRecord2Record``
      - one set per inference record; other records are released
    * - ``RoundRecord2Record``
@@ -156,10 +179,10 @@ storage.
 - ``hybrid`` batches on either, and a queued instruction goes first. The
   instruction's batch takes the sets that an automatic batch would.
 
-The pipeline attaches the instruction to ``batch.request`` and replaces the
-batch id with ``<scenario>:instruction:<request id>``, the oldest instruction
-first, one per step. Acknowledgement also consumes the instruction. Batch
-construction must not call models or perform training.
+The pipeline runs the oldest instruction first, one per step. It gives the
+instruction's batch the id ``<scenario>:instruction:<request id>`` and attaches
+the instruction to ``batch.request``. Acknowledgement also consumes the
+instruction. Batch construction must not call models or perform training.
 
 The trainer gives TRAIN records to the pipeline when ``RequestType.TRAIN`` is
 in the ``Task2Batch``'s ``required_request_types``. The pipeline queues them
@@ -212,9 +235,10 @@ A reported-feedback recipe writes:
   its record-to-task stage: assemble an ATIF trajectory or Harbor task
   directly. Use ``context.require_score()`` when the method needs a reward.
   The stage attaches the source and report ids to the returned item.
-- ``make_batch(tasks, batch_number)`` on a ``Task2Batch`` subclass: assemble
-  the flat tuple of selected tasks into a batch. The pipeline tracks
-  consumption by set, including tasks that the recipe removes from training.
+- ``make_batch(tasks, batch_id)`` on a ``Task2Batch`` subclass: assemble
+  the flat tuple of selected tasks into a batch with the ID ``batch_id``.
+  The pipeline tracks consumption by set, including tasks that the recipe
+  removes from training.
 
 ``exclusive_sources`` makes a terminal report own its referenced inference
 records outright, and ``ordered_groups`` batches ready groups in key order.
@@ -259,8 +283,7 @@ for tracked records that time out. The recipe's record stage is a
 ``JudgingRecord2Record`` with the judging and the worker that runs
 ``judge``. Its record-to-task stage is a ``JudgedTasks`` with
 ``make_sample(record, judgment)``, and its ``Task2Batch`` supplies
-``make_batch``. The stage holds judged records and drops those more than
-``max_staleness`` versions behind the newest one.
+``make_batch``. The stage holds judged records until a batch uses them.
 
 Task generation contract
 ------------------------

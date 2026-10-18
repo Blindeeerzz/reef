@@ -230,13 +230,46 @@ import yaml
 from reef_client.serve import CapturedTurn, CaptureStore, ServeConfig, build_handler
 
 from reef.core.requirements import required_by
-from reef.core.training_request import CLIENT_COMMANDS
 from reef.harness.adapters import get_adapter
 from reef.harness.adapters.descriptor import NO_TOKEN_API_KEY, AdapterDescriptor, ClientState
 from reef.harness.client.check_display import CheckDisplay
 from reef.harness.episodes.vendor_install import version_probe_env
 from reef.harness.episodes.version_check import ships_version_check
 from reef.harness.step_result import design_sections, evaluation_report, next_action, rejection_text
+
+
+#: The commands a client reports as on its PATH or not, so a proposer builds for the machine the change runs on,
+#: not the one it is tried in: players, notifiers, openers and clipboards per platform, and common tools.
+CLIENT_COMMANDS = (
+    "afplay",
+    "say",
+    "osascript",
+    "open",
+    "pbcopy",
+    "terminal-notifier",
+    "xdg-open",
+    "notify-send",
+    "paplay",
+    "pw-play",
+    "aplay",
+    "wl-copy",
+    "xclip",
+    "powershell.exe",
+    "wslview",
+    "ffplay",
+    "ffmpeg",
+    "mpv",
+    "mpg123",
+    "sox",
+    "espeak",
+    "curl",
+    "git",
+    "gh",
+    "python3",
+    "node",
+    "brew",
+    "apt-get",
+)
 
 
 def _captures_dir() -> Path:
@@ -1180,12 +1213,6 @@ def _met(item: Mapping[str, Any], record: Mapping[str, Any] | None) -> bool:
     A check off without a recorded check, from an older release file, counts by
     name; the install script's evaluation applies the same rule."""
     return record is not None and ("check" not in record or record.get("check") == item.get("check"))
-
-
-def _unmet(requires: Any, setup: Any) -> list[dict[str, Any]]:
-    """The required items no check off meets."""
-    checked = {item["name"]: item for item in _named_items(setup)}
-    return [item for item in _named_items(requires) if not _met(item, checked.get(item["name"]))]
 
 
 def _item_line(item: Mapping[str, Any]) -> str:

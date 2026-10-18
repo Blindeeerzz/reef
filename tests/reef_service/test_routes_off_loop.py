@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-from tests.scenario.test_component_trainers import _dispatcher
+from tests.support.component_trainers import _dispatcher
 
 from reef.service.app import create_app
 
@@ -21,7 +21,7 @@ def test_a_catalog_read_waiting_for_the_scenario_lock_leaves_the_loop_free(tmp_p
     release = threading.Event()
 
     def hold() -> None:
-        with dispatcher._registry.lock_for("agent"):
+        with dispatcher.registry.lock_for("agent"):
             held.set()
             release.wait(10)
 

@@ -54,8 +54,6 @@ class Task2Batch(ABC, Plugin):
     required_request_types: frozenset[RequestType] = frozenset({RequestType.INFERENCE, RequestType.REPORT})
 
     def __init__(self, context: PipelineContext, batch_size: int) -> None:
-        if batch_size <= 0:
-            raise ValueError("batch_size must be positive")
         self.context = context
         self.scenario = context.scenario
         #: The number of record sets in one batch.
@@ -84,25 +82,18 @@ class Task2Batch(ABC, Plugin):
         return self.context.experiment_logger
 
     @abstractmethod
-    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_id: str) -> TrainingBatch:
         """Build a batch from the tasks of the selected record sets, in batch order.
 
+        Use ``batch_id`` as the ID of the returned batch. The pipeline assigns
+        it. An automatic batch gets ``<scenario>:batch:<number>``. An
+        instruction's batch gets ``<scenario>:instruction:<request id>``. The
+        number counts the batches of this pipeline and starts again when the
+        pipeline restarts. It is not a training step.
         The pipeline tracks consumption by record set, including the tasks
         that the recipe leaves out of the batch. In ``manual`` mode an
         instruction's batch has no tasks.
         """
-
-    def status(self) -> Mapping[str, Any]:
-        """Return JSON-safe state that the pipeline adds to its status."""
-        return {}
-
-    def operational_metrics(self) -> Mapping[str, float | int]:
-        """Return numeric state that the pipeline adds to its metrics."""
-        return {}
-
-    def close(self) -> None:
-        """Release resources that the stage owns. Calling it more than one time is safe."""
-        return
 
 
 class NoBatches(Task2Batch):
@@ -124,5 +115,5 @@ class NoBatches(Task2Batch):
     def __init__(self, context: PipelineContext) -> None:
         super().__init__(context, 1)
 
-    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_number: int) -> TrainingBatch:
+    def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_id: str) -> TrainingBatch:
         raise RuntimeError(f"scenario {self.scenario!r} trains no weights and never produces a training batch")

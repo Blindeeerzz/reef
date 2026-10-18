@@ -36,10 +36,8 @@ from reef.evaluation.harness import (
 from reef.harness.adapters.descriptor import AdapterDescriptor
 from reef.harness.compose import Context
 from reef.harness.compose.loader import EntryOptions, Loader
-from reef.harness.episodes.e2b import E2BExecutor
-from reef.harness.episodes.executor import EpisodeExecutor, LocalExecutor, SandboxExecutor
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindings, ModelBindingsResolver, usage_of
-from reef.harness.episodes.vendor_install import install_prefix, resolve_binary
+from reef.harness.episodes.vendor_install import AdapterProgram
 from reef.harness.tree.mutations import (
     Mutation,
     MutationError,
@@ -60,17 +58,14 @@ from reef.harness.tree.nodes import (
 from reef.harness.tree.render import render_composition, tree_files
 from reef.runtime.executor import Executor
 from reef.runtime.executor.config import ExecutorSettings
-from reef.train.backend import STALE_RESULT_POLICIES, CandidateBackend, PreparedStep, StaleResultPolicy
+from reef.sandbox.process import EpisodeExecutor, LocalExecutor
+from reef.train.backend import CandidateBackend, PreparedStep
 from reef.train.cordis_backend.contracts import ProposalValidator, StepProgress, StepProgressReader, StepRecords
-from reef.train.cordis_backend.manifest import FailureManifest
-from reef.train.cordis_backend.manifest import FailureRecord as FailureRecord  # re-export: manifest entry type
-from reef.train.cordis_backend.manifest import advance
+from reef.train.cordis_backend.manifest import FailureManifest, advance
 from reef.train.cordis_backend.proposals import Proposal, ProposalInbox
 from reef.train.cordis_backend.strategies import AgentHost, Promoter, Proposer, ProposerCalls, StepProposal
 from reef.train.types import TrainingBatch, TrainStepResult, TrajectoryItem, trajectories
 
-#: The record file of an attempt directory that re-evaluated a kept candidate; it names the first attempt.
-RECORD_REEVALUATION_FILE = "reevaluation.json"
 #: The record files one step writes under its claimed directory (``<step>``, a retried step ``<step>-<attempt>``).
 RECORD_PROPOSER_FILE = "proposer.json"
 RECORD_MUTATIONS_FILE = "mutations.json"
@@ -391,16 +386,13 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         publish: str = "auto",
         review_kinds: tuple[str, ...] = (),
         seed: tuple[Mapping[str, Any], ...] = (),
-        episode_workers: int | None = None,
         proposals_dir: str | Path | None = None,
         max_pending_proposals: int = 8,
         step_record_dir: str | Path | None = None,
         worker_executor: ExecutorSettings | None = None,
-        worker_gpus: float | None = None,
         agent_executor: EpisodeExecutor | None = None,
         agent_timeout_s: float = 1800.0,
         agent_trial_timeout_s: float = 300.0,
-        on_stale: StaleResultPolicy = "merge",
     ) -> None:
         if not tasks:
             raise ValueError("harness evolution requires a non-empty task set")
@@ -439,13 +431,10 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{label} must be an integer of at least 0 (0 disables the limit)")
         worker_selection, worker_requirements = evaluation_selection(
-            score_episode, episode_workers, worker_executor or ExecutorSettings(), worker_gpus
+            score_episode, worker_executor or ExecutorSettings()
         )
         Executor.get_class(worker_selection.settings.backend)
-        if on_stale not in STALE_RESULT_POLICIES:
-            raise ValueError(f"on_stale must be one of {STALE_RESULT_POLICIES}")
-        self.on_stale = on_stale
-        # Proposals a settlement already filed; a step evaluated again settles once.
+        # Proposals that a settlement filed already. A later abort of the same step does not refuse them.
         self.settled_proposals: set[str] = set()
         self._forbid_residue = forbid_residue
         self._max_steps = max_steps
@@ -495,25 +484,16 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         self._validate_seed()
         # Evolution needs the binary at boot, just like the model binding.
         # Install failures propagate with the missing tool or vendor error.
-        prefix = install_prefix(descriptor)
-        if isinstance(self._executor, E2BExecutor):
-            self._executor = self._executor.for_adapter(descriptor, binary=binary)
-            self._executor.preflight()
-            self._binary = self._executor.binary
-        else:
-            self._binary = binary if binary is not None else resolve_binary(descriptor, prefix=prefix)
-        if binary is None and descriptor.install is not None and isinstance(self._executor, SandboxExecutor):
-            # Bind the whole install: npm launchers are symlinks into packages,
-            # and git installs need both their editable source and their venv.
-            self._executor = replace(self._executor, base_paths=(*self._executor.base_paths, str(prefix)))
+        program = AdapterProgram(descriptor)
+        self._executor, self._binary = self._executor.for_program(program, binary=binary)
+        self._executor.preflight()
         for label, timeout in (("agent_timeout_s", agent_timeout_s), ("agent_trial_timeout_s", agent_trial_timeout_s)):
             if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
                 raise ValueError(f"{label} must be a positive number")
-        # The agent proposer runs the same installed binary as the episodes, under its own isolation.
-        if binary is None and descriptor.install is not None and isinstance(agent_executor, SandboxExecutor):
-            agent_executor = replace(agent_executor, base_paths=(*agent_executor.base_paths, str(prefix)))
-        if isinstance(agent_executor, E2BExecutor):
-            agent_executor = agent_executor.for_adapter(descriptor)
+        # The agent proposer runs the same harness as the episodes, under its own isolation.
+        self._agent_binary = self._binary
+        if agent_executor is not None:
+            agent_executor, self._agent_binary = agent_executor.for_program(program, binary=binary)
             agent_executor.preflight()
         self._agent_executor = agent_executor
         self._agent_timeout_s = float(agent_timeout_s)
@@ -716,7 +696,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             carried["promoted_clients"] = promoted_clients
         # Carried through skips so a no-commit step keeps the rollback target.
         rollback_entries = state.get("rollback_entries")
-        rollback_evaluation_context = state.get("rollback_evaluation_context", state.get("rollback_gated_against"))
+        rollback_evaluation_context = state.get("rollback_evaluation_context")
         if rollback_entries is not None:
             carried["rollback_entries"] = rollback_entries
             carried["rollback_evaluation_context"] = rollback_evaluation_context
@@ -797,8 +777,8 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             return PreparedStep.with_candidate(
                 HarnessCandidate(
                     candidate_id=f"{batch.batch_id}:recheck",
-                    candidate_files=render_composition(self._nodes_from(target), self._descriptor),
-                    current_files=render_composition(self._nodes_from(published), self._descriptor),
+                    candidate_files=render_composition(nodes_from_entries(target), self._descriptor),
+                    current_files=render_composition(nodes_from_entries(published), self._descriptor),
                     candidate_entries=tuple(target),
                     current_entries=tuple(published),
                     mutations=(),
@@ -957,9 +937,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         previous = None if previous_state is None else FailureManifest.from_state(previous_state)
         # A side the evaluation did not run showed nothing, so its manifest carries over untouched, as through a skip.
         manifest = None
-        if committed_side in evaluation_metrics.get(
-            "evaluation_sides", evaluation_metrics.get("gate_sides", EVALUATION_SIDES)
-        ):
+        if committed_side in evaluation_metrics.get("evaluation_sides", EVALUATION_SIDES):
             manifest = advance(
                 previous,
                 int(prepared.state["steps"]),
@@ -978,9 +956,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         metrics["evaluation_context"] = self.evaluation_context()
         # A publish stores the replaced tree and its evaluation stamp as the rollback target; a rollback consumes it.
         rollback_entries = prepared.state.get("rollback_entries")
-        rollback_evaluation_context = prepared.state.get(
-            "rollback_evaluation_context", prepared.state.get("rollback_gated_against")
-        )
+        rollback_evaluation_context = prepared.state.get("rollback_evaluation_context")
         if candidate.recheck and decision.selected:
             metrics["rolled_back"] = True
             rollback_entries = None
@@ -995,7 +971,6 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             state["failure_manifest"] = manifest.to_state()
         state.pop("rollback_entries", None)
         state.pop("rollback_evaluation_context", None)
-        state.pop("rollback_gated_against", None)
         if rollback_entries is not None:
             state["rollback_entries"] = rollback_entries
             state["rollback_evaluation_context"] = rollback_evaluation_context
@@ -1030,7 +1005,6 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             metrics["mutations"] = [_mutation_record(mutation) for mutation in candidate.mutations]
 
         if candidate.proposal_id is not None and self.proposals is not None:
-            # Filed on every settlement: a candidate evaluated again after a stale refusal files its latest decision.
             selection_result = {"step": int(state["steps"]), "selected": decision.selected, "reason": decision.reason}
             self.proposals.settle(candidate.proposal_id, selection_result)
             self.settled_proposals.add(candidate.proposal_id)
@@ -1058,12 +1032,6 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         self._loader.root.update([copy.deepcopy(entry) for entry in entries])
         return TrainStepResult({**state, "entries": entries}, metrics)
 
-    @property
-    def stale_result_policy(self) -> StaleResultPolicy:
-        """Episodes compare candidate and current under one set of weights, so a result survives a weights change
-        as the recipe's ``on_stale`` says: merged by default."""
-        return self.on_stale
-
     def commit_applied(self, state: Mapping[str, Any]) -> None:
         """Discard this backend's render source after its commit is durable."""
         artifact = self._rendered_publications.pop(int(state["steps"]), None)
@@ -1073,29 +1041,6 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         self._loader.root.update([copy.deepcopy(entry) for entry in state["entries"]])
         # The step is over: no earlier settlement can be aborted any more.
         self.settled_proposals.clear()
-
-    def prepare_reevaluation(self, prepared: PreparedStep) -> PreparedStep:
-        """The kept candidate with a fresh attempt directory for its episodes, shown as evaluating again.
-
-        The proposer files stay with the first attempt; the new directory
-        names it in ``reevaluation.json`` and receives the episodes.
-        """
-        candidate = self._candidate_from(prepared)
-        metrics = dict(prepared.metrics)
-        step_dir = None
-        if candidate.record_dir is not None:
-            step_dir = self._claim_step_dir(int(prepared.state["steps"]))
-            self._current_step_record = step_dir
-            metrics["step_record"] = str(step_dir)
-            self._write_record(step_dir, RECORD_REEVALUATION_FILE, {"first_attempt": str(candidate.record_dir)})
-        self._step_calls = None
-        self._step_progress = StepProgress(
-            request_id=self.step_request_id,
-            phase="evaluating",
-            started_at=time.time(),
-            step_record=None if step_dir is None else str(step_dir),
-        )
-        return replace(prepared, candidate=replace(candidate, record_dir=step_dir), metrics=metrics)
 
     def abort_step(self, prepared: PreparedStep) -> None:
         self._step_progress = None
@@ -1113,8 +1058,8 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             and self.proposals is not None
             and candidate.proposal_id not in self.settled_proposals
         ):
-            # Filed, not left in claimed/ forever: the inbox never returns to a claimed file on its own. A
-            # proposal an earlier evaluation settled keeps that decision when its second evaluation fails.
+            # File the proposal, so it does not stay in claimed/: the inbox never returns to a claimed file.
+            # A proposal that this step settled already keeps its decision.
             self.proposals.refuse(candidate.proposal_id, "step aborted before a result")
         self.settled_proposals.clear()
 
@@ -1149,7 +1094,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             return None
         return AgentHost(
             descriptor=self._descriptor,
-            binary=self._binary,
+            binary=self._agent_binary,
             executor=self._agent_executor,
             step_dir=step_dir,
             calls=calls,
@@ -1206,10 +1151,6 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
     def _nodes(self) -> tuple[tuple[str, Any], ...]:
         """The enabled composition in tree order, as (kind, config) pairs."""
         return nodes_from_entries(self._entries())
-
-    @staticmethod
-    def _nodes_from(entries: Sequence[Mapping[str, Any]]) -> tuple[tuple[str, Any], ...]:
-        return nodes_from_entries(entries)
 
     def _entries(self) -> list[EntryOptions]:
         """Live entry options in tree order."""
