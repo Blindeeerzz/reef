@@ -18,7 +18,7 @@ border-radius:8px;color:var(--ink);font-size:12px}.evaluation-groups a:hover{bac
 .evaluation-badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;white-space:nowrap}
 .evaluation-badge.pass{color:var(--good)}.evaluation-badge.fail,.evaluation-badge.invalid{color:var(--bad)}
 .evaluation-badge.running{color:var(--accent)}.evaluation-badge.pending,.evaluation-badge.not_run,
-.evaluation-badge.unsupported,.evaluation-badge.untested{color:var(--warn)}
+.evaluation-badge.unsupported,.evaluation-badge.untested,.evaluation-badge.concern{color:var(--warn)}
 .evaluation-spinner{display:inline-block;width:11px;height:11px;border:2px solid var(--line);
 border-top-color:currentColor;border-radius:50%;animation:evaluation-spin 1s linear infinite}
 @keyframes evaluation-spin{to{transform:rotate(360deg)}}
@@ -61,10 +61,10 @@ def check_status(checks: Sequence[Mapping[str, object]]) -> str:
     for status in ("invalid", "fail", "not_run", "running", "pending"):
         if status in statuses:
             return status
-    for reported in ("unsupported", "untested"):
+    for reported in ("unsupported", "untested", "concern"):
         if statuses == {reported}:
             return reported
-    return "pass" if statuses <= {"pass", "unsupported", "untested"} else "invalid"
+    return "pass" if statuses <= {"pass", "unsupported", "untested", "concern"} else "invalid"
 
 
 def status_html(status: str) -> str:
@@ -77,6 +77,7 @@ def status_html(status: str) -> str:
         "pending": "Waiting",
         "unsupported": "Not possible here",
         "untested": "Not tested",
+        "concern": "Needs your review",
     }
     if status not in labels:
         status = "invalid"
@@ -192,6 +193,11 @@ def checks_html(checks: object, report: object = None, reason: object = None, *,
             "The checks passed, but part of the request is not possible on this harness. "
             "This release waits for your review."
         )
+    elif result == "pending" and any(check.get("status") == "concern" for check in records):
+        outcome = (
+            "The requested behavior passed, but the change review found something for you to judge. "
+            "This release waits for your review."
+        )
     elif result == "pending" and any(
         check.get("group") == "request" and check.get("status") == "untested" for check in records
     ):
@@ -206,6 +212,7 @@ def checks_html(checks: object, report: object = None, reason: object = None, *,
         ("pass", "passed"),
         ("unsupported", "not possible here"),
         ("untested", "not tested here"),
+        ("concern", "for your review"),
         ("running", "running"),
         ("pending", "waiting"),
     ):
@@ -213,7 +220,8 @@ def checks_html(checks: object, report: object = None, reason: object = None, *,
         if count:
             counts.append(f"{count} {label}")
     failed = sum(
-        str(check.get("status")) not in {"pass", "unsupported", "untested", "running", "pending"} for check in counted
+        str(check.get("status")) not in {"pass", "unsupported", "untested", "concern", "running", "pending"}
+        for check in counted
     )
     if failed:
         counts.append(f"{failed} {'needs' if failed == 1 else 'need'} attention")

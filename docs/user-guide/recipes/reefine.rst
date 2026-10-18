@@ -83,7 +83,10 @@ How it works
    tested. Neither is run. The evaluator also runs protected tasks on both the
    serving release and the candidate, and a fresh model review of the change.
    A failed, invalid or unrun required check rejects the candidate. A candidate
-   that passes with limits waits for your review. A task of several messages
+   that passes with limits waits for your review. When the requested behavior
+   passes but the change review finds a problem it does not call unsafe, such
+   as an addition the request did not ask for, the candidate waits for your
+   review with that finding; an unsafe change is rejected. A task of several messages
    does not run on a harness whose adapter sends one message per session
    (dsh, native and terminus); it is shown as not tested, and a candidate that
    passes the other checks waits for your review. Other behavior that was not

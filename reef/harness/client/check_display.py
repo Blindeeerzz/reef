@@ -125,6 +125,7 @@ STATUS_LABELS = {
     "not_run": "not run",
     "unsupported": "not possible",
     "untested": "not tested",
+    "concern": "needs your review",
     "pending": "waiting",
 }
 

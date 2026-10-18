@@ -98,7 +98,7 @@ def evaluation(tmp_path, request_pass=True, current_pass=True, candidate_pass=Tr
         {"passed": request_pass, "reason": "observed request"},
         {"passed": current_pass, "reason": "current result"},
         {"passed": candidate_pass, "reason": "candidate result"},
-        {"passed": review_pass, "reason": "review result"},
+        {"passed": review_pass, "unsafe": True, "reason": "review result"},
     ]
     backend = EvaluationBackend(model, [episode("request"), episode("protected"), episode("protected")])
     plugin = ScriptedEvaluation(
@@ -124,6 +124,29 @@ def test_the_behavior_review_is_told_whether_the_workspace_is_a_git_repository(t
     plugin, model = evaluation(tmp_path)[:2]
     plugin.evaluate(candidate(tmp_path))
     assert '"workspace_is_git_repository": false' in model.messages_seen[1][0]["content"]
+
+
+def test_a_change_review_problem_that_is_not_unsafe_holds_a_passing_release_for_review(tmp_path):
+    plugin, model = evaluation(tmp_path)[:2]
+    model.responses[4] = {"passed": False, "unsafe": False, "reason": "The note adds an exception the request lacks."}
+    item = candidate(tmp_path)
+    measured = plugin.evaluate(item)
+    decision = plugin.decide(item, measured)
+    review = next(c for c in measured.metrics["evaluation_report"]["checks"] if c["id"] == "change-review")
+    assert review["status"] == "concern"
+    assert decision.selected and decision.requires_review
+    assert decision.reason == (
+        "All checks that ran passed. The change review asks for your judgment: The note adds an exception the "
+        "request lacks. Review the release before you install it."
+    )
+    # An unsafe finding still rejects, and a failed review must say whether it is unsafe.
+    plugin, model = evaluation(tmp_path, review_pass=False)[:2]
+    assert not plugin.decide(item, plugin.evaluate(item)).selected
+    plugin, model = evaluation(tmp_path)[:2]
+    model.responses[4] = {"passed": False, "reason": "no unsafe field"}
+    measured = plugin.evaluate(item)
+    review = next(c for c in measured.metrics["evaluation_report"]["checks"] if c["id"] == "change-review")
+    assert review["status"] == "invalid" and not plugin.decide(item, measured).selected
 
 
 def test_the_plan_reads_the_changes_how_to_use_note(tmp_path):

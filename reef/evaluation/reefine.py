@@ -92,7 +92,8 @@ class ReefineEvaluationBackend(CandidateEvaluator):
 
 #: How much of the first failed check's reason a rejection repeats; the page shows every reason in full.
 REASON_CHARACTERS = 300
-CheckStatus = Literal["pending", "running", "pass", "fail", "invalid", "not_run", "unsupported", "untested"]
+#: ``concern`` is a change review that found a problem it does not call unsafe: the release waits for the person.
+CheckStatus = Literal["pending", "running", "pass", "fail", "invalid", "not_run", "unsupported", "untested", "concern"]
 
 
 @dataclass(frozen=True)
@@ -472,9 +473,13 @@ class ReefineEvaluation(SelectionPlugin):
                     deadline,
                 )
                 passed, reason = validate_review(change_review)
+                unsafe = change_review.get("unsafe")
+                if not passed and not isinstance(unsafe, bool):
+                    raise ValueError("a failed change review requires a boolean unsafe")
+                # A problem the review does not call unsafe holds a release whose behavior passed for the person.
                 checks[review_index] = replace(
                     checks[review_index],
-                    status="pass" if passed else "fail",
+                    status="pass" if passed else "fail" if unsafe else "concern",
                     score=float(passed),
                     observed=reason,
                     reason="" if passed else reason,
@@ -519,6 +524,7 @@ class ReefineEvaluation(SelectionPlugin):
         # Rows reported but never run carry their own status; every other row must pass.
         reported_status = {"limit": "unsupported", "untested": "untested"}
         skipped = []
+        concerns = []
         if not isinstance(checks, list) or not checks:
             failures.append("evaluation returned no checks")
         else:
@@ -532,6 +538,12 @@ class ReefineEvaluation(SelectionPlugin):
                 failures.append("evaluation is missing a required check group")
             limits = [check for check in checks if isinstance(check, Mapping) and check.get("group") == "limit"]
             untested = [check for check in checks if isinstance(check, Mapping) and check.get("group") == "untested"]
+            # A change review that found a problem it does not call unsafe holds the release for review.
+            concerns = [
+                check
+                for check in checks
+                if isinstance(check, Mapping) and check.get("group") == "review" and check.get("status") == "concern"
+            ]
             # A request task the adapter cannot run is reported as untested and holds the release for review.
             skipped = [
                 check
@@ -566,6 +578,7 @@ class ReefineEvaluation(SelectionPlugin):
                 if isinstance(check, Mapping)
                 and check.get("status") != reported_status.get(str(check.get("group")), "pass")
                 and check not in skipped
+                and check not in concerns
             ]
             if failed:
                 # The page shows every check's full reason; the decision names the failed checks and the first cause.
@@ -584,7 +597,7 @@ class ReefineEvaluation(SelectionPlugin):
         if not selected:
             reason = ". ".join(failures) + "."
         else:
-            reason = "All checks that ran passed." if skipped else "All required checks passed."
+            reason = "All checks that ran passed." if skipped or concerns else "All required checks passed."
             if limits:
                 reason += " Part of the request is not possible on this harness: " + "; ".join(
                     str(check.get("expected")).strip().rstrip(".") for check in limits
@@ -592,7 +605,9 @@ class ReefineEvaluation(SelectionPlugin):
                 reason += "."
             for check in skipped:
                 reason += f" {check_label(check)} was not run: {str(check.get('reason')).strip().rstrip('.')}."
-            if limits or skipped:
+            for check in concerns:
+                reason += f" The change review asks for your judgment: {str(check.get('reason')).strip().rstrip('.')}."
+            if limits or skipped or concerns:
                 reason += " Review the release before you install it."
         if selected and untested:
             reason += (
@@ -619,7 +634,7 @@ class ReefineEvaluation(SelectionPlugin):
             reason=reason,
             evaluation=evaluation,
             metrics={"request_feedback": feedback},
-            requires_review=selected and bool(limits or skipped),
+            requires_review=selected and bool(limits or skipped or concerns),
         )
 
     def begin(self, checks: list[CheckResult], index: int) -> None:

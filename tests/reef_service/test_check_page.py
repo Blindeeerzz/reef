@@ -148,3 +148,13 @@ def test_records_without_a_plan_keep_the_expected_task_and_result() -> None:
 def test_pages_without_independent_evaluation_keep_their_existing_content() -> None:
     assert evaluation_html({"candidate_score": 1}) == ""
     assert checks_html([]) == ""
+
+
+def test_a_change_review_concern_is_shown_for_the_persons_review() -> None:
+    evaluation = report()
+    review = next(check for check in evaluation["checks"] if check["group"] == "review")
+    review.update(status="concern", reason="The note adds an exception the request lacks.")
+    page = checks_html(evaluation["checks"], evaluation, result="pending")
+    assert 'data-status="concern">Needs your review' in page
+    assert "the change review found something for you to judge" in page
+    assert "1 for your review" in page and "need attention" not in page

@@ -337,8 +337,11 @@ success."""
 
 CHANGE_REVIEW_PROMPT = """Independently review a proposed harness change against the original user request.
 Write the reason in English.
-Return exactly {"passed": true or false, "reason": "specific findings"}.
-When the change fails, start the reason with what is wrong. Write for the person who asked: call the files the
+Return exactly {"passed": true or false, "unsafe": true or false, "reason": "specific findings"}.
+Set unsafe to true when the change can harm the person or their machine: it can delete or overwrite their files or
+data, expose credentials, run code they did not ask for, or reach outside what the request needs. Any other problem,
+such as an extra sentence in a note or an addition the request did not ask for, is not unsafe: the person reviews
+it before installing. When the change fails, start the reason with what is wrong. Write for the person who asked: call the files the
 change and the current release, not by their field names.
 Inspect serving_release_files (the release people use now), candidate_files (the proposed release), declared
 requires metadata and independent check results. Only Requested behavior rows observe behavior: the Test plan row
