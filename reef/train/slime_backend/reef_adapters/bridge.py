@@ -196,6 +196,7 @@ class SlimeTrainingBackend(TrainingBackend, ExecutorFailureListener):
                 source_hf=source_hf,
                 source_megatron=source_megatron,
                 lora=lora,
+                saves_optimizer=not args.no_save_optim,
             )
             if storage_config is not None and save_hf_template is not None and megatron_save_root is not None
             else None

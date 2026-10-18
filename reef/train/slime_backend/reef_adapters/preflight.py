@@ -131,6 +131,7 @@ def prepare_checkpoint_storage(args: SlimeArguments, retention: RetentionConfig)
         source_megatron=args.load,
         lora=bool(args.megatron_lora_rank),
         critic_save_interval=args.critic_save_interval,
+        saves_optimizer=not args.no_save_optim,
     )
     marker = read_marker(storage.marker_path)
     if marker is not None and marker["status"] == "RUNNING":

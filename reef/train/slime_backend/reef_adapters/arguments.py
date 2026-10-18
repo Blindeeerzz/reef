@@ -43,6 +43,7 @@ class SlimeArguments(Namespace):
     start_rollout_id: int | None
     custom_megatron_init_path: str | None
     custom_critic_args_hook_path: str | None = None
+    no_save_optim: bool = False
     custom_model_provider_path: str | None
     custom_rollout_data_keys: tuple[str, ...] | list[str] | None = ()
     megatron_config_path: str | None
