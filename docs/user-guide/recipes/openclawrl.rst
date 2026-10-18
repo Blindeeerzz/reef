@@ -119,6 +119,7 @@ file. The record-to-task stage takes no config.
    pipeline.record2record.config.prm_concurrency | 8 | turns judged at once
    pipeline.record2record.config.prm_max_hint_candidates | 3 | hint candidates collected per turn
    pipeline.record2record.config.tool_turn_reward | prm | the reward of a turn whose next state is a tool result: ``prm`` asks the PRM, as upstream does; ``neutral`` gives no reward, so the turn trains only from an accepted hint
+   pipeline.record2record.config.negative_reward | prm | the reward of a turn that the PRM scores -1: ``prm`` keeps -1, as upstream does; ``neutral`` gives no reward, so the turn trains only from an accepted hint
    pipeline.task2batch.config.batch_size | 16 | judged turns per training step. Must equal the driver's ``--global-batch-size``.
    pipeline.task2batch.config.prm_record_file | "" | judged population, one JSON line per batch; empty disables it
    recipe.config.max_staleness | 0 | accepted lag between the producing and serving version. Env ``REEF_MAX_STALENESS``.
@@ -130,6 +131,14 @@ background ``terminal`` command or a deleted homework file. It scored 7 of 20
 text replies +1. After about 20 steps, the policy stopped replying in text.
 ``tool_turn_reward: neutral`` removes that reward. Only the student's reaction
 then rewards or penalizes a turn.
+
+Most student reactions then reject the reply's style, so most rewards are -1.
+A -1 lowers the probability of the whole reply, and the policy can lower it by
+calling a tool instead of replying in text. In the same stream, one step on
+five rejected replies cut the text answers of a fixed probe from 16 of 24 to 8
+of 24. One step on the same turns with no reward, trained only from their
+hints, did not. ``negative_reward: neutral`` gives a rejected turn no reward,
+so the hint teaches the correction and the reward term keeps only +1.
 
 With ``prm_api: openai``, a hosted provider can be the judge, because the
 judge needs only generated text. The config holds the name of the credential

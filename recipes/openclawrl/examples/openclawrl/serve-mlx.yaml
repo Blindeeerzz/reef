@@ -116,6 +116,10 @@ pipeline:
       # turn whose next state is a tool result gets no reward; only an
       # accepted hint trains it.
       tool_turn_reward: neutral
+      # Most student reactions reject the style, so most rewards are -1. A -1
+      # on the whole reply taught the policy to call a tool instead of
+      # replying. With neutral, a rejected turn trains only from its hint.
+      negative_reward: neutral
   task2batch:
     config:
       # Judged turns per optimizer step. The reference uses 16. A value of 8

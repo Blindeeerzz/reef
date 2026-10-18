@@ -107,6 +107,13 @@ class OpenClawRLJudgingSettings(PluginSettings):
         help="The reward of a turn whose next state is a tool result: 'prm' asks the PRM, as upstream does; "
         "'neutral' gives no reward, so only the hint judge can train the turn.",
     )
+    # A whole-sequence -1 lowers the probability of the reply as a whole, and a
+    # policy can lower it by not replying in text at all.
+    negative_reward: str = config_option(
+        "prm",
+        help="The reward of a turn that the PRM scores -1: 'prm' keeps -1, as upstream does; "
+        "'neutral' gives no reward, so only the hint judge can train the turn.",
+    )
 
     def __post_init__(self) -> None:
         if self.session_ttl_s <= 0:
@@ -135,6 +142,8 @@ class OpenClawRLJudgingSettings(PluginSettings):
             raise ValueError("prm_max_hint_candidates must be positive")
         if self.tool_turn_reward not in ("prm", "neutral"):
             raise ValueError(f"tool_turn_reward must be 'prm' or 'neutral', got {self.tool_turn_reward!r}")
+        if self.negative_reward not in ("prm", "neutral"):
+            raise ValueError(f"negative_reward must be 'prm' or 'neutral', got {self.negative_reward!r}")
 
 
 def prm_clients(settings: OpenClawRLJudgingSettings, environ: Mapping[str, str]) -> tuple[Any, Any, Any]:
@@ -195,6 +204,7 @@ class OpenClawRLJudging(RecordJudging):
         self.prm, self.teacher, self.renderer = clients if clients is not None else prm_clients(settings, environ)
         self.max_hint_candidates = settings.prm_max_hint_candidates
         self.tool_turn_reward = settings.tool_turn_reward
+        self.negative_reward = settings.negative_reward
         self.index = SessionIndex(settings.session_ttl_s, max_sessions=settings.max_open_sessions)
         # Correlation reports itself through the log, not the record file:
         # the failure worth catching is "nothing ever bound", and a run in
@@ -283,6 +293,8 @@ class OpenClawRLJudging(RecordJudging):
                 self.prm.evaluate(response_text, job.next_state_text, job.next_state_role),
                 self.prm.evaluate_hint_votes(response_text, job.next_state_text, job.next_state_role),
             )
+        if eval_score == -1.0 and self.negative_reward == "neutral":
+            eval_score = 0.0
         # 3. The accepted hindsight hints, shortest first, capped.
         candidates = collect_hint_candidates(hint_votes, max_cand=self.max_hint_candidates)
         # 4. Every candidate ships as a TOKEN SEQUENCE — upstream's

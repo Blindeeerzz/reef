@@ -507,6 +507,18 @@ class TestHybridDispatch:
         # A turn that the user answers keeps its PRM reward.
         assert user_turn.score == 1.0
 
+    def test_a_neutral_negative_reward_trains_a_rejected_turn_only_from_its_hint(self):
+        neutral = OpenClawRLJudgingSettings(negative_reward="neutral")
+
+        hinted = _judge_one_turn(_FakeJudge(-1.0, "write it as plain text"), _FakeTeacher([[-0.3]]), settings=neutral)
+        unhinted = _judge_one_turn(_FakeJudge(-1.0, None), _FakeTeacher(None), settings=neutral)
+        accepted = _judge_one_turn(_FakeJudge(1.0, None), _FakeTeacher(None), settings=neutral)
+
+        assert hinted.score == 0.0
+        assert hinted.teacher_cands[0]["hint"] == "write it as plain text"
+        assert unhinted.score is None
+        assert accepted.score == 1.0
+
     def test_teacher_failure_degrades_to_rl_only(self):
         judgment = _judge_one_turn(_FakeJudge(1.0, "a substantive hint here"), _FakeTeacher(None))
         assert judgment.score == 1.0
@@ -718,6 +730,7 @@ class TestJudgeDialects:
             ({"prm_api": "anthropic"}, "prm_api must be"),
             ({"prm_api": "sglang"}, "applies only to prm_api 'openai'"),
             ({"tool_turn_reward": "zero"}, "tool_turn_reward must be"),
+            ({"negative_reward": "zero"}, "negative_reward must be"),
         ],
     )
     def test_invalid_judge_settings_are_refused(self, overrides, message):
