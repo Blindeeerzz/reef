@@ -36,13 +36,16 @@ logger = logging.getLogger(__name__)
 class MLXRuntime(TrainingRuntime):
     """Train the serving runtime's adapter in this process, one optimizer step per reserved batch."""
 
-    def __init__(self, serving: MLXServingRuntime, *, checkpoint_dir: str, loss_options: LossOptions) -> None:
+    def __init__(
+        self, serving: MLXServingRuntime, *, checkpoint_dir: str, loss_options: LossOptions, max_train_tokens: int = 0
+    ) -> None:
         super().__init__()
         self._serving = serving
         self._engine = serving.engine
         self._checkpoint_root = Path(checkpoint_dir)
         self._checkpoint_root.mkdir(parents=True, exist_ok=True)
         self._loss_options = loss_options
+        self._max_train_tokens = max_train_tokens
 
     @property
     def serving(self) -> MLXServingRuntime:
@@ -117,15 +120,30 @@ class MLXRuntime(TrainingRuntime):
         reopens, whether the step succeeds or fails.
         """
         scenario_step = payload["scenario_step"]
+        samples, advantages = list(payload["samples"]), list(payload["advantages"])
+        limit = self._max_train_tokens
+        if limit:
+            # The backward pass of one row grows faster than its length, so a long row is left out of the step.
+            kept = [
+                (sample, advantage)
+                for sample, advantage in zip(samples, advantages, strict=True)
+                if len(sample.training.get("tokens", ())) <= limit
+            ]
+            if not kept:
+                raise RuntimeContractError(
+                    f"every row of step {scenario_step} is longer than training.options.max_train_tokens ({limit})"
+                )
+            skipped = len(samples) - len(kept)
+            samples, advantages = [sample for sample, _ in kept], [advantage for _, advantage in kept]
+        else:
+            skipped = 0
         source_runtime_load_id = self._serving.current_runtime_load_id()
         engine = self.engine
         with self._serving.paused_admission():
             before = engine.adapter_snapshot()
             try:
                 try:
-                    metrics = engine.train(
-                        payload["loss_family"], payload["samples"], payload["advantages"], self._loss_options
-                    )
+                    metrics = engine.train(payload["loss_family"], samples, advantages, self._loss_options)
                 except ValueError as exc:
                     # The loss family found a sample that it cannot train on.
                     raise RuntimeContractError(f"the mlx training step refused its batch: {exc}") from exc
@@ -156,7 +174,12 @@ class MLXRuntime(TrainingRuntime):
             training_job_id=candidate_id,
             checkpoint_path=str(destination),
             current_runtime_load_id=source_runtime_load_id,
-            training_metrics={**metrics, "adapter_delta_l2": delta, "adapter_tensors_changed": changed},
+            training_metrics={
+                **metrics,
+                "adapter_delta_l2": delta,
+                "adapter_tensors_changed": changed,
+                "rows_over_max_train_tokens": skipped,
+            },
         )
 
     def reject_candidate(self, candidate: ModelCandidate) -> None:
@@ -217,6 +240,7 @@ def mlx_runtimes(settings: MLXConfig, engine: ModelEngine) -> tuple[MLXRuntime, 
         serving,
         checkpoint_dir=settings.checkpoint_dir,
         loss_options=LossOptions(settings.kl_coef, settings.loss_options),
+        max_train_tokens=settings.max_train_tokens,
     )
     return training, serving
 

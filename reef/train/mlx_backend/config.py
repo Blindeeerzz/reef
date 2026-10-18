@@ -126,6 +126,9 @@ class MLXConfig(MLXEngineConfig):
         default_factory=dict, help="Settings of the selected loss family; its settings type validates them."
     )
     inference_timeout_s: float = config_option(300.0, help="Seconds to wait for admitted requests to finish.")
+    max_train_tokens: int = config_option(
+        0, help="Tokens of one training row, at most; longer rows are left out of the step. 0 sets no limit."
+    )
     train_timeout_s: float | None = config_option(None, help="Unsupported; training runs in this process.")
 
     def __post_init__(self) -> None:
@@ -138,6 +141,12 @@ class MLXConfig(MLXEngineConfig):
             raise ValueError("kl_coef must be finite and non-negative")
         if not math.isfinite(self.inference_timeout_s) or self.inference_timeout_s <= 0:
             raise ValueError("inference_timeout_s must be finite and positive")
+        if (
+            isinstance(self.max_train_tokens, bool)
+            or not isinstance(self.max_train_tokens, int)
+            or self.max_train_tokens < 0
+        ):
+            raise ValueError("max_train_tokens must be a non-negative integer")
         if self.train_timeout_s is not None:
             raise ValueError("the mlx backend trains in the service process and has no train timeout")
 

@@ -101,7 +101,8 @@ All keys are under ``training.options``. Only ``checkpoint_dir`` is required.
    training.options.kl_coef | 0.0 | weight of the frozen-base KL term, as described under Loss families below
    training.options.loss_options | {} | settings of the selected loss family; for ``openclawrl``: ``w_rl`` 1.0, ``w_opd`` 1.0, ``eps_lo`` 0.2, ``eps_hi`` 0.28, ``diff_clip`` 1.0 (null for no limit), ``hint_selection`` sequence_optimal or shortest, ``native_k`` 20, ``kl_coef`` (default: ``training.options.kl_coef``); ``tttd`` reads only ``kl_coef``
    training.options.max_tokens | 256 | response token limit when a request sets none
-   training.options.max_context_tokens | 0 | prompt and response token limit of one request, and so of one training row; a request's response limit is lowered to fit, and a prompt that reaches the limit fails with HTTP 400; 0 sets no limit
+   training.options.max_context_tokens | 0 | prompt and response token limit of one request; a request's response limit is lowered to fit, and a prompt that reaches the limit fails with HTTP 400; 0 sets no limit
+   training.options.max_train_tokens | 0 | token limit of one training row; a longer row is left out of its step, the step reports the count as ``rows_over_max_train_tokens``, and a step whose rows are all longer fails; 0 sets no limit
    training.options.temperature | 1.0 | sampling temperature when a request sets none; must be positive
    training.options.top_p | 1.0 | top-p for every request
    training.options.seed | 0 | MLX random seed
@@ -286,7 +287,9 @@ blocks adapted and ``checkpoint_layers: true``, one row of 4096, 8192 and
 10240 tokens peaked at 13.5, 26.2 and 35.9 GiB. Lowering ``lora_layers``
 does not remove this cost: 16 adapted blocks peaked at 45.5 GiB for 12288
 tokens. A harness can send long prompts and ask for long responses, so set
-``max_context_tokens`` to the longest row that fits.
+``max_train_tokens`` to the longest row that fits. Generation needs much less
+memory than a training step, so ``max_context_tokens`` can stay higher: a
+request then still gets a reply, and only its training row is left out.
 
 When a step runs out of memory, change these options in this order:
 

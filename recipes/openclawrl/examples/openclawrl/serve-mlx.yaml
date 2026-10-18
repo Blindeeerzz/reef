@@ -58,13 +58,17 @@ training:
     # the same answer in markdown, on the reply probe).
     learning_rate: 1.0e-4
     max_tokens: 2048
-    # The prompt and completion tokens of one request, and so of one training
-    # row. Hermes asks for 8192 completion tokens, and its prompts grow during
-    # a session. The backward pass of one row grows faster than linearly with
-    # its length: on this 9B config, 8192 tokens peak at 26 GiB, 10240 tokens
-    # at 36 GiB, and 12288 tokens exceeded a 48 GB Mac. Lower this value on
-    # a Mac with less memory.
-    max_context_tokens: 10240
+    # The tokens of one training row. Hermes asks for 8192 completion tokens,
+    # and its prompts grow during a session. The backward pass of one row
+    # grows faster than linearly with its length: on this 9B config, 8192
+    # tokens peak at 26 GiB, 10240 tokens at 36 GiB, and 12288 tokens exceeded
+    # a 48 GB Mac. Longer rows are left out of training. Lower this value on a
+    # Mac with less memory.
+    max_train_tokens: 10240
+    # The prompt and completion tokens of one request. Generation needs much
+    # less memory than training, so a late turn of a long session still gets
+    # a reply instead of HTTP 400; only its training row is left out.
+    max_context_tokens: 16384
     # Chunk the [response, vocab] head so the backward pass of a long response
     # fits in memory.
     log_probs_chunk_size: 512
