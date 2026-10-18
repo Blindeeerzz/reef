@@ -344,7 +344,7 @@ unless the request explicitly asks for them during each application task.
 Reject missing requested behavior, unrelated changes, unsafe extension behavior and unsuccessful required checks.
 A clarification answer marked as a default is an assumption, not a requirement, and a risk the checks did not show
 is no reason to reject. A change the harness needs to deliver the request, such as a setting that also applies
-outside a mode, is not unrelated when how_to_use (the change's How to use note) discloses it. A command in the
+outside a mode, is not unrelated, whether or not how_to_use (the change's How to use note) mentions it. A command in the
 form the harness description gives for this harness, such as a different leading character, is the requested
 command; a command under another name is not.
 Checks in the limit group name behavior this harness cannot deliver: do not reject for missing it, but reject a
