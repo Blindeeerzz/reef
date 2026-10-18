@@ -329,20 +329,27 @@ from the published release, excluding pending candidates.
 
 The plan reads the original request with
 ``ReefineEvaluationBackend.harness_description``: the adapter name, the entry
-kinds a change there may contain and the adapter's harness facts. It returns
-the checks for one application episode and the limits, requested behavior that
-no change of those kinds can deliver on that harness. Limits are recorded and
-never run.
+kinds a change there may contain, the adapter's harness facts and how many
+messages one task may hold. It returns tasks, limits and untested items. A task
+is the messages a person types in one fresh session and the checks that session
+shows; each task runs and is judged on its own checks. Limits are requested
+behavior that no change of those kinds can deliver on that harness. Untested
+items are behavior a person would get but no task can show here. Limits and
+untested items are recorded and never run.
 
 The report under ``EvaluationResult.metrics.evaluation_report`` has a version,
 request and release IDs, model and scorer identity, task version, a protected
 suite checksum, the request plan and check rows. Each row records its group,
 target, status, expected and observed behavior, scores, reason, duration and
 optional record directory. Check statuses are ``pending``, ``running``,
-``pass``, ``fail``, ``invalid``, ``not_run`` and ``unsupported``. Rows in the
-``limit`` group have the status ``unsupported``. Every other required group and
-row must pass before ``SelectionDecision.selected`` can be true. A selected
-candidate with limit rows sets ``requires_review``.
+``pass``, ``fail``, ``invalid``, ``not_run``, ``unsupported`` and ``untested``.
+Rows in the ``limit`` group have the status ``unsupported`` and rows in the
+``untested`` group the status ``untested``. Every other required group and row,
+one ``request-behavior-<n>`` row per task, must pass before
+``SelectionDecision.selected`` can be true. A selected candidate with limit rows
+sets ``requires_review``. A reviewer reply that is not valid JSON is asked once
+more in a fresh conversation, and long tool output in a trajectory is cut
+before a reviewer reads it.
 
 ``RequestVerifier`` is an optional operator-owned ABC. Implement
 ``verify(result: EpisodeResult, workspace: Path) -> VerificationResult``.

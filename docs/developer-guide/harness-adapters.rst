@@ -1352,7 +1352,9 @@ Descriptor fields
 
 - ``name`` identifies the adapter. ``binary`` is the executable, and
   ``argv`` supplies its arguments for one headless prompt. Reef substitutes
-  ``{prompt}`` in ``argv``.
+  ``{prompt}`` in ``argv``. With ``follow_up_messages: true`` the binary also
+  takes further messages right after the prompt and sends them in order in the
+  same session, so an episode can play a person's short exchange (pi does).
 - ``files`` maps node kinds to output paths, such as
   ``skills/{name}/SKILL.md``. ``rules`` and ``skill`` paths are required.
   Each ``files.config.<target>`` gives a config file's ``path``, its

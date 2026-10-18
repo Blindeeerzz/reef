@@ -71,14 +71,19 @@ How it works
    remain. These proposer checks help construct and choose the candidate;
    they cannot approve or reject publication. An independent evaluator then plans the checks from
    the original request and the harness's description: the entry kinds a
-   change may contain and the harness's facts. Requested behavior that the
-   harness cannot deliver is listed as a limit with its reason, and it is not
-   run. The evaluator runs one real application episode for the rest,
-   protected tasks on both the serving release and the candidate, and a fresh
-   model review of the change. A failed, invalid or unrun required check
-   rejects the candidate. A candidate that passes with limits waits for your
-   review. A request in which every behavior is a limit is rejected. Both
-   pages show the checks, the limits, comparisons and the selection reason.
+   change may contain and the harness's facts. The plan splits the request
+   into tasks. A task is what a person types in one new session: one message,
+   or up to three on a harness that takes several in one run (pi). Each task
+   runs in a fresh session and is judged on its own checks. Requested behavior
+   that the harness cannot deliver is listed as a limit with its reason, and
+   behavior that no task here can show, such as a restart, is listed as not
+   tested. Neither is run. The evaluator also runs protected tasks on both the
+   serving release and the candidate, and a fresh model review of the change.
+   A failed, invalid or unrun required check rejects the candidate. A candidate
+   that passes with limits waits for your review; behavior that was not tested
+   is shown and does not change the decision. A request with no task to run is
+   rejected. Both pages show each task, the limits, what was not tested,
+   comparisons and the selection reason.
 
 3. Result. The session that asked reports it in the chat when the step
    settles, and ``reef-pi evolve ... --wait`` prints the same line:
