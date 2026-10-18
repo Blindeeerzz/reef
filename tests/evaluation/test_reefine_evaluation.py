@@ -120,6 +120,17 @@ def test_failed_required_check_rejects(tmp_path, field):
     assert measured.metrics["evaluation_report"]["current_release_id"] == "served-release"
 
 
+def test_a_rejection_names_the_failed_checks_and_shortens_the_first_reason(tmp_path):
+    plugin, model = evaluation(tmp_path, request_pass=False, review_pass=False)[:2]
+    model.responses[1]["reason"] = "The test ran after the fix. " + "More detail follows here. " * 30
+    item = candidate(tmp_path)
+    decision = plugin.decide(item, plugin.evaluate(item))
+    assert decision.reason.startswith(
+        "Failed: Requested behavior 1, Change review. Requested behavior 1: The test ran after the fix."
+    )
+    assert len(decision.reason) < 400
+
+
 def test_success_uses_fresh_review_context_and_writes_progress_and_record(tmp_path):
     plugin, model, backend = evaluation(tmp_path)
     item = candidate(tmp_path)

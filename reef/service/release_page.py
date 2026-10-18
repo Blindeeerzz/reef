@@ -28,6 +28,7 @@ from urllib.parse import quote, urlencode
 from reef.core.requirements import required_by
 from reef.harness.step_result import (
     design_sections,
+    evaluation_report,
     floor_tasks_note,
     missed_episode_text,
     missed_episodes,
@@ -448,6 +449,9 @@ def _review(metrics: Mapping[str, Any]) -> str:
         )
     else:
         parts.append('<p class="empty">no review on record</p>')
+    if isinstance(evaluation_report(metrics), Mapping) and isinstance(review, Mapping):
+        # The evaluation decided the result; the notes stay one click away so they do not read as the result.
+        parts = ["<details><summary>Show the proposer's notes</summary>" + "".join(parts) + "</details>"]
     if undeclared:
         parts.append(
             '<div class="failure"><h3>Undeclared variables</h3><p>The extension reads these and no requires item '

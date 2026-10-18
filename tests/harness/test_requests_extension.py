@@ -1383,7 +1383,7 @@ def test_a_headless_session_draws_no_spinner(tmp_path: Path) -> None:
         (
             SELECTED_ROW,
             f"reef: '{ASK}' is published as release rel-1111. Install when ready with /versions v1 install."
-            " Details: /versions v1.\nThe proposer's own notes (the evaluation decided this result): two way replies; idle detection",
+            " Details: /versions v1.\nNot covered: two way replies; idle detection",
         ),
         (
             PENDING_ROW,
@@ -1658,7 +1658,7 @@ def test_session_start_reports_a_stored_request_that_settled_and_re_arms_the_wat
     first = "reef: /reefine <what it should do> asks for a harness change; /versions lists the versions."
     report = (
         f"reef: '{ASK}' is published as release rel-1111. Install when ready with /versions v1 install."
-        " Details: /versions v1.\nThe proposer's own notes (the evaluation decided this result): two way replies; idle detection"
+        " Details: /versions v1.\nNot covered: two way replies; idle detection"
     )
     # The still-running entry's record is read once (unanswered here: the runner knows no such route) before
     # the watch takes it, so a request the service no longer knows is dropped instead of watched.

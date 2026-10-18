@@ -2099,13 +2099,16 @@ def report_request(
             print(f"reef-{adapter}: {heading}:")
             for point in points:
                 print(f"  - {point}")
-    if uncovered:
-        # The proposer reviewed its own change while writing it; the evaluation decided the result.
-        print(f"reef-{adapter}: the proposer's own notes (the evaluation decided this result): {joined_points(uncovered)}")
+    # With an evaluation, its checks decide and the page keeps the proposer's notes; printed here they would read as
+    # the result.
+    if uncovered and not isinstance(checks, list):
+        # After a rejection the checks decided; the review's points are notes on the change, not the cause.
+        label = "review notes (they did not decide this result)" if selection_result == "rejected" else "not covered"
+        print(f"reef-{adapter}: {label}: {joined_points(uncovered)}")
     limits = review_points(rows[step], "limits")
-    if limits:
+    if limits and not isinstance(checks, list):
         # One point per line: a point may hold a '; ' of its own.
-        print(f"reef-{adapter}: the proposer's notes on what is out of reach on this harness:")
+        print(f"reef-{adapter}: out of reach on this harness:")
         for point in limits:
             print(f"  - {point}")
     if selection_result in ("rejected", "skipped"):

@@ -25,7 +25,15 @@ import time
 from collections.abc import Mapping, Sequence
 
 from reef.core.requirements import required_by
-from reef.harness.step_result import design_sections, floor_tasks_note, next_action, reef_installs, rejection_text
+from reef.harness.step_result import (
+    design_sections,
+    evaluation_report,
+    floor_tasks_note,
+    next_action,
+    pending_text,
+    reef_installs,
+    rejection_text,
+)
 from reef.service.check_page import STYLE as EVALUATION_STYLE
 from reef.service.check_page import checks_html, evaluation_html
 from reef.service.page_layout import document, escape, requires_table, stamp, status_span
@@ -243,18 +251,15 @@ def meaning(
             return f"Published as release {release}. GET /reef/harness serves it from now on."
         return f"Published as release {release}. Your current session keeps its installed harness until you choose to update."
     if selection_result == "pending":
-        return (
-            f"Release {release} is ready. This change includes an extension, "
-            "so it needs your review before installation."
-        )
+        return f"Release {release} is ready. {pending_text(metrics)}"
     if selection_result.startswith("promoted"):
-        return f"passed the checks and was {selection_result}; the release that step published serves it"
+        return f"This update passed the checks and was {selection_result}; the release that step published serves it."
     if selection_result == "rejected":
-        return rejection_text(metrics)
+        return f"This update {rejection_text(metrics)}"
     if selection_result == "skipped" and declined(metrics):
         return DECLINED_WORDS
     if selection_result == "skipped":
-        return f"produced no change ({metrics.get('skipped')}); nothing changed"
+        return f"This request produced no change ({metrics.get('skipped')}). Nothing changed."
     if selection_result == "failed":
         return failed_words(metrics)
     return f"the step ended as {selection_result}"
@@ -340,7 +345,11 @@ def review_html(metrics: Mapping[str, object], rejected: bool = False) -> str:
     if not isinstance(review, Mapping):
         failure = notes.get("review_failure")
         if not isinstance(failure, str) or not failure.strip():
-            return f'<section class="card review-card">\n<h2>Proposer\'s own review</h2>\n{again}</section>\n' if again else ""
+            return (
+                f'<section class="card review-card">\n<h2>Proposer\'s own review</h2>\n{again}</section>\n'
+                if again
+                else ""
+            )
         return (
             f'<section class="card review-card">\n<h2>Proposer\'s own review</h2>\n<p>The review of the entries against your '
             f"request did not run, so nothing checked whether they deliver it: {escape(failure)}</p>\n{again}"
@@ -358,10 +367,8 @@ def review_html(metrics: Mapping[str, object], rejected: bool = False) -> str:
         else ""
     )
     kept = kept_answer(notes)
-    return (
-        '<section class="card review-card">\n<h2>Proposer\'s own review</h2>\n<p class="empty">Written while the change '
-        "was made. The independent evaluation decides the result.</p>\n<p>Coverage of the request: "
-        f'{status_span(str(review.get("result") or "unknown"))}</p>\n'
+    notes_html = (
+        f'<p>Coverage of the request: {status_span(str(review.get("result") or "unknown"))}</p>\n'
         + ("" if kept is None else f"<p>{escape(kept)}; the others are in the step record.</p>\n")
         + (
             (
@@ -375,7 +382,13 @@ def review_html(metrics: Mapping[str, object], rejected: bool = False) -> str:
         )
         + out_of_reach
         + again
-        + "</section>\n"
+    )
+    if isinstance(evaluation_report(metrics), Mapping):
+        # The evaluation decided the result; the notes stay one click away so they do not read as the result.
+        notes_html = f"<details><summary>Show the proposer's notes</summary>\n{notes_html}</details>\n"
+    return (
+        '<section class="card review-card">\n<h2>Proposer\'s own review</h2>\n<p class="empty">Written while the change '
+        f"was made. The independent evaluation decides the result.</p>\n{notes_html}</section>\n"
     )
 
 

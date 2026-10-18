@@ -1918,7 +1918,7 @@ def test_a_published_release_that_requires_setup_names_setup_before_update() -> 
             [
                 "reef-pi: 'text me when you are blocked' is published as release rel-1111. Restart reef-pi to install "
                 "it (the update notice offers it).",
-                "reef-pi: the proposer's own notes (the evaluation decided this result): idle detection; two way replies",
+                "reef-pi: not covered: idle detection; two way replies",
                 # The release requires nothing, so the next step is the update alone.
                 "reef-pi: next: reef-pi update",
             ],
@@ -2035,7 +2035,7 @@ def test_a_rejection_names_the_missed_task_and_drops_the_rephrase_advice_when_th
             "reef-pi: 'text me when you are blocked' did not pass the checks. candidate missed the floor on 1 of 1 "
             f"tasks. {tail}"
         )
-        assert out[-1] == "reef-pi: the proposer's own notes (the evaluation decided this result): no off switch"
+        assert out[-1] == "reef-pi: review notes (they did not decide this result): no off switch"
 
 
 class _Tty(io.StringIO):
@@ -2276,7 +2276,7 @@ def test_a_step_that_could_not_be_evaluated_and_a_limit_are_said_as_such(tmp_pat
     )
     # One point per line under the heading: a point may hold a '; ' of its own.
     assert out[2:5] == [
-        "reef-claude: the proposer's notes on what is out of reach on this harness:",
+        "reef-claude: out of reach on this harness:",
         "  - no tool lockout.",
         "  - a typed skill still loads.",
     ]
@@ -2362,7 +2362,20 @@ def test_wait_names_the_release_how_to_use_and_a_declined_step_is_answered_with_
     reef.close()
     out = capsys.readouterr().out.splitlines()
     assert out[2] == "reef-claude: how to use: Type $chat in the session."
-    assert out[3] == "reef-claude: the proposer's own notes (the evaluation decided this result): no idle check; two way replies"
+    assert out[3] == "reef-claude: not covered: no idle check; two way replies"
+    # With an evaluation its checks decide; the proposer's notes stay on the page so they do not read as the result.
+    untested = {"id": "untested-0", "group": "untested", "status": "untested", "expected": "the mode after a restart"}
+    metrics = {"selected": True, "proposal_notes": notes, "evaluation_report": {"checks": [untested]}}
+    reef = _FakeReef(answer, rows=[CREATION_ROW, _step_row("rel-2222-selected", metrics)])
+    (tmp_path / "evaluated").mkdir()
+    compose, captures = _claude_ask_tree(tmp_path / "evaluated", reef.port)
+    with patch.dict(os.environ, _ask_env(captures, compose), clear=True):
+        assert wait_request("ask-scenario", "claude", compose, "q-1", timeout_s=5, poll_s=0.01) == 0
+    reef.close()
+    out = capsys.readouterr().out.splitlines()
+    heading = out.index("reef-claude: not tested here:")
+    assert out[heading + 1] == "  - the mode after a restart"
+    assert not any("not covered" in line for line in out)
     declined = {"declined": "the design says no entry this harness takes can deliver the request", "design": design}
     row = _step_row("rel-0", {"skipped": "no proposal", "proposal_notes": declined})
     reef = _FakeReef(answer, rows=[CREATION_ROW, row])

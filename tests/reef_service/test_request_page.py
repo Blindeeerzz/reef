@@ -228,7 +228,7 @@ def test_a_pending_request_names_the_promote_and_reads_promoted_once_a_promote_r
     page = build_request_page(_record(), [CREATION, pending], now=1_100.0)
     assert '<span class="pending">Ready for review</span>' in page
     assert "Proposed changes" in _sections(page)
-    assert "Release rel-1 is ready. This change includes an extension" in page
+    assert "Release rel-1 is ready. This release changes an extension, so read it before it runs." in page
     assert REFRESH not in page
     assert "<code>/versions v1 install</code>" in page
     promote = _row({}, release_id="rel-2", parent="rel-0", operation="promote", rollback_target_release_id="rel-1")

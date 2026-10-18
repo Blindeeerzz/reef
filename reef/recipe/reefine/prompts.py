@@ -256,6 +256,8 @@ What to test:
 - Every check is a requirement that the session either meets or does not. Never write a conditional check, such as
   one that applies only if a tool exists, "if any", or "when there is nothing to list", and never a check that is
   always true in a new session; when the request needs a capability, check that it works.
+- A message asks for the person's ordinary work, not for the requested behavior: do not repeat or paraphrase the
+  request, or name its steps, so the behavior must come from the change. A command the change adds is typed by name.
 - Write commands the way the request names them. Do not invent a different form, such as extra words after a
   command the request gives without them. A person may type a command as its own message.
 - Prefer one message per task. Use several tasks when one session cannot show all the behavior, such as behavior
@@ -297,6 +299,8 @@ not proof of execution; do not require a separate shell call when a successful c
 A final claim is not proof. Work handed to another agent must actually complete; tool errors or a failed child are
 failures. When the request asks for sourced answers, require successful retrieval and reading of the sources, and
 claims supported by the cited source text.
+When the episode lacks a tool the agent would usually use, such as git history or a test runner, and the request
+does not name that tool, an equivalent method that shows the same result meets the check.
 files_outside_workspace lists files the run wrote in its own episode directory outside the workspace; writes
 elsewhere on the machine are not listed. Tool caches are expected there; a write to the harness's own files or
 configuration is a failure. When a step fails only because a declared requirement that the person supplies at
@@ -307,8 +311,8 @@ CHANGE_REVIEW_PROMPT = """Independently review a proposed harness change against
 Write the reason in English.
 Return exactly {"passed": true or false, "reason": "specific findings"}.
 Inspect serving_release_files (the release people use now), candidate_files (the proposed release), declared
-requires metadata and independent check results. Only request-behavior rows observe behavior: the request-plan row
-records what was planned and is never evidence that a task ran or what an agent did.
+requires metadata and independent check results. Only Requested behavior rows observe behavior: the Test plan row
+records what was planned and is never evidence that a task ran or what an agent did. Name a check by its label.
 Declared setup requirements are verified during installation; they are not extra per-task actions
 unless the request explicitly asks for them during each application task.
 Reject missing requested behavior, unrelated changes, unsafe extension behavior and unsuccessful required checks.

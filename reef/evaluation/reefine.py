@@ -87,6 +87,8 @@ class ReefineEvaluationBackend(CandidateEvaluator):
     def show_evaluation_checks(self, checks: tuple[Mapping[str, object], ...]) -> None: ...
 
 
+#: How much of the first failed check's reason a rejection repeats; the page shows every reason in full.
+REASON_CHARACTERS = 300
 CheckStatus = Literal["pending", "running", "pass", "fail", "invalid", "not_run", "unsupported", "untested"]
 
 
@@ -455,7 +457,9 @@ class ReefineEvaluation(SelectionPlugin):
                         "serving_release_files": candidate.current_files,
                         "candidate_files": candidate.candidate_files,
                         "requires": list(candidate.requires),
-                        "checks": [check.to_dict() for check in checks[:-1]],
+                        "checks": [
+                            {"label": check_label(check.to_dict()), **check.to_dict()} for check in checks[:-1]
+                        ],
                     },
                     deadline,
                 )
@@ -546,19 +550,25 @@ class ReefineEvaluation(SelectionPlugin):
                     or report.get("current_release_id") != candidate.context.current.release_id
                 ):
                     failures.append("evaluation does not match this request and serving release")
-            failures.extend(
-                (
-                    check_label(check) + ": " + str(check.get("reason") or check.get("status")).strip().rstrip(".")
-                    if isinstance(check, Mapping)
-                    else "malformed check"
-                )
+            if not all(isinstance(check, Mapping) for check in checks):
+                failures.append("evaluation contains a malformed check")
+            failed = [
+                check
                 for check in checks
-                if not isinstance(check, Mapping)
-                or (
-                    check.get("status") != reported_status.get(str(check.get("group")), "pass")
-                    and check not in skipped
+                if isinstance(check, Mapping)
+                and check.get("status") != reported_status.get(str(check.get("group")), "pass")
+                and check not in skipped
+            ]
+            if failed:
+                # The page shows every check's full reason; the decision names the failed checks and the first cause.
+                first = str(failed[0].get("reason") or failed[0].get("status")).strip()
+                if len(first) > REASON_CHARACTERS:
+                    cut = first[:REASON_CHARACTERS]
+                    first = cut[: cut.rfind(". ") + 1] if cut.rfind(". ") > REASON_CHARACTERS // 3 else cut + "..."
+                failures.append(
+                    f"Failed: {', '.join(check_label(check) for check in failed)}. "
+                    f"{check_label(failed[0])}: {first.rstrip('.')}"
                 )
-            )
         selected = not failures
         if not selected:
             reason = ". ".join(failures) + "."

@@ -590,8 +590,9 @@ export default function requests(pi) {
   const deliverReport = (step, rows, text, ctx) => {
     const lines = [settledText(step, rows, clip(text.trim(), 60))];
     const uncovered = uncoveredOf(rows[step]);
-    // The proposer reviewed its own change while writing it; the evaluation decided the result.
-    if (uncovered.length) lines.push(`The proposer's own notes (the evaluation decided this result): ${uncovered.join("; ")}`);
+    // With an evaluation its checks decide, and the page keeps the proposer's notes so they do not read as the result.
+    const evaluated = Boolean(metricsOf(rows[step]).evaluation_report);
+    if (uncovered.length && !evaluated) lines.push(`Not covered: ${uncovered.join("; ")}`);
     const content = lines.join("\n");
     pi.sendMessage({ customType: REPORT_MESSAGE_TYPE, content, display: true }, { triggerTurn: false });
     ctx.ui.notify(lines[0], "info");
