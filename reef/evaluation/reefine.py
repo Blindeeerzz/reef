@@ -429,7 +429,12 @@ class ReefineEvaluation(SelectionPlugin):
             failures.append("evaluation returned no checks")
         else:
             groups = {check.get("group") for check in checks if isinstance(check, Mapping)}
-            if not {"request", "regression", "review"} <= groups or groups - {"request", "regression", "review", "limit"}:
+            if not {"request", "regression", "review"} <= groups or groups - {
+                "request",
+                "regression",
+                "review",
+                "limit",
+            }:
                 failures.append("evaluation is missing a required check group")
             limits = [check for check in checks if isinstance(check, Mapping) and check.get("group") == "limit"]
             if isinstance(candidate, ReefineCandidate):
@@ -459,8 +464,9 @@ class ReefineEvaluation(SelectionPlugin):
         if not selected:
             reason = "; ".join(failures)
         elif limits:
-            reason = "required Reefine checks passed; waiting for your review because this harness cannot deliver: " + (
-                "; ".join(str(check.get("expected")) for check in limits)
+            reason = (
+                "required Reefine checks passed; waiting for your review because this harness cannot deliver: "
+                + ("; ".join(str(check.get("expected")) for check in limits))
             )
         else:
             reason = "all required Reefine checks passed"
@@ -538,7 +544,9 @@ class ReefineEvaluation(SelectionPlugin):
         if remaining <= 0:
             raise ValueError("evaluation time budget exhausted")
         entries = candidate.candidate_entries if side == "candidate" else candidate.current_entries
-        result = run_episode(
+        # Real tasks run tools that cache under the episode's home; the root is removed after the run, so the review
+        # reads what was written outside the workspace instead of the run being refused for it.
+        return run_episode(
             self.backend.episode_descriptor,
             self.backend.episode_files(entries),
             prompt,
@@ -552,12 +560,6 @@ class ReefineEvaluation(SelectionPlugin):
             online=not prompt.startswith("[health]"),
             task_environment=self.settings.environment,
         )
-        if result.residue:
-            raise ValueError(
-                f"episode left {len(result.residue)} file(s) outside the workspace or allowed state, "
-                f"such as {result.residue[0]}"
-            )
-        return result
 
     def judge_episode(
         self,
@@ -583,6 +585,7 @@ class ReefineEvaluation(SelectionPlugin):
                 "requires": list(requires),
                 "trajectory": result.trajectory,
                 "stderr": result.stderr[-2000:],
+                "files_outside_workspace": list(result.residue[:50]),
             },
             deadline,
         )

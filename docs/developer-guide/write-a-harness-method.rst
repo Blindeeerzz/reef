@@ -359,7 +359,9 @@ prompts that start with ``[health]``. On pi, an online episode drops
 runs put the configured binary directory on ``PATH`` so child sessions use the
 same install. Retention skips symlinks and Git metadata and
 rejects output above 1000 files or 50 MiB. Unavailable trajectories and model
-responses are invalid, and cannot approve publication.
+responses are invalid, and cannot approve publication. Files an episode writes
+outside its workspace, such as tool caches under the episode home, do not
+invalidate it: the request review receives them as ``files_outside_workspace``.
 Operator-selected environment variables are forwarded explicitly, separately
 from the harness relocation environment, and are not included in review inputs.
 

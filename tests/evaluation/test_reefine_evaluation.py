@@ -215,6 +215,15 @@ def test_a_request_made_only_of_limits_runs_no_episode_and_is_rejected(tmp_path)
     assert statuses["request-behavior"] == "not_run" and statuses["limit-0"] == "unsupported"
 
 
+def test_files_written_outside_the_workspace_reach_the_review_without_invalidating_the_run(tmp_path):
+    plugin, model, backend = evaluation(tmp_path)
+    backend.results[0] = replace(episode("request"), residue=("Library/Caches/pip/entry",))
+    item = candidate(tmp_path)
+    measured = plugin.evaluate(item)
+    assert plugin.decide(item, measured).selected
+    assert '"files_outside_workspace": ["Library/Caches/pip/entry"]' in model.messages_seen[1][0]["content"]
+
+
 @pytest.mark.parametrize(
     "plan",
     [
