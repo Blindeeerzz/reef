@@ -105,6 +105,10 @@ Set the checkpoint cadence
 
 ``checkpoint_every_n_versions`` (default ``1``) decides how many accepted updates go by between durable checkpoints. Between checkpoints, new weights live only in the engine's memory: their versions are recorded, but their bytes are not. A restart restores the last checkpoint, and the step counter, algorithm state, and record progress continue from the log. Raise the cadence only when checkpoint writes are the bottleneck and losing live versions on a restart is acceptable.
 
+By default, a Slime training deployment saves its training checkpoint after each training job. This checkpoint is the Megatron checkpoint and the HF export. If these saves use too much of each step, set ``--reef-checkpoint-interval N`` in ``training.options``. Then the deployment saves the checkpoint only after each ``N``-th scenario version. The jobs between two saves keep no checkpoint, thus their versions are live weights. Set ``checkpoint_every_n_versions`` to a multiple of ``N``. The driver does not start with a different value. Use this option only for full-weight training. The driver does not start with ``--release-train`` or with LoRA.
+
+A crash or a stop loses the training of the jobs after the last save. That is a maximum of ``N`` - 1 jobs. At the next start, training continues from the last saved checkpoint. The batches of the lost jobs do not train again.
+
 On a training deployment, checkpoint retention runs under ``--reef-checkpoint-policy`` (``latest`` or ``best_reward``) with storage-fraction limits; when storage is blocked the step is deferred rather than failed, and ``/reef/status`` shows ``checkpoint_storage``.
 
 Track experiments with W&B

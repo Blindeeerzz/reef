@@ -131,6 +131,7 @@ Recipe
    from reef.recipe import Recipe, WeightTrainingRecipe, config_field
    from reef.recipe.cordis import CordisRecipe
    from reef.recipe.reefine import ReefineRecipe
+   from reef.recipe.sft import SFTRecipe
 
 A recipe is one frozen dataclass configuring the serving and evolution behavior
 for every scenario in a deployment.
@@ -139,6 +140,7 @@ for every scenario in a deployment.
 
    Recipe                       record-only by default   reef.recipe
    ├── WeightTrainingRecipe     training objective, loss family, separate runtimes
+   │   ├── SFTRecipe                                        reef.recipe.sft
    │   ├── SAORecipe                                        recipes.sao.recipe
    │   ├── TTTDRecipe                                       recipes.tttd.recipe
    │   ├── SDFTRecipe                                       recipes.sdft.recipe
