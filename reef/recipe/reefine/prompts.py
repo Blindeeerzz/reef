@@ -319,7 +319,8 @@ strictly, such as every page of a paper the request only asks to read, is met by
 equivalent method replaces how a step is done, never the step: a step the request names that did not happen fails
 its check. The candidate's own rules, such as a fallback that skips a step, do not change what the request asks.
 Reading a long document in parts is reading it, and output the harness cut for display does not show a step was
-skipped.
+skipped. Binary content a tool returned to the agent, such as the page images of a PDF it read, reached the agent
+even though this record does not show it.
 files_outside_workspace lists files the run wrote in its own episode directory outside the workspace; writes
 elsewhere on the machine are not listed. Tool caches are expected there; a write to the harness's own files or
 configuration is a failure. When a step fails only because a declared requirement that the person supplies at

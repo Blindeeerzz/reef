@@ -818,7 +818,9 @@ def shortened_value(value: object, cap: int | None) -> object:
     its start and end."""
     if isinstance(value, str):
         if BINARY_TEXT.fullmatch(value):
-            return f"[binary data such as an image, {len(value)} characters, not shown]"
+            return (
+                f"[binary content, such as a page image, that the tool returned to the agent: {len(value)} characters]"
+            )
         if cap is None or len(value) <= cap:
             return value
         head, tail = value[: cap * 3 // 4], value[-(cap // 4) :]

@@ -295,7 +295,7 @@ def test_a_trajectory_within_the_budget_reaches_the_review_whole_except_binary_d
     events = [{"content": "task"}, {"tool": "P" * 50_000}, {"image": image}, {"content": "final answer " * 400}]
     kept = shortened_trajectory(events)
     assert kept[1] == {"tool": "P" * 50_000} and kept[3] == events[3]
-    assert kept[2]["image"].startswith("[binary data such as an image")
+    assert kept[2]["image"].startswith("[binary content, such as a page image, that the tool returned to the agent")
 
 
 def test_a_long_trajectory_cuts_its_longest_texts_first_and_keeps_short_answers():
