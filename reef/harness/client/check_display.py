@@ -74,7 +74,7 @@ class CheckDisplay:
             expand=True,
             show_lines=False,
         )
-        table.add_column("Check", ratio=2, no_wrap=True, overflow="ellipsis")
+        table.add_column("Check", min_width=26, no_wrap=True, overflow="ellipsis")
         table.add_column("Status", width=10)
         table.add_column("Current", width=7, justify="right")
         table.add_column("Candidate", width=9, justify="right")

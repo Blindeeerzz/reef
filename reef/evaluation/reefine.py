@@ -34,6 +34,7 @@ from reef.core.training_request import TrainingRequest
 from reef.evaluation.evaluators import SelectionPlugin
 from reef.evaluation.harness import HarnessCandidate, verifier_reward
 from reef.harness.adapters.descriptor import AdapterDescriptor
+from reef.harness.client.check_display import check_label
 from reef.harness.episodes.model_binding import ModelBinding, ModelBindingError, ModelBindings
 from reef.harness.episodes.run import EpisodeError, EpisodeResult, TrajectoryKeepError, run_episode
 from reef.harness.episodes.trajectory import TrajectoryError, final_assistant_text
@@ -267,8 +268,8 @@ class ReefineEvaluation(SelectionPlugin):
                         checks[plan_index],
                         status="pass",
                         observed=(
-                            f"planned {len(tasks)} task(s), {len(limits)} limit(s) and "
-                            f"{len(untested)} untested item(s); no behavior is observed in this row"
+                            f"{len(tasks)} task(s) planned, {len(limits)} not possible here, {len(untested)} not "
+                            "tested here; this row observes no behavior"
                         ),
                         seconds=time.monotonic() - plan_started,
                     )
@@ -523,7 +524,7 @@ class ReefineEvaluation(SelectionPlugin):
                     failures.append("evaluation does not match this request and serving release")
             failures.extend(
                 (
-                    str(check.get("id", "unknown")) + ": " + str(check.get("reason") or check.get("status"))
+                    check_label(check) + ": " + str(check.get("reason") or check.get("status")).strip().rstrip(".")
                     if isinstance(check, Mapping)
                     else "malformed check"
                 )
@@ -533,15 +534,17 @@ class ReefineEvaluation(SelectionPlugin):
             )
         selected = not failures
         if not selected:
-            reason = "; ".join(failures)
+            reason = ". ".join(failures) + "."
         elif limits:
-            reason = "required Reefine checks passed; waiting for your review because this harness cannot deliver: " + (
-                "; ".join(str(check.get("expected")) for check in limits)
+            reason = (
+                "All required checks passed. Part of the request is not possible on this harness: "
+                + "; ".join(str(check.get("expected")).strip().rstrip(".") for check in limits)
+                + ". Review the release before you install it."
             )
         else:
-            reason = "all required Reefine checks passed"
+            reason = "All required checks passed."
         if selected and untested:
-            reason += "; not tested here: " + "; ".join(str(check.get("expected")) for check in untested)
+            reason += " Not tested here: " + "; ".join(str(check.get("expected")).strip().rstrip(".") for check in untested) + "."
         feedback = []
         if isinstance(checks, list):
             feedback = [

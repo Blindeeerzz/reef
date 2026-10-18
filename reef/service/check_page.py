@@ -90,6 +90,7 @@ def check_html(
     requirements: Sequence[str] = (),
     prompt: str = "",
     plan_check: Mapping[str, object] | None = None,
+    result: str = "",
 ) -> str:
     status = check_status((check,))
     body = (
@@ -103,10 +104,12 @@ def check_html(
         )
     if plan_check is not None:
         plan_status = check_status((plan_check,))
-        plan_labels = {"pass": "Ready", "running": "Being prepared", "pending": "Not ready yet"}
+        plan_text = {"running": "being written", "pending": "not written yet"}.get(plan_status)
+        if plan_text is None:
+            plan_text = str(plan_check.get("observed") or "").split(";")[0] if plan_status == "pass" else "unavailable"
         body += (
-            f'<p class="evaluation-note" data-check-id="{escape(plan_check.get("id"))}">Check plan: '
-            f'{escape(plan_labels.get(plan_status, "Unavailable"))}.</p>'
+            f'<p class="evaluation-note" data-check-id="{escape(plan_check.get("id"))}">Test plan: '
+            f"{escape(plan_text)}.</p>"
         )
         if plan_status in {"fail", "invalid", "not_run"}:
             body += f'<p class="evaluation-observed">{escape(plan_check.get("reason"))}</p>'
@@ -130,15 +133,11 @@ def check_html(
             "for each requirement.</p>"
         )
     if check.get("group") == "limit":
-        body += (
-            '<p class="evaluation-note">This harness cannot deliver this part of the request, so it was not run. '
-            "The release waits for your review; install it only if the rest is useful to you.</p>"
-        )
+        body += '<p class="evaluation-note">This harness cannot deliver this part of the request, so it was not run.'
+        body += " The release waits for your review.</p>" if result in ("pending", "selected") else "</p>"
     if check.get("group") == "untested":
-        body += (
-            '<p class="evaluation-note">This evaluation could not observe this part, so it was not run. '
-            "Check it yourself after you install the release.</p>"
-        )
+        body += '<p class="evaluation-note">This evaluation could not observe this part, so it was not run.'
+        body += " Check it yourself after you install the release.</p>" if result in ("pending", "selected") else "</p>"
     if check.get("group") == "regression":
         comparison = []
         for label, key in (("Current release", "current_score"), ("Candidate", "score")):
@@ -197,6 +196,8 @@ def checks_html(checks: object, report: object = None, reason: object = None, *,
             "This release waits for your review."
         )
     counts = []
+    # The plan row records what was planned; the counts are of checks that observe or report behavior.
+    counted = [check for check in records if check.get("id") != "request-plan"]
     for check_status_name, label in (
         ("pass", "passed"),
         ("unsupported", "not possible here"),
@@ -204,11 +205,11 @@ def checks_html(checks: object, report: object = None, reason: object = None, *,
         ("running", "running"),
         ("pending", "waiting"),
     ):
-        count = sum(check.get("status") == check_status_name for check in records)
+        count = sum(check.get("status") == check_status_name for check in counted)
         if count:
             counts.append(f"{count} {label}")
     failed = sum(
-        str(check.get("status")) not in {"pass", "unsupported", "untested", "running", "pending"} for check in records
+        str(check.get("status")) not in {"pass", "unsupported", "untested", "running", "pending"} for check in counted
     )
     if failed:
         counts.append(f"{failed} need attention")
@@ -245,6 +246,7 @@ def checks_html(checks: object, report: object = None, reason: object = None, *,
                     requirements=requirements,
                     prompt="\n".join(messages),
                     plan_check=plan_check if index == 0 else None,
+                    result=result,
                 )
             if not behaviors and plan_check is not None:
                 body += check_html(plan_check, "Prepare the behavior check")
@@ -269,7 +271,7 @@ def checks_html(checks: object, report: object = None, reason: object = None, *,
                     check_title = str(check.get("expected") or label)
                 else:
                     check_title = label
-                body += check_html(check, check_title)
+                body += check_html(check, check_title, result=result)
             if not members:
                 body += '<p class="evaluation-note">No result was recorded for this group.</p>'
             body += "</details>"

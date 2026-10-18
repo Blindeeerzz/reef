@@ -340,9 +340,9 @@ def review_html(metrics: Mapping[str, object], rejected: bool = False) -> str:
     if not isinstance(review, Mapping):
         failure = notes.get("review_failure")
         if not isinstance(failure, str) or not failure.strip():
-            return f'<section class="card review-card">\n<h2>Review</h2>\n{again}</section>\n' if again else ""
+            return f'<section class="card review-card">\n<h2>Proposer\'s own review</h2>\n{again}</section>\n' if again else ""
         return (
-            f'<section class="card review-card">\n<h2>Review</h2>\n<p>The review of the entries against your '
+            f'<section class="card review-card">\n<h2>Proposer\'s own review</h2>\n<p>The review of the entries against your '
             f"request did not run, so nothing checked whether they deliver it: {escape(failure)}</p>\n{again}"
             "</section>\n"
         )
@@ -359,7 +359,8 @@ def review_html(metrics: Mapping[str, object], rejected: bool = False) -> str:
     )
     kept = kept_answer(notes)
     return (
-        f'<section class="card review-card">\n<h2>Review</h2>\n<p>Coverage of the request: '
+        '<section class="card review-card">\n<h2>Proposer\'s own review</h2>\n<p class="empty">Written while the change '
+        "was made. The independent evaluation decides the result.</p>\n<p>Coverage of the request: "
         f'{status_span(str(review.get("result") or "unknown"))}</p>\n'
         + ("" if kept is None else f"<p>{escape(kept)}; the others are in the step record.</p>\n")
         + (

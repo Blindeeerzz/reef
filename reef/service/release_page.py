@@ -455,7 +455,12 @@ def _review(metrics: Mapping[str, Any]) -> str:
         )
     if dropped:
         parts.append("<h3>Answers written again</h3>" + _listed(dropped, ""))
-    return _card("Review", "".join(parts) + "\n")
+    return _card(
+        "Proposer's own review",
+        '<p class="empty">Written while the change was made. The independent evaluation decides the result.</p>'
+        + "".join(parts)
+        + "\n",
+    )
 
 
 def evaluation_token_counts(metrics: Mapping[str, Any]) -> tuple[int, int] | None:

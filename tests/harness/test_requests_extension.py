@@ -1383,17 +1383,17 @@ def test_a_headless_session_draws_no_spinner(tmp_path: Path) -> None:
         (
             SELECTED_ROW,
             f"reef: '{ASK}' is published as release rel-1111. Install when ready with /versions v1 install."
-            " Details: /versions v1.\nNot covered: two way replies; idle detection",
+            " Details: /versions v1.\nThe proposer's own notes (the evaluation decided this result): two way replies; idle detection",
         ),
         (
             PENDING_ROW,
             f"reef: '{ASK}' is ready as release rel-3333. This release changes an extension, so read it before "
-            "it runs: /versions v1 opens the page, /versions v1 install serves it.",
+            "it runs. /versions v1 opens the page, /versions v1 install serves it.",
         ),
         (
             REJECTED_ROW,
-            f"reef: '{ASK}' did not pass the checks (candidate missed the floor on 1 of 1 tasks). Nothing changed; "
-            "rephrase or split the request. Details: /versions v1.",
+            f"reef: '{ASK}' did not pass the checks. candidate missed the floor on 1 of 1 tasks. Nothing changed. "
+            "The page lists each check; ask again for a new attempt. Details: /versions v1.",
         ),
         (
             SKIPPED_ROW,
@@ -1431,13 +1431,14 @@ def test_the_watch_reports_the_result_and_what_the_review_left_uncovered(
     # The settled step clears both indicators: the footer line and the spinner above the input.
     assert statuses[-1] == {"kind": "status", "key": "reef", "text": None}
     assert _of_kind(out, "widget")[-1] == {"kind": "widget", "key": "reef-harness", "content": None}
-    # The report is a custom message the chat renders and the session keeps, without a turn, then the notice.
+    # The report is a custom message the chat renders and the session keeps, without a turn, then the notice: its
+    # first line only, so the chat does not show the report twice.
     assert out["events"][report] == {
         "kind": "message",
         "message": {"customType": "reef-harness", "content": expected, "display": True},
         "options": {"triggerTurn": False},
     }
-    assert out["events"][report + 1] == {"kind": "notify", "message": expected, "type": "info"}
+    assert out["events"][report + 1] == {"kind": "notify", "message": expected.split("\n")[0], "type": "info"}
     # The report delivered, the stored filing is dropped.
     assert _stored(tmp_path) == []
 
@@ -1657,7 +1658,7 @@ def test_session_start_reports_a_stored_request_that_settled_and_re_arms_the_wat
     first = "reef: /reefine <what it should do> asks for a harness change; /versions lists the versions."
     report = (
         f"reef: '{ASK}' is published as release rel-1111. Install when ready with /versions v1 install."
-        " Details: /versions v1.\nNot covered: two way replies; idle detection"
+        " Details: /versions v1.\nThe proposer's own notes (the evaluation decided this result): two way replies; idle detection"
     )
     # The still-running entry's record is read once (unanswered here: the runner knows no such route) before
     # the watch takes it, so a request the service no longer knows is dropped instead of watched.
@@ -1669,7 +1670,7 @@ def test_session_start_reports_a_stored_request_that_settled_and_re_arms_the_wat
         "message": {"customType": "reef-harness", "content": report, "display": True},
         "options": {"triggerTurn": False},
     }
-    assert out["events"][3] == {"kind": "notify", "message": report, "type": "info"}
+    assert out["events"][3] == {"kind": "notify", "message": report.split("\n")[0], "type": "info"}
     assert out["events"][4]["url"].endswith("/reef/scenarios/code-repair/records/q-9")
     assert out["events"][5] == {"kind": "status", "key": "reef", "text": "reef: request q-9 queued"}
     assert len(_of_kind(out, "message")) == 1  # the stale entry's row is in the catalog; it is not reported

@@ -1918,7 +1918,7 @@ def test_a_published_release_that_requires_setup_names_setup_before_update() -> 
             [
                 "reef-pi: 'text me when you are blocked' is published as release rel-1111. Restart reef-pi to install "
                 "it (the update notice offers it).",
-                "reef-pi: not covered: idle detection; two way replies",
+                "reef-pi: the proposer's own notes (the evaluation decided this result): idle detection; two way replies",
                 # The release requires nothing, so the next step is the update alone.
                 "reef-pi: next: reef-pi update",
             ],
@@ -1928,7 +1928,7 @@ def test_a_published_release_that_requires_setup_names_setup_before_update() -> 
             0,
             [
                 "reef-pi: 'text me when you are blocked' is ready as release rel-3333. This release changes an "
-                "extension, so read it before it runs: /versions v1 opens the page, /versions v1 install "
+                "extension, so read it before it runs. Next: /versions v1 opens the page, /versions v1 install "
                 "serves it. Page: {page}",
                 "reef-pi: next: /versions v1 install in a reef-pi session, or reef-pi update",
             ],
@@ -1939,8 +1939,8 @@ def test_a_published_release_that_requires_setup_names_setup_before_update() -> 
             ),
             1,
             [
-                "reef-pi: 'text me when you are blocked' did not pass the checks (candidate missed the floor on 1 of 1 "
-                "tasks). Nothing changed; rephrase or split the request."
+                "reef-pi: 'text me when you are blocked' did not pass the checks. candidate missed the floor on 1 of 1 "
+                "tasks. Nothing changed. The page lists each check; ask again for a new attempt."
             ],
         ),
         (
@@ -2018,8 +2018,8 @@ def test_a_rejection_names_the_missed_task_and_drops_the_rephrase_advice_when_th
         ),
         (
             {"task": "[health] echo", "score": 0.0, "failure": None, "reply": "hello"},
-            "the task '[health] echo' scored 0.0; the reply graded was 'hello'. Nothing changed; rephrase or split "
-            "the request.",
+            "the task '[health] echo' scored 0.0; the reply graded was 'hello'. Nothing changed; ask again for a new "
+            "attempt.",
         ),
     ]
     for index, (episode, tail) in enumerate(cases):
@@ -2032,10 +2032,10 @@ def test_a_rejection_names_the_missed_task_and_drops_the_rephrase_advice_when_th
         reef.close()
         out = capsys.readouterr().out.splitlines()
         assert out[-2] == (
-            "reef-pi: 'text me when you are blocked' did not pass the checks (candidate missed the floor on 1 of 1 "
-            f"tasks): {tail}"
+            "reef-pi: 'text me when you are blocked' did not pass the checks. candidate missed the floor on 1 of 1 "
+            f"tasks. {tail}"
         )
-        assert out[-1] == "reef-pi: review notes (they did not decide this result): no off switch"
+        assert out[-1] == "reef-pi: the proposer's own notes (the evaluation decided this result): no off switch"
 
 
 class _Tty(io.StringIO):
@@ -2276,7 +2276,7 @@ def test_a_step_that_could_not_be_evaluated_and_a_limit_are_said_as_such(tmp_pat
     )
     # One point per line under the heading: a point may hold a '; ' of its own.
     assert out[2:5] == [
-        "reef-claude: out of reach on this harness:",
+        "reef-claude: the proposer's notes on what is out of reach on this harness:",
         "  - no tool lockout.",
         "  - a typed skill still loads.",
     ]
@@ -2362,7 +2362,7 @@ def test_wait_names_the_release_how_to_use_and_a_declined_step_is_answered_with_
     reef.close()
     out = capsys.readouterr().out.splitlines()
     assert out[2] == "reef-claude: how to use: Type $chat in the session."
-    assert out[3] == "reef-claude: not covered: no idle check; two way replies"
+    assert out[3] == "reef-claude: the proposer's own notes (the evaluation decided this result): no idle check; two way replies"
     declined = {"declined": "the design says no entry this harness takes can deliver the request", "design": design}
     row = _step_row("rel-0", {"skipped": "no proposal", "proposal_notes": declined})
     reef = _FakeReef(answer, rows=[CREATION_ROW, row])

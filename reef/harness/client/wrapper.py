@@ -235,7 +235,7 @@ from reef.harness.adapters.descriptor import NO_TOKEN_API_KEY, AdapterDescriptor
 from reef.harness.client.check_display import CheckDisplay
 from reef.harness.episodes.vendor_install import version_probe_env
 from reef.harness.episodes.version_check import ships_version_check
-from reef.harness.step_result import design_sections, evaluation_report, next_action, rejection_text
+from reef.harness.step_result import design_sections, evaluation_report, next_action, pending_text, rejection_text
 
 
 #: The commands a client reports as on its PATH or not, so a proposer builds for the machine the change runs on,
@@ -1710,10 +1710,7 @@ def result_line(
             if notice
             else f"reef-{adapter} page {step} opens the page"
         )
-        return (
-            f"'{ask}' is ready as release {release}. This release changes an extension, so read it before it "
-            f"runs: {where}. Page: {page}"
-        )
+        return f"'{ask}' is ready as release {release}. {pending_text(metrics)} Next: {where}. Page: {page}"
     if selection_result == "rejected":
         return f"'{ask}' {rejection_text(metrics)}"
     if selection_result == "skipped" and declined_reason(row):
@@ -2089,14 +2086,26 @@ def report_request(
     if usage and selection_result in ("selected", "pending"):
         # The form the release is used by, so nobody guesses it from the request (codex takes $chat, not /chat).
         print(f"reef-{adapter}: how to use: {usage}")
+    report = evaluation_report(rows[step].get("metrics") or {})
+    checks = report.get("checks") if isinstance(report, Mapping) else None
+    for group, heading in (("limit", "not possible on this harness"), ("untested", "not tested here")):
+        # The evaluation's own findings, one point per line, before the proposer's notes.
+        points = [
+            str(check.get("expected"))
+            for check in (checks if isinstance(checks, list) else [])
+            if isinstance(check, Mapping) and check.get("group") == group
+        ]
+        if points:
+            print(f"reef-{adapter}: {heading}:")
+            for point in points:
+                print(f"  - {point}")
     if uncovered:
-        # After a rejection the checks decided; the review's points are notes on the change, not the cause.
-        label = "review notes (they did not decide this result)" if selection_result == "rejected" else "not covered"
-        print(f"reef-{adapter}: {label}: {joined_points(uncovered)}")
+        # The proposer reviewed its own change while writing it; the evaluation decided the result.
+        print(f"reef-{adapter}: the proposer's own notes (the evaluation decided this result): {joined_points(uncovered)}")
     limits = review_points(rows[step], "limits")
     if limits:
         # One point per line: a point may hold a '; ' of its own.
-        print(f"reef-{adapter}: out of reach on this harness:")
+        print(f"reef-{adapter}: the proposer's notes on what is out of reach on this harness:")
         for point in limits:
             print(f"  - {point}")
     if selection_result in ("rejected", "skipped"):

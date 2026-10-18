@@ -214,9 +214,9 @@ def test_a_settled_selected_request_carries_the_result_the_mutation_and_the_link
         )
     )
     page = build_request_page(_record(), [CREATION, rejected], now=1_100.0)
-    assert '<span class="rejected">Not selected</span>' in page
-    assert "did not pass the checks (candidate missed the floor on 1 of 1 tasks). Nothing changed" in page
-    assert "rephrase or split the request" in page
+    assert '<span class="rejected">Rejected</span>' in page
+    assert "did not pass the checks. candidate missed the floor on 1 of 1 tasks. Nothing changed" in page
+    assert "ask again for a new attempt" in page
     assert "What changed" not in _sections(page)
     changed = _section(page, "Proposed changes")
     assert changed.count("<li>") == 2
@@ -253,7 +253,7 @@ def test_a_rejected_request_names_the_missed_episode_on_both_pages() -> None:
         "the task '[health] echo' failed: no transcript was read" in result
     )
     assert "rephrase" not in result and "the change itself was not judged" in result
-    review = _section(page, "Review")
+    review = _section(page, "Proposer's own review")
     assert "Review notes" in review and "The checks decided this result" in review
     version = build_release_page(1, [CREATION, row])
     assert "Missed" in version and "no transcript was read" in version
@@ -290,10 +290,10 @@ def test_an_evaluation_that_never_ran_says_so_on_both_pages_with_no_candidate_sc
 def test_what_the_harness_puts_out_of_reach_shows_apart_from_the_uncovered_gaps() -> None:
     notes = {"review": {"result": "partial", "covered": ["chat"], "uncovered": [], "limits": ["no tool lockout"]}}
     row = _row(_answered(selected=True, published=True, mutation=MUTATION, proposal_notes=notes))
-    review = _section(build_request_page(_record(), [CREATION, row], now=1_100.0), "Review")
+    review = _section(build_request_page(_record(), [CREATION, row], now=1_100.0), "Proposer's own review")
     assert "Out of reach on this harness" in review and "no tool lockout" in review
     assert "Still uncovered" not in review
-    version = _section(build_release_page(1, [CREATION, row]), "Review")
+    version = _section(build_release_page(1, [CREATION, row]), "Proposer's own review")
     assert "Out of reach on this harness" in version and "no tool lockout" in version
 
 
@@ -305,7 +305,7 @@ def test_answers_the_proposer_wrote_again_show_under_review_on_both_pages() -> N
     }
     row = _row(_answered(selected=True, published=True, mutation=MUTATION, proposal_notes=notes))
     page = build_request_page(_record(), [CREATION, row], now=1_100.0)
-    review = _section(page, "Review")
+    review = _section(page, "Proposer's own review")
     assert "Answers written again" in review and "the harness refused the entries: bad frontmatter" in review
     version = build_release_page(1, [CREATION, row])
     assert "Answers written again" in version and "bad frontmatter" in version
@@ -364,8 +364,8 @@ def test_both_pages_say_which_answer_the_step_kept() -> None:
         ({"review": review}, None),
     ):
         row = _row(_answered(selected=True, published=True, mutation=MUTATION, proposal_notes=notes))
-        request = _section(build_request_page(_record(), [CREATION, row], now=1_100.0), "Review")
-        version = _section(build_release_page(1, [CREATION, row]), "Review")
+        request = _section(build_request_page(_record(), [CREATION, row], now=1_100.0), "Proposer's own review")
+        version = _section(build_release_page(1, [CREATION, row]), "Proposer's own review")
         for text in (request, version):
             assert (words in text) if words else ("Kept answer" not in text)
 
@@ -399,7 +399,7 @@ def test_a_skipped_request_shows_why_the_proposer_produced_nothing_and_what_the_
     skipped = _row(_answered(skipped="no proposal", proposal_notes=notes), release_id="rel-0")
     page = build_request_page(_record(), [CREATION, skipped], now=1_100.0)
     assert REFRESH not in page and '<span class="failed">Failed</span>' in page
-    assert _sections(page) == ["Request", "Result", "Proposed changes", "Review", "Design"]
+    assert _sections(page) == ["Request", "Result", "Proposed changes", "Proposer's own review", "Design"]
     assert "<p>one rules entry</p>" in _section(page, "Design")
     selection_result = _section(page, "Result")
     assert "The step failed before evaluation. Nothing was published" in selection_result
@@ -408,7 +408,7 @@ def test_a_skipped_request_shows_why_the_proposer_produced_nothing_and_what_the_
         in selection_result
     )
     assert "No changes were produced by this step." in _section(page, "Proposed changes")
-    review = _section(page, "Review")
+    review = _section(page, "Proposer's own review")
     assert '<span class="partial">Partial</span>' in review and "<li>a way to turn it off</li>" in review
     assert "the trigger" not in review
     complete = {"review": {"result": "complete", "covered": ["all of it"], "uncovered": []}}
@@ -454,7 +454,7 @@ def test_a_step_whose_review_did_not_run_says_so_instead_of_dropping_the_section
     notes = {"design": "plan", "review_failure": "model call failed after 91.9 s: non-text content"}
     row = _row(_answered(selected=True, mutation=MUTATION, proposal_notes=notes))
     page = build_request_page(_record(), [CREATION, row], now=1_100.0)
-    review = _section(page, "Review")
+    review = _section(page, "Proposer's own review")
     assert "did not run, so nothing checked whether they deliver it" in review
     assert "non-text content" in review
 

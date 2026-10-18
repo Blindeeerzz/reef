@@ -45,7 +45,7 @@ def test_requested_behavior_lists_generated_requirements_with_one_task_result() 
     assert "<li>See the test fail first</li>" in page
     assert "<li>Have another agent review</li>" in page
     assert "result for the whole task" in page and "does not contain separate results" in page
-    assert "Check plan: Ready" in page
+    assert "Test plan: " in page
     assert "waiting for your review" in page
     assert page.index('id="evaluation-request"') < page.index('id="evaluation-regression"')
     assert 'id="evaluation-limit"' not in page and "Not possible on this harness" not in page
@@ -92,7 +92,7 @@ def test_a_ready_plan_does_not_mark_the_pending_application_task_passed() -> Non
         {"id": "request-behavior", "group": "request", "status": "pending"},
     ]
     page = checks_html(checks)
-    assert "Check plan: Ready" in page
+    assert "Test plan: " in page
     assert "Read the file;\nRun its test" in page
     assert 'Requested behavior</h3><span class="evaluation-badge pending"' in page
     assert "Recorded checks passed" not in page
@@ -140,7 +140,7 @@ def test_records_without_a_plan_keep_the_expected_task_and_result() -> None:
     ]
     page = evaluation_html({"evaluation_report": {"checks": checks}}, result="rejected")
     assert "Read the downloaded paper" in page and "No paper was read" in page
-    assert "Check plan: Ready" not in page
+    assert "Test plan: " not in page
 
 
 def test_pages_without_independent_evaluation_keep_their_existing_content() -> None:

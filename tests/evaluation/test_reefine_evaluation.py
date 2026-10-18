@@ -188,7 +188,7 @@ def test_a_harness_limit_is_reported_not_run_and_holds_a_passing_release_for_rev
     measured = plugin.evaluate(item)
     decision = plugin.decide(item, measured)
     assert decision.selected and decision.requires_review
-    assert "cannot deliver: refuse every other tool" in decision.reason
+    assert "not possible on this harness: refuse every other tool" in decision.reason
     checks = {check["id"]: check for check in measured.metrics["evaluation_report"]["checks"]}
     assert checks["limit-0"]["status"] == "unsupported" and checks["limit-0"]["group"] == "limit"
     assert checks["request-behavior-0"]["status"] == "pass"
@@ -248,7 +248,7 @@ def test_untested_behavior_is_shown_and_does_not_hold_a_passing_release(tmp_path
     measured = plugin.evaluate(item)
     decision = plugin.decide(item, measured)
     assert decision.selected and not decision.requires_review
-    assert "not tested here: the mode is off after a restart" in decision.reason
+    assert "Not tested here: the mode is off after a restart" in decision.reason
     checks = {check["id"]: check for check in measured.metrics["evaluation_report"]["checks"]}
     assert checks["untested-0"]["status"] == "untested" and checks["untested-0"]["group"] == "untested"
 
