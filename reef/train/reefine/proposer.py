@@ -405,10 +405,11 @@ class WrittenAnswer:
 class RequestAnswers:
     """What the answers to one request have left so far, and the retry section each one asks for next.
 
-    ``kept`` is the delivering answer with the fewest uncovered points and
-    ``kept_attempt`` the answer it was; ``undelivered`` the last answer whose
-    review found it only put a substitute in the behavior's place;
-    ``declined`` the last design that said no entry can deliver the request;
+    ``kept`` is the answer with entries the review rates best, a delivering
+    answer before one that only puts a substitute in the behavior's place,
+    then the fewest uncovered points, and ``kept_attempt`` the answer it was.
+    The review only chooses and improves answers: the independent evaluation
+    decides publication. ``declined`` the last design that said no entry can deliver the request;
     ``unusable`` the last answer that could not be used and ``failed`` the
     call that ended the loop. ``dropped_attempts`` says why each unusable
     answer was dropped, so the page says what the kept one replaced, and
@@ -419,7 +420,6 @@ class RequestAnswers:
 
     kept: WrittenAnswer | None = None
     kept_attempt: int = 0
-    undelivered: StepProposal | None = None
     declined: StepProposal | None = None
     unusable: UnusableAnswer | None = None
     failed: StepProposal | None = None
@@ -459,13 +459,7 @@ class RequestAnswers:
         """An answer with entries: kept when it delivers with fewer uncovered points than the one kept, and the
         retry its review asks for; empty once the review finds nothing another answer could close."""
         review = answer.notes.get("review")
-        if review is not None and review.get("delivers") is False:
-            reason = review["uncovered"][0] if review["uncovered"] else "the entries only imitate the behavior"
-            self.undelivered = StepProposal(
-                (),
-                {**answer.notes, "failure": f"the change does not deliver the request: {reason}", "attempts": attempt},
-            )
-        elif self.kept is None or uncovered_count(answer.notes) < uncovered_count(self.kept.notes):
+        if self.kept is None or answer_rank(answer.notes) < answer_rank(self.kept.notes):
             self.kept = answer
             self.kept_attempt = attempt
         if review is None or (review["result"] == "complete" and review.get("delivers") is not False):
@@ -482,15 +476,12 @@ class RequestAnswers:
         return self.reviewed
 
     def unanswered(self, attempt: int) -> StepProposal:
-        """The step's proposal when no answer was kept, with the reasons earlier answers were dropped. After a
-        failed call an earlier substitute says more about the request than the failure does; otherwise a design
-        that declined, then a substitute, then the last unusable answer's reason with its design."""
+        """The step's proposal when no answer was kept, with the reasons earlier answers were dropped: the failed
+        call, else a design that declined, else the last unusable answer's reason with its design."""
         if self.failed is not None:
-            proposal = self.undelivered or self.failed
+            proposal = self.failed
         elif self.declined is not None:
             proposal = self.declined
-        elif self.undelivered is not None:
-            proposal = self.undelivered
         else:
             failure = "no answer was written" if self.unusable is None else self.unusable.reason
             design = None if self.unusable is None else self.unusable.design
@@ -498,7 +489,7 @@ class RequestAnswers:
                 (), {**({} if design is None else {"design": kept_design(design)}), "failure": failure}
             )
         notes = dict(proposal.notes)
-        if attempt > 1 and proposal is not self.undelivered:
+        if attempt > 1:
             notes["attempts"] = attempt
         if self.dropped_attempts:
             notes["dropped_attempts"] = list(self.dropped_attempts)
@@ -729,6 +720,12 @@ def uncovered_count(notes: Mapping[str, Any]) -> int:
     """How many points an answer's review left uncovered; an answer without a review counts none."""
     review = notes.get("review")
     return 0 if review is None else len(review["uncovered"])
+
+
+def answer_rank(notes: Mapping[str, Any]) -> tuple[bool, int]:
+    """How an answer's review rates it, lower first: a delivering answer, then the fewest uncovered points."""
+    review = notes.get("review")
+    return (review is not None and review.get("delivers") is False, uncovered_count(notes))
 
 
 def nothing_to_apply(reply: str, reason: str) -> StepProposal:

@@ -704,9 +704,7 @@ def read_answer(
     undeclared = evolution.undeclared_env(mutations, [*own, *added])
     if undeclared:
         notes["undeclared_env"] = undeclared
-    if review is not None and review.get("delivers") is False:
-        reason = review["uncovered"][0] if review["uncovered"] else "the entries only imitate the behavior"
-        return StepProposal((), {**notes, "failure": f"the change does not deliver the request: {reason}"})
+    # The review informs the step's notes; the independent evaluation, not this review, decides publication.
     # The mapping is the backend's dict: the items the agent added join the request's, as the text proposer's do.
     if added and isinstance(request, dict):
         request["requires"] = [*own, *added]

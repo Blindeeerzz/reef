@@ -62,14 +62,14 @@ How it works
    substitute in its place, such as a rule describing it. When the review
    is partial or finds a substitute, the model writes the answer again with
    the review's findings, up to three answers in all. The step keeps the
-   delivering answer with the fewest uncovered points, and both pages say
-   which answer it kept when it wrote more than one; when no answer
-   delivers, it is skipped with the reason. A point the harness's facts say
+   best answer: a delivering answer before a substitute, then the fewest
+   uncovered points. Both pages say which answer it kept when it wrote more
+   than one. A step is skipped only when no answer has entries. A point the harness's facts say
    no answer there can deliver (a hard tool lockout on a harness whose
    commands cannot take a tool away) is a limit, listed apart from the
    uncovered points: it starts no retry, and the loop ends when only limits
-   remain. These proposer checks help construct the candidate; they cannot
-   approve publication. An independent evaluator then plans the checks from
+   remain. These proposer checks help construct and choose the candidate;
+   they cannot approve or reject publication. An independent evaluator then plans the checks from
    the original request and the harness's description: the entry kinds a
    change may contain and the harness's facts. Requested behavior that the
    harness cannot deliver is listed as a limit with its reason, and it is not
