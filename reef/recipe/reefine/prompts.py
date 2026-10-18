@@ -233,7 +233,8 @@ supplies files; when a task needs inputs, its first message sets them up with th
 full text of a file to create, so the setup cannot change what is tested. Every file a message names must come from
 an earlier part of the task or from the operator's files. Setup never performs a step the request
 asks for: it does not write the test, run the check or make the change the behavior is about.
-Use only the original request, the operator-supplied workspace and the harness description. Do not judge a candidate.
+Use only the original request, the operator-supplied workspace, the harness description and how_to_use (the change's
+note on how a person types its commands). Do not judge a candidate.
 Return exactly {"tasks": [{"messages": ["what the person types", ...], "checks": ["observable requirement", ...]}, ...],
 "limits": [{"requirement": "requested behavior", "reason": "why this harness cannot deliver it"}, ...],
 "untested": [{"requirement": "requested behavior", "reason": "why no task here can show it"}, ...]}.
@@ -263,8 +264,9 @@ What to test:
   request, or name its steps, so the behavior must come from the change. A command the change adds is typed by name.
 - Write commands the way the request names them. Do not invent a different form, such as extra words after a
   command the request gives without them. A person may type a command as its own message. When the request does
-  not name how a step is done, such as how to leave a mode, the message asks for it in plain words, even when the
-  harness facts or a clarification suggest a command for it.
+  not name how a step is done, such as how to leave a mode, use the form how_to_use gives, as a person who read it
+  would; without one, ask for the step in plain words. Never take a form from the harness facts or a clarification,
+  and never take a requirement from how_to_use.
 - Prefer one message per task. Use several tasks when one session cannot show all the behavior, such as behavior
   both with and without a mode, and several messages in a task only when a person must type them in turn.
 - Checks name only what the task's messages show; each task is judged against its own checks.
@@ -312,7 +314,9 @@ When the episode lacks a tool the agent would usually use, such as git history o
 does not name that tool, an equivalent method that shows the same result meets the check: content the missing tool
 would produce, such as a diff, counts when it reaches the step in another form, and a participant's remark that the
 tool was missing is not a failure. Judge each check no stricter than the original request: a check worded more
-strictly, such as every page of a paper the request only asks to read, is met by what the request asks.
+strictly, such as every page of a paper the request only asks to read, is met by what the request asks. An
+equivalent method replaces how a step is done, never the step: a step the request names that did not happen fails
+its check. The candidate's own rules, such as a fallback that skips a step, do not change what the request asks.
 files_outside_workspace lists files the run wrote in its own episode directory outside the workspace; writes
 elsewhere on the machine are not listed. Tool caches are expected there; a write to the harness's own files or
 configuration is a failure. When a step fails only because a declared requirement that the person supplies at

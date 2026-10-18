@@ -14,6 +14,7 @@ from reef.evaluation.reefine import ReefineEvaluationBackend
 from reef.harness.adapters.descriptor import AdapterDescriptor
 from reef.harness.adapters.harness_facts import harness_facts
 from reef.harness.episodes.model_binding import ModelBindings
+from reef.harness.step_result import design_sections
 from reef.sandbox.process import EpisodeExecutor
 from reef.train.backend import PreparedStep
 from reef.train.cordis_backend.backend import CordisBackend
@@ -42,6 +43,7 @@ class ReefineBackend(CordisBackend, ServedCompositionConsumer, ReefineEvaluation
                 requires = tuple(parse_requires(request_record.get("requires", ())))
             else:
                 requires = ()
+            notes = prepared.metrics.get("proposal_notes")
             prepared = replace(
                 prepared,
                 candidate=ReefineCandidate(
@@ -58,6 +60,7 @@ class ReefineBackend(CordisBackend, ServedCompositionConsumer, ReefineEvaluation
                     record_dir=candidate.record_dir,
                     context=EvaluationContext(batch.request, composition),
                     requires=requires,
+                    usage=design_sections(notes)[1] if isinstance(notes, Mapping) else "",
                 ),
             )
         return prepared

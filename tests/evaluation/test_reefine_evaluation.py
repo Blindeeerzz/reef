@@ -120,6 +120,13 @@ def test_failed_required_check_rejects(tmp_path, field):
     assert measured.metrics["evaluation_report"]["current_release_id"] == "served-release"
 
 
+def test_the_plan_reads_the_changes_how_to_use_note(tmp_path):
+    plugin, model = evaluation(tmp_path)[:2]
+    item = replace(candidate(tmp_path), usage="Type /chat off to leave the mode.")
+    plugin.evaluate(item)
+    assert '"how_to_use": "Type /chat off to leave the mode."' in model.messages_seen[0][0]["content"]
+
+
 def test_a_rejection_names_the_failed_checks_and_shortens_the_first_reason(tmp_path):
     plugin, model = evaluation(tmp_path, request_pass=False, review_pass=False)[:2]
     model.responses[1]["reason"] = "The test ran after the fix. " + "More detail follows here. " * 30

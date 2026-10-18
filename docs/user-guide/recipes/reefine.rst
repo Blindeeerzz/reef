@@ -71,8 +71,11 @@ How it works
    remain. These proposer checks help construct and choose the candidate;
    they cannot approve or reject publication. An independent evaluator then plans the checks from
    the original request and the harness's description: the entry kinds a
-   change may contain and the harness's facts. The plan splits the request
-   into tasks. A task is what a person types in one new session: usually one
+   change may contain and the harness's facts. When the request does not say
+   how to type a step, such as how to leave a mode, a task types it as the
+   change's How to use note says; the note never adds a requirement. The plan
+   splits the request into tasks. A task is what a person types in one new
+   session: usually one
    message, or a short exchange when a person must type several in turn. Each
    task runs in a fresh session and is judged on its own checks. Requested behavior
    that the harness cannot deliver is listed as a limit with its reason, and

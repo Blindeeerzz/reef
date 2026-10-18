@@ -52,6 +52,9 @@ class EvaluationContext:
 class ReefineCandidate(HarnessCandidate):
     context: EvaluationContext
     requires: tuple[Mapping[str, object], ...] = ()
+    #: The change's How to use note, which tells a person how to type its commands. The plan may take a command form
+    #: from it for a step the request does not name; requirements come from the request alone.
+    usage: str = ""
 
 
 class ReefineEvaluationBackend(CandidateEvaluator):
@@ -244,6 +247,7 @@ class ReefineEvaluation(SelectionPlugin):
                         "prompt": context.prompt,
                         "files": dict(context.files or {}),
                         "harness": harness,
+                        "how_to_use": candidate.usage,
                     }
                     replies = []
                     # A plan that breaks its limits is asked for once more, with the problem, before it counts.
