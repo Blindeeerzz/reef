@@ -461,6 +461,7 @@ class ReefineEvaluation(SelectionPlugin):
                         "serving_release_files": candidate.current_files,
                         "candidate_files": candidate.candidate_files,
                         "how_to_use": candidate.usage,
+                        "harness": dict(self.backend.harness_description),
                         "requires": list(candidate.requires),
                         "checks": [
                             {"label": check_label(check.to_dict()), **check.to_dict()} for check in checks[:-1]
