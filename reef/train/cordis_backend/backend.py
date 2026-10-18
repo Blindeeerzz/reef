@@ -1021,10 +1021,12 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             if replaced is not None:
                 replaced.discard()
             self._rendered_publications[step] = artifact
-            # Under review, or when a reviewed kind is touched, the release waits for a promote; loop code is
-            # reviewed whether or not the deployment listed it.
-            pending = self._publish == "review" or bool(
-                (self._review_kinds | ALWAYS_REVIEWED_KINDS) & self._mutation_kinds(candidate)
+            # Under review, when a reviewed kind is touched, or when the selection asks for it, the release waits
+            # for a promote; loop code is reviewed whether or not the deployment listed it.
+            pending = (
+                self._publish == "review"
+                or decision.requires_review
+                or bool((self._review_kinds | ALWAYS_REVIEWED_KINDS) & self._mutation_kinds(candidate))
             )
             return TrainStepResult({**state, "entries": entries}, metrics, artifact=artifact, pending=pending)
 

@@ -69,16 +69,22 @@ How it works
    commands cannot take a tool away) is a limit, listed apart from the
    uncovered points: it starts no retry, and the loop ends when only limits
    remain. These proposer checks help construct the candidate; they cannot
-   approve publication. An independent evaluator then runs health tasks,
-   one real application episode derived from the original request, protected
-   tasks on both the serving release and candidate, and a fresh model review
-   of the change. A failed, invalid or unrun required check rejects the
-   candidate. Both pages show the checks, comparisons and selection reason.
+   approve publication. An independent evaluator then plans the checks from
+   the original request and the harness's description: the entry kinds a
+   change may contain and the harness's facts. Requested behavior that the
+   harness cannot deliver is listed as a limit with its reason, and it is not
+   run. The evaluator runs one real application episode for the rest,
+   protected tasks on both the serving release and the candidate, and a fresh
+   model review of the change. A failed, invalid or unrun required check
+   rejects the candidate. A candidate that passes with limits waits for your
+   review. A request in which every behavior is a limit is rejected. Both
+   pages show the checks, the limits, comparisons and the selection reason.
 
 3. Result. The session that asked reports it in the chat when the step
    settles, and ``reef-pi evolve ... --wait`` prints the same line:
    published as a release, ready but waiting for your review because it
-   changes an extension, rejected by the evaluation, or skipped with the reason,
+   changes an extension or because part of the request is not possible on
+   this harness, rejected by the evaluation, or skipped with the reason,
    followed by the points the review left uncovered.
 4. Read. A release that touches a ``code_extension`` is held back from the
    served head, so it reaches no session on its own. ``/versions
@@ -114,9 +120,13 @@ Behavior and configuration
   the agent records any unverified interactive checks in its design.
 * ``evolution.review_kinds: [code_extension]`` holds code changes pending
   human promotion. Client requirements must pass setup before installation.
-* ``evolution.selection: reefine`` is the default. All four check groups must
-  pass. Request and protected-task episodes currently support pi. Other
-  adapters report unsupported request evaluation and reject the candidate.
+* ``evolution.selection: reefine`` is the default. The requested behavior,
+  the protected tasks and the change review must pass. Request episodes run
+  on every adapter. A limit does not fail the candidate, but it holds a
+  passing release for your review. On pi, request episodes run online. Other
+  adapters run them with their usual episode settings, and Codex episodes
+  keep web search and sandbox network access off. A request that needs the
+  network therefore cannot pass on Codex yet.
   Explicit ``selection: floor`` retains the old health-only selection for
   existing deployments; it does not verify a requested behavior.
 * What only you can provide (a phone number, a credential, a permission, an
@@ -481,8 +491,10 @@ The bundled health scorer grades the reply's last line, ``reef-ok`` exactly.
 With explicit ``evolution.selection: floor``, this check answers one question:
 does the tree still work after the change? The
 model binding answers, the shell tool runs, every extension loads. It says
-nothing about whether the change does what was asked. The default
-``selection: reefine`` also requires the independent checks described above.
+nothing about whether the change does what was asked. With the default
+``selection: reefine``, the evaluation tasks are the default
+``evaluation.protected_tasks``: the serving release and the candidate each run
+them, and the candidate must not do worse.
 Set both ``evolution.tasks`` and
 ``evolution.evaluate`` for a workload of your own, and
 ``evolution.selection: score_comparison`` to require the candidate to beat

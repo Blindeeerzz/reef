@@ -78,7 +78,9 @@ def test_pending_algorithm_entries_are_not_the_current_serving_tree(tmp_path):
     assert candidate.context.current.release_id == "head-1"
 
 
-@pytest.mark.parametrize("case", ["success", "request_failure", "protected_regression", "invalid_plan"])
+@pytest.mark.parametrize(
+    "case", ["success", "request_failure", "protected_regression", "invalid_plan", "harness_limit"]
+)
 def test_formal_checks_control_publication_and_progress_route(tmp_path, monkeypatch, case):
     recipe = ReefineRecipe.from_environment(
         {},
@@ -105,6 +107,8 @@ def test_formal_checks_control_publication_and_progress_route(tmp_path, monkeypa
     if case == "invalid_plan":
         replies[0] = {"prompt": "", "checks": []}
         replies.pop(1)
+    if case == "harness_limit":
+        replies[0]["limits"] = [{"requirement": "refuse other tools", "reason": "not possible on this harness"}]
     responses = iter(replies)
 
     def chat(self, messages, **params):
@@ -148,7 +152,8 @@ def test_formal_checks_control_publication_and_progress_route(tmp_path, monkeypa
                     pytest.fail("request did not settle within the test deadline")
                 await asyncio.sleep(0.02)
             assert progress["settled"]
-            assert progress["state"] == ("selected" if case == "success" else "rejected")
+            # A limit holds a passing release for the person's review: it is published but not served.
+            assert progress["state"] == {"success": "selected", "harness_limit": "pending"}.get(case, "rejected")
             report = progress["evaluation"]
             assert report["current_release_id"] == head and report["request_id"] == request_id
             assert progress["checks"] == report["checks"]

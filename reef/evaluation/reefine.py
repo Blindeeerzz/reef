@@ -1,7 +1,10 @@
-"""Independent Reefine request, health, protected-task and model review checks.
+"""Independent Reefine request, protected-task and model review checks.
 
 This plugin alone selects a candidate. Proposer design notes and trial scores
 are not evaluation inputs. Each model call starts with a fresh message list.
+The plan reads the harness description, so requested behavior the harness
+cannot deliver is reported as a limit instead of being run and failed; a
+candidate that passes with limits waits for the person's review.
 """
 
 from __future__ import annotations
@@ -70,17 +73,19 @@ class ReefineEvaluationBackend(CandidateEvaluator):
     @abstractmethod
     def episode_executor(self) -> EpisodeExecutor: ...
 
+    @property
     @abstractmethod
-    def episode_files(self, entries: tuple[Mapping[str, object], ...]) -> dict[str, str]: ...
+    def harness_description(self) -> Mapping[str, object]:
+        """What a change to the evaluated harness may contain and what the harness offers, for the plan."""
 
     @abstractmethod
-    def score_health(self, task: str, result: EpisodeResult) -> float: ...
+    def episode_files(self, entries: tuple[Mapping[str, object], ...]) -> dict[str, str]: ...
 
     @abstractmethod
     def show_evaluation_checks(self, checks: tuple[Mapping[str, object], ...]) -> None: ...
 
 
-CheckStatus = Literal["pending", "running", "pass", "fail", "invalid", "not_run"]
+CheckStatus = Literal["pending", "running", "pass", "fail", "invalid", "not_run", "unsupported"]
 
 
 @dataclass(frozen=True)
@@ -183,18 +188,10 @@ class ReefineEvaluation(SelectionPlugin):
         deadline = started + self.settings.timeout_seconds
         models = self.backend.evaluation_models
         reviewer = models[self.settings.reviewer_model]
-        tasks = candidate.evaluation_tasks
         checks = [
-            CheckResult(f"health-{index}", "health", "candidate", expected=task) for index, task in enumerate(tasks)
+            CheckResult("request-plan", "request", "plan", expected="a real episode covering the original request"),
+            CheckResult("request-behavior", "request", "candidate", expected="all requested behavior"),
         ]
-        if not tasks:
-            checks.append(
-                CheckResult("health-missing", "health", "candidate", "invalid", reason="no health tasks configured")
-            )
-        checks.append(
-            CheckResult("request-plan", "request", "plan", expected="a real episode covering the original request")
-        )
-        checks.append(CheckResult("request-behavior", "request", "candidate", expected="all requested behavior"))
         for index, task in enumerate(self.settings.protected_tasks):
             checks.append(CheckResult(f"regression-{index}", "regression", "candidate/current", expected=task))
         if not self.settings.protected_tasks:
@@ -217,17 +214,14 @@ class ReefineEvaluation(SelectionPlugin):
         with TemporaryDirectory(prefix="reefine-evaluation-") as temporary:
             records = Path(temporary) if root is None else root / "reefine-evaluation"
             records.mkdir(parents=True, exist_ok=True)
-            # Plan from the original instruction and operator context, before viewing any candidate content.
+            # Plan from the original instruction, operator context and the harness description, before viewing any
+            # candidate content.
             request = candidate.context.request
-            plan_index = next(i for i, check in enumerate(checks) if check.id == "request-plan")
+            plan_index = 0
             plan = None
             if request is None:
                 checks[plan_index] = replace(
                     checks[plan_index], status="invalid", reason="no original training request"
-                )
-            elif self.backend.episode_descriptor.name != "pi":
-                checks[plan_index] = replace(
-                    checks[plan_index], status="not_run", reason="request episodes currently support pi only"
                 )
             else:
                 self.begin(checks, plan_index)
@@ -237,58 +231,51 @@ class ReefineEvaluation(SelectionPlugin):
                     reply = self.ask_json(
                         reviewer,
                         self.instructions.plan,
-                        {"request": request.text, "prompt": context.prompt, "files": dict(context.files or {})},
+                        {
+                            "request": request.text,
+                            "prompt": context.prompt,
+                            "files": dict(context.files or {}),
+                            "harness": dict(self.backend.harness_description),
+                        },
                         deadline,
                     )
-                    prompt, requirements = validate_plan(reply)
-                    if context.prompt:
+                    prompt, requirements, limits = validate_plan(reply)
+                    if context.prompt and requirements:
                         prompt = context.prompt
-                    plan = {"prompt": prompt, "checks": requirements}
+                    plan = {"prompt": prompt, "checks": requirements, "limits": limits}
                     checks[plan_index] = replace(
                         checks[plan_index],
                         status="pass",
                         observed="; ".join(requirements),
                         seconds=time.monotonic() - plan_started,
                     )
+                    # Behavior the harness cannot deliver is reported, never run: running it could only fail.
+                    checks[plan_index + 1 : plan_index + 1] = [
+                        CheckResult(
+                            f"limit-{index}",
+                            "limit",
+                            "harness",
+                            "unsupported",
+                            expected=limit["requirement"],
+                            reason=limit["reason"],
+                        )
+                        for index, limit in enumerate(limits)
+                    ]
                 except (ValueError, ModelBindingError) as exc:
                     checks[plan_index] = replace(
                         checks[plan_index], status="invalid", reason=str(exc), seconds=time.monotonic() - plan_started
                     )
             self.update_progress(checks)
-            for index, task in enumerate(tasks):
-                self.begin(checks, index)
-                before = time.monotonic()
-                try:
-                    result = self.episode(
-                        candidate, "candidate", task, {}, False, records / f"health-{index}", deadline
-                    )
-                    score = self.backend.score_health(task, result)
-                    if not math.isfinite(score):
-                        raise ValueError("health scorer returned a non-finite score")
-                    passed = score == 1 and result.exit_code == 0
-                    if passed:
-                        reason = ""
-                    elif result.exit_code != 0:
-                        reason = f"health harness exited {result.exit_code}"
-                    else:
-                        reason = "health answer did not match"
-                    checks[index] = replace(
-                        checks[index],
-                        status="pass" if passed else "fail",
-                        score=score,
-                        observed=final_assistant_text(result.trajectory) or "",
-                        reason=reason,
-                        seconds=time.monotonic() - before,
-                    )
-                except (EpisodeError, TrajectoryError, TrajectoryKeepError, ValueError, ModelBindingError) as exc:
-                    checks[index] = replace(
-                        checks[index], status="invalid", reason=str(exc), seconds=time.monotonic() - before
-                    )
-                self.update_progress(checks)
             request_index = next(i for i, check in enumerate(checks) if check.id == "request-behavior")
             if plan is None or request is None:
                 checks[request_index] = replace(
                     checks[request_index], status="not_run", reason="request plan unavailable"
+                )
+            elif not plan["checks"]:
+                checks[request_index] = replace(
+                    checks[request_index],
+                    status="not_run",
+                    reason="this harness cannot deliver any of the requested behavior; see its limits",
                 )
             else:
                 checks[request_index] = replace(checks[request_index], expected=checks[plan_index].observed)
@@ -437,16 +424,18 @@ class ReefineEvaluation(SelectionPlugin):
         report = evaluation_report(evaluation.metrics)
         checks = report.get("checks") if isinstance(report, Mapping) else None
         failures = []
+        limits = []
         if not isinstance(checks, list) or not checks:
             failures.append("evaluation returned no checks")
         else:
             groups = {check.get("group") for check in checks if isinstance(check, Mapping)}
-            if groups != {"health", "request", "regression", "review"}:
+            if not {"request", "regression", "review"} <= groups or groups - {"request", "regression", "review", "limit"}:
                 failures.append("evaluation is missing a required check group")
+            limits = [check for check in checks if isinstance(check, Mapping) and check.get("group") == "limit"]
             if isinstance(candidate, ReefineCandidate):
                 expected_ids = {"request-plan", "request-behavior", "change-review"}
-                expected_ids.update(f"health-{index}" for index in range(len(candidate.evaluation_tasks)))
                 expected_ids.update(f"regression-{index}" for index in range(len(self.settings.protected_tasks)))
+                expected_ids.update(f"limit-{index}" for index in range(len(limits)))
                 ids = [check.get("id") for check in checks if isinstance(check, Mapping)]
                 if set(ids) != expected_ids or len(ids) != len(expected_ids):
                     failures.append("evaluation is missing required checks or contains duplicate checks")
@@ -463,10 +452,18 @@ class ReefineEvaluation(SelectionPlugin):
                     else "malformed check"
                 )
                 for check in checks
-                if not isinstance(check, Mapping) or check.get("status") != "pass"
+                if not isinstance(check, Mapping)
+                or check.get("status") != ("unsupported" if check.get("group") == "limit" else "pass")
             )
         selected = not failures
-        reason = "all required Reefine checks passed" if selected else "; ".join(failures)
+        if not selected:
+            reason = "; ".join(failures)
+        elif limits:
+            reason = "required Reefine checks passed; waiting for your review because this harness cannot deliver: " + (
+                "; ".join(str(check.get("expected")) for check in limits)
+            )
+        else:
+            reason = "all required Reefine checks passed"
         feedback = []
         if isinstance(checks, list):
             feedback = [
@@ -476,7 +473,9 @@ class ReefineEvaluation(SelectionPlugin):
                     "reason": check.get("reason") or check.get("observed"),
                 }
                 for check in checks
-                if isinstance(check, Mapping) and check.get("group") == "request" and check.get("status") != "pass"
+                if isinstance(check, Mapping)
+                and check.get("group") in ("request", "limit")
+                and check.get("status") != "pass"
             ]
         return SelectionDecision(
             selected=selected,
@@ -484,6 +483,7 @@ class ReefineEvaluation(SelectionPlugin):
             reason=reason,
             evaluation=evaluation,
             metrics={"request_feedback": feedback},
+            requires_review=selected and bool(limits),
         )
 
     def begin(self, checks: list[CheckResult], index: int) -> None:
@@ -604,18 +604,36 @@ def grade_health_text(task: str, text: str | None) -> float:
     return 1.0 if lines and lines[-1] == "reef-ok" else 0.0
 
 
-def validate_plan(value: Mapping[str, object]) -> tuple[str, list[str]]:
+def validate_plan(value: Mapping[str, object]) -> tuple[str, list[str], list[dict[str, str]]]:
     prompt = value.get("prompt")
     checks = value.get("checks")
-    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 4000:
-        raise ValueError("request plan needs a nonempty episode prompt of at most 4000 characters")
+    limits = value.get("limits", [])
     if (
         not isinstance(checks, list)
-        or not 1 <= len(checks) <= 20
+        or len(checks) > 20
         or any(not isinstance(check, str) or not check.strip() for check in checks)
     ):
-        raise ValueError("request plan needs 1 to 20 observable checks")
-    return prompt, checks
+        raise ValueError("request plan needs at most 20 observable checks")
+    if (
+        not isinstance(limits, list)
+        or len(limits) > 10
+        or any(
+            not isinstance(limit, Mapping)
+            or set(limit) != {"requirement", "reason"}
+            or any(not isinstance(text, str) or not text.strip() for text in limit.values())
+            for limit in limits
+        )
+    ):
+        raise ValueError("request plan limits must be at most 10 objects with a requirement and a reason")
+    if not checks and not limits:
+        raise ValueError("request plan needs at least one check or limit")
+    if checks and (not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 4000):
+        raise ValueError("request plan needs a nonempty episode prompt of at most 4000 characters")
+    return (
+        prompt if isinstance(prompt, str) else "",
+        checks,
+        [{"requirement": limit["requirement"], "reason": limit["reason"]} for limit in limits],
+    )
 
 
 def validate_review(value: Mapping[str, object]) -> tuple[bool, str]:

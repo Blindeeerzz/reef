@@ -22,7 +22,6 @@ def report() -> dict[str, object]:
                 "expected": "joined requirements",
                 "observed": "The tests and the second-agent review completed successfully.",
             },
-            {"id": "health-0", "group": "health", "status": "pass", "expected": "Run a shell command"},
             {
                 "id": "regression-0",
                 "group": "regression",
@@ -48,9 +47,31 @@ def test_requested_behavior_lists_generated_requirements_with_one_task_result() 
     assert "result for the whole task" in page and "does not contain separate results" in page
     assert "Check plan: Ready" in page
     assert "waiting for your review" in page
-    assert page.index('id="evaluation-request"') < page.index('id="evaluation-health"')
+    assert page.index('id="evaluation-request"') < page.index('id="evaluation-regression"')
+    assert 'id="evaluation-limit"' not in page and "Not possible on this harness" not in page
     assert '<details class="evaluation-group" id="evaluation-regression">' in page
     assert "Current release" in page and "Candidate" in page
+
+
+def test_limits_show_as_their_own_group_and_explain_the_review() -> None:
+    evaluation = report()
+    evaluation["checks"].insert(
+        1,
+        {
+            "id": "limit-0",
+            "group": "limit",
+            "status": "unsupported",
+            "expected": "Refuse every tool except web search",
+            "reason": "A command cannot take a tool away on this harness",
+        },
+    )
+    page = checks_html(evaluation["checks"], evaluation, result="pending")
+    assert '<details class="evaluation-group" id="evaluation-limit" open>' in page
+    assert "Refuse every tool except web search</h3>" in page
+    assert "A command cannot take a tool away on this harness" in page
+    assert 'data-status="unsupported">Not possible here' in page
+    assert "part of the request is not possible on this harness" in page
+    assert "1 not possible here" in page and "need attention" not in page
 
 
 @pytest.mark.parametrize("status", ["fail", "invalid", "not_run", "running", "pending"])

@@ -16,7 +16,8 @@ padding:14px 16px;background:var(--code);border-radius:8px;margin:20px 0 12px}
 border-radius:8px;color:var(--ink);font-size:12px}.evaluation-groups a:hover{background:var(--code);text-decoration:none}
 .evaluation-badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;white-space:nowrap}
 .evaluation-badge.pass{color:var(--good)}.evaluation-badge.fail,.evaluation-badge.invalid{color:var(--bad)}
-.evaluation-badge.running{color:var(--accent)}.evaluation-badge.pending,.evaluation-badge.not_run{color:var(--warn)}
+.evaluation-badge.running{color:var(--accent)}.evaluation-badge.pending,.evaluation-badge.not_run,
+.evaluation-badge.unsupported{color:var(--warn)}
 .evaluation-spinner{display:inline-block;width:11px;height:11px;border:2px solid var(--line);
 border-top-color:currentColor;border-radius:50%;animation:evaluation-spin 1s linear infinite}
 @keyframes evaluation-spin{to{transform:rotate(360deg)}}
@@ -45,7 +46,7 @@ border:1px solid var(--line);border-radius:6px;padding:10px 14px;min-width:150px
 
 GROUPS = (
     ("request", "Requested behavior"),
-    ("health", "Basic agent functions"),
+    ("limit", "Not possible on this harness"),
     ("regression", "Existing tasks"),
     ("review", "Independent change review"),
 )
@@ -58,7 +59,9 @@ def check_status(checks: Sequence[Mapping[str, object]]) -> str:
     for status in ("invalid", "fail", "not_run", "running", "pending"):
         if status in statuses:
             return status
-    return "pass" if statuses == {"pass"} else "invalid"
+    if statuses == {"unsupported"}:
+        return "unsupported"
+    return "pass" if statuses <= {"pass", "unsupported"} else "invalid"
 
 
 def status_html(status: str) -> str:
@@ -69,6 +72,7 @@ def status_html(status: str) -> str:
         "not_run": "Not run",
         "running": "Running",
         "pending": "Waiting",
+        "unsupported": "Not possible here",
     }
     if status not in labels:
         status = "invalid"
@@ -122,6 +126,11 @@ def check_html(
             "These requirements are checked together; this record does not contain separate results "
             "for each requirement.</p>"
         )
+    if check.get("group") == "limit":
+        body += (
+            '<p class="evaluation-note">This harness cannot deliver this part of the request, so it was not run. '
+            "The release waits for your review; install it only if the rest is useful to you.</p>"
+        )
     if check.get("group") == "regression":
         comparison = []
         for label, key in (("Current release", "current_score"), ("Candidate", "score")):
@@ -173,12 +182,23 @@ def checks_html(checks: object, report: object = None, reason: object = None, *,
         "rejected": "This update was rejected. The current release stays in use.",
         "failed": "The step failed. This update was not published.",
     }
+    outcome = outcomes.get(result, "Each check below shows its recorded result.")
+    if result == "pending" and any(check.get("group") == "limit" for check in records):
+        outcome = (
+            "The checks passed, but part of the request is not possible on this harness. "
+            "This release waits for your review."
+        )
     counts = []
-    for check_status_name, label in (("pass", "passed"), ("running", "running"), ("pending", "waiting")):
+    for check_status_name, label in (
+        ("pass", "passed"),
+        ("unsupported", "not possible here"),
+        ("running", "running"),
+        ("pending", "waiting"),
+    ):
         count = sum(check.get("status") == check_status_name for check in records)
         if count:
             counts.append(f"{count} {label}")
-    failed = sum(str(check.get("status")) not in {"pass", "running", "pending"} for check in records)
+    failed = sum(str(check.get("status")) not in {"pass", "unsupported", "running", "pending"} for check in records)
     if failed:
         counts.append(f"{failed} need attention")
     body = (
@@ -186,12 +206,15 @@ def checks_html(checks: object, report: object = None, reason: object = None, *,
         '<p class="evaluation-intro">Check the requested behavior first, then the existing capabilities '
         "and independent review. These results decide whether the harness update can be published.</p>"
         f'<div class="evaluation-overview"><div><strong>{titles[status]}</strong>'
-        f'<p>{escape(outcomes.get(result, "Each check below shows its recorded result."))}</p></div>'
+        f"<p>{escape(outcome)}</p></div>"
         f'<span class="evaluation-count">{escape(" / ".join(counts))}</span></div>'
     )
     grouped = [(group, label, [check for check in records if check.get("group") == group]) for group, label in GROUPS]
     body += '<nav class="evaluation-groups" aria-label="Evaluation check groups">'
     for group, label, members in grouped:
+        if group == "limit" and not members:
+            # Most requests have no limits; the group appears only when the plan found one.
+            continue
         body += f'<a href="#evaluation-{group}"><span>{label}</span>{status_html(check_status(members))}</a>'
     body += "</nav>"
     plan = report.get("plan") if isinstance(report, Mapping) else None
@@ -217,6 +240,8 @@ def checks_html(checks: object, report: object = None, reason: object = None, *,
                 if check.get("id") not in {"request-plan", "request-behavior"}:
                     body += check_html(check, "Additional behavior check")
             body += "</section>"
+        elif group == "limit" and not members:
+            continue
         else:
             expanded = " open" if group_status != "pass" else ""
             body += (
@@ -224,7 +249,12 @@ def checks_html(checks: object, report: object = None, reason: object = None, *,
                 f"<summary><span>{label}</span>{status_html(group_status)}</summary>"
             )
             for index, check in enumerate(members):
-                check_title = f"Protected task {index + 1}" if group == "regression" else label
+                if group == "regression":
+                    check_title = f"Protected task {index + 1}"
+                elif group == "limit":
+                    check_title = str(check.get("expected") or label)
+                else:
+                    check_title = label
                 body += check_html(check, check_title)
             if not members:
                 body += '<p class="evaluation-note">No result was recorded for this group.</p>'

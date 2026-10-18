@@ -59,7 +59,10 @@ class CheckDisplay:
                 name = str(check.get("id", "check"))
                 status = str(check.get("status", "pending"))
                 if self.last_status.get(name) != status:
-                    status_line = f"{name}: {status} {check.get('reason') or check.get('observed') or ''}"
+                    status_line = (
+                        f"{check_label(check)}: {STATUS_LABELS.get(status, status)} "
+                        f"{check.get('reason') or check.get('observed') or ''}"
+                    )
                     self.console.print(Text(" ".join(status_line.split())[:300]))
                     self.last_status[name] = status
 
@@ -95,9 +98,9 @@ class CheckDisplay:
                     self.spinners[name] = spinner
                 status_cell = spinner
             else:
-                status_cell = Text(status)
+                status_cell = Text(STATUS_LABELS.get(status, status))
             cells: list[Spinner | Text] = [
-                Text(name),
+                Text(check_label(check)),
                 status_cell,
                 Text(score_text(check.get("current_score"))),
                 Text(score_text(check.get("score"))),
@@ -112,6 +115,35 @@ class CheckDisplay:
                 cells.append(Text(f"{seconds:.1f}" if isinstance(seconds, (int, float)) else "—"))
             table.add_row(*cells)
         return table
+
+
+#: Plain words for each recorded check status.
+STATUS_LABELS = {
+    "pass": "passed",
+    "fail": "failed",
+    "invalid": "error",
+    "not_run": "not run",
+    "unsupported": "not possible",
+    "pending": "waiting",
+}
+
+
+def check_label(check: Mapping[str, object]) -> str:
+    """A reader's name for one check: what it verifies rather than its record ID."""
+    name = str(check.get("id", "check"))
+    group = check.get("group")
+    if name == "request-plan":
+        return "Test plan"
+    if name == "request-behavior":
+        return "Requested behavior"
+    if name == "change-review":
+        return "Change review"
+    if group == "limit":
+        return "Not possible here"
+    if group == "regression":
+        index = name.removeprefix("regression-")
+        return f"Protected task {int(index) + 1}" if index.isdigit() else "Protected tasks"
+    return name
 
 
 def score_text(value: object) -> str:

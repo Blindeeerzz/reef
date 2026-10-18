@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 from reef.core.requirements import parse_requires
 from reef.evaluation.harness import HarnessCandidate
@@ -12,12 +12,13 @@ from reef.evaluation.reefine import EvaluationContext
 from reef.evaluation.reefine import ReefineCandidate as ReefineCandidate
 from reef.evaluation.reefine import ReefineEvaluationBackend
 from reef.harness.adapters.descriptor import AdapterDescriptor
+from reef.harness.adapters.harness_facts import harness_facts
 from reef.harness.episodes.model_binding import ModelBindings
-from reef.harness.episodes.run import EpisodeResult
 from reef.sandbox.process import EpisodeExecutor
 from reef.train.backend import PreparedStep
 from reef.train.cordis_backend.backend import CordisBackend
 from reef.train.cordis_backend.contracts import ServedComposition, ServedCompositionConsumer
+from reef.train.reefine.proposer import request_kinds
 from reef.train.types import TrainingBatch
 
 
@@ -80,8 +81,14 @@ class ReefineBackend(CordisBackend, ServedCompositionConsumer, ReefineEvaluation
     def episode_files(self, entries: tuple[Mapping[str, object], ...]) -> dict[str, str]:
         return self._episode_evaluator.render(entries)
 
-    def score_health(self, task: str, result: EpisodeResult) -> float:
-        return self.episode_scorer.score_with_models(task, result, self._models)
+    @property
+    def harness_description(self) -> Mapping[str, object]:
+        facts = harness_facts(self._descriptor.name)
+        return {
+            "adapter": self._descriptor.name,
+            "entry_kinds": list(request_kinds(self._descriptor.name)),
+            "facts": None if facts is None else asdict(facts),
+        }
 
     def show_evaluation_checks(self, checks: tuple[Mapping[str, object], ...]) -> None:
         if self._step_progress is not None:

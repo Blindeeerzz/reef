@@ -319,21 +319,30 @@ method policy in ``recipes/`` and continue to use their existing plugins.
 
 The evaluator implements the existing ``CandidateEvaluationPlugin`` contract:
 ``evaluate`` returns measurements. ``decide`` returns a ``SelectionDecision``
-whose ``selected`` flag controls publication.
+whose ``selected`` flag controls publication. Its ``requires_review`` flag
+holds a selected release for a person's review instead of serving it.
 ``ReefineCandidate`` adds the original ``TrainingRequest``, the admitted
 client requirements that will be delivered, and a snapshot of the current
 serving composition. Reviewers inspect those requirements as artifact
 metadata, without the proposer's design notes or conversations. Scenario preparation freezes that snapshot
-from the published release, excluding pending candidates. Re-evaluation
-refreshes it and admits the same mutations against the new head.
+from the published release, excluding pending candidates.
+
+The plan reads the original request with
+``ReefineEvaluationBackend.harness_description``: the adapter name, the entry
+kinds a change there may contain and the adapter's harness facts. It returns
+the checks for one application episode and the limits, requested behavior that
+no change of those kinds can deliver on that harness. Limits are recorded and
+never run.
 
 The report under ``EvaluationResult.metrics.evaluation_report`` has a version,
 request and release IDs, model and scorer identity, task version, a protected
 suite checksum, the request plan and check rows. Each row records its group,
 target, status, expected and observed behavior, scores, reason, duration and
 optional record directory. Check statuses are ``pending``, ``running``,
-``pass``, ``fail``, ``invalid`` and ``not_run``. Every required group and row
-must pass before ``SelectionDecision.selected`` can be true.
+``pass``, ``fail``, ``invalid``, ``not_run`` and ``unsupported``. Rows in the
+``limit`` group have the status ``unsupported``. Every other required group and
+row must pass before ``SelectionDecision.selected`` can be true. A selected
+candidate with limit rows sets ``requires_review``.
 
 ``RequestVerifier`` is an optional operator-owned ABC. Implement
 ``verify(result: EpisodeResult, workspace: Path) -> VerificationResult``.
@@ -344,10 +353,11 @@ and checks the actual test/edit/review order in the trajectory.
 
 ``run_episode`` accepts optional ``workspace_files``, ``initialize_git``,
 ``keep_workspace``, ``online`` and ``task_environment`` inputs. Defaults preserve existing episode
-behavior. Reefine request and protected-task episodes explicitly enable online
-pi execution; the health episode retains ``PI_OFFLINE``. Online runs retain
-extensions and put the configured pi binary directory on ``PATH`` so child
-sessions use the same install. Retention skips symlinks and Git metadata and
+behavior. Reefine request and protected-task episodes pass ``online``, except
+prompts that start with ``[health]``. On pi, an online episode drops
+``PI_OFFLINE``; other adapters keep their descriptor's episode settings. Online
+runs put the configured binary directory on ``PATH`` so child sessions use the
+same install. Retention skips symlinks and Git metadata and
 rejects output above 1000 files or 50 MiB. Unavailable trajectories and model
 responses are invalid, and cannot approve publication.
 Operator-selected environment variables are forwarded explicitly, separately

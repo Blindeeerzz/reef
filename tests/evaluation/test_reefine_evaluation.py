@@ -16,6 +16,7 @@ from reef.evaluation.reefine import (
     EvaluationInstructions,
     ReefineEvaluation,
     ReefineEvaluationSettings,
+    validate_plan,
     validate_review,
 )
 from reef.harness.client.check_display import CheckDisplay
@@ -37,10 +38,11 @@ class ReviewModel(ModelBinding):
 
 
 class EvaluationBackend(ReefineBackend):
-    def __init__(self, model, results):
+    def __init__(self, model, results, adapter="pi"):
         self.models = ModelBindings(model)
         self.results = results
         self.progress = []
+        self.adapter = adapter
 
     @property
     def evaluation_models(self):
@@ -50,15 +52,14 @@ class EvaluationBackend(ReefineBackend):
     def episode_descriptor(self):
         from reef.harness.adapters import get_adapter
 
-        return get_adapter("pi")
+        return get_adapter(self.adapter)
+
+    @property
+    def harness_description(self):
+        return {"adapter": self.adapter, "entry_kinds": ["skill", "rules"], "facts": None}
 
     def show_evaluation_checks(self, checks):
         self.progress.append(checks)
-
-    def score_health(self, task, result):
-        from reef.evaluation.reefine import evaluate_health
-
-        return evaluate_health(task, result)
 
 
 class ScriptedEvaluation(ReefineEvaluation):
@@ -98,7 +99,7 @@ def evaluation(tmp_path, request_pass=True, current_pass=True, candidate_pass=Tr
         {"passed": candidate_pass, "reason": "candidate result"},
         {"passed": review_pass, "reason": "review result"},
     ]
-    backend = EvaluationBackend(model, [episode(), episode("request"), episode("protected"), episode("protected")])
+    backend = EvaluationBackend(model, [episode("request"), episode("protected"), episode("protected")])
     plugin = ScriptedEvaluation(
         backend,
         ReefineEvaluationSettings(protected_tasks=("protected task",)),
@@ -128,7 +129,9 @@ def test_success_uses_fresh_review_context_and_writes_progress_and_record(tmp_pa
     assert '"harness": {"AGENTS.md": "new"}' in model.messages_seen[1][0]["content"]
     assert '"harness": {"AGENTS.md": "old"}' in model.messages_seen[2][0]["content"]
     assert '"harness": {"AGENTS.md": "new"}' in model.messages_seen[3][0]["content"]
-    assert '"harness"' not in model.messages_seen[0][0]["content"]
+    # The plan sees the harness description and never the candidate's files.
+    assert '"harness": {"adapter": "pi"' in model.messages_seen[0][0]["content"]
+    assert "AGENTS.md" not in model.messages_seen[0][0]["content"]
     assert '"requires": [{"name": "curl", "kind": "binary"}]' in model.messages_seen[1][0]["content"]
     assert '"requires": [{"name": "curl", "kind": "binary"}]' in model.messages_seen[-1][0]["content"]
     assert '"requires"' not in model.messages_seen[0][0]["content"]
@@ -153,7 +156,7 @@ def test_invalid_plan_and_missing_request_never_approve(tmp_path):
             model.responses[0] = {"prompt": "", "checks": []}
         # Without a request episode there is no request judgment call.
         model.responses.pop(0 if missing else 1)
-        backend.results.pop(1)
+        backend.results.pop(0)
         measured = plugin.evaluate(item)
         assert not plugin.decide(item, measured).selected
         statuses = {check["id"]: check["status"] for check in measured.metrics["evaluation_report"]["checks"]}
@@ -168,9 +171,62 @@ def test_valid_baseline_failure_can_improve(tmp_path):
 
 def test_empty_or_partial_evaluation_never_approves(tmp_path):
     plugin = evaluation(tmp_path)[0]
-    for checks in ([], [CheckResult("only-health", "health", "candidate", "pass").to_dict()]):
+    for checks in ([], [CheckResult("only-review", "review", "candidate", "pass").to_dict()]):
         measured = EvaluationResult("reefine", "1", {"evaluation_report": {"checks": checks}})
         assert not plugin.decide(candidate(tmp_path), measured).selected
+
+
+def test_a_harness_limit_is_reported_not_run_and_holds_a_passing_release_for_review(tmp_path):
+    plugin, model, backend = evaluation(tmp_path)
+    backend.adapter = "claude"
+    model.responses[0] = {
+        "prompt": "run a command",
+        "checks": ["command before output"],
+        "limits": [{"requirement": "refuse every other tool", "reason": "a command cannot take a tool away"}],
+    }
+    item = candidate(tmp_path)
+    measured = plugin.evaluate(item)
+    decision = plugin.decide(item, measured)
+    assert decision.selected and decision.requires_review
+    assert "cannot deliver: refuse every other tool" in decision.reason
+    checks = {check["id"]: check for check in measured.metrics["evaluation_report"]["checks"]}
+    assert checks["limit-0"]["status"] == "unsupported" and checks["limit-0"]["group"] == "limit"
+    assert checks["request-behavior"]["status"] == "pass"
+    # Any harness is planned and run; the request judge reads the limits so it does not fail for them.
+    assert '"adapter": "claude"' in model.messages_seen[0][0]["content"]
+    assert "a command cannot take a tool away" in model.messages_seen[1][0]["content"]
+    assert decision.metrics["request_feedback"][0]["id"] == "limit-0"
+
+
+def test_a_request_made_only_of_limits_runs_no_episode_and_is_rejected(tmp_path):
+    plugin, model, backend = evaluation(tmp_path)
+    model.responses[0] = {
+        "prompt": "",
+        "checks": [],
+        "limits": [{"requirement": "refuse every other tool", "reason": "a command cannot take a tool away"}],
+    }
+    model.responses.pop(1)
+    backend.results.pop(0)
+    item = candidate(tmp_path)
+    measured = plugin.evaluate(item)
+    decision = plugin.decide(item, measured)
+    assert not decision.selected and not decision.requires_review
+    statuses = {check["id"]: check["status"] for check in measured.metrics["evaluation_report"]["checks"]}
+    assert statuses["request-behavior"] == "not_run" and statuses["limit-0"] == "unsupported"
+
+
+@pytest.mark.parametrize(
+    "plan",
+    [
+        {"prompt": "task", "checks": ["x"], "limits": [{"requirement": "y"}]},
+        {"prompt": "task", "checks": ["x"], "limits": "none"},
+        {"prompt": "", "checks": ["x"]},
+        {"prompt": "", "checks": [], "limits": []},
+    ],
+)
+def test_malformed_plan_is_invalid(plan):
+    with pytest.raises(ValueError):
+        validate_plan(plan)
 
 
 @pytest.mark.parametrize("payload", [{"passed": "true", "reason": "x"}, {"passed": True}, [], None])
@@ -239,7 +295,7 @@ def test_display_aligns_unicode_and_pipe_has_no_ansi():
             [CheckResult("request-中", "request", "candidate", "pass", score=1, observed="First\nSecond").to_dict()],
         )
     output = stream.getvalue()
-    assert "Current" in output and "Candidate" in output and "pass" in output
+    assert "Current" in output and "Candidate" in output and "passed" in output
     assert "First Second" in output
     assert "\x1b[" not in output
 
