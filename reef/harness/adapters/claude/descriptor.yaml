@@ -161,8 +161,9 @@ cleanup_whitelist:
   # a top-level state file, feature-gate cache, per-session todo lists, and
   # captured shell snapshots. Episode state, not residue.
   - "claude/.claude.json"
-  # Claude Code backs that state file up before it rewrites it.
+  # Claude Code backs that state file up before it rewrites it, and stamps its periodic cleanup.
   - "claude/backups/**"
+  - "claude/.last-cleanup"
   - "claude/statsig/**"
   - "claude/todos/**"
   - "claude/shell-snapshots/**"
