@@ -101,9 +101,11 @@ class CheckpointStorage:
         disk_usage: Callable[[Path], Any] = shutil.disk_usage,
         lora: bool = False,
         critic_save_interval: int = 1,
+        saves_optimizer: bool = True,
     ) -> None:
         self.config = config
         self._lora = bool(lora)
+        self._saves_optimizer = saves_optimizer
         if (
             not isinstance(critic_save_interval, int)
             or isinstance(critic_save_interval, bool)
@@ -389,10 +391,12 @@ class CheckpointStorage:
         megatron_bytes = self._source_measure(megatron) if megatron is not None else 0
         # HF export + model, FP32 master weights, and two Adam moments; the
         # critic checkpoint (when configured) is a second full model plus
-        # optimizer state of roughly the same footprint.
+        # optimizer state of roughly the same footprint. With --no-save-optim
+        # a pair is only the HF export and the Megatron model.
         if self._lora:
             return int(1.2 * max(hf_bytes, megatron_bytes))
-        training_state = 8 * hf_bytes * (2 if self.critic_root is not None else 1)
+        model_copies = 8 if self._saves_optimizer else 2
+        training_state = model_copies * hf_bytes * (2 if self.critic_root is not None else 1)
         return max(hf_bytes + megatron_bytes, training_state)
 
     @cached_property

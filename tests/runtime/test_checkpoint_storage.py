@@ -164,6 +164,26 @@ class TestCheckpointStorage:
 
         assert storage.validate_capacity()["reservation_bytes"] == 80
 
+    @pytest.mark.parametrize(("saves_optimizer", "reservation"), [(True, 80), (False, 20)])
+    def test_cold_start_reserves_the_optimizer_only_when_it_is_saved(
+        self, tmp_path: Path, saves_optimizer: bool, reservation: int
+    ) -> None:
+        # With --no-save-optim a pair is the HF export and the Megatron model. An
+        # estimate that included the optimizer blocked a 27B model on a 500 GB disk.
+        root, source_hf = tmp_path / "checkpoints", tmp_path / "source-hf"
+        _write_bytes(source_hf, 10)
+        storage = CheckpointStorage(
+            RetentionConfig(max_storage_bytes=1000, min_free_space_bytes=0),
+            hf_template=str(root / "hf" / "{rollout_id}"),
+            megatron_root=root / "megatron",
+            source_hf=source_hf,
+            measure=_logical_bytes,
+            disk_usage=lambda path: Usage(1000, 0, 1000),
+            saves_optimizer=saves_optimizer,
+        )
+
+        assert storage.validate_capacity()["reservation_bytes"] == reservation
+
     def test_megatron_source_alone_stands_in_for_the_pair(self, tmp_path: Path) -> None:
         root, source_megatron = tmp_path / "checkpoints", tmp_path / "source-megatron"
         _write_bytes(source_megatron / "iter_0000000", 90)
