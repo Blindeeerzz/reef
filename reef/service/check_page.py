@@ -117,10 +117,9 @@ def check_html(
         # Live progress carries the plan as text; keep its clauses intact without inventing individual results.
         if isinstance(expected, str) and check.get("group") == "request":
             expected = expected.replace("; ", ";\n")
-        body += (
-            '<span class="evaluation-label">What the evaluator checks</span>'
-            f'<p class="evaluation-observed">{escape(expected)}</p>'
-        )
+        # A limit or an untested item is part of the request that no check ran.
+        label = "What the request asks" if check.get("group") in ("limit", "untested") else "What the evaluator checks"
+        body += f'<span class="evaluation-label">{label}</span><p class="evaluation-observed">{escape(expected)}</p>'
     if str(check.get("id")).startswith("request-behavior"):
         body += (
             '<p class="evaluation-note">The status above is the result for the whole task. '

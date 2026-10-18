@@ -68,6 +68,7 @@ def test_limits_show_as_their_own_group_and_explain_the_review() -> None:
     page = checks_html(evaluation["checks"], evaluation, result="pending")
     assert '<details class="evaluation-group" id="evaluation-limit" open>' in page
     assert "Refuse every tool except web search</h3>" in page
+    assert '<span class="evaluation-label">What the request asks</span>' in page
     assert "A command cannot take a tool away on this harness" in page
     assert 'data-status="unsupported">Not possible here' in page
     assert "part of the request is not possible on this harness" in page
