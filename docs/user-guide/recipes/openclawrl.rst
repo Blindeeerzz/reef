@@ -118,7 +118,7 @@ file. The record-to-task stage takes no config.
    pipeline.record2record.config.prm_timeout_s | 120.0 | per-judge timeout in seconds
    pipeline.record2record.config.prm_concurrency | 8 | turns judged at once
    pipeline.record2record.config.prm_max_hint_candidates | 3 | hint candidates collected per turn
-   pipeline.record2record.config.tool_turn_reward | prm | the reward of a turn whose next state is a tool result: ``prm`` asks the PRM, as upstream does; ``neutral`` gives no reward, so the turn trains only from an accepted hint
+   pipeline.record2record.config.tool_turn_reward | prm | the reward of a turn whose next state is a tool result: ``prm`` asks the PRM, as upstream does; ``neutral`` gives no reward, so the turn trains only from an accepted hint; ``skip`` does not judge or train the turn
    pipeline.record2record.config.negative_reward | prm | the reward of a turn that the PRM scores -1: ``prm`` keeps -1, as upstream does; ``neutral`` gives no reward, so the turn trains only from an accepted hint
    pipeline.task2batch.config.batch_size | 16 | judged turns per training step. Must equal the driver's ``--global-batch-size``.
    pipeline.task2batch.config.prm_record_file | "" | judged population, one JSON line per batch; empty disables it
@@ -139,6 +139,13 @@ five rejected replies cut the text answers of a fixed probe from 16 of 24 to 8
 of 24. One step on the same turns with no reward, trained only from their
 hints, did not. ``negative_reward: neutral`` gives a rejected turn no reward,
 so the hint teaches the correction and the reward term keeps only +1.
+
+At learning rate 1e-4, four steps from the base adapter moved the reply style
+about 40% toward plain text. Trained on all judged turns, the same steps also
+stopped the policy from answering in text: 0 of 8 probe conversations. Trained
+on the turns the student judged, it kept 8 of 8. One step on tool turns alone
+reached a loss of 4211. ``tool_turn_reward: skip`` leaves tool turns out of
+training.
 
 With ``prm_api: openai``, a hosted provider can be the judge, because the
 judge needs only generated text. The config holds the name of the credential

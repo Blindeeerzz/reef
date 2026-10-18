@@ -507,6 +507,18 @@ class TestHybridDispatch:
         # A turn that the user answers keeps its PRM reward.
         assert user_turn.score == 1.0
 
+    def test_a_skipped_tool_turn_is_not_judged_or_trained(self):
+        skip = OpenClawRLJudgingSettings(tool_turn_reward="skip")
+
+        tool_turn = _judge_one_turn(
+            _FakeJudge(1.0, "read the file first"), _FakeTeacher([[-0.3]]), next_state_role="tool", settings=skip
+        )
+        user_turn = _judge_one_turn(_FakeJudge(1.0, None), _FakeTeacher(None), settings=skip)
+
+        assert tool_turn.score is None
+        assert tool_turn.teacher_cands == ()
+        assert user_turn.score == 1.0
+
     def test_a_neutral_negative_reward_trains_a_rejected_turn_only_from_its_hint(self):
         neutral = OpenClawRLJudgingSettings(negative_reward="neutral")
 

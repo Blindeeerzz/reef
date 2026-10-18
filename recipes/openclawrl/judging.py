@@ -105,7 +105,7 @@ class OpenClawRLJudgingSettings(PluginSettings):
     tool_turn_reward: str = config_option(
         "prm",
         help="The reward of a turn whose next state is a tool result: 'prm' asks the PRM, as upstream does; "
-        "'neutral' gives no reward, so only the hint judge can train the turn.",
+        "'neutral' gives no reward, so only the hint judge can train the turn; 'skip' does not train it.",
     )
     # A whole-sequence -1 lowers the probability of the reply as a whole, and a
     # policy can lower it by not replying in text at all.
@@ -140,8 +140,8 @@ class OpenClawRLJudgingSettings(PluginSettings):
             raise ValueError("prm_concurrency must be positive")
         if self.prm_max_hint_candidates <= 0:
             raise ValueError("prm_max_hint_candidates must be positive")
-        if self.tool_turn_reward not in ("prm", "neutral"):
-            raise ValueError(f"tool_turn_reward must be 'prm' or 'neutral', got {self.tool_turn_reward!r}")
+        if self.tool_turn_reward not in ("prm", "neutral", "skip"):
+            raise ValueError(f"tool_turn_reward must be 'prm', 'neutral' or 'skip', got {self.tool_turn_reward!r}")
         if self.negative_reward not in ("prm", "neutral"):
             raise ValueError(f"negative_reward must be 'prm' or 'neutral', got {self.negative_reward!r}")
 
@@ -271,6 +271,11 @@ class OpenClawRLJudging(RecordJudging):
         single OPD candidate, so the distillation term keeps pulling the
         policy toward the frozen base distribution on its top-K.
         """
+        # 0. A skipped tool turn is not judged and not trained.
+        if job.next_state_role == "tool" and self.tool_turn_reward == "skip":
+            self.judged["next_state:tool"] += 1
+            self.judged["declined"] += 1
+            return TurnJudgment(job.receipt)
         # 1. The judges and teacher see the same text upstream does: the
         #    chat-template re-render of the FULL assistant turn (reasoning +
         #    content + native tool calls); the visible render is the fallback.

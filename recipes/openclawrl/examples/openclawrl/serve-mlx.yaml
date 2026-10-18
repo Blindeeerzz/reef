@@ -53,7 +53,10 @@ training:
       - self_attn.v_proj
       - self_attn.o_proj
       - linear_attn.in_proj_qkv
-    learning_rate: 3.0e-5
+    # At 3e-5 four steps did not move the style of the replies; at 1e-4 they
+    # moved it about 40% toward plain text (log P of a plain answer against
+    # the same answer in markdown, on the reply probe).
+    learning_rate: 1.0e-4
     max_tokens: 2048
     # The prompt and completion tokens of one request, and so of one training
     # row. Hermes asks for 8192 completion tokens, and its prompts grow during
@@ -112,10 +115,11 @@ pipeline:
       prm_tokenizer_path: mlx-community/Qwen3.5-9B-MLX-4bit
       # The upstream judge scores any tool output without an error as +1, so
       # the policy learned to call tools that do nothing for the student.
-      # After about 20 steps it stopped answering in text. With neutral, a
-      # turn whose next state is a tool result gets no reward; only an
-      # accepted hint trains it.
-      tool_turn_reward: neutral
+      # After about 20 steps it stopped answering in text. Training those
+      # turns from their hints alone also moved the policy toward tool calls
+      # at learning rate 1e-4. With skip, a turn whose next state is a tool
+      # result is not trained; the student's reactions train the rest.
+      tool_turn_reward: skip
       # Most student reactions reject the style, so most rewards are -1. A -1
       # on the whole reply taught the policy to call a tool instead of
       # replying. With neutral, a rejected turn trains only from its hint.
