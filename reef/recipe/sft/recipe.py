@@ -9,7 +9,6 @@ from typing import Any
 from reef.core.reports import ReportBase, TeacherContextReport
 from reef.recipe.base import WeightTrainingRecipe, WeightTrainingSpec
 from reef.recipe.errors import RecipeConfigError
-from reef.recipe.sft.objective import SftObjective
 from reef.recipe.sft.processor import SFTRecord2Record, SFTTasks
 from reef.task2batch import DistillBatches
 from reef.train.algos import StepScheduling
@@ -48,7 +47,8 @@ class SFTRecipe(WeightTrainingRecipe):
     @classmethod
     def training_spec(cls) -> WeightTrainingSpec:
         return WeightTrainingSpec(
-            objective=SftObjective.name,
+            # The Slime bridge does not import this recipe. A dotted reference imports the objective there.
+            objective="reef.recipe.sft:SftObjective",
             # Each sample is one unit. The backend sets the step size.
             scheduling=StepScheduling(unit="sample"),
         )

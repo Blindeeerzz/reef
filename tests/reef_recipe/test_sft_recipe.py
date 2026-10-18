@@ -24,8 +24,8 @@ from reef.recipe.sft import SftObjective, SFTRecipe, SFTRecord2Record, SFTSettin
 from reef.runtime.interfaces import TrainingMethod
 from reef.task2batch import DistillBatches
 from reef.train import PipelineContext
-from reef.train.algos import StepScheduling
-from reef.train.algos.registry import resolve_objective
+from reef.train.algos import StepScheduling, registry
+from reef.train.algos.registry import ObjectiveRegistry, resolve_objective
 from reef.train.pipeline import TrainingPipeline
 from reef.train.slime_backend.data_builder import to_slime_rollout_data
 from reef.train.slime_backend.loss_families import resolve_loss_family
@@ -261,7 +261,7 @@ def test_sft_recipe_resolves_by_dotted_reference_and_builds_its_stages(tokenizer
     assert recipe.name == "sft"
     assert recipe.report_type is TeacherContextReport
     spec = SFTRecipe.training_spec()
-    assert (spec.objective, spec.loss_family) == ("sft", "sft")
+    assert (spec.objective, spec.loss_family) == ("reef.recipe.sft:SftObjective", "sft")
     assert spec.scheduling == StepScheduling(unit="sample")
     pipeline = recipe.build_pipeline(PipelineContext("science", TeacherContextReport))
     assert isinstance(pipeline.record2record, SFTRecord2Record)
@@ -300,6 +300,24 @@ def test_objective_trains_every_batch_without_advantages_and_allows_several_epoc
     SftObjective().validate_scheduling(StepScheduling(unit="sample", epochs=3))
     # Another recipe selects the objective for a job by its dotted reference.
     assert isinstance(resolve_objective("reef.recipe.sft:SftObjective"), SftObjective)
+
+
+@pytest.mark.unit
+def test_the_recipe_objective_resolves_where_the_recipe_was_never_imported(
+    tokenizer: TurnTokenizer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The Slime bridge never imports the recipe module, so no objective is registered there.
+    monkeypatch.setattr(registry, "OBJECTIVES", ObjectiveRegistry())
+    pipeline = _pipeline()
+    pipeline.ingest(_inference("i1"))
+    pipeline.ingest(_report("r1", ("i1",)))
+
+    step = prepare_slime_step(
+        pipeline.build_batch(), TrainingMethod(SFTRecipe.training_spec().objective), {}, StepScheduling(unit="sample")
+    )
+
+    assert step.payload is not None
+    assert step.payload["loss"] == "sft"
 
 
 @pytest.mark.unit
