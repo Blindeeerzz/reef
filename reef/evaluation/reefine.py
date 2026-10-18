@@ -568,7 +568,10 @@ class ReefineEvaluation(SelectionPlugin):
                 first = str(failed[0].get("reason") or failed[0].get("status")).strip()
                 if len(first) > REASON_CHARACTERS:
                     cut = first[:REASON_CHARACTERS]
-                    first = cut[: cut.rfind(". ") + 1] if cut.rfind(". ") > REASON_CHARACTERS // 3 else cut + "..."
+                    if cut.rfind(". ") > REASON_CHARACTERS // 3:
+                        first = cut[: cut.rfind(". ") + 1]
+                    else:
+                        first = cut.rsplit(" ", 1)[0] + "... (the page has the full reason)"
                 failures.append(
                     f"Failed: {', '.join(check_label(check) for check in failed)}. "
                     f"{check_label(failed[0])}: {first.rstrip('.')}"

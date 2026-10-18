@@ -136,6 +136,11 @@ def test_a_rejection_names_the_failed_checks_and_shortens_the_first_reason(tmp_p
         "Failed: Requested behavior 1, Change review. Requested behavior 1: The test ran after the fix."
     )
     assert len(decision.reason) < 400
+    # A reason with no sentence end in reach is cut at a word and points to the page.
+    plugin, model = evaluation(tmp_path, request_pass=False)[:2]
+    model.responses[1]["reason"] = "The agent searched first and " + "then read several sections " * 30
+    decision = plugin.decide(item, plugin.evaluate(item))
+    assert decision.reason.endswith("sections... (the page has the full reason).")
 
 
 def test_success_uses_fresh_review_context_and_writes_progress_and_record(tmp_path):

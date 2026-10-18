@@ -246,7 +246,8 @@ facts: its tools, commands and how a mode works there (null when unknown; then j
 What to test:
 - Test only behavior the person asks for. Do not add requirements for situations the request does not mention,
   such as how the agent should act when a step fails, and do not make a requirement stricter than the request,
-  such as a count the request does not give or the words of a message the request does not quote. A task that shows the behavior is absent where the request does not
+  such as a count the request does not give or the words of a message the request does not quote. Use the request's
+  own words when they are enough; do not add qualifiers such as "full" or "all". A task that shows the behavior is absent where the request does not
   apply is allowed.
 - The request may end with clarifications. An answer the person did not choose, such as one marked as a default,
   is an assumption, not a requirement: do not test it, and do not take a command form or message wording from it.
@@ -317,6 +318,8 @@ tool was missing is not a failure. Judge each check no stricter than the origina
 strictly, such as every page of a paper the request only asks to read, is met by what the request asks. An
 equivalent method replaces how a step is done, never the step: a step the request names that did not happen fails
 its check. The candidate's own rules, such as a fallback that skips a step, do not change what the request asks.
+Reading a long document in parts is reading it, and output the harness cut for display does not show a step was
+skipped.
 files_outside_workspace lists files the run wrote in its own episode directory outside the workspace; writes
 elsewhere on the machine are not listed. Tool caches are expected there; a write to the harness's own files or
 configuration is a failure. When a step fails only because a declared requirement that the person supplies at
