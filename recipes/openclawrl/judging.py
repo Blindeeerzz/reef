@@ -100,6 +100,11 @@ class OpenClawRLJudgingSettings(PluginSettings):
     prm_timeout_s: float = config_option(120.0, help="The timeout of one judge call in seconds.")
     prm_concurrency: int = config_option(8, help="The turns judged at the same time.")
     prm_max_hint_candidates: int = config_option(3, help="The hint candidates collected for each turn, at most.")
+    teacher_chat_template_kwargs: Mapping[str, Any] = config_option(
+        default_factory=dict,
+        help="Chat-template arguments of the teacher's hint-enhanced prompt. Set the policy's own, such as "
+        "training.options.chat_template_kwargs, so the teacher's prompt ends where the policy's did.",
+    )
     # Upstream's judge scores any non-error tool output +1, so a policy can earn
     # reward with tool calls that do nothing for the user.
     tool_turn_reward: str = config_option(
@@ -182,7 +187,10 @@ def prm_clients(settings: OpenClawRLJudgingSettings, environ: Mapping[str, str])
             timeout_s=settings.prm_timeout_s,
         )
     prm = PRMJudge(transport, m=settings.prm_m)
-    return prm, DirectiveTeacher(tokenizer_path=tokenizer_path), ResponseRenderer(tokenizer_path)
+    teacher = DirectiveTeacher(
+        tokenizer_path=tokenizer_path, template_kwargs=dict(settings.teacher_chat_template_kwargs)
+    )
+    return prm, teacher, ResponseRenderer(tokenizer_path)
 
 
 class OpenClawRLJudging(RecordJudging):

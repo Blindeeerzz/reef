@@ -761,6 +761,30 @@ class TestJudgeDialects:
         with pytest.raises(ValueError, match="TEST_JUDGE_KEY"):
             prm_clients(self.openai_settings(), {})
 
+    def test_the_teacher_renders_with_the_configured_template_arguments(self, monkeypatch):
+        seen = {}
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, tools, tokenize, add_generation_prompt, **kwargs):
+                seen.update(kwargs)
+                return "prompt"
+
+            def __call__(self, text, add_special_tokens):
+                return {"input_ids": [1, 2]}
+
+        monkeypatch.setattr(prm, "load_tokenizer", lambda path: FakeTokenizer())
+        settings = self.openai_settings(teacher_chat_template_kwargs={"enable_thinking": False})
+        _, teacher, _ = prm_clients(settings, {"TEST_JUDGE_KEY": "key"})
+
+        tokens = asyncio.run(
+            teacher.candidate_tokens(
+                [{"role": "user", "content": "q"}], native_tokens=[5, 6, 7], response_token_count=1
+            )
+        )
+
+        assert seen == {"enable_thinking": False}
+        assert tokens == [1, 2, 7]
+
     def test_the_sglang_dialect_appends_its_native_path(self):
         settings = OpenClawRLJudgingSettings(prm_url="http://prm:23001", prm_tokenizer_path="some/tokenizer")
         judge, _, _ = prm_clients(settings, {})

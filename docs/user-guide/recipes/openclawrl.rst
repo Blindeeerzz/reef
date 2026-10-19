@@ -118,6 +118,7 @@ file. The record-to-task stage takes no config.
    pipeline.record2record.config.prm_timeout_s | 120.0 | per-judge timeout in seconds
    pipeline.record2record.config.prm_concurrency | 8 | turns judged at once
    pipeline.record2record.config.prm_max_hint_candidates | 3 | hint candidates collected per turn
+   pipeline.record2record.config.teacher_chat_template_kwargs | {} | chat-template arguments of the teacher's hint-enhanced prompt; set the policy's own (``training.options.chat_template_kwargs`` on MLX), so the teacher's prompt ends where the policy's did
    pipeline.record2record.config.tool_turn_reward | prm | the reward of a turn whose next state is a tool result: ``prm`` asks the PRM, as upstream does; ``neutral`` gives no reward, so the turn trains only from an accepted hint; ``skip`` does not judge or train the turn
    pipeline.record2record.config.negative_reward | prm | the reward of a turn that the PRM scores -1: ``prm`` keeps -1, as upstream does; ``neutral`` gives no reward, so the turn trains only from an accepted hint
    pipeline.task2batch.config.batch_size | 16 | judged turns per training step. Must equal the driver's ``--global-batch-size``.

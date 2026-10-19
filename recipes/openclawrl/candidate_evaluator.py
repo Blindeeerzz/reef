@@ -178,8 +178,14 @@ def load_reply_probe(path: pathlib.Path) -> tuple[list[dict[str, Any]], list[lis
     return tools, conversations
 
 
-def answers_in_text(generated: str) -> bool:
-    """Whether a generated turn is a text answer: visible text after any reasoning, and no tool call."""
+def answers_in_text(generated: str, *, opens_reasoning: bool = False) -> bool:
+    """Whether a generated turn is a text answer: visible text after any reasoning, and no tool call.
+
+    When the chat template opened the reasoning block, a turn that never closes it has no visible text:
+    the client reads all of it as reasoning.
+    """
+    if opens_reasoning and "</think>" not in generated:
+        return False
     visible = generated.split("</think>")[-1]
     return bool(visible.strip()) and "<tool_call>" not in visible
 
@@ -203,9 +209,11 @@ class OpenClawRLCandidateEvaluation(RegressionCheckMixin, ConfiguredEvaluationPl
         #: The best reply_rate of a selected candidate; ``None`` until the first.
         self.best_reply_rate: float | None = None
         self.reply_prompts: list[list[int]] = []
+        self.reply_opens_reasoning: list[bool] = []
         if settings.reply_probe_file.strip():
             tools, conversations = load_reply_probe(pathlib.Path(settings.reply_probe_file.strip()))
             self.reply_prompts = [runtime.engine.render_prompt(messages, tools=tools) for messages in conversations]
+            self.reply_opens_reasoning = [runtime.engine.opens_reasoning(prompt) for prompt in self.reply_prompts]
 
     def evaluate(self, candidate: UpdateCandidate) -> EvaluationResult:
         replies = self.runtime.probe_candidate(candidate.candidate_id, self.prompts, max_tokens=self.max_tokens)
@@ -223,7 +231,11 @@ class OpenClawRLCandidateEvaluation(RegressionCheckMixin, ConfiguredEvaluationPl
             answers = self.runtime.probe_candidate(
                 candidate.candidate_id, self.reply_prompts, max_tokens=self.reply_max_tokens
             )
-            reply_count = sum(1 for answer in answers if answers_in_text(answer))
+            reply_count = sum(
+                1
+                for answer, opens in zip(answers, self.reply_opens_reasoning, strict=True)
+                if answers_in_text(answer, opens_reasoning=opens)
+            )
             reply_metrics = {
                 REPLY_RATE_METRIC: reply_count / len(answers),
                 "reply_count": reply_count,

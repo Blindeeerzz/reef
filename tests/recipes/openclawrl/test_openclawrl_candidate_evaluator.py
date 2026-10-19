@@ -181,6 +181,15 @@ def test_min_reply_rate_refuses_the_first_candidate_too(tmp_path: Path) -> None:
     assert decision.reason.startswith("reply_rate 0.5 is below min_reply_rate 0.75")
 
 
+def test_a_turn_that_never_closes_an_opened_reasoning_block_is_not_a_text_answer() -> None:
+    from recipes.openclawrl.candidate_evaluator import answers_in_text
+
+    unclosed = "Here is the solution: 72 clips."
+    assert answers_in_text(unclosed)
+    assert not answers_in_text(unclosed, opens_reasoning=True)
+    assert answers_in_text(f"{unclosed}</think>\n\nShe sold 72 clips.", opens_reasoning=True)
+
+
 def test_from_config_refuses_a_runtime_that_cannot_probe_a_candidate() -> None:
     with pytest.raises(PluginConfigError, match="mlx training runtime"):
         OpenClawRLCandidateEvaluation.from_config(
