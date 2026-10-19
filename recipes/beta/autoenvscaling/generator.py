@@ -4,10 +4,9 @@
 (:func:`admitted_task`) holds each reply to the generator service's parser and authoring checks and appends a
 Dockerfile step that keeps the repository's history up to the base commit only. ``validate`` runs the task checks
 on a copy under the generator service's tasks root. ``record_results`` places each played task against the band
-``[band_low, band_high]`` and writes the generation report.
-Eval tasks remain unplayed and receive no band measurement.
-The recipe owns the split manifest.
-The generator reports nothing to the Designer, which is not trained here. A cursor under the state directory lets a restart continue with the next session.
+``[band_low, band_high]`` and writes the generation report. An eval task is not played and gets no band position.
+The generator reports nothing to the Designer, which is not trained here. A cursor under the state directory lets
+a restart continue with the next session.
 """
 
 from __future__ import annotations
@@ -108,7 +107,7 @@ STAGE_UNCHECKED = "unchecked"  # a refusing check could not run, so validate ref
 STAGE_PLAY = "play"  # the recipe could not play the task
 STAGE_BAND = "band"  # the task played, and its pass rate is outside the band
 STAGE_UNREACHED = "unreached"  # the round ended before it played the task
-STAGE_HELD_OUT = "held_out"
+STAGE_HELD_OUT = "held_out"  # the task is in the eval split, so the recipe did not play it
 # Where a pass rate falls against the band.
 BAND_BELOW = "below"
 BAND_INSIDE = "inside"
@@ -653,9 +652,10 @@ class AutoEnvScalingGenerator(TaskGenerator):
         return TaskValidationResult(errors)
 
     async def record_results(self, results: tuple[TaskPlayResult, ...]) -> None:
-        """Save training pass rates, band measurements and held-out outcomes in the generation report.
+        """Close the generation: each played task's pass rate and band position, and the report.
 
-        The band is diagnostic and does not change the store's manifest.
+        An eval task gets the stage ``held_out``. The band is only recorded in the report. It does not change the
+        recipe's task store.
         """
         proposals = list(self.refused)
         outcomes: dict[str, TaskOutcome] = {}
@@ -701,8 +701,6 @@ class AutoEnvScalingGenerator(TaskGenerator):
             "generation": self.generation,
             "error": self.error,
             "band": {"low": self.band_low, "high": self.band_high},
-            "manifest": None,
-            "manifest_error": "",
             "next_position": self.cursor.next_position,
             "proposals": [
                 {**asdict(proposal), "checks": self.checks_document(proposal.task_name)} for proposal in proposals

@@ -206,10 +206,10 @@ storage.
 - ``hybrid`` batches on either, and a queued instruction goes first. The
   instruction's batch takes the sets that an automatic batch would.
 
-The pipeline attaches the instruction to ``batch.request`` and replaces the
-batch id with ``<scenario>:instruction:<request id>``, the oldest instruction
-first, one per step. Acknowledgement also consumes the instruction. Batch
-construction must not call models or perform training.
+The pipeline runs the oldest instruction first, one per step. It gives the
+instruction's batch the id ``<scenario>:instruction:<request id>`` and attaches
+the instruction to ``batch.request``. Acknowledgement also consumes the
+instruction. Batch construction must not call models or perform training.
 
 The trainer gives TRAIN records to the pipeline when ``RequestType.TRAIN`` is
 in the ``Task2Batch``'s ``required_request_types``. The pipeline queues them
@@ -262,9 +262,10 @@ A reported-feedback recipe writes:
   its record-to-task stage: assemble an ATIF trajectory or Harbor task
   directly. Use ``context.require_score()`` when the method needs a reward.
   The stage attaches the source and report ids to the returned item.
-- ``make_batch(tasks, batch_number)`` on a ``Task2Batch`` subclass: assemble
-  the flat tuple of selected tasks into a batch. The pipeline tracks
-  consumption by set, including tasks that the recipe removes from training.
+- ``make_batch(tasks, batch_id)`` on a ``Task2Batch`` subclass: assemble
+  the flat tuple of selected tasks into a batch with the ID ``batch_id``.
+  The pipeline tracks consumption by set, including tasks that the recipe
+  removes from training.
 
 ``exclusive_sources`` makes a terminal report own its referenced inference
 records outright, and ``ordered_groups`` batches ready groups in key order.
@@ -350,8 +351,9 @@ without a reward counts as 0. A non-empty ``error`` means that the task was not
 played: it failed validation, the generator service refused it, or the agent
 could not start on it.
 
-An eval result has ``split="eval"``, no rewards and no error.
-Generators must keep it out of training feedback and measured experience.
+An eval result has ``split="eval"``, no rewards, and no error. The task was
+not played. A generator must not use an eval result as training feedback or as
+experience for later generations.
 
 The generator service scores an episode whose verifier ran past its timeout
 as 0, and reports it, so a training play of that kind trains. The task's
@@ -366,11 +368,13 @@ the round finishes. One round runs at a time. In each round it:
 
 1. Asks the generator for tasks with the configured ``description`` and the
    request's source sessions.
-2. Saves the candidates, then validates each task with the generator.
-3. Publishes valid tasks to the local store and assigns their train/eval split before play.
-   It stages training tasks through the generator service and plays each one ``plays_per_task`` times, then plays its measurement arms.
-   Eval tasks remain saved without plays.
-4. Sends the results to ``record_results``.
+2. Saves the candidates in the scenario's task store, then validates each
+   task with the generator.
+3. Publishes each valid task with its train/eval split.
+4. Writes each training task through the generator service and plays it
+   ``plays_per_task`` times on the training arm, then plays each measurement
+   arm. It does not play eval tasks.
+5. Sends the results to ``record_results``.
 
 The training plays carry the arm ``plain``, and only reports with that label
 train. A generated task whose measurement arm is
@@ -405,15 +409,17 @@ for batches like a played round, so a failing worker does not start round
 after round. An exception from the
 generator stops the round. The record-to-task stage still sends the results
 it has to ``record_results``. A summary of each round goes to
-``state_dir/<scenario>/store/plays/round-<round>.json``, with the IDs of its source records. After a restart, the
+``state_dir/<scenario>/round-<round>.json``, with the IDs of its source records. After a restart, the
 record-to-task stage continues with the next round. ``GET /reef/status`` shows the generator, the
 round, the task counts, and the last error under ``task_generation``.
 
-The store saves candidates before validation and records each publication or rejection independently of play results.
-Its generation documents own task metadata; task directories contain only Harbor files.
-The store rebuilds its cumulative ``split-manifest.json`` from publication outcomes when reopened.
-``GET /reef/status`` exposes task counts under ``task_store``.
-Legacy summaries outside the store remain untouched and do not resume into the new store.
+The record-to-task stage keeps its tasks in the task store ``generated-tasks``
+of the scenario session (see `Where the stages live`_). It records each
+publication or rejection before play. Thus a retry of a round uses the saved
+candidates and does not generate the tasks again. Tasks that share a source
+record get the same split, and a published task keeps its split. A task whose
+sources join tasks of both splits is rejected. ``GET /reef/status`` shows the
+number of train, eval, rejected, and pending tasks under ``task_store``.
 
 Container operations run in the generator service, ``reef.record2task.generator``.
 The record-to-task stage calls this service over HTTP. The ``generator`` deployment
@@ -437,7 +443,12 @@ Where the stages live
 
 Each stage has its own package: ``reef/record2record/``, ``reef/record2task/``,
 and ``reef/task2batch/``. The pipeline lives in ``reef/train/pipeline.py``, and
-the context that the stages read in ``reef/pipeline_context.py``. The stage
+the context that the stages read in ``reef/pipeline_context.py``. A stage that
+saves generated tasks opens a store with
+``context.task_storage.open(name, split=...)`` (see `Generated task stores
+<../reference/python-api.rst#generated-task-stores>`__). In a composite recipe,
+each component opens its store names under its component name.
+``task_storage`` is ``None`` if the trainer has no scenario session. The stage
 packages also hold shared implementations: ``SampleAssembly``
 (``reef/record2task/assembly.py``), and ``DistillTasks``
 (``reef/record2task/distill.py``) with ``DistillBatches``
