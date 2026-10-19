@@ -1175,8 +1175,24 @@ groups them:
    pipeline.record2task.config.description | what the tasks are about; every generation request carries it. Required with rounds.
    pipeline.record2task.config.generator_url | the generator service, ``${endpoints.generator}``. Required with rounds.
    pipeline.record2task.config.state_dir | where each scenario keeps its round summaries. Required with rounds.
+   pipeline.record2task.config.eval_fraction | 0.0 | fraction of new source groups held out before play; between 0 and 1
+   pipeline.record2task.config.split_seed | 0 | fixed seed for the task store's train/eval split
    pipeline.record2task.config.served_model | the model the task player asks for; the deployment's by default
    pipeline.record2task.config.scaffold_tolerance | 8 | masked tokens the sample assembly may realign before a response, for a thinking template's scaffold
+
+With rounds enabled, each valid task and its split are saved in the scenario's task store before play.
+The task files go in the task file store; see `Choose the task file store
+<../user-guide/operate.rst#choose-the-task-file-store>`__.
+Related source sessions keep the same split across generations.
+A task that joins existing train and eval source groups is rejected.
+Eval tasks are saved without training plays, measurement plays or Designer rewards.
+The generator's pass-rate band does not filter the store.
+
+Set ``eval_fraction`` and ``split_seed`` here rather than in a generator's configuration.
+The defaults keep every task in train.
+The task store saves these values when the scenario opens it for the first time.
+A scenario that loads with other values fails.
+Use a new scenario for a different split.
 
 ``GeneratedTaskBatches`` batches complete task groups:
 
@@ -1209,7 +1225,7 @@ place it on the host that has Docker.
 
 .. config::
 
-   generator.tasks-root | the directory generated tasks, manifests and Harbor job files live under. Required.
+   generator.tasks-root | the directory generated tasks and Harbor job files live under. Required.
    generator.host | 127.0.0.1 | bind address
    generator.port | 8910 | bind port
    generator.work-dir | ``<tasks-root>/.play`` | where the task player keeps trials

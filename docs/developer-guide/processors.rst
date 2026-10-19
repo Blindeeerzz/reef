@@ -318,11 +318,15 @@ plays of a task. Each play shows the agent the files that
 ``solution/hint.txt``. The recipe never trains on a measurement arm.
 
 A ``TaskPlayResult`` holds the task, ``training_rewards``,
-``measurement_rewards`` (by arm name), and an ``error``. The rewards include
+``measurement_rewards`` (by arm name), a ``split`` (``train`` by default), and an ``error``. The rewards include
 only episodes that ran. An episode that ran
 without a reward counts as 0. A non-empty ``error`` means that the task was not
 played: it failed validation, the generator service refused it, or the agent
 could not start on it.
+
+An eval result has ``split="eval"``, no rewards, and no error. The task was
+not played. A generator must not use an eval result as training feedback or as
+experience for later generations.
 
 The generator service scores an episode whose verifier ran past its timeout
 as 0, and reports it, so a training play of that kind trains. The task's
@@ -336,10 +340,13 @@ time the pipeline looks for a batch, it starts a round when one is due. In each 
 
 1. Asks the generator for tasks with the configured ``description`` and the
    request's source sessions.
-2. Validates each task with the generator.
-3. Writes each valid task through the generator service and plays it
-   ``plays_per_task`` times on the training arm, then plays each measurement arm.
-4. Sends the results to ``record_results``.
+2. Saves the candidates in the scenario's task store, then validates each
+   task with the generator.
+3. Publishes each valid task with its train/eval split.
+4. Writes each training task through the generator service and plays it
+   ``plays_per_task`` times on the training arm, then plays each measurement
+   arm. It does not play eval tasks.
+5. Sends the results to ``record_results``.
 
 The training plays carry the arm ``plain``, and only reports with that label
 train. A generated task whose measurement arm is
@@ -375,6 +382,14 @@ it has to ``record_results``. A summary of each round goes to
 ``state_dir/<scenario>/round-<round>.json``, with the IDs of its source records. After a restart, the
 record-to-task stage continues with the next round. ``GET /reef/status`` shows the generator, the
 round, the task counts, and the last error under ``task_generation``.
+
+The record-to-task stage keeps its tasks in the task store ``generated-tasks``
+of the scenario session (see `Where the stages live`_). It records each
+publication or rejection before play. Thus a retry of a round uses the saved
+candidates and does not generate the tasks again. Tasks that share a source
+record get the same split, and a published task keeps its split. A task whose
+sources join tasks of both splits is rejected. ``GET /reef/status`` shows the
+number of train, eval, rejected, and pending tasks under ``task_store``.
 
 Container operations run in the generator service, ``reef.record2task.generator``.
 The record-to-task stage calls this service over HTTP. The ``generator`` deployment
