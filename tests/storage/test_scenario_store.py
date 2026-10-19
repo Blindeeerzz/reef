@@ -23,7 +23,7 @@ from reef.storage.commits import CommitRecord
 from reef.storage.postgres import PostgresScenarioStorage
 from reef.storage.scenario import ScenarioStoreConflict
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
-from reef.storage.task_files import LocalTaskFileStore
+from reef.storage.tasks import LocalTaskFileStore
 
 
 def record(record_id: str, *, scenario: str = "math") -> AgentRecord:

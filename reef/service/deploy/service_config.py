@@ -22,7 +22,7 @@ from reef.service.deploy.config_utils import config_value, interpolate_config, i
 from reef.storage.postgres import postgres_url, validate_postgres_schema
 from reef.storage.records import RecordRetention
 from reef.storage.scenario import ScenarioStorage
-from reef.storage.task_files import TaskFileStore
+from reef.storage.tasks import TaskFileStore
 
 
 @dataclass(frozen=True)

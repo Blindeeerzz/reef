@@ -16,8 +16,16 @@ from reef.service.assembly import build_dispatcher
 from reef.service.deploy.service_config import ServiceConfig
 from reef.storage.postgres import PostgresScenarioStorage
 from reef.storage.sqlite import SQLiteScenarioStorage
-from reef.storage.task_files import LocalTaskFileStore, files_digest
-from reef.storage.tasks import GenerationState, SplitSettings, StoredTask, TaskCandidate, TaskConflict, TaskStoreError
+from reef.storage.tasks import (
+    GenerationState,
+    LocalTaskFileStore,
+    SplitSettings,
+    StoredTask,
+    TaskCandidate,
+    TaskConflict,
+    TaskStoreError,
+    files_digest,
+)
 
 SPLIT = SplitSettings(eval_fraction=0.25, seed=7)
 
@@ -293,7 +301,7 @@ def test_the_deployment_selects_the_task_file_store(tmp_path, backend, files_roo
 
 @pytest.mark.parametrize(
     "backend",
-    ["unknown", "reef.storage.task_files:TaskFileStore", {"module": "reef.storage.sqlite:SQLiteScenarioStorage"}],
+    ["unknown", "reef.storage.tasks:TaskFileStore", {"module": "reef.storage.sqlite:SQLiteScenarioStorage"}],
 )
 def test_the_deployment_rejects_an_invalid_task_file_backend(backend):
     with pytest.raises(ValueError, match="task_file_backend"):

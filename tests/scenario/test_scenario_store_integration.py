@@ -18,8 +18,7 @@ from reef.storage.commits import CommitRecord
 from reef.storage.records import RecordRetention, RecordStore
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage, ScenarioStore
 from reef.storage.sqlite import SQLiteScenarioStorage
-from reef.storage.task_files import TaskFileStore
-from reef.storage.tasks import TaskStorage
+from reef.storage.tasks import TaskFileStore, TaskStorage
 from reef.train.trainer import Trainer
 from reef.train.types import TrainStepResult
 

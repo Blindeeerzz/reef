@@ -294,7 +294,7 @@ The default, ``local``, keeps the files in ``storage.task-file-dir``
 Archiving a scenario moves its files under ``archived/`` in that directory.
 
 To use a different store, name a subclass of
-``reef.storage.task_files.TaskFileStore`` in ``storage.task-file-backend``.
+``reef.storage.tasks.TaskFileStore`` in ``storage.task-file-backend``.
 Give ``package.module:ClassName``, or give the name and a ``config`` mapping:
 
 .. code-block:: yaml

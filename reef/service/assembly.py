@@ -39,7 +39,7 @@ from reef.storage.postgres import PostgresScenarioStorage
 from reef.storage.records import RecordRetention
 from reef.storage.scenario import ScenarioStorage
 from reef.storage.sqlite import SQLiteScenarioStorage
-from reef.storage.task_files import LocalTaskFileStore, TaskFileStore
+from reef.storage.tasks import LocalTaskFileStore, TaskFileStore
 
 
 def _training_recipe_type(name: str) -> type[WeightTrainingRecipe] | None:

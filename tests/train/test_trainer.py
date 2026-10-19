@@ -1004,7 +1004,7 @@ def test_stale_batches_survive_restart_without_retiring_records(tmp_path):
     from reef.core.components import RECORDS_COMPONENT
     from reef.scenario.factory import recovered_trainer_states
     from reef.storage.commit_log import CommitHistoryScenarioStore
-    from reef.storage.task_files import LocalTaskFileStore
+    from reef.storage.tasks import LocalTaskFileStore
     from reef.surface.base import Surface
 
     database = tmp_path / "records.sqlite3"

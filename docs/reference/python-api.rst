@@ -634,7 +634,7 @@ records and commits. Record retention does not delete tasks.
 Task file stores
 ~~~~~~~~~~~~~~~~
 
-A ``TaskFileStore`` (``reef.storage.task_files``) keeps the directories of the
+A ``TaskFileStore`` (``reef.storage.tasks``) keeps the directories of the
 published tasks, addressed by the digest of their files. The digest covers the
 directory name, and the path and bytes of each file. Thus a repeated save of
 the same files changes nothing. A deployment selects the store in

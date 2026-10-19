@@ -17,8 +17,7 @@ from reef.core.errors import ReefError
 from reef.core.plugins import Plugin
 from reef.storage.commits import CommitRecord
 from reef.storage.records import RecordStore
-from reef.storage.task_files import TaskFileStore
-from reef.storage.tasks import TaskStorage
+from reef.storage.tasks import TaskFileStore, TaskStorage
 
 
 class ScenarioStoreConflict(ReefError):

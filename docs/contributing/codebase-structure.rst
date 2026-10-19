@@ -281,8 +281,8 @@ The extension points those packages expose are in `Python API
 - Does it implement storage? Put it in ``reef/storage/``. ``sql_records.py``
   shares SQL record and retention operations. ``sql_tasks.py`` shares the
   task tables and task store operations in the same database.
-  ``task_files.py`` defines the pluggable ``TaskFileStore`` for task
-  directories and the local store. ``sqlite.py`` supplies SQLite
+  ``tasks.py`` holds the local ``TaskFileStore`` next to the task contracts,
+  as ``commit_log.py`` holds the JSONL commit history. ``sqlite.py`` supplies SQLite
   schema, connections, transactions, and file maintenance. ``postgres.py`` supplies
   PostgreSQL tables, the commit table, pooled transactions, and retention.
   ``commit_log.py`` owns the ``CommitHistory`` base, the JSONL ``CommitLog``, and

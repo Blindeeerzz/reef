@@ -20,8 +20,7 @@ from reef.core.records_types import AgentRecord, RequestType
 from reef.storage.commits import CommitRecord
 from reef.storage.records import AppendResult, ConsumptionReceipt, RecordLoss, RecordStore, StoredRecord
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage, ScenarioStore
-from reef.storage.task_files import TaskFileStore
-from reef.storage.tasks import TaskStorage
+from reef.storage.tasks import TaskFileStore, TaskStorage
 
 logger = logging.getLogger(__name__)
 

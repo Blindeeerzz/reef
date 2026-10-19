@@ -58,7 +58,7 @@ from reef.storage.records import RecordLoss, RecordRetention
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage
 from reef.storage.sql_records import RecordTables, SQLRecordRetention, SQLRecordStore
 from reef.storage.sql_tasks import SQLTaskStorage, task_tables
-from reef.storage.task_files import LocalTaskFileStore, TaskFileStore
+from reef.storage.tasks import LocalTaskFileStore, TaskFileStore
 
 logger = logging.getLogger(__name__)
 

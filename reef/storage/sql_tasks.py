@@ -20,7 +20,6 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from reef.core.tasks import GeneratedTask, HarborTask, PlayArm, write_harbor_task
 from reef.storage.sql_records import SQLRecordStore
-from reef.storage.task_files import TaskFileStore
 from reef.storage.tasks import (
     SPLIT_NAMES,
     GenerationState,
@@ -29,6 +28,7 @@ from reef.storage.tasks import (
     StoredTask,
     TaskCandidate,
     TaskConflict,
+    TaskFileStore,
     TaskStorage,
     TaskStore,
     TaskStoreError,
