@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import tarfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -11,6 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from tests.train.test_reef_trainer_contracts import ExampleBackend
 
 from reef.artifact import InMemoryRepositoryBackend
+from reef.core.records_types import RequestType
 from reef.core.reports import ScoredRolloutReport
 from reef.dispatcher import Dispatcher
 from reef.recipe import Recipe
@@ -23,7 +26,7 @@ from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.task2batch import Task2Batch
 from reef.train import PreparedStep, Trainer, TrainingBatch
 from reef.train.pipeline import TrainingPipeline
-from reef.train.types import TaskItem
+from reef.train.types import TaskItem, TrajectoryItem
 
 HEADERS = {"x-reef-scenario": "s", "Authorization": "Bearer import-test-token"}
 
@@ -391,6 +394,176 @@ def test_batch_admission_is_atomic_and_ordered(tmp_path):
             assert response.status == 413
             assert scenario.records.get("s", "large") is None
             assert not dispatcher.recipe.batches
+
+    try:
+        asyncio.run(run())
+    finally:
+        dispatcher.close()
+
+
+def atif(text):
+    return {
+        "schema_version": "ATIF-v1.4",
+        "session_id": text,
+        "agent": {"name": "fixture", "version": "1"},
+        "steps": [{"step_id": 1, "source": "user", "message": text}],
+        "extra": {"reef": {"reward": 1.0}},
+    }
+
+
+def write_task(root, name="demo", instruction="Print hello."):
+    task = root / name
+    (task / "environment").mkdir(parents=True)
+    (task / "tests").mkdir()
+    (task / "task.toml").write_text('version = "1.0"\n')
+    (task / "instruction.md").write_text(instruction)
+    (task / "environment" / "Dockerfile").write_text("FROM alpine\n")
+    (task / "tests" / "test.sh").write_text("exit 0\n")
+    return task
+
+
+def task_archive(*entries):
+    """A gzip tar of ``(name, path)`` pairs; a path of None adds an empty directory entry."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        for name, path in entries:
+            tar.add(path, arcname=name)
+    return buffer.getvalue()
+
+
+class UploadBatches(Task2Batch):
+    required_request_types = frozenset(RequestType) - {RequestType.TRAIN}
+
+    def make_batch(self, tasks, batch_id):
+        return TrainingBatch(batch_id, tasks)
+
+
+@dataclass(frozen=True, kw_only=True)
+class UploadRecipe(Recipe):
+    batches: list[TrainingBatch] = field(default_factory=list)
+
+    def build(self, scenario, records, *, algorithm_state=None, experiment_logger=None, task_storage=None):
+        return Trainer.build(
+            scenario,
+            records,
+            pipeline_factory=lambda context: TrainingPipeline(context, task2batch=UploadBatches(context, 2)),
+            candidate_backend=LearningBackend(scenario, self.batches),
+            algorithm_state=algorithm_state,
+            experiment_logger=experiment_logger,
+            training_mode=self.training_mode,
+            task_storage=task_storage,
+        )
+
+
+def test_uploaded_trajectories_and_tasks_train_as_items(tmp_path):
+    recipe = UploadRecipe()
+    dispatcher = dispatcher_for(tmp_path, recipe)
+    task = write_task(tmp_path / "source")
+    changed = write_task(tmp_path / "changed", instruction="Print goodbye.")
+    task_headers = {**HEADERS, "x-reef-agent-record-id": "task-1"}
+
+    async def run():
+        async with TestClient(TestServer(create_app(dispatcher, tokens="import-test-token"))) as client:
+            trajectory = imported("trajectory-1", atif("trajectory-1"), "trajectory")
+            response = await client.post("/reef/records/batch", headers=HEADERS, json={"records": [trajectory]})
+            assert response.status == 200, await response.text()
+            assert (await response.json())["records"][0]["request_type"] == "trajectory"
+            response = await client.post("/reef/tasks", headers=task_headers, data=task_archive(("demo", task)))
+            assert response.status == 200, await response.text()
+            receipt = await response.json()
+            assert receipt["request_type"] == "task"
+            assert receipt["task"]["name"] == "demo"
+            scenario = dispatcher.get_or_create_scenario("s")
+            await wait_for_training(scenario, 2)
+
+            # A retry is accepted after training and does not train again; changed content conflicts.
+            response = await client.post("/reef/records", headers=HEADERS, json=trajectory)
+            assert response.status == 200
+            response = await client.post("/reef/tasks", headers=task_headers, data=task_archive(("demo", task)))
+            assert response.status == 200
+            response = await client.post(
+                "/reef/records", headers=HEADERS, json=imported("trajectory-1", atif("other"), "trajectory")
+            )
+            assert response.status == 409
+            response = await client.post("/reef/tasks", headers=task_headers, data=task_archive(("demo", changed)))
+            assert response.status == 409
+            for invalid in (
+                imported("bad", {**atif("bad"), "steps": []}, "trajectory"),
+                imported("bad", {**atif("bad"), "schema_version": "v1"}, "trajectory"),
+                imported("bad", {"task": {"name": "demo", "digest": receipt["task"]["digest"]}}, "task"),
+            ):
+                response = await client.post("/reef/records", headers=HEADERS, json=invalid)
+                assert response.status == 400, await response.text()
+            assert scenario.records.get_for_audit("s", "bad") is None
+
+            (batch,) = recipe.batches
+            uploaded_trajectory, uploaded_task = batch.items
+            assert isinstance(uploaded_trajectory, TrajectoryItem)
+            assert uploaded_trajectory.trajectory == atif("trajectory-1")
+            assert uploaded_trajectory.source_agent_record_ids == ("trajectory-1",)
+            assert isinstance(uploaded_task, TaskItem)
+            assert uploaded_task.source_agent_record_ids == ("task-1",)
+            assert uploaded_task.metadata == {"task": receipt["task"]}
+            assert uploaded_task.task_path.name == "demo"
+            assert (uploaded_task.task_path / "instruction.md").read_text() == "Print hello."
+            assert len(scenario.store.history()) == 1
+
+    try:
+        asyncio.run(run())
+    finally:
+        dispatcher.close()
+
+
+def test_uploads_need_a_recipe_that_takes_them(tmp_path):
+    dispatcher = dispatcher_for(tmp_path, LearningRecipe())
+    task = write_task(tmp_path / "source")
+
+    async def run():
+        async with TestClient(TestServer(create_app(dispatcher, tokens="import-test-token"))) as client:
+            response = await client.post(
+                "/reef/records", headers=HEADERS, json=imported("trajectory-1", atif("trajectory-1"), "trajectory")
+            )
+            assert response.status == 400
+            assert "does not take trajectory uploads" in await response.text()
+            response = await client.post(
+                "/reef/tasks",
+                headers={**HEADERS, "x-reef-agent-record-id": "task-1"},
+                data=task_archive(("demo", task)),
+            )
+            assert response.status == 400
+            assert "does not take task uploads" in await response.text()
+            assert dispatcher.get_or_create_scenario("s").records.count("s") == 0
+
+    try:
+        asyncio.run(run())
+    finally:
+        dispatcher.close()
+
+
+def test_a_task_upload_must_be_one_harbor_task_directory(tmp_path):
+    dispatcher = dispatcher_for(tmp_path, UploadRecipe())
+    task = write_task(tmp_path / "source")
+    no_verifier = write_task(tmp_path / "no-verifier")
+    (no_verifier / "tests" / "test.sh").unlink()
+    (tmp_path / "link").symlink_to(task / "instruction.md")
+    headers = {**HEADERS, "x-reef-agent-record-id": "task-1"}
+
+    async def run():
+        async with TestClient(TestServer(create_app(dispatcher, tokens="import-test-token"))) as client:
+            response = await client.post("/reef/tasks", headers=HEADERS, data=task_archive(("demo", task)))
+            assert response.status == 400
+            assert "x-reef-agent-record-id" in await response.text()
+            for archive in (
+                b"not a gzip tar",
+                task_archive(("demo", task), ("other", task)),
+                task_archive(("demo", task), ("demo/link", tmp_path / "link")),
+                task_archive(("demo", task), ("demo/../escape", task / "instruction.md")),
+                task_archive(("demo", task / "instruction.md")),
+                task_archive(("demo", no_verifier)),
+            ):
+                response = await client.post("/reef/tasks", headers=headers, data=archive)
+                assert response.status == 400, await response.text()
+            assert dispatcher.get_or_create_scenario("s").records.count("s") == 0
 
     try:
         asyncio.run(run())

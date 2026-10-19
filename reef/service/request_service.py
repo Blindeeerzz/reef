@@ -10,11 +10,17 @@ scenario surface's request/response checks. No aiohttp types appear here;
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import tarfile
+import tempfile
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path, PurePosixPath
 from typing import Any
+
+from harbor.models.task.task import Task as HarborTaskLoader
 
 from reef.artifact.artifact import Artifact, ArtifactError, ArtifactNotFound, ArtifactRef
 from reef.core.errors import ReefError, UnknownScenario
@@ -33,7 +39,15 @@ from reef.scenario.scenario import Scenario
 from reef.service.install_script import TOKEN_PLACEHOLDER, render_install_script
 from reef.service.release_page import before_release_id, build_release_page, build_running_step_page, result_of
 from reef.service.request_page import STATE_WORDS, build_request_page, request_state, settled_step
-from reef.service.wire import SCENARIO_HEADER, ProposalPayload, ReportPayload, RequestHeaders, parse_request_headers
+from reef.service.wire import (
+    AGENT_RECORD_ID_HEADER,
+    SCENARIO_HEADER,
+    ProposalPayload,
+    ReportPayload,
+    RequestHeaders,
+    parse_request_headers,
+)
+from reef.storage.tasks import files_digest
 from reef.surface.base import InferenceHooks, InferenceLease, LeasingInferenceHooks, Surface
 from reef.surface.weights import RuntimeLoadMismatch, reported_runtime_load_id, reported_runtime_load_spans
 from reef.train.backend import CandidateBackend
@@ -42,6 +56,9 @@ from reef.train.cordis_backend.proposals import ProposalInbox
 from reef.train.trainer import Trainer
 
 logger = logging.getLogger(__name__)
+
+#: The most bytes that the files of one uploaded task can hold when they are unpacked.
+MAX_TASK_FILES_BYTES = 256 * 1024 * 1024
 
 
 def request_family(record: bool) -> str:
@@ -112,6 +129,38 @@ def normalize_request_payload(
         return dict(payload), ()
     report = ReportPayload.from_dict(payload)
     return report.to_dict(), report.references
+
+
+def unpack_task_archive(archive: bytes, root: Path) -> Path:
+    """Unpack a gzip tar of one Harbor task directory under ``root``, check it with Harbor, and return it.
+
+    The archive holds one top-level directory and only files and directories
+    below it. Raises ``ValueError`` for any other archive.
+    """
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+            members = tar.getmembers()
+            top_names = {PurePosixPath(member.name).parts[:1] for member in members}
+            if len(top_names) != 1 or () in top_names:
+                raise ValueError("the task archive must hold one task directory")
+            for member in members:
+                if not (member.isfile() or member.isdir()):
+                    raise ValueError(f"the task archive entry {member.name!r} is not a file or a directory")
+                if member.name.startswith("/") or ".." in PurePosixPath(member.name).parts:
+                    raise ValueError(f"the task archive entry {member.name!r} is not inside the task directory")
+            if sum(member.size for member in members) > MAX_TASK_FILES_BYTES:
+                raise ValueError(f"the task files are larger than {MAX_TASK_FILES_BYTES} bytes")
+            tar.extractall(root, members=members, filter="data")
+    except tarfile.TarError as exc:
+        raise ValueError(f"the task archive is not a valid gzip tar: {exc}") from exc
+    task_directory = root / next(iter(top_names))[0]
+    if not task_directory.is_dir():
+        raise ValueError("the task archive must hold one task directory")
+    try:
+        HarborTaskLoader(task_directory)
+    except (ValueError, OSError) as exc:
+        raise ValueError(f"{task_directory.name} is not a Harbor task: {exc}") from exc
+    return task_directory
 
 
 @dataclass(frozen=True)
@@ -231,8 +280,11 @@ class RequestService:
         if not isinstance(record_id, str) or not record_id.strip():
             raise ValueError("agent_record_id must be a non-empty string")
         request_type = body.get("request_type")
-        if not isinstance(request_type, str) or request_type not in ("inference", "report"):
-            raise ValueError("import request_type must be 'inference' or 'report'; use /reef/train for instructions")
+        if not isinstance(request_type, str) or request_type not in ("inference", "report", "trajectory"):
+            raise ValueError(
+                "import request_type must be 'inference', 'report' or 'trajectory'; "
+                "use /reef/train for instructions and /reef/tasks for tasks"
+            )
         payload = body.get("payload")
         if not isinstance(payload, Mapping):
             raise ValueError("record payload must be an object")
@@ -246,6 +298,29 @@ class RequestService:
             references=references,
         )
         return parsed, item
+
+    def upload_task(self, headers: Mapping[str, str], archive: bytes) -> AgentRecord:
+        """Save an uploaded Harbor task and its ``task`` record through ordinary admission.
+
+        ``archive`` is a gzip tar of one task directory. The record ID comes
+        from the ``x-reef-agent-record-id`` header, so a retry is safe.
+        """
+        parsed = parse_request_headers(headers, RequestType.TASK)
+        record_id = next(
+            (value.strip() for key, value in headers.items() if key.lower() == AGENT_RECORD_ID_HEADER), ""
+        )
+        if not record_id:
+            raise ValueError(f"missing or empty {AGENT_RECORD_ID_HEADER}")
+        with tempfile.TemporaryDirectory(prefix="reef-task-upload-") as staging:
+            task_directory = unpack_task_archive(archive, Path(staging))
+            item = AgentRecord.create(
+                scenario=parsed.scenario,
+                request_type=RequestType.TASK,
+                payload={"task": {"name": task_directory.name, "digest": files_digest(task_directory)}},
+                agent_record_id=record_id,
+                references=(),
+            )
+            return self._dispatcher.accept_task(item, task_directory, release_id=parsed.release_id)
 
     async def infer_with_data(
         self,

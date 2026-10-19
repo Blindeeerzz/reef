@@ -81,4 +81,4 @@ class TraceBatches(DistillBatches):
     """
 
     supported_training_modes = frozenset({"auto", "manual", "hybrid"})
-    required_request_types = frozenset(RequestType)
+    required_request_types = frozenset({RequestType.INFERENCE, RequestType.REPORT, RequestType.TRAIN})

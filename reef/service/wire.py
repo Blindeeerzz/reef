@@ -17,6 +17,8 @@ from reef.core.records_types import RequestType, parse_references
 
 SCENARIO_HEADER = "x-reef-scenario"
 RELEASE_ID_HEADER = "x-reef-release-id"
+#: The client's ID of an uploaded task record; the same name the service answers a receipt with.
+AGENT_RECORD_ID_HEADER = "x-reef-agent-record-id"
 #: Harness-stamped side-channel context (method-integration RFC §3.2). The
 #: service carries each pair through to the INFERENCE record so a processor
 #: can correlate on it, and reads one value itself: ``release``, the release

@@ -17,6 +17,8 @@ def test_core_package_exports_protocol_and_record_types() -> None:
         RequestType.INFERENCE,
         RequestType.REPORT,
         RequestType.TRAIN,
+        RequestType.TRAJECTORY,
+        RequestType.TASK,
     )
     assert AgentRecord.__module__ == "reef.core.records_types"
     assert RecordStore.__module__ == "reef.storage.records"

@@ -68,8 +68,10 @@ The pipeline
 trainer gives records to and takes batches from. Recipes do not subclass it.
 The trainer calls it on its own thread, under its lock; no call may block:
 
-- ``ingest(record)``: one record arrives. A TRAIN instruction stays in the
-  pipeline; every other record goes to the record stage. The pipeline gives
+- ``ingest(record)``: one record arrives. A TRAIN instruction and an upload
+  stay in the pipeline (see `Uploaded trajectories and tasks
+  <#uploaded-trajectories-and-tasks>`__). Inferences and reports go to the
+  record stage. The pipeline gives
   each set that the stage forms to the record-to-task stage and gives the
   result back to the record stage (``settle``): ``READY`` with tasks, or a
   skip, which ends the set's records. A record-to-task stage with slow work
@@ -80,7 +82,8 @@ The trainer calls it on its own thread, under its lock; no call may block:
   example a finished round), then the record stage's ``poll`` (for example
   finished judgments, or a round that is due).
 - ``build_batch()``: reserve ``batch_size`` sets from the record stage, in
-  its selection order, and give their tasks to ``make_batch``. The trainer
+  its selection order, and give their tasks to ``make_batch``. Uploads
+  come first and each one counts as one set. The trainer
   validates the batch against ``output_schema``. The same batch stays
   reserved until it is acknowledged or released.
 - ``acknowledge(batch_id, trained=True)``: the training step consumed that
@@ -108,7 +111,7 @@ report shaped for another component instead of failing it. The pipeline
 passes such changes to the record stage as its updated ``PipelineContext``
 (``context_changed``).
 
-``status()`` reports ``ready_units`` (the held sets) and ``batch_size``. A
+``status()`` reports ``ready_units`` (the held sets and uploads) and ``batch_size``. A
 stage adds an entry only when a terminal outcome cannot become a batch and an
 external runner must stop waiting (TTTD reports a complete mixed-artifact
 step as an invariant failure).
@@ -126,6 +129,36 @@ stage, the same way as an immediate result. Each set settles one time. A
 result from ``take_finished`` must not be pending, and its set must be
 pending; otherwise ``ready()`` raises ``ValueError``. The stage's ``close``
 stops its worker.
+
+Uploaded trajectories and tasks
+-------------------------------
+
+A client can upload training items directly. ``POST /reef/records`` takes an
+ATIF document as a ``trajectory`` record, and ``POST /reef/tasks`` takes a
+Harbor task directory as a ``task`` record (see the `HTTP API
+<../reference/http-api.rst#upload-trajectories-and-harbor-tasks>`__).
+
+A recipe takes uploads when its ``Task2Batch`` lists ``RequestType.TRAJECTORY``
+or ``RequestType.TASK`` in ``required_request_types``. Admission refuses an
+upload with 400 when no trainer of the scenario lists its type.
+
+An upload does not go to the record stage or the record-to-task stage:
+
+- A ``trajectory`` record becomes a ``TrajectoryItem`` of the uploaded document.
+- A ``task`` record becomes a ``TaskItem``. Its ``task_path`` is the task
+  directory in the scenario's task file store, and its ``metadata["task"]``
+  holds the task ``name`` and ``digest``.
+- The item's ``source_agent_record_ids`` holds the ID of the upload record.
+
+A batch takes uploads first, oldest first, and each upload counts as one set.
+In ``manual`` mode an instruction's batch takes no uploads, as it takes no
+sets. In a scenario of several components, each trainer that lists the type
+trains on the upload. Acknowledgement consumes the uploads with the sets, so
+the commit lists their record IDs and recovery does not ingest them again.
+
+The training backend must accept the item kind. An uploaded trajectory has no
+captured rollout tensors. A ``TaskItem`` needs a ``task2batch`` stage or a
+backend that runs tasks.
 
 The record-to-record stage
 --------------------------
@@ -431,6 +464,8 @@ A record's path to a batch
 
    computed record -> record2record: observe/track -> dispatch -> async judge -> judged set
        -> record2task: make_sample -> TrainDataItem -> task2batch: make_batch -> batch -> acknowledge
+
+   trajectory or task upload -> TrainDataItem -> task2batch: make_batch -> batch -> acknowledge
 
 Where the stages live
 ---------------------

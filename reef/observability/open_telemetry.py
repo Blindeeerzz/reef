@@ -131,9 +131,11 @@ class OpenTelemetryRecordObserver(RecordObserver):
                     Link(record_span_context(item.scenario, reference), {"reef.agent_record_id": reference})
                     for reference in item.references[1:]
                 ]
-        else:
+        elif item.request_type is RequestType.TRAIN:
             name = "training request"
             attributes.update(self._training_request_attributes(item.payload))
+        else:
+            name = f"uploaded {item.request_type.value}"
         self._emit(
             name,
             planned=record_span_context(item.scenario, item.agent_record_id),

@@ -182,6 +182,19 @@ def test_split_settings_are_fixed_and_names_are_separate(session):
     assert [task.generated.task.name for task in session.tasks.open("alpha", split=SPLIT).tasks()] == ["one"]
 
 
+def test_uploaded_task_files_are_kept_by_digest_per_scenario(storage, tmp_path):
+    source = tmp_path / "upload" / "demo"
+    (source / "tests").mkdir(parents=True)
+    (source / "tests" / "test.sh").write_text("exit 0\n")
+    with closing(storage.open("math")) as session, closing(storage.open("other")) as other:
+        digest = session.tasks.put_files(source)
+        assert digest == files_digest(source) == session.tasks.put_files(source)
+        stored = session.tasks.files_path(digest)
+        assert stored.name == "demo" and (stored / "tests" / "test.sh").read_text() == "exit 0\n"
+        with pytest.raises(TaskStoreError, match="no files"):
+            other.tasks.files_path(digest)
+
+
 def test_a_closed_session_opens_no_task_store(storage):
     session = storage.open("math")
     session.close()

@@ -50,7 +50,8 @@ class Task2Batch(ABC, Plugin):
     #: The training modes that the recipe's batches support. ``manual`` and
     #: ``hybrid`` batch on a training instruction.
     supported_training_modes: frozenset[str] = frozenset({"auto"})
-    #: The kinds of record that the trainer gives the pipeline.
+    #: The kinds of record that the trainer gives the pipeline. A recipe lists ``RequestType.TRAJECTORY`` or
+    #: ``RequestType.TASK`` to take uploads; admission refuses an upload that no trainer of the scenario takes.
     required_request_types: frozenset[RequestType] = frozenset({RequestType.INFERENCE, RequestType.REPORT})
 
     def __init__(self, context: PipelineContext, batch_size: int) -> None:

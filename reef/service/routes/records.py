@@ -44,6 +44,18 @@ def register_record_routes(app: web.Application, *, request_service: RequestServ
             }
         )
 
+    async def upload_task(request: web.Request) -> web.Response:
+        archive = await request.read()
+        item = await asyncio.to_thread(request_service.upload_task, request.headers, archive)
+        return web.json_response(
+            {
+                "agent_record_id": item.agent_record_id,
+                "scenario": item.scenario,
+                "request_type": item.request_type.value,
+                "task": item.payload["task"],
+            }
+        )
+
     def accept_typed(request_type: RequestType):
         async def accept(request: web.Request) -> web.Response:
             payload = await read_object(request)
@@ -77,6 +89,7 @@ def register_record_routes(app: web.Application, *, request_service: RequestServ
 
     app.router.add_post("/reef/records", import_record)
     app.router.add_post("/reef/records/batch", import_records)
+    app.router.add_post("/reef/tasks", upload_task)
     app.router.add_post("/reef/report", accept_typed(RequestType.REPORT))
     app.router.add_post("/reef/train", accept_typed(RequestType.TRAIN))
 

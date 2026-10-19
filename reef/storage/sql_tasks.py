@@ -119,6 +119,12 @@ class SQLTaskStorage(TaskStorage):
     def open(self, name: str, *, split: SplitSettings) -> SQLTaskStore:
         return SQLTaskStore(self, name, split=split)
 
+    def put_files(self, source: Path) -> str:
+        return self.files.put(self.scenario, source)
+
+    def files_path(self, digest: str) -> Path:
+        return self.files.path(self.scenario, digest)
+
 
 class SQLTaskStore(TaskStore):
     """One named task store. Each database operation is one transaction of the record database."""

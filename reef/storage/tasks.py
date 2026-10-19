@@ -14,6 +14,9 @@ changes nothing. A deployment selects the file store in
 ``storage.task_file_backend``: ``local`` selects :class:`LocalTaskFileStore`,
 and a plugin reference selects another subclass of :class:`TaskFileStore`.
 
+A client can also upload a Harbor task. The scenario's file store keeps its
+files in the same way, and a ``task`` record names their digest.
+
 A task store belongs to a scenario session. Archiving the scenario retires its
 task stores and task files with its records and commits. Record retention
 does not delete tasks.
@@ -201,7 +204,11 @@ class TaskStore(ABC):
 
 
 class TaskStorage(ABC):
-    """Opens the task stores of one scenario. Each store has a name and its own split settings."""
+    """Opens the task stores of one scenario, and keeps the files of the tasks uploaded to it.
+
+    Each task store has a name and its own split settings. An uploaded task
+    is in no task store: a ``task`` record names the digest of its files.
+    """
 
     @abstractmethod
     def open(self, name: str, *, split: SplitSettings) -> TaskStore:
@@ -210,6 +217,14 @@ class TaskStorage(ABC):
         The first open saves ``split``. Raises ``TaskStoreError`` if a later
         open gives different split settings.
         """
+
+    @abstractmethod
+    def put_files(self, source: Path) -> str:
+        """Save a copy of the uploaded task directory ``source`` in the scenario's file store; return its digest."""
+
+    @abstractmethod
+    def files_path(self, digest: str) -> Path:
+        """Return the local task directory of ``digest``. Raises ``TaskStoreError`` if the store does not hold it."""
 
 
 class TaskFileStore(Plugin, ABC):

@@ -10,7 +10,7 @@ import pytest
 from tests.support._threshold_processor import threshold_pipeline
 from tests.train.test_record_stage_batch_parity import CountingBackend, inference, instruction, report
 
-from reef.core import AgentRecord
+from reef.core import AgentRecord, RequestType
 from reef.record2record import (
     GroupDecision,
     InferenceRecord2Record,
@@ -24,6 +24,7 @@ from reef.record2record import (
 )
 from reef.record2task import Record2Task, ReportTasks, SkippedReport, TaskResult
 from reef.storage.sqlite import SQLiteRecordStore
+from reef.storage.tasks import SplitSettings, TaskStorage, TaskStore
 from reef.task2batch import Task2Batch
 from reef.train import PipelineContext, Trainer
 from reef.train.pipeline import TrainingPipeline
@@ -381,3 +382,83 @@ def test_the_trainer_reserves_a_batch_when_a_pending_set_finishes() -> None:
     processor.pending_tasks.finish("i1", TaskResult.ready((TaskItem(Path("t1")),)))
     batch = trainer.reserve_training_batch()
     assert batch is not None and [str(item.task_path) for item in batch.items] == ["t1"]
+
+
+class FilesOnlyTaskStorage(TaskStorage):
+    """Names the directory of an uploaded task after its digest; it opens no task store."""
+
+    def open(self, name: str, *, split: SplitSettings) -> TaskStore:
+        raise NotImplementedError
+
+    def put_files(self, source: Path) -> str:
+        raise NotImplementedError
+
+    def files_path(self, digest: str) -> Path:
+        return Path("/task-files") / digest
+
+
+class InferenceTasks(Record2Task):
+    """Each inference set becomes one task named after its record."""
+
+    def make_tasks(self, record_set: RecordSet) -> TaskResult:
+        record_ids = record_set.record_ids()
+        return TaskResult.ready((TaskItem(Path(record_ids[0]), source_agent_record_ids=record_ids),))
+
+
+class UploadBatches(PairBatches):
+    required_request_types = frozenset(RequestType) - {RequestType.TRAIN}
+
+
+def upload(record_id: str, request_type: RequestType) -> AgentRecord:
+    payload: dict[str, object] = (
+        {"schema_version": "ATIF-v1.4", "agent": {"name": "fixture"}, "steps": [{"step_id": 1}]}
+        if request_type is RequestType.TRAJECTORY
+        else {"task": {"name": "demo", "digest": f"digest-{record_id}"}}
+    )
+    return AgentRecord.create(scenario="s", request_type=request_type, agent_record_id=record_id, payload=payload)
+
+
+@pytest.mark.unit
+def test_uploads_skip_the_first_stages_and_go_first_in_a_batch() -> None:
+    context = PipelineContext("s", task_storage=FilesOnlyTaskStorage())
+    processor = TrainingPipeline(
+        context,
+        record2record=InferenceRecord2Record(),
+        record2task=InferenceTasks(),
+        task2batch=UploadBatches(context, 2),
+    )
+    processor.ingest(inference("i1"))
+    assert not processor.ready()
+    processor.ingest(upload("t1", RequestType.TRAJECTORY))
+    processor.ingest(upload("k1", RequestType.TASK))
+    assert processor.status()["ready_units"] == 3
+
+    batch = processor.build_batch()
+    assert [item.source_agent_record_ids for item in batch.items] == [("t1",), ("k1",)]
+    assert batch.items[1] == TaskItem(
+        Path("/task-files/digest-k1"),
+        source_agent_record_ids=("k1",),
+        metadata={"task": {"name": "demo", "digest": "digest-k1"}},
+    )
+    processor.release_batch(batch.batch_id)
+    batch = processor.build_batch()
+    assert [item.source_agent_record_ids for item in batch.items] == [("t1",), ("k1",)]
+    assert processor.acknowledge(batch.batch_id) == {"t1", "k1"}
+
+    # A replay of a consumed upload does not queue it again before the commit releases it.
+    processor.ingest(upload("t1", RequestType.TRAJECTORY))
+    processor.ingest(upload("t2", RequestType.TRAJECTORY))
+    batch = processor.build_batch()
+    assert [item.source_agent_record_ids for item in batch.items] == [("t2",), ("i1",)]
+    assert processor.acknowledge(batch.batch_id) == {"t2", "i1"}
+    assert {"t1", "k1", "t2"} <= processor.releasable_record_ids()
+    processor.release_records(frozenset({"t1", "k1", "t2"}))
+    assert not processor.consumed_uploads
+
+
+@pytest.mark.unit
+def test_a_task_upload_needs_the_scenarios_task_storage() -> None:
+    context = PipelineContext("s")
+    processor = TrainingPipeline(context, task2batch=UploadBatches(context, 1))
+    with pytest.raises(ValueError, match="needs the task storage"):
+        processor.ingest(upload("k1", RequestType.TASK))

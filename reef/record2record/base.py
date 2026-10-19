@@ -235,7 +235,10 @@ class PassThroughRecord2Record(Record2Record):
         raise TypeError(f"{type(self).__name__} ends no set: pair it with NoTasks, or hold sets in another stage")
 
     def consume(self, record_sets: tuple[RecordSet, ...], *, trained: bool) -> frozenset[str]:
-        raise TypeError(f"{type(self).__name__} holds no set, so no batch can consume one")
+        # A batch of uploads alone consumes no set.
+        if record_sets:
+            raise TypeError(f"{type(self).__name__} holds no set, so no batch can consume one")
+        return frozenset()
 
 
 class InferenceRecord2Record(Record2Record):
