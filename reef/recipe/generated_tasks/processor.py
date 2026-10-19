@@ -5,8 +5,9 @@ episode of the training arm names its task under ``metadata.task``, the episodes
 group, and a group is complete at ``plays_per_task`` episodes. A training play that reports nothing, such
 as a failed trial, never joins its group. So when a task's plays end, its group is complete at the number
 of plays that reported, and a group of one is discarded. ``GeneratedTaskBatches`` batches
-``tasks_per_step`` complete groups, in arrival order. ``GeneratedTaskTasks`` runs the rounds with the
-deployment's :class:`~reef.core.tasks.TaskGenerator`.
+``tasks_per_step`` complete groups, in arrival order. When a round is due, the record stage forms a round
+set. ``GeneratedTaskTasks`` runs it with the deployment's :class:`~reef.core.tasks.TaskGenerator` and
+returns pending until the round finishes.
 
 One round is one job on a private worker, off the trainer's thread:
 
@@ -48,8 +49,16 @@ from reef.core.tasks.metadata import TRAINING_ARM, reported_arm, reported_task_n
 from reef.core.tasks.split import TaskSplit, TaskSplitConflict, extend_split_by_source
 from reef.harness.client.tasks import TaskPlay
 from reef.pipeline_context import PipelineContext
-from reef.record2record import GroupDecision, Record2Record, ReportContext, RoundGrouping, RoundRecord2Record
-from reef.record2task import Record2Task, ReportTasks
+from reef.record2record import (
+    GroupDecision,
+    Record2Record,
+    RecordSet,
+    ReportContext,
+    RoundGrouping,
+    RoundRecord2Record,
+    RoundSet,
+)
+from reef.record2task import Record2Task, ReportTasks, TaskResult
 from reef.record2task.assembly import SampleAssembly, SampleAssemblySettings
 from reef.record2task.generator.client import DuplicateTask, Generator, HttpGenerator, TaskNameConflict
 from reef.storage.tasks import SplitName, SplitSettings, TaskConflict, TaskStore
@@ -314,7 +323,7 @@ class TaskBatchSettings(PluginSettings):
 
 
 class GeneratedTaskRecord2Record(RoundRecord2Record):
-    """The generated-task record stage: one group per task, and a round request every ``batches_per_round`` batches.
+    """The generated-task record stage: one group per task, and a round set every ``batches_per_round`` batches.
 
     Config: ``plays_per_task`` (the training plays of each task, at least 2; a
     group is complete at this count, or at the plays that reported), ``batches_per_round``,
@@ -348,14 +357,21 @@ class GeneratedTaskRecord2Record(RoundRecord2Record):
 class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
     """The record-to-task stage of generated tasks: played episodes as tasks, and the rounds.
 
-    Each time the pipeline looks for a batch, the stage starts a round when
-    the record stage says one is due, on the worker. The round's source
-    sessions go to the generator as the request's ``source_records``. The
-    round generates tasks, validates them, has the generator service play
-    them, and sends the results to the generator; the plays come back as
-    records. This stage owns the worker, the round numbers, and the round
-    summaries under ``state_dir/<scenario>``; a restart reads them to continue
-    with the next round. The tasks and their splits go in the task store
+    The record stage forms a ``RoundSet`` when a round is due. ``make_tasks``
+    submits the round to the worker and returns ``TaskResult.pending()``. The
+    round's source sessions go to the generator as the request's
+    ``source_records``. The round generates tasks, validates them, has the
+    generator service play them, and sends the results to the generator. The
+    plays come back as records and train as reports.
+
+    ``take_finished`` hands back each finished round. A round that played a
+    task, or whose job failed, is ``READY`` with no tasks; the next round waits
+    for batches. A round that played no task is ``SKIPPED``; the next round
+    starts at once.
+
+    This stage owns the worker and the round summaries under
+    ``state_dir/<scenario>``. A restart reads the summaries to continue with
+    the next round. The tasks and their splits go in the task store
     ``generated-tasks`` of the scenario session.
     """
 
@@ -369,7 +385,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         task_player: Generator | None = None,
         worker: BackgroundJobWorker | None = None,
     ) -> None:
-        #: The record stage that requests the rounds; ``poll`` tells it when each one finished.
+        #: The record stage that forms the round sets and closes the task groups.
         self.round_stage = round_stage
         self.assembly = episode_assembly(settings.scaffold_tolerance)
         self.scenario = context.scenario
@@ -411,11 +427,12 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         if self.state_dir is not None:
             for task_name, count in recorded_reported_plays(self.state_dir).items():
                 round_stage.plays_reported(task_name, count)
-        # The worker puts each task's count here as its plays end; the trainer's thread takes them in poll.
+        # The worker puts each task's count here as its plays end; the trainer's thread takes them in take_finished.
         self.reported_play_counts: queue.SimpleQueue[tuple[str, int]] = queue.SimpleQueue()
-        self.next_round = recorded[-1] + 1 if recorded else 0
+        round_stage.resume_rounds(next_round=recorded[-1] + 1 if recorded else 0, round_limit=self.rounds)
         self.completed_rounds = len(recorded)
-        self.round_in_flight: int | None = None
+        #: The round set that runs on the worker. One round runs at a time.
+        self.round_in_flight: RoundSet | None = None
         self.tasks_generated = 0
         self.tasks_played = 0
         self.last_error = ""
@@ -455,42 +472,40 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         sample = self.assembly.build(context, context.require_score())
         return replace(sample, group_id=task_name)
 
-    def poll(self) -> None:
-        """Absorb the finished plays and rounds, then start the next round when the record stage says one is due."""
-        while not self.reported_play_counts.empty():
-            self.round_stage.plays_reported(*self.reported_play_counts.get_nowait())
-        self.absorb_finished_rounds()
-        if self.round_stage.round_due():
-            self.start_round()
+    def make_tasks(self, record_set: RecordSet) -> TaskResult:
+        """Submit a round set to the worker and return pending; make a sample from any other set.
 
-    def start_round(self) -> None:
-        """Start the next round on the worker with the waiting source sessions, or stop the rounds when none can run."""
-        if self.worker is None or self.next_round >= self.rounds:
-            self.round_stage.stop_rounds()
-            return
-        sources = self.round_stage.start_round()
+        A worker that refuses the round is closed or broken, so no round runs again.
+        """
+        if not isinstance(record_set, RoundSet):
+            return super().make_tasks(record_set)
         job = RoundJob(
-            receipt=f"round-{self.next_round:05d}",
-            round_number=self.next_round,
-            source_records=session_records(sources),
+            receipt=f"round-{record_set.round_number:05d}",
+            round_number=record_set.round_number,
+            source_records=session_records(record_set.sources),
         )
-        if not self.worker.submit(job):
+        if self.worker is None or not self.worker.submit(job):
             self.last_error = "the round worker is closed or broken; no further round runs"
             self.round_stage.stop_rounds()
-            return
-        self.round_in_flight = self.next_round
-        self.next_round += 1
+            return TaskResult.skipped()
+        self.round_in_flight = record_set
+        return TaskResult.pending()
 
-    def absorb_finished_rounds(self) -> None:
-        """Take the rounds that the worker finished, and tell the record stage whether each one played no task."""
-        if self.worker is None:
-            return
+    def take_finished(self) -> tuple[tuple[Hashable, TaskResult], ...]:
+        """Close the task groups whose plays ended, and hand back each finished round."""
+        while not self.reported_play_counts.empty():
+            self.round_stage.plays_reported(*self.reported_play_counts.get_nowait())
+        round_set = self.round_in_flight
+        if self.worker is None or round_set is None:
+            return ()
+        finished: list[tuple[Hashable, TaskResult]] = []
         for outcome in self.worker.poll():
             self.round_in_flight = None
             if isinstance(outcome, Failed):
                 self.last_error = f"{outcome.receipt} did not finish; see the service log"
                 logger.error("generated-task %s failed on scenario %r", outcome.receipt, self.scenario)
-                self.round_stage.round_finished(played_none=False)
+                # READY, not SKIPPED: a failing worker must not start round after round.
+                finished.append((round_set.set_id, TaskResult.ready(())))
                 continue
             if not isinstance(outcome, RoundOutcome):
                 raise TypeError("the round worker must hand back a RoundOutcome")
@@ -506,10 +521,8 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
                 played,
                 len(outcome.results),
             )
-            self.round_stage.round_finished(played_none=played == 0)
-
-    def background_jobs_running(self) -> bool:
-        return self.round_in_flight is not None
+            finished.append((round_set.set_id, TaskResult.ready(()) if played else TaskResult.skipped()))
+        return tuple(finished)
 
     def close(self) -> None:
         if self.worker is not None:
@@ -523,8 +536,8 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             "task_store": task_counts(self.task_store) if self.task_store is not None else {},
             "task_generation": {
                 "generator": None if self.task_generator is None else type(self.task_generator).__name__,
-                "in_flight": self.round_in_flight,
-                "next": self.next_round,
+                "in_flight": None if self.round_in_flight is None else self.round_in_flight.round_number,
+                "next": self.round_stage.next_round,
                 "completed": self.completed_rounds,
                 "of": self.rounds,
                 "tasks_generated": self.tasks_generated,
