@@ -65,6 +65,10 @@ training:
     # a 48 GB Mac. Longer rows are left out of training. Lower this value on a
     # Mac with less memory.
     max_train_tokens: 10240
+    # Rows a step needs once long rows are left out. A step on one row moves
+    # the adapter a full step toward that row alone: run 5's step 6 trained on
+    # 1 of 8 rows and dropped reply_rate from 1.0 to 0.125.
+    min_train_rows: 4
     # The prompt and completion tokens of one request, as the reference's
     # rollout-max-context-len. Generation needs much less memory than
     # training: a 60,000-token prompt peaked at 12.2 GiB. Hermes conversations
@@ -172,3 +176,7 @@ evaluation:
     reply_probe_file: recipes/openclawrl/examples/openclawrl/reply_probe.json
     reply_max_tokens: 512
     reply_margin: 0.25
+    # The best selected reply_rate lives in the Reef process, so after a
+    # restart the first candidate sets it. The floor holds in any case: run 5
+    # selected a 0.125 candidate right after a restart.
+    min_reply_rate: 0.75

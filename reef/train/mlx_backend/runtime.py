@@ -37,7 +37,13 @@ class MLXRuntime(TrainingRuntime):
     """Train the serving runtime's adapter in this process, one optimizer step per reserved batch."""
 
     def __init__(
-        self, serving: MLXServingRuntime, *, checkpoint_dir: str, loss_options: LossOptions, max_train_tokens: int = 0
+        self,
+        serving: MLXServingRuntime,
+        *,
+        checkpoint_dir: str,
+        loss_options: LossOptions,
+        max_train_tokens: int = 0,
+        min_train_rows: int = 1,
     ) -> None:
         super().__init__()
         self._serving = serving
@@ -46,6 +52,7 @@ class MLXRuntime(TrainingRuntime):
         self._checkpoint_root.mkdir(parents=True, exist_ok=True)
         self._loss_options = loss_options
         self._max_train_tokens = max_train_tokens
+        self._min_train_rows = min_train_rows
 
     @property
     def serving(self) -> MLXServingRuntime:
@@ -105,9 +112,10 @@ class MLXRuntime(TrainingRuntime):
             if not self._max_train_tokens or len(sample.training.get("tokens", ())) <= self._max_train_tokens
         ]
         # The backward pass of one row grows faster than its length, so a long row is left out of the step.
-        # A batch with no row left is a state-only skip, so the scenario moves past it.
+        # A batch with too few rows left is a state-only skip, so the scenario moves past it: the optimizer
+        # takes a full-size step whatever the row count, and one row then sets its whole direction.
         metrics = {**signal.metrics, "rows_over_max_train_tokens": len(samples) - len(kept)}
-        if not kept:
+        if len(kept) < self._min_train_rows:
             return PreparedTrainingStep("skip", signal.next_algorithm_state, metrics)
         return PreparedTrainingStep(
             "train",
@@ -231,6 +239,7 @@ def mlx_runtimes(settings: MLXConfig, engine: ModelEngine) -> tuple[MLXRuntime, 
         checkpoint_dir=settings.checkpoint_dir,
         loss_options=LossOptions(settings.kl_coef, settings.loss_options),
         max_train_tokens=settings.max_train_tokens,
+        min_train_rows=settings.min_train_rows,
     )
     return training, serving
 

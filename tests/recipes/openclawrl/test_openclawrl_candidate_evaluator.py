@@ -168,6 +168,19 @@ def test_the_reply_probe_counts_text_answers_and_refuses_a_policy_that_stops_ans
     assert not run([TEXT_ANSWER, TOOL_CALL])[0].selected
 
 
+def test_min_reply_rate_refuses_the_first_candidate_too(tmp_path: Path) -> None:
+    training, engine = probe_runtime(tmp_path)
+    plugin = build_plugin(training, reply_probe_file=str(write_reply_probe(tmp_path)), min_reply_rate=0.75)
+    engine.replies = [CLEAN] * 6 + [TEXT_ANSWER, TOOL_CALL]
+    candidate = UpdateCandidate(candidate_id="c")
+
+    decision = plugin.decide(candidate, plugin.evaluate(candidate))
+
+    # Without a best selected rate (a fresh process), the floor still holds.
+    assert not decision.selected
+    assert decision.reason.startswith("reply_rate 0.5 is below min_reply_rate 0.75")
+
+
 def test_from_config_refuses_a_runtime_that_cannot_probe_a_candidate() -> None:
     with pytest.raises(PluginConfigError, match="mlx training runtime"):
         OpenClawRLCandidateEvaluation.from_config(
@@ -184,6 +197,7 @@ def test_from_config_refuses_a_runtime_that_cannot_probe_a_candidate() -> None:
         ({"regression_margin": -0.1}, "regression_margin must be non-negative"),
         ({"reply_max_tokens": 0}, "reply_max_tokens must be positive"),
         ({"reply_margin": -0.1}, "reply_margin must be non-negative"),
+        ({"min_reply_rate": 1.5}, "min_reply_rate must be between 0 and 1"),
         ({"reply_probe_file": "/nonexistent/reply_probe.json"}, "cannot read reply_probe_file"),
     ],
 )

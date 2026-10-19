@@ -103,6 +103,7 @@ All keys are under ``training.options``. Only ``checkpoint_dir`` is required.
    training.options.max_tokens | 256 | response token limit when a request sets none
    training.options.max_context_tokens | 0 | prompt and response token limit of one request; a request's response limit is lowered to fit, and a prompt that reaches the limit fails with HTTP 400; 0 sets no limit
    training.options.max_train_tokens | 0 | token limit of one training row; a longer row is left out of its step, the step reports the count as ``rows_over_max_train_tokens``, and a batch whose rows are all longer is skipped; 0 sets no limit
+   training.options.min_train_rows | 1 | rows a step needs once ``max_train_tokens`` has left long rows out; a batch with fewer is skipped, because the optimizer takes a full-size step toward the rows that remain
    training.options.temperature | 1.0 | sampling temperature when a request sets none; must be positive
    training.options.top_p | 1.0 | top-p for every request
    training.options.seed | 0 | MLX random seed

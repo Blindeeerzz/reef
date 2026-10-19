@@ -42,6 +42,7 @@ answers with text and no tool call. ``decide`` refuses a candidate whose
         reply_probe_file: recipes/openclawrl/examples/openclawrl/reply_probe.json
         reply_max_tokens: 512    # generation budget for one reply-probe answer
         reply_margin: 0.25       # allowed drop below the best selected reply_rate
+        min_reply_rate: 0.75     # lowest reply_rate a candidate may have, also right after a restart
 
 The file is JSON: ``{"tools": [...], "conversations": [[message, ...], ...]}``,
 with the tools and messages in the format that the harness sends.
@@ -139,6 +140,9 @@ class OpenClawRLCandidateEvaluationSettings(PluginSettings):
     reply_margin: float = config_option(
         0.25, help="The allowed drop of reply_rate below the best selected reply_rate."
     )
+    min_reply_rate: float = config_option(
+        0.0, help="The lowest reply_rate a selected candidate may have, whatever the best selected one was."
+    )
 
     def __post_init__(self) -> None:
         if not 1 <= self.probe_size <= len(PROBE_PROBLEMS):
@@ -151,6 +155,8 @@ class OpenClawRLCandidateEvaluationSettings(PluginSettings):
             raise ValueError(f"reply_max_tokens must be positive, got {self.reply_max_tokens}")
         if self.reply_margin < 0:
             raise ValueError(f"reply_margin must be non-negative, got {self.reply_margin}")
+        if not 0 <= self.min_reply_rate <= 1:
+            raise ValueError(f"min_reply_rate must be between 0 and 1, got {self.min_reply_rate}")
 
 
 def load_reply_probe(path: pathlib.Path) -> tuple[list[dict[str, Any]], list[list[dict[str, Any]]]]:
@@ -193,6 +199,7 @@ class OpenClawRLCandidateEvaluation(RegressionCheckMixin, ConfiguredEvaluationPl
         ]
         self.reply_max_tokens = settings.reply_max_tokens
         self.reply_margin = settings.reply_margin
+        self.min_reply_rate = settings.min_reply_rate
         #: The best reply_rate of a selected candidate; ``None`` until the first.
         self.best_reply_rate: float | None = None
         self.reply_prompts: list[list[int]] = []
@@ -244,6 +251,18 @@ class OpenClawRLCandidateEvaluation(RegressionCheckMixin, ConfiguredEvaluationPl
         if not self.reply_prompts:
             return super().decide(candidate, evaluation)
         reply_rate = float(evaluation.metrics[REPLY_RATE_METRIC])
+        # The best selected rate lives in this process; the floor also holds after a restart.
+        if reply_rate < self.min_reply_rate:
+            return SelectionDecision(
+                selected=False,
+                policy="regression-check",
+                reason=(
+                    f"{REPLY_RATE_METRIC} {reply_rate:g} is below min_reply_rate {self.min_reply_rate:g}; "
+                    "holding the last selected weights"
+                ),
+                evaluation=evaluation,
+                metrics={"metric": REPLY_RATE_METRIC, "value": reply_rate, "floor": self.min_reply_rate},
+            )
         best = self.best_reply_rate
         if best is not None and reply_rate < best - self.reply_margin:
             return SelectionDecision(
