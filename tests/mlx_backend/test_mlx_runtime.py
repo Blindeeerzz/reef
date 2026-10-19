@@ -69,7 +69,7 @@ def train(runtime: MLXRuntime, scenario_step: int = 0):
     return runtime.train_candidate(prepared.payload)
 
 
-def test_rows_longer_than_max_train_tokens_are_left_out_of_the_step(tmp_path: Path) -> None:
+def test_rows_longer_than_max_train_tokens_are_left_out_and_an_all_long_batch_is_skipped(tmp_path: Path) -> None:
     engine = FakeMLXEngine()
     runtime = build(tmp_path, engine, max_train_tokens=5)
     long_sample = policy_trajectory("rec-long", (1, 2, 3, 4, 5, 6), (1, 1), (-0.5, -0.25), 1.0)
@@ -77,18 +77,18 @@ def test_rows_longer_than_max_train_tokens_are_left_out_of_the_step(tmp_path: Pa
         TrainingBatch("batch-1", (sample(1.0), long_sample)), TrainingMethod("mlx-test-tttd"), {}, ONE_STEP, 0
     )
 
-    candidate = runtime.train_candidate(prepared.payload)
+    runtime.train_candidate(prepared.payload)
 
     [call] = engine.trained
     assert [s.training["tokens"] for s in call.samples] == [[1, 2, 3, 4]]
     assert call.advantages == (1.0,)
-    assert candidate.training_metrics["rows_over_max_train_tokens"] == 1
+    assert prepared.metrics["rows_over_max_train_tokens"] == 1
 
     only_long = runtime.prepare_training_step(
         TrainingBatch("batch-2", (long_sample, long_sample)), TrainingMethod("mlx-test-tttd"), {}, ONE_STEP, 1
     )
-    with pytest.raises(RuntimeContractError, match="max_train_tokens"):
-        runtime.train_candidate(only_long.payload)
+    assert only_long.action == "skip"
+    assert only_long.metrics["rows_over_max_train_tokens"] == 2
 
 
 def test_the_first_request_is_served_under_a_runtime_load_id(tmp_path: Path) -> None:
