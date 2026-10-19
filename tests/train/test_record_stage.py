@@ -113,22 +113,13 @@ class PendingTasks(Record2Task):
         return finished
 
 
-class ClosingBatches(RecordingBatches):
-    def __init__(self, context: PipelineContext) -> None:
-        super().__init__(context)
-        self.closed = False
-
-    def close(self) -> None:
-        self.closed = True
-
-
 class PendingPipeline(TrainingPipeline):
     """Holds each inference record as one set whose tasks ``PendingTasks`` makes later."""
 
     def __init__(self, context: PipelineContext | None = None) -> None:
         context = PipelineContext("s") if context is None else context
         self.pending_tasks = PendingTasks()
-        self.batches = ClosingBatches(context)
+        self.batches = RecordingBatches(context)
         super().__init__(
             context, record2record=InferenceRecord2Record(), record2task=self.pending_tasks, task2batch=self.batches
         )
@@ -358,16 +349,15 @@ def test_a_pending_set_holds_its_records_and_settles_when_its_result_comes_back(
 
 
 @pytest.mark.unit
-def test_a_duplicate_or_unknown_result_settles_nothing(caplog: pytest.LogCaptureFixture) -> None:
+def test_a_second_result_for_a_settled_set_is_refused() -> None:
     processor = PendingPipeline()
     processor.ingest(inference("i1"))
     result = TaskResult.ready((TaskItem(Path("t1")),))
     processor.pending_tasks.finish("i1", result)
-    processor.pending_tasks.finish("i1", result)
-    processor.pending_tasks.finish("unknown", TaskResult.skipped())
     assert processor.ready()
-    assert len(processor.record2record.pool) == 1 and not processor.releasable_record_ids()
-    assert caplog.text.count("which is not pending") == 2
+    processor.pending_tasks.finish("i1", result)
+    with pytest.raises(ValueError, match="set 'i1', which is not pending"):
+        processor.ready()
 
 
 @pytest.mark.unit
@@ -375,25 +365,17 @@ def test_take_finished_must_not_hand_back_a_pending_result() -> None:
     processor = PendingPipeline()
     processor.ingest(inference("i1"))
     processor.pending_tasks.finish("i1", TaskResult.pending())
-    with pytest.raises(TypeError, match="returned a pending result"):
+    with pytest.raises(ValueError, match="returned a pending result"):
         processor.ready()
 
 
 @pytest.mark.unit
-def test_a_closed_pipeline_closes_every_stage_and_ignores_a_late_result() -> None:
+def test_a_closed_pipeline_ignores_a_late_result() -> None:
     processor = PendingPipeline()
     processor.ingest(inference("i1"))
     processor.close()
     processor.pending_tasks.finish("i1", TaskResult.ready((TaskItem(Path("t1")),)))
-    assert processor.batches.closed
     assert not processor.ready() and len(processor.record2record.pool) == 0
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("hook", ["poll", "background_jobs_running"])
-def test_a_task_stage_that_defines_a_removed_hook_is_refused(hook: str) -> None:
-    with pytest.raises(TypeError, match=f"defines {hook}.*take_finished"):
-        type("OldTasks", (RecordingTasks,), {hook: lambda self: None})
 
 
 @pytest.mark.unit

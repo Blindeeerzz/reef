@@ -323,7 +323,7 @@ class TaskBatchSettings(PluginSettings):
 
 
 class GeneratedTaskRecord2Record(RoundRecord2Record):
-    """The generated-task record stage: one group per task, and a round request every ``batches_per_round`` batches.
+    """The generated-task record stage: one group per task, and a round set every ``batches_per_round`` batches.
 
     Config: ``plays_per_task`` (the training plays of each task, at least 2; a
     group is complete at this count, or at the plays that reported), ``batches_per_round``,
@@ -361,13 +361,18 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
     submits the round to the worker and returns ``TaskResult.pending()``. The
     round's source sessions go to the generator as the request's
     ``source_records``. The round generates tasks, validates them, has the
-    generator service play them, and sends the results to the generator; the
-    plays come back as records. ``take_finished`` hands back each finished
-    round: ``READY`` with no tasks when it played a task, because its episodes
-    train as reports, and ``SKIPPED`` when it played none. This stage owns the
-    worker and the round summaries under ``state_dir/<scenario>``; a restart
-    reads them to continue with the next round. The tasks and their splits go
-    in the task store ``generated-tasks`` of the scenario session.
+    generator service play them, and sends the results to the generator. The
+    plays come back as records and train as reports.
+
+    ``take_finished`` hands back each finished round. A round that played a
+    task, or whose job failed, is ``READY`` with no tasks; the next round waits
+    for batches. A round that played no task is ``SKIPPED``; the next round
+    starts at once.
+
+    This stage owns the worker and the round summaries under
+    ``state_dir/<scenario>``. A restart reads the summaries to continue with
+    the next round. The tasks and their splits go in the task store
+    ``generated-tasks`` of the scenario session.
     """
 
     def __init__(
@@ -469,7 +474,10 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         return replace(sample, group_id=task_name)
 
     def make_tasks(self, record_set: RecordSet) -> TaskResult:
-        """Submit a round set to the worker and return pending; make a sample from any other set."""
+        """Submit a round set to the worker and return pending; make a sample from any other set.
+
+        A worker that refuses the round is closed or broken, so no round runs again.
+        """
         if not isinstance(record_set, RoundSet):
             return super().make_tasks(record_set)
         receipt = f"round-{record_set.round_number:05d}"
@@ -477,7 +485,9 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             receipt=receipt, round_number=record_set.round_number, source_records=session_records(record_set.sources)
         )
         if self.worker is None or not self.worker.submit(job):
-            raise RuntimeError(f"the round worker is closed or broken; round {record_set.round_number} cannot run")
+            self.last_error = "the round worker is closed or broken; no further round runs"
+            self.round_stage.stop_rounds()
+            return TaskResult.skipped()
         self.round_set_ids[receipt] = record_set.set_id
         self.round_in_flight = record_set.round_number
         return TaskResult.pending()
@@ -495,6 +505,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             if isinstance(outcome, Failed):
                 self.last_error = f"{outcome.receipt} did not finish; see the service log"
                 logger.error("generated-task %s failed on scenario %r", outcome.receipt, self.scenario)
+                # READY, not SKIPPED: a failing worker must not start round after round.
                 finished.append((set_id, TaskResult.ready(())))
                 continue
             if not isinstance(outcome, RoundOutcome):

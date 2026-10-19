@@ -50,10 +50,11 @@ class Record2Task(ABC, Plugin):
     Runs on the trainer thread without network or model calls. Raise on a
     broken training contract. Slow work runs on a worker that the stage owns:
     ``make_tasks`` submits it and returns ``TaskResult.pending()``, and
-    ``take_finished`` hands back the result. ``close`` stops the worker, and a
-    result that finishes after ``close`` is ignored. A deployment names a stage class in
-    ``pipeline.record2task`` and gives its config. The class parses the
-    config into its settings dataclass and builds the stage in ``from_config``.
+    ``take_finished`` hands back the result. ``close`` stops the worker; the
+    pipeline ignores a result that finishes after ``close``. A deployment names
+    a stage class in ``pipeline.record2task`` and gives its config. The class
+    parses the config into its settings dataclass and builds the stage in
+    ``from_config``.
     """
 
     @classmethod
@@ -76,15 +77,6 @@ class Record2Task(ABC, Plugin):
     def scenario_state_dirs(cls, config: Mapping[str, Any], scenario: str) -> tuple[Path, ...]:
         """The directories under which a stage built from ``config`` keeps a scenario's state, for archiving."""
         return ()
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-        removed = sorted(name for name in ("poll", "background_jobs_running") if name in vars(cls))
-        if removed:
-            raise TypeError(
-                f"{cls.__name__} defines {', '.join(removed)}, which Record2Task no longer calls: "
-                "return TaskResult.pending() from make_tasks and hand the result back through take_finished"
-            )
 
     @abstractmethod
     def make_tasks(self, record_set: RecordSet) -> TaskResult:

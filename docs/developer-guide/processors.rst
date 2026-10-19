@@ -92,10 +92,10 @@ The trainer calls it on its own thread, under its lock; no call may block:
 
 The pipeline also merges the record and task stages' ``status()`` and metrics.
 ``background_jobs_running()`` is true while a set is pending or the record
-stage runs a background job; the trainer then polls ``ready()`` at a fixed
-interval. ``close()`` closes all three stages, and after it the pipeline
-settles no further result. ``releasable_record_ids()``
-returns the completed records that no held or pending set references, and
+stage runs a background job. The trainer then polls ``ready()`` at a fixed
+interval. ``close()`` closes the record and task stages. After ``close()``,
+the pipeline settles no further result. ``releasable_record_ids()`` returns
+the completed records that no held or pending set references, and
 ``release_records(ids)`` frees their memory after a successful commit. New
 commits retain the stored bodies; consumption progress prevents retraining
 on restart. Storage can independently evict any body under capacity pressure,
@@ -124,15 +124,11 @@ stage's ``take_finished()``, which returns ``(set_id, TaskResult)`` pairs for
 the work that finished. The pipeline then settles each set in the record
 stage, the same way as an immediate result:
 
-- Each set settles one time. The pipeline logs and ignores a result for a set
-  that is not pending, such as a duplicate.
-- A result from ``take_finished`` must not be pending.
+- Each set settles one time.
+- A result from ``take_finished`` must not be pending, and its set must be
+  pending. Otherwise ``ready()`` raises ``ValueError``.
 - After ``close()``, the pipeline settles nothing. The stage's ``close``
   stops its worker.
-
-``Record2Task`` has no ``poll`` or ``background_jobs_running`` hook. A
-subclass that defines either one fails when Python defines the class, and
-the error names ``take_finished``. Stages with immediate results need no change.
 
 The record-to-record stage
 --------------------------
@@ -362,9 +358,9 @@ oracle passed the same verifier, so the timeout is the agent's.
 The recipe splits the rounds across its stages. The record stage
 (``GeneratedTaskRecord2Record``, a ``RoundRecord2Record``) decides when a round is due,
 holds the source sessions, and forms a round set with the round number and its sessions.
-The record-to-task stage (``GeneratedTaskTasks``) takes the round set, runs the round
-on its own ``BackgroundJobWorker`` outside the trainer lock, and returns pending until
-the round finishes. One round runs at a time. In each round it:
+The record-to-task stage (``GeneratedTaskTasks``) takes the round set. It runs the
+round on its own ``BackgroundJobWorker``, outside the trainer lock, and returns
+pending until the round finishes. One round runs at a time. In each round it:
 
 1. Asks the generator for tasks with the configured ``description`` and the
    request's source sessions.
@@ -397,8 +393,8 @@ holds source sessions in arrival order. Each round takes at most
 ``source_records_per_round`` of them, and a round without a waiting session
 has none. The generator receives each session's inference records and then
 its report as ``source_records``. The pipeline keeps a session's records
-while its round set is pending, then releases them. A session that arrives after the
-last round is released at once. A restart before the release can use a
+while its round set is pending, then releases them. A session that arrives
+after the last round is released at once. A restart before the release can use a
 session again.
 
 The first round starts when the pipeline first looks for a batch. The next
@@ -406,11 +402,12 @@ round starts after ``batches_per_round`` batches trained since the previous
 round started; a batch that the backend dropped as stale does not count. A
 round that played no task is followed at once. A round whose job failed waits
 for batches like a played round, so a failing worker does not start round
-after round. An exception from the
-generator stops the round. The record-to-task stage still sends the results
-it has to ``record_results``. A summary of each round goes to
-``state_dir/<scenario>/round-<round>.json``, with the IDs of its source records. After a restart, the
-record-to-task stage continues with the next round. ``GET /reef/status`` shows the generator, the
+after round. If the worker is closed or broken, it refuses the next round and
+no round runs again. An exception from the generator stops the round. The
+record-to-task stage still sends the results it has to ``record_results``. A
+summary of each round goes to ``state_dir/<scenario>/round-<round>.json``,
+with the IDs of its source records. After a restart, the record-to-task stage
+continues with the next round. ``GET /reef/status`` shows the generator, the
 round, the task counts, and the last error under ``task_generation``.
 
 The record-to-task stage keeps its tasks in the task store ``generated-tasks``

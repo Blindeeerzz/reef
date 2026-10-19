@@ -768,11 +768,13 @@ def test_a_closed_pipeline_starts_no_round_and_ignores_a_round_that_finishes_lat
     assert p.status()["task_generation"]["completed"] == 0, "the late round settled nothing"
 
 
-def test_a_worker_that_refuses_a_round_stops_the_pipeline_with_the_reason(tmp_path: Path) -> None:
-    p, _ = rounds(tmp_path, ScriptedGenerator([generated(0, 0)]))
-    p.record2task.worker.close()
-    with pytest.raises(RuntimeError, match="round 0 cannot run"):
-        p.ready()
+def test_a_worker_that_refuses_a_round_stops_the_rounds_with_the_reason(tmp_path: Path) -> None:
+    worker = InlineWorker()
+    p, _ = rounds(tmp_path, ScriptedGenerator([generated(0, 0)]), worker=worker, rounds=2)
+    worker.close()
+    assert not looked(p) and not p.background_jobs_running()
+    assert [job.round_number for job in worker.submitted] == [0], "no round is tried after the refusal"
+    assert "no further round runs" in p.status()["task_generation"]["last_error"]
 
 
 def test_the_real_worker_runs_a_round_off_the_trainers_thread(tmp_path: Path) -> None:

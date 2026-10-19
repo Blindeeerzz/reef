@@ -23,7 +23,6 @@ and runs the training modes and the training instructions.
 
 from __future__ import annotations
 
-import logging
 import time
 from collections.abc import Hashable, Mapping
 from dataclasses import dataclass, field, replace
@@ -40,8 +39,6 @@ from reef.record2record.staleness import producing_runtime_load_ids
 from reef.record2task import NoTasks, Record2Task, TaskResult
 from reef.task2batch import NoBatches, Task2Batch
 from reef.train.types import TrainDataItem, TrainingBatch
-
-logger = logging.getLogger(__name__)
 
 
 #: In manual mode the pipeline holds at most this many batches of sets; it releases older ones.
@@ -189,7 +186,7 @@ class TrainingPipeline:
         self.batch_number = 0
         #: Tasks by the ID of the record set that made them, until the set trains or ends.
         self.tasks: dict[Hashable, tuple[TrainDataItem, ...]] = {}
-        #: Formed sets whose tasks are still being made, by set ID. Their records stay held until they settle.
+        #: Formed sets that the record-to-task stage still works on, by set ID. Their records stay held until settled.
         self.pending_sets: dict[Hashable, RecordSet] = {}
         self.closed = False
         self.set_training_mode(context.training_mode)
@@ -296,16 +293,15 @@ class TrainingPipeline:
 
     def settle_finished_tasks(self) -> None:
         """Give the record stage the result of each pending set that finished. A set settles one time only."""
+        stage_name = type(self.record2task).__name__
         for set_id, result in self.record2task.take_finished():
             if result.status is TaskStatus.PENDING:
-                raise TypeError(f"{type(self.record2task).__name__}.take_finished returned a pending result")
-            record_set = self.pending_sets.pop(set_id, None)
-            if record_set is None:
-                logger.warning(
-                    "scenario %r ignores a task result for set %r, which is not pending", self.scenario, set_id
+                raise ValueError(f"{stage_name}.take_finished returned a pending result for set {set_id!r}")
+            if set_id not in self.pending_sets:
+                raise ValueError(
+                    f"{stage_name}.take_finished returned a result for set {set_id!r}, which is not pending"
                 )
-                continue
-            self.settle_task_result(record_set, result)
+            self.settle_task_result(self.pending_sets.pop(set_id), result)
         self.forget_ended_sets()
 
     def settle_task_result(self, record_set: RecordSet, result: TaskResult) -> None:
@@ -454,7 +450,7 @@ class TrainingPipeline:
         return {**state, **self.record2record.status(), **self.record2task.status()}
 
     def close(self) -> None:
-        """Close the three stages; safe to call more than once.
+        """Close the record and task stages; safe to call more than once.
 
         After ``close`` returns, no background worker of a stage may touch
         shared state, and the pipeline settles no further result.
@@ -463,7 +459,4 @@ class TrainingPipeline:
         try:
             self.record2record.close()
         finally:
-            try:
-                self.record2task.close()
-            finally:
-                self.task2batch.close()
+            self.record2task.close()

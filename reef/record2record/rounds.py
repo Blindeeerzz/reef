@@ -7,8 +7,8 @@ the rounds' plays produce.
 
 When a round is due, the stage forms a ``RoundSet`` with the round number and
 the round's source sessions. The record-to-task stage takes the set like any
-other formed set. It usually returns ``TaskStatus.PENDING`` and hands the
-result back later. The round ends when the set settles.
+other formed set. It usually returns ``TaskStatus.PENDING`` and hands back the
+result later. The round ends when the set settles.
 
 A round is due when no round is running, the round limit is not reached, and
 one of these is true:
@@ -92,7 +92,7 @@ class RoundRecord2Record(ReportRecord2Record):
         self.waiting_sources: list[ReportContext] = []
 
     def resume_rounds(self, *, next_round: int, round_limit: int) -> None:
-        """Set the number of the next round and the number of rounds in all; a restart continues from its summaries."""
+        """Set the next round number and the round limit. After a restart, the next round follows the recorded ones."""
         self.next_round = next_round
         self.round_limit = round_limit
 
@@ -146,7 +146,10 @@ class RoundRecord2Record(ReportRecord2Record):
         status: TaskStatus,
         producing_runtime_load_ids: frozenset[str | None] = frozenset(),
     ) -> None:
-        """End a settled round set. A round that settled as anything but ``READY`` makes no batch to wait for."""
+        """End the round of a settled round set.
+
+        A round that is not ``READY`` makes no batch, so the next round is due at once.
+        """
         if not isinstance(record_set, RoundSet):
             super().settle(record_set, status, producing_runtime_load_ids)
             return
