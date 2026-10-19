@@ -12,7 +12,8 @@ scenario settings all go through that service.
 
 ``sql_records`` implements shared SQLAlchemy record operations. ``sql_tasks``
 defines the task tables and implements the task store operations in the same
-database. ``sqlite``
+database. ``task_files`` defines the pluggable store of task directories and
+its local implementation. ``sqlite``
 supplies SQLite connections, schema upgrades, and file retention. ``postgres``
 supplies PostgreSQL tables, a commit table, a shared connection pool, and SQL
 retention. ``commit_log`` defines the commit history contract, implements JSONL

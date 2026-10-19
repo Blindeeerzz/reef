@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 from contextlib import closing
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Self
 
 import pytest
 
-from reef.core.tasks import GeneratedTask, HarborTask, PlayArm
+from reef.core.config import config_option
+from reef.core.plugins import PluginSettings
+from reef.core.tasks import GeneratedTask, HarborTask, PlayArm, read_harbor_task
+from reef.service.assembly import build_dispatcher
+from reef.service.deploy.service_config import ServiceConfig
 from reef.storage.postgres import PostgresScenarioStorage
 from reef.storage.sqlite import SQLiteScenarioStorage
+from reef.storage.task_files import LocalTaskFileStore, files_digest
 from reef.storage.tasks import GenerationState, SplitSettings, StoredTask, TaskCandidate, TaskConflict, TaskStoreError
 
 SPLIT = SplitSettings(eval_fraction=0.25, seed=7)
@@ -65,7 +73,12 @@ def test_a_generation_records_candidates_and_outcomes(session):
     store.reject_task(generation=0, index=2, reason="the oracle failed")
     completed = store.complete_generation(generation=0)
 
-    assert alpha == StoredTask(generated=candidates[0], split="train", generation=0, index=0)
+    assert alpha == StoredTask(
+        generated=candidates[0], split="train", generation=0, index=0, files_digest=alpha.files_digest
+    )
+    directory = store.path(alpha)
+    assert directory.name == "alpha"
+    assert read_harbor_task(directory) == candidates[0].task
     assert completed == GenerationState(
         generation=0,
         source_record_ids=("record-1", "record-2"),
@@ -142,7 +155,7 @@ def test_a_task_name_is_published_once(session):
     with pytest.raises(TaskConflict, match="published to eval, not train"):
         store.publish_task(generation=1, index=0, split="train")
     assert store.publish_task(generation=1, index=1, split="eval") == first
-    with pytest.raises(TaskConflict, match="published with other content"):
+    with pytest.raises(TaskConflict, match="published with other files"):
         store.publish_task(generation=1, index=2, split="eval")
     assert store.tasks() == (first,)
 
@@ -188,10 +201,15 @@ def test_tasks_survive_a_restart_and_archive_retires_them(open_durable_storage):
             store = session.task_store("tasks", split=SPLIT)
             state = store.generation(0)
             assert state is not None and state.pending_indices == (1,)
-            assert [task.generated for task in store.tasks()] == [generated("alpha")]
+            (published,) = store.tasks()
+            assert published.generated == generated("alpha")
+            assert read_harbor_task(store.path(published)) == generated("alpha").task
         storage.archive("math")
         with closing(storage.open("math")) as session:
-            assert session.task_store("tasks", split=SPLIT).generations() == ()
+            store = session.task_store("tasks", split=SPLIT)
+            assert store.generations() == ()
+            with pytest.raises(TaskStoreError, match="no files"):
+                store.path(published)
 
 
 def test_an_archived_postgres_session_writes_no_task(postgres_config, tmp_path):
@@ -204,3 +222,79 @@ def test_an_archived_postgres_session_writes_no_task(postgres_config, tmp_path):
         storage.archive("math")
         with pytest.raises(RuntimeError, match="archived"):
             store.begin_generation(generation=0, source_record_ids=("record-1",))
+
+
+def test_the_local_file_store_keeps_binary_files_by_digest(tmp_path):
+    source = tmp_path / "source" / "image-task"
+    (source / "environment").mkdir(parents=True)
+    (source / "environment" / "data.bin").write_bytes(bytes(range(256)))
+    (source / "instruction.md").write_text("Describe the image.\n")
+
+    with closing(LocalTaskFileStore(tmp_path / "files")) as files:
+        digest = files.put("math", source)
+        assert files.put("math", source) == digest == files_digest(source)
+        copy = files.path("math", digest)
+        assert copy.name == "image-task"
+        assert (copy / "environment" / "data.bin").read_bytes() == bytes(range(256))
+        with pytest.raises(TaskStoreError, match="no files"):
+            files.path("code", digest)
+
+        (source / "link").symlink_to(source / "instruction.md")
+        with pytest.raises(TaskStoreError, match="not a file"):
+            files.put("math", source)
+
+        (archived,) = files.archive("math")
+        assert (Path(archived) / digest / "image-task" / "environment" / "data.bin").exists()
+        with pytest.raises(TaskStoreError, match="no files"):
+            files.path("math", digest)
+
+
+@dataclass(frozen=True)
+class SubdirectorySettings(PluginSettings):
+    subdirectory: str = config_option("", help="Subdirectory of the task files.")
+
+
+class SubdirectoryTaskFileStore(LocalTaskFileStore):
+    """A plugin store that keeps its files in a configured subdirectory of ``storage.task_file_dir``."""
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any], *, directory: Path) -> Self:
+        settings = SubdirectorySettings.parse(config, plugin_class=cls)
+        return cls(directory / settings.subdirectory)
+
+
+@pytest.mark.parametrize(
+    ("backend", "files_root"),
+    [
+        ("local", "files"),
+        ({"module": f"{__name__}:SubdirectoryTaskFileStore", "config": {"subdirectory": "plugin"}}, "files/plugin"),
+    ],
+)
+def test_the_deployment_selects_the_task_file_store(tmp_path, backend, files_root):
+    settings = ServiceConfig(
+        recipe="recipe",
+        agent_record_dir=str(tmp_path / "records"),
+        artifact_repository=str(tmp_path / "artifacts.git"),
+        artifact_work_dir=str(tmp_path / "work"),
+        artifact_cache_dir=str(tmp_path / "cache"),
+        task_file_backend=backend,
+        task_file_dir=str(tmp_path / "files"),
+    )
+    dispatcher = build_dispatcher(settings)
+    try:
+        store = dispatcher.get_or_create_scenario("math").store.task_store("tasks", split=SPLIT)
+        store.begin_generation(generation=0, source_record_ids=("record-1",))
+        store.save_candidates(generation=0, candidates=(generated("alpha"),))
+        directory = store.path(store.publish_task(generation=0, index=0, split="train"))
+        assert directory.is_relative_to(tmp_path / files_root)
+    finally:
+        dispatcher.close()
+
+
+@pytest.mark.parametrize(
+    "backend",
+    ["unknown", "reef.storage.task_files:TaskFileStore", {"module": "reef.storage.sqlite:SQLiteScenarioStorage"}],
+)
+def test_the_deployment_rejects_an_invalid_task_file_backend(backend):
+    with pytest.raises(ValueError, match="task_file_backend"):
+        ServiceConfig(recipe="recipe", task_file_backend=backend)

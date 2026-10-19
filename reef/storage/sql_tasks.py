@@ -1,23 +1,26 @@
 """Task stores in the record database of a scenario, for each SQL backend.
 
-The task tables are in the same database as the records. Each operation uses
-one transaction of the record store. The adapters build the tables with
-:func:`task_tables` and supply their namespace. This module implements the
-task store behavior once.
+The task tables are in the same database as the records. Each database
+operation uses one transaction of the record store. The task directories are
+in a ``TaskFileStore``. The adapters build the tables with :func:`task_tables`
+and supply their namespace. This module implements the task store behavior once.
 """
 
 from __future__ import annotations
 
 import json
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 from sqlalchemy import BigInteger, Boolean, Column, Float, ForeignKey, MetaData, String, Table, Text, and_, select
 from sqlalchemy.engine import Connection, RowMapping
 from sqlalchemy.sql.elements import ColumnElement
 
-from reef.core.tasks import GeneratedTask, HarborTask, PlayArm
+from reef.core.tasks import GeneratedTask, HarborTask, PlayArm, write_harbor_task
 from reef.storage.sql_records import SQLRecordStore
+from reef.storage.task_files import TaskFileStore
 from reef.storage.tasks import (
     SPLIT_NAMES,
     GenerationState,
@@ -39,7 +42,7 @@ class TaskTables:
     ``stores`` holds the split settings of each store. ``generations`` holds
     one row for each generation. ``candidates`` holds one row for each saved
     candidate, with its outcome. ``published`` holds one row for each
-    published task name.
+    published task name, with the digest of its task files.
     """
 
     stores: Table
@@ -87,7 +90,6 @@ def task_tables(metadata: MetaData, *, foreign_key: str | None = None) -> TaskTa
             Column("generation", BigInteger, primary_key=True),
             Column("candidate_index", BigInteger, primary_key=True),
             Column("task_name", Text, nullable=False),
-            Column("digest", String(64), nullable=False),
             Column("generated_json", Text, nullable=False),
             Column("split", Text),
             Column("error", Text, nullable=False),
@@ -97,7 +99,7 @@ def task_tables(metadata: MetaData, *, foreign_key: str | None = None) -> TaskTa
             metadata,
             *key_columns(),
             Column("task_name", Text, primary_key=True),
-            Column("digest", String(64), nullable=False),
+            Column("files_digest", String(64), nullable=False),
             Column("split", Text, nullable=False),
             Column("generation", BigInteger, nullable=False),
             Column("candidate_index", BigInteger, nullable=False),
@@ -106,24 +108,30 @@ def task_tables(metadata: MetaData, *, foreign_key: str | None = None) -> TaskTa
 
 
 class SQLTaskStorage(TaskStorage):
-    """Opens the task stores in the database of one record store."""
+    """Opens the task stores of one scenario in the database of its record store."""
 
-    def __init__(self, records: SQLRecordStore, tables: TaskTables) -> None:
+    def __init__(self, records: SQLRecordStore, tables: TaskTables, files: TaskFileStore, scenario: str) -> None:
         self.records = records
         self.tables = tables
+        self.files = files
+        self.scenario = scenario
 
     def open(self, name: str, *, split: SplitSettings) -> SQLTaskStore:
-        return SQLTaskStore(self.records, self.tables, name, split=split)
+        return SQLTaskStore(self, name, split=split)
 
 
 class SQLTaskStore(TaskStore):
-    """One named task store. Each operation is one transaction of the record database."""
+    """One named task store. Each database operation is one transaction of the record database."""
 
-    def __init__(self, records: SQLRecordStore, tables: TaskTables, name: str, *, split: SplitSettings) -> None:
+    def __init__(self, storage: SQLTaskStorage, name: str, *, split: SplitSettings) -> None:
         if not isinstance(name, str) or not name:
             raise ValueError("a task store name must be a non-empty string")
+        records = storage.records
+        tables = storage.tables
         self.records = records
         self.tables = tables
+        self.files = storage.files
+        self.scenario = storage.scenario
         self.name = name
         self.key = {**tables.scope, "store_name": name}
         with records._transaction(write=True) as connection:
@@ -174,7 +182,6 @@ class SQLTaskStore(TaskStore):
                             "generation": generation,
                             "candidate_index": index,
                             "task_name": item.task.name,
-                            "digest": item.task.digest,
                             "generated_json": document,
                             "split": None,
                             "error": "",
@@ -192,12 +199,17 @@ class SQLTaskStore(TaskStore):
     def publish_task(self, *, generation: int, index: int, split: SplitName) -> StoredTask:
         if split not in SPLIT_NAMES:
             raise ValueError("split must be 'train' or 'eval'")
-        published = self.tables.published
-        with self.records._transaction(write=True) as connection:
+        with self.records._transaction(write=False) as connection:
             candidate = self.require_candidate(connection, generation, index)
-            if candidate["error"]:
-                raise TaskStoreError(f"candidate {index} of generation {generation} is rejected")
-            name = candidate["task_name"]
+        if candidate["error"]:
+            raise TaskStoreError(f"candidate {index} of generation {generation} is rejected")
+        # Save the files first, so that a published row always has its files.
+        with tempfile.TemporaryDirectory(prefix="reef-task-") as staging:
+            task = generated_from_document(candidate["generated_json"]).task
+            digest = self.files.put(self.scenario, write_harbor_task(task, Path(staging)))
+        published = self.tables.published
+        name = candidate["task_name"]
+        with self.records._transaction(write=True) as connection:
             existing = (
                 connection.execute(select(published).where(self.matching(published, task_name=name)))
                 .mappings()
@@ -208,7 +220,7 @@ class SQLTaskStore(TaskStore):
                     published.insert().values(
                         **self.key,
                         task_name=name,
-                        digest=candidate["digest"],
+                        files_digest=digest,
                         split=split,
                         generation=generation,
                         candidate_index=index,
@@ -216,8 +228,8 @@ class SQLTaskStore(TaskStore):
                 )
                 first_candidate = candidate
             else:
-                if existing["digest"] != candidate["digest"]:
-                    raise TaskConflict(f"task {name!r} is published with other content")
+                if existing["files_digest"] != digest:
+                    raise TaskConflict(f"task {name!r} is published with other files")
                 if existing["split"] != split:
                     raise TaskConflict(f"task {name!r} is published to {existing['split']}, not {split}")
                 first_candidate = self.require_candidate(
@@ -230,6 +242,7 @@ class SQLTaskStore(TaskStore):
             split=split,
             generation=int(first_candidate["generation"]),
             index=int(first_candidate["candidate_index"]),
+            files_digest=digest,
         )
 
     def reject_task(self, *, generation: int, index: int, reason: str) -> None:
@@ -276,7 +289,11 @@ class SQLTaskStore(TaskStore):
         published = self.tables.published
         statement = (
             select(
-                published.c.split, candidates.c.generation, candidates.c.candidate_index, candidates.c.generated_json
+                published.c.split,
+                published.c.files_digest,
+                candidates.c.generation,
+                candidates.c.candidate_index,
+                candidates.c.generated_json,
             )
             .join(
                 candidates,
@@ -297,9 +314,13 @@ class SQLTaskStore(TaskStore):
                 split=row["split"],
                 generation=int(row["generation"]),
                 index=int(row["candidate_index"]),
+                files_digest=row["files_digest"],
             )
             for row in rows
         )
+
+    def path(self, task: StoredTask) -> Path:
+        return self.files.path(self.scenario, task.files_digest)
 
     def matching(self, table: Table, **columns: object) -> ColumnElement[bool]:
         """Select the rows of this store in ``table`` that have the given column values."""

@@ -17,6 +17,7 @@ from reef.core.errors import ReefError
 from reef.core.plugins import Plugin
 from reef.storage.commits import CommitRecord
 from reef.storage.records import RecordStore
+from reef.storage.task_files import TaskFileStore
 from reef.storage.tasks import SplitSettings, TaskStore
 
 
@@ -122,12 +123,14 @@ class ScenarioStorage(Plugin, ABC):
 
     @classmethod
     @abstractmethod
-    def from_config(cls, config: Mapping[str, Any], *, directory: Path) -> Self:
+    def from_config(cls, config: Mapping[str, Any], *, directory: Path, task_files: TaskFileStore) -> Self:
         """Build the storage a deployment names.
 
         ``config`` is the plugin's own configuration. ``directory`` is the
         deployment's ``storage.agent_record_dir``, which the storage may use
-        for local files.
+        for local files. ``task_files`` keeps the files of published tasks.
+        The storage owns it: ``archive`` retires the files of a scenario, and
+        ``close`` closes it.
         """
 
     @property

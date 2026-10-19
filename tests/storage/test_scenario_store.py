@@ -23,6 +23,7 @@ from reef.storage.commits import CommitRecord
 from reef.storage.postgres import PostgresScenarioStorage
 from reef.storage.scenario import ScenarioStoreConflict
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
+from reef.storage.task_files import LocalTaskFileStore
 
 
 def record(record_id: str, *, scenario: str = "math") -> AgentRecord:
@@ -209,9 +210,8 @@ def test_close_is_idempotent_and_rejects_further_use(store, monkeypatch):
 
 def sqlite_session(journal=None, *, database=None, initial_step=0):
     records = SQLiteRecordStore(database)
-    return CommitHistoryScenarioStore(
-        "math", records, journal, tasks=records.task_storage(), initial_step=initial_step
-    )
+    tasks = records.task_storage(LocalTaskFileStore(), "math")
+    return CommitHistoryScenarioStore("math", records, journal, tasks=tasks, initial_step=initial_step)
 
 
 def test_recovery_preserves_records_from_commits_before_checkpoint(tmp_path):

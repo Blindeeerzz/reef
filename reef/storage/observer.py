@@ -20,6 +20,7 @@ from reef.core.records_types import AgentRecord, RequestType
 from reef.storage.commits import CommitRecord
 from reef.storage.records import AppendResult, ConsumptionReceipt, RecordLoss, RecordStore, StoredRecord
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage, ScenarioStore
+from reef.storage.task_files import TaskFileStore
 from reef.storage.tasks import SplitSettings, TaskStore
 
 logger = logging.getLogger(__name__)
@@ -164,7 +165,7 @@ class ObservedScenarioStorage(ScenarioStorage):
         self._observer = observer
 
     @classmethod
-    def from_config(cls, config: Mapping[str, Any], *, directory: Path) -> Self:
+    def from_config(cls, config: Mapping[str, Any], *, directory: Path, task_files: TaskFileStore) -> Self:
         raise PluginConfigError(f"{cls.__name__} wraps another storage; deployment assembly applies it")
 
     @property

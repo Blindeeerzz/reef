@@ -6,15 +6,20 @@ then gets one outcome: the stage publishes it to the train or eval split, or
 rejects it with a reason. The stage chooses the split. The store keeps it and
 refuses writes that conflict with it.
 
+A published task is a Harbor task directory. The database keeps the state of
+the store and the digest of each task directory. A ``TaskFileStore``
+(``reef.storage.task_files``) keeps the files of the directory.
+
 A task store belongs to a scenario session. Archiving the scenario retires its
-task stores with its records and commits. Record retention does not delete
-tasks, because each task holds its own content.
+task stores and task files with its records and commits. Record retention
+does not delete tasks.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from reef.core.errors import ReefError
@@ -29,7 +34,7 @@ class TaskStoreError(ReefError):
 
 
 class TaskConflict(TaskStoreError):
-    """A task name is already published with different content or in the other split."""
+    """A task name is already published with different files or in the other split."""
 
 
 @dataclass(frozen=True)
@@ -107,13 +112,15 @@ class GenerationState:
 class StoredTask:
     """A published task and its split.
 
-    ``generation`` and ``index`` identify the candidate that published the task first.
+    ``generation`` and ``index`` identify the candidate that published the task
+    first. ``files_digest`` identifies its directory in the task file store.
     """
 
     generated: GeneratedTask
     split: SplitName
     generation: int
     index: int
+    files_digest: str
 
 
 class TaskStore(ABC):
@@ -140,11 +147,12 @@ class TaskStore(ABC):
 
     @abstractmethod
     def publish_task(self, *, generation: int, index: int, split: SplitName) -> StoredTask:
-        """Publish one candidate to ``split`` and return the published task.
+        """Save the task directory of one candidate, publish the candidate to ``split``, and return the task.
 
-        Each task name is published once. A later candidate with the same
-        content must name the same split, and it returns the published task.
-        Raises ``TaskConflict`` if the name is published with other content or
+        The task files are durable before the publication. Each task name is
+        published once. A later candidate with the same files must name the
+        same split, and it returns the published task.
+        Raises ``TaskConflict`` if the name is published with other files or
         in the other split. Raises ``TaskStoreError`` if the candidate does not
         exist or is rejected.
         """
@@ -171,6 +179,10 @@ class TaskStore(ABC):
     @abstractmethod
     def tasks(self, *, split: SplitName | None = None) -> tuple[StoredTask, ...]:
         """Return the published tasks in generation and candidate order, optionally of one split."""
+
+    @abstractmethod
+    def path(self, task: StoredTask) -> Path:
+        """Return the local Harbor task directory of a published task. The caller must not change it."""
 
 
 class TaskStorage(ABC):

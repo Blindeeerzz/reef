@@ -464,10 +464,12 @@ scenario package depends only on storage contracts. The storage contract is:
 
    * - Member
      - Contract
-   * - ``from_config(config, *, directory)``
+   * - ``from_config(config, *, directory, task_files)``
      - Class method that builds the storage a deployment names in
        ``storage.record_backend``. ``config`` is the plugin's own mapping;
-       ``directory`` is ``storage.agent_record_dir``.
+       ``directory`` is ``storage.agent_record_dir``. ``task_files`` is the
+       ``TaskFileStore`` of the deployment (see `Task file stores`_). The
+       storage owns it: ``archive`` and ``close`` also apply to it.
    * - ``durable``
      - Whether new sessions and settings survive a process restart.
    * - ``open(scenario)``
@@ -575,6 +577,12 @@ candidates. Each ``TaskCandidate`` holds a ``GeneratedTask`` and its outcome:
 - A pending candidate has neither. After a restart, the stage validates the
   candidates in ``GenerationState.pending_indices``.
 
+A published task is a Harbor task directory. ``publish_task`` saves the
+directory in the task file store first, and then it records the publication
+in the database. The database keeps the digest of the files
+(``StoredTask.files_digest``). The task file store accepts text and binary
+files. A ``GeneratedTask`` holds text files only.
+
 .. list-table::
    :header-rows: 1
    :widths: 45 55
@@ -588,7 +596,7 @@ candidates. Each ``TaskCandidate`` holds a ``GeneratedTask`` and its outcome:
      - Save the candidates once, before validation or play.
    * - ``publish_task(generation=..., index=..., split=...)``
      - Publish one candidate and return its ``StoredTask``. Each task name is
-       published once. A later candidate with the same content must give the
+       published once. A later candidate with the same files must give the
        same split. It then returns the published task.
    * - ``reject_task(generation=..., index=..., reason=...)``
      - Save the rejection of one candidate.
@@ -599,21 +607,56 @@ candidates. Each ``TaskCandidate`` holds a ``GeneratedTask`` and its outcome:
    * - ``tasks(split=None)``
      - Return the published tasks in generation and candidate order. Give a
        ``split`` to return only the tasks of that split.
+   * - ``path(task)``
+     - Return the local Harbor task directory of a published task, for
+       example for ``TaskPlayer.play``. Do not change it.
 
 Each write is durable when it returns. An identical retry of a write changes
 nothing. A write that conflicts with the stored state raises
-``TaskStoreError``. If a task name is published with other content or in the
+``TaskStoreError``. If a task name is published with other files or in the
 other split, the store raises ``TaskConflict``, a subclass of
 ``TaskStoreError``. The caller serializes the writers of one store.
 
-A ``StoredTask`` holds the complete task. To run the task, write its
-directory with ``reef.core.tasks.write_harbor_task``.
-
 SQLite keeps the task tables in the database file of the scenario.
 PostgreSQL keeps them in the deployment schema, with a key for each store
-generation. Thus ``archive`` retires the tasks with the records and commits.
-Record retention does not delete tasks, because each task holds its own
-content.
+generation. ``archive`` retires the task tables and the task files with the
+records and commits. Record retention does not delete tasks.
+
+Task file stores
+~~~~~~~~~~~~~~~~
+
+A ``TaskFileStore`` (``reef.storage.task_files``) keeps the directories of the
+published tasks, addressed by the digest of their files. The digest covers the
+directory name, and the path and bytes of each file. Thus a repeated save of
+the same files changes nothing. A deployment selects the store in
+``storage.task_file_backend`` (see `Choose the task file store
+<../user-guide/operate.rst#choose-the-task-file-store>`__).
+``LocalTaskFileStore`` is the built-in store. An embedded caller can give a
+store to ``SQLiteScenarioStorage(..., task_files=...)`` or
+``PostgresScenarioStorage(..., task_files=...)``. Without one, the storage
+uses a ``LocalTaskFileStore`` in ``task-files`` under its directory.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
+
+   * - Member
+     - Contract
+   * - ``from_config(config, *, directory)``
+     - Class method that builds the store a deployment names. ``directory``
+       is ``storage.task_file_dir``. A remote store can use it as a local cache.
+   * - ``put(scenario, source)``
+     - Save a copy of the task directory ``source`` and return the digest.
+       The copy is durable when the method returns. Raise ``TaskStoreError``
+       for a symbolic link or a special file.
+   * - ``path(scenario, digest)``
+     - Return a local directory with the files of ``digest``. The directory
+       has the name of the saved directory. Raise ``TaskStoreError`` if the
+       store does not hold the digest.
+   * - ``archive(scenario)``
+     - Retire the files of the scenario and return the archive locations.
+   * - ``close()``
+     - Release the resources of the store. A second call does nothing.
 
 Artifact backends
 -----------------

@@ -58,6 +58,7 @@ from reef.storage.records import RecordLoss, RecordRetention
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage
 from reef.storage.sql_records import RecordTables, SQLRecordRetention, SQLRecordStore
 from reef.storage.sql_tasks import SQLTaskStorage, task_tables
+from reef.storage.task_files import LocalTaskFileStore, TaskFileStore
 
 logger = logging.getLogger(__name__)
 
@@ -371,9 +372,10 @@ class PostgresRecordStore(SQLRecordStore):
         statement = insert(table).values(rows).on_conflict_do_nothing().returning(next(iter(table.primary_key)))
         return connection.execute(statement).first() is not None
 
-    def task_storage(self) -> SQLTaskStorage:
-        """The generated task stores of this store generation."""
-        return SQLTaskStorage(self, replace(self._database.task_tables, scope={"storage_id": self.storage_id}))
+    def task_storage(self, files: TaskFileStore, scenario: str) -> SQLTaskStorage:
+        """Open the task stores of this store generation, with their task files in ``files``."""
+        tables = replace(self._database.task_tables, scope={"storage_id": self.storage_id})
+        return SQLTaskStorage(self, tables, files, scenario)
 
     def close(self) -> None:
         with self._lock:
@@ -485,25 +487,35 @@ class PostgresScenarioStorage(ScenarioStorage):
     On start, it imports the commit logs and model configuration files that
     older versions kept under ``directory`` and moves them under
     ``directory/archived``. After that it keeps no scenario state in files.
+    ``task_files`` keeps the files of published tasks; the default is a
+    ``LocalTaskFileStore`` in ``directory/task-files``.
     """
 
-    def __init__(self, database_url: str, directory: Path, *, schema: str = "reef_records") -> None:
+    def __init__(
+        self,
+        database_url: str,
+        directory: Path,
+        *,
+        schema: str = "reef_records",
+        task_files: TaskFileStore | None = None,
+    ) -> None:
         self._directory = Path(directory)
         self._directory.mkdir(parents=True, exist_ok=True)
         self._database = PostgresRecordDatabase(database_url, schema=schema)
         self._schema = schema
         self._lock = RLock()
         self._closed = False
+        self.task_files = LocalTaskFileStore(self._directory / "task-files") if task_files is None else task_files
         try:
             self._import_local_files()
         except BaseException:
-            self._database.close()
+            self.close()
             raise
 
     @classmethod
-    def from_config(cls, config: Mapping[str, Any], *, directory: Path) -> Self:
+    def from_config(cls, config: Mapping[str, Any], *, directory: Path, task_files: TaskFileStore) -> Self:
         settings = PostgresStorageSettings.parse(config, plugin_class=cls)
-        return cls(settings.database_url, directory, schema=settings.schema)
+        return cls(settings.database_url, directory, schema=settings.schema, task_files=task_files)
 
     @property
     def durable(self) -> bool:
@@ -515,7 +527,9 @@ class PostgresScenarioStorage(ScenarioStorage):
             records = PostgresRecordStore(self._database, name=scenario)
             try:
                 commits = PostgresCommitTable(self._database, records.storage_id)
-                return CommitHistoryScenarioStore(scenario, records, commits, tasks=records.task_storage())
+                return CommitHistoryScenarioStore(
+                    scenario, records, commits, tasks=records.task_storage(self.task_files, scenario)
+                )
             except BaseException:
                 records.close()
                 raise
@@ -538,9 +552,10 @@ class PostgresScenarioStorage(ScenarioStorage):
         with self._lock:
             self._ensure_open()
             storage_id = self._database.archive(scenario)
+            archived_files = self.task_files.archive(scenario)
             if storage_id is None:
-                return ()
-            return (f"postgres://{self._schema}/record-store/{storage_id}",)
+                return archived_files
+            return (f"postgres://{self._schema}/record-store/{storage_id}", *archived_files)
 
     def prune(self, *, max_bytes: int) -> int:
         with self._lock:
@@ -551,7 +566,10 @@ class PostgresScenarioStorage(ScenarioStorage):
         with self._lock:
             if not self._closed:
                 self._closed = True
-                self._database.close()
+                try:
+                    self._database.close()
+                finally:
+                    self.task_files.close()
 
     def _import_local_files(self) -> None:
         """Import the commit logs and model configuration files of older versions, then move them aside.
