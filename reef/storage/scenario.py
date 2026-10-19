@@ -18,7 +18,7 @@ from reef.core.plugins import Plugin
 from reef.storage.commits import CommitRecord
 from reef.storage.records import RecordStore
 from reef.storage.task_files import TaskFileStore
-from reef.storage.tasks import SplitSettings, TaskStore
+from reef.storage.tasks import TaskStorage
 
 
 class ScenarioStoreConflict(ReefError):
@@ -62,14 +62,13 @@ class ScenarioStore(ABC):
     def durable(self) -> bool:
         """Whether committed state survives a process restart."""
 
+    @property
     @abstractmethod
-    def task_store(self, name: str, *, split: SplitSettings) -> TaskStore:
-        """Open the generated task store ``name`` of this scenario.
+    def tasks(self) -> TaskStorage:
+        """Opens the generated task stores of this scenario.
 
-        Each record-to-task stage uses its own name. Thus the components of a
-        composite recipe use different names. The first open saves ``split``.
-        A later open with different settings raises ``TaskStoreError``. The
-        store closes with this session. It survives a restart if ``durable`` is true.
+        Each record-to-task stage opens its own store name. The stores close
+        with this session. They survive a restart if ``durable`` is true.
         """
 
     @abstractmethod

@@ -398,7 +398,12 @@ Where the stages live
 
 Each stage has its own package: ``reef/record2record/``, ``reef/record2task/``,
 and ``reef/task2batch/``. The pipeline lives in ``reef/train/pipeline.py``, and
-the context that the stages read in ``reef/pipeline_context.py``. The stage
+the context that the stages read in ``reef/pipeline_context.py``. A stage that
+saves generated tasks opens a store with
+``context.task_storage.open(name, split=...)`` (see `Generated task stores
+<../reference/python-api.rst#generated-task-stores>`__). In a composite recipe,
+each component opens its store names under its component name.
+``task_storage`` is ``None`` if the trainer has no scenario session. The stage
 packages also hold shared implementations: ``SampleAssembly``
 (``reef/record2task/assembly.py``), and ``DistillTasks``
 (``reef/record2task/distill.py``) with ``DistillBatches``

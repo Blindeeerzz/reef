@@ -24,7 +24,7 @@ from reef.core.errors import ReefError
 from reef.storage.commits import RECORD_KIND, CommitLogError, CommitRecord
 from reef.storage.records import RecordStore
 from reef.storage.scenario import ScenarioStore, ScenarioStoreConflict
-from reef.storage.tasks import SplitSettings, TaskStorage, TaskStore
+from reef.storage.tasks import TaskStorage
 
 
 def same_commit(left: CommitRecord, right: CommitRecord) -> bool:
@@ -318,10 +318,11 @@ class CommitHistoryScenarioStore(ScenarioStore):
     def durable(self) -> bool:
         return self._commit_history is not None
 
-    def task_store(self, name: str, *, split: SplitSettings) -> TaskStore:
+    @property
+    def tasks(self) -> TaskStorage:
         with self._lock:
             self._ensure_open()
-            return self._tasks.open(name, split=split)
+            return self._tasks
 
     @property
     def commit_history(self) -> CommitHistory | None:

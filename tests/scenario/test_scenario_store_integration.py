@@ -19,7 +19,7 @@ from reef.storage.records import RecordRetention, RecordStore
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage, ScenarioStore
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.storage.task_files import TaskFileStore
-from reef.storage.tasks import SplitSettings, TaskStore
+from reef.storage.tasks import TaskStorage
 from reef.train.trainer import Trainer
 from reef.train.types import TrainStepResult
 
@@ -42,8 +42,9 @@ class OpaqueStore(ScenarioStore):
     def durable(self) -> bool:
         return self._inner.durable
 
-    def task_store(self, name: str, *, split: SplitSettings) -> TaskStore:
-        return self._inner.task_store(name, split=split)
+    @property
+    def tasks(self) -> TaskStorage:
+        return self._inner.tasks
 
     def history(self) -> tuple[CommitRecord, ...]:
         return self._inner.history()
@@ -121,6 +122,7 @@ class FailingRecipe(Recipe):
         *,
         algorithm_state: Mapping[str, Any] | None = None,
         experiment_logger: ExperimentLogger | None = None,
+        task_storage: TaskStorage | None = None,
     ) -> Trainer:
         raise RuntimeError("injected recipe failure")
 

@@ -867,7 +867,7 @@ def test_scenario_runtime_executes_grpo_as_one_async_transaction(tmp_path) -> No
         objective = _GROUPED_PG_OBJECTIVE
         loss_family = "pg"
 
-        def build(self, scenario, records, *, algorithm_state=None, experiment_logger=None):
+        def build(self, scenario, records, *, algorithm_state=None, experiment_logger=None, task_storage=None):
             return Trainer.build(
                 scenario,
                 records,

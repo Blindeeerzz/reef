@@ -582,6 +582,7 @@ def test_task_to_batch_stage_depends_only_on_contracts_below_training() -> None:
         "reef.pipeline_context",
         "reef.record2record",
         "reef.record2task",
+        "reef.storage.tasks",
         "reef.task2batch",
     )
     paths = [*sorted((REPO_ROOT / "reef" / "task2batch").rglob("*.py")), REPO_ROOT / "reef" / "pipeline_context.py"]

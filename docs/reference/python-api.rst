@@ -190,10 +190,13 @@ Common members
 | ``checkpoint_strategy``                           | ``CheckpointStrategy``      | defaults to                    |
 |                                                   |                             | ``EveryNVersions(1)``          |
 +---------------------------------------------------+-----------------------------+--------------------------------+
-| ``build(scenario, records, algorithm_state=...)`` | ``Trainer``                 | construct the scenario trainer |
+| ``build(scenario, records, algorithm_state=...,`` | ``Trainer``                 | construct the scenario trainer;|
+| ``task_storage=...)``                             |                             | give ``task_storage`` to       |
+|                                                   |                             | ``Trainer.build``              |
 +---------------------------------------------------+-----------------------------+--------------------------------+
 | ``build_trainers(scenario, records,``             | ``tuple[ComponentTrainer,   | one trainer per release        |
-| ``surface=..., algorithm_states=...)``            | ...]``                      | component; defaults to the     |
+| ``surface=..., algorithm_states=...,``            | ...]``                      | component; defaults to the     |
+| ``task_storage=...)``                             |                             |                                |
 |                                                   |                             | single trainer ``build``       |
 |                                                   |                             | returns, bound to the          |
 |                                                   |                             | surface's one component        |
@@ -500,9 +503,10 @@ The session contract is:
    * - ``durable``
      - Whether committed history survives session/process restart. A durable
        store requires a repository backend supporting staged releases.
-   * - ``task_store(name, *, split)``
-     - Open the generated task store ``name`` (see `Generated task stores`_).
-       It closes with the session and survives restarts when ``durable``.
+   * - ``tasks``
+     - The ``TaskStorage`` that opens the generated task stores of the
+       scenario (see `Generated task stores`_). The stores close with the
+       session and survive restarts when ``durable``.
    * - ``history()``
      - Committed ``CommitRecord`` values in step order, including rollback and
        pending releases. This is authoritative after an ambiguous commit error.
@@ -563,10 +567,15 @@ before any rollout. Thus generation and rollout can recover independently
 after a restart. The contract and its values are in ``reef.storage.tasks``.
 
 To open a store, call
-``session.task_store(name, split=SplitSettings(eval_fraction=..., seed=...))``.
-Each record-to-task stage uses its own ``name``. Thus the components of a
-composite recipe use different names. The first open saves the split
-settings. A later open with different settings raises ``TaskStoreError``.
+``task_storage.open(name, split=SplitSettings(eval_fraction=..., seed=...))``.
+A pipeline stage gets ``task_storage`` from ``PipelineContext.task_storage``.
+The scenario factory gives ``session.tasks`` to ``Recipe.build_trainers``,
+which gives it to ``Trainer.build``. A recipe that overrides ``build`` must
+give ``task_storage`` to ``Trainer.build`` too. A composite recipe gives each
+component a ``TaskStorage`` that opens ``<component>/<name>``. Thus two
+components never share a store. Each record-to-task stage uses its own
+``name``. The first open saves the split settings. A later open with
+different settings raises ``TaskStoreError``.
 
 A store holds generations. A generation holds its source record ids and its
 candidates. Each ``TaskCandidate`` holds a ``GeneratedTask`` and its outcome:
