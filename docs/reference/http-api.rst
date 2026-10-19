@@ -53,12 +53,13 @@ Routes
 | ``POST /v1/images``, ``/v1/embeddings``,                                         | multimodal call, relayed by the recipe to its     |
 | ``/v1/audio/speech``, ``/v1/decisions``                                          | gateway; not recorded, 501 when it offers none    |
 +----------------------------------------------------------------------------------+---------------------------------------------------+
-| ``POST /reef/records``                                                           | import one existing inference, report or ATIF     |
-|                                                                                  | trajectory                                        |
+| ``POST /reef/records``                                                           | import one existing inference or report           |
 +----------------------------------------------------------------------------------+---------------------------------------------------+
 | ``POST /reef/records/batch``                                                     | atomically import a batch of records              |
 +----------------------------------------------------------------------------------+---------------------------------------------------+
-| ``POST /reef/tasks``                                                             | upload one Harbor task directory                  |
+| ``POST /reef/trajectories``                                                      | upload ATIF trajectories as training data items   |
++----------------------------------------------------------------------------------+---------------------------------------------------+
+| ``POST /reef/tasks``                                                             | upload one Harbor task as a training data item    |
 +----------------------------------------------------------------------------------+---------------------------------------------------+
 | ``POST /reef/report``                                                            | submit feedback about one or more receipts        |
 +----------------------------------------------------------------------------------+---------------------------------------------------+
@@ -301,38 +302,43 @@ end-to-end memory use require measurement with the selected recipe.
 Upload trajectories and Harbor tasks
 ------------------------------------
 
-Use these uploads when your data is already a training item. Reef gives the
-item directly to the recipe's task-to-batch stage. Reef does not make the item
-from inferences and reports. The scenario's recipe must take the upload type.
-If it does not, Reef refuses the upload with 400. For the recipe side, see
-`Uploaded trajectories and tasks
-<../developer-guide/processors.rst#uploaded-trajectories-and-tasks>`__.
+Use these routes when your data is already a training item. An upload is not
+a record. Reef keeps it as a data item and gives it directly to the recipe's
+task-to-batch stage. The scenario's recipe must accept the item kind. If it
+does not, Reef refuses the upload with 400. For the recipe side, see
+`Uploaded data items <../developer-guide/processors.rst#uploaded-data-items>`__.
 
-To upload an ATIF trajectory, send it to ``POST /reef/records`` or
-``POST /reef/records/batch`` with ``request_type`` set to ``trajectory``. The
-payload is the ATIF document. It must have an ``ATIF-v`` ``schema_version``,
-an ``agent`` object and at least one step:
+Both routes use the usual Bearer token and ``x-reef-scenario`` header. Each
+data item has an ``item_id`` that you choose. An identical retry returns the
+same receipt, also after training. The same ID with different content
+returns 409. An invalid upload returns 400 and saves nothing.
+
+To upload ATIF trajectories, send 1 to 1000 of them in one request to
+``POST /reef/trajectories``. Each document must have an ``ATIF-v``
+``schema_version``, an ``agent`` object and at least one step. Reef saves all
+of them in one transaction, or none. The request body can be at most 10 MiB:
 
 .. code:: bash
 
-   curl -f http://127.0.0.1:8900/reef/records \
+   curl -f http://127.0.0.1:8900/reef/trajectories \
      -H "Authorization: Bearer $REEF_TOKEN" \
      -H 'x-reef-scenario: my-agent' \
      -H 'Content-Type: application/json' \
-     -d '{
-       "agent_record_id": "trajectory-0001",
-       "request_type": "trajectory",
-       "payload": {
+     -d '{"trajectories": [{
+       "item_id": "trajectory-0001",
+       "trajectory": {
          "schema_version": "ATIF-v1.4",
          "session_id": "trajectory-0001",
          "agent": {"name": "my-agent", "version": "1"},
          "steps": [{"step_id": 1, "source": "user", "message": "What is 2 + 2?"}]
        }
-     }'
+     }]}'
+
+The response is ``{"scenario": "my-agent", "items": [{"item_id":
+"trajectory-0001", "kind": "trajectory"}]}``.
 
 To upload a Harbor task, send a gzip tar of one task directory to
-``POST /reef/tasks``. Give the record ID in the ``x-reef-agent-record-id``
-header:
+``POST /reef/tasks``. Give the item ID in the ``x-reef-item-id`` header:
 
 .. code:: bash
 
@@ -340,7 +346,7 @@ header:
    curl -f http://127.0.0.1:8900/reef/tasks \
      -H "Authorization: Bearer $REEF_TOKEN" \
      -H 'x-reef-scenario: my-agent' \
-     -H 'x-reef-agent-record-id: task-0001' \
+     -H 'x-reef-item-id: task-0001' \
      -H 'Content-Type: application/gzip' \
      --data-binary @my-task.tar.gz
 
@@ -350,23 +356,20 @@ Harbor's task loader must accept the directory. The directory needs
 ``task.toml``, ``instruction.md`` and the verifier script in ``tests/``. The
 request body can be at most 64 MiB. The unpacked files can be at most 256 MiB.
 Reef keeps the files in the scenario's task file store
-(``storage.task_file_backend``). The response holds the receipt and the task's
-``name`` and ``digest``:
+(``storage.task_file_backend``). The response holds the receipt and the
+task's ``name`` and ``digest``:
 
 .. code:: json
 
-   {"agent_record_id": "task-0001", "scenario": "my-agent", "request_type": "task",
+   {"scenario": "my-agent", "item_id": "task-0001", "kind": "task",
     "task": {"name": "my-task", "digest": "<sha256 of the task files>"}}
 
-Both uploads follow the record import rules. An identical retry returns the
-existing receipt, also after training. The same ID with different content
-returns 409. An invalid upload returns 400 and stores nothing.
-
-Each upload counts as one record set toward the recipe's ``batch_size``. A
-batch takes uploads first, in arrival order, and then record sets. Thus a
+Each data item counts as one record set toward the recipe's ``batch_size``. A
+batch takes data items first, in upload order, and then record sets. Thus a
 large upload can delay the training of live traffic. The delay continues
-until the batches use all of the upload. Archiving the scenario retires the
-uploaded task files with its records.
+until the batches use all of the upload. Archiving the scenario retires its
+data items and their task files with its records. Record retention does not
+delete data items.
 
 Manual training
 ---------------

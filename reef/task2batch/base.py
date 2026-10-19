@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Self
 
-from reef.core.batches import TrainDataItem, TrainingBatch
+from reef.core.batches import TaskItem, TrainDataItem, TrainingBatch, TrajectoryItem
 from reef.core.config import config_option
 from reef.core.plugins import NoSettings, Plugin, PluginConfigError, PluginSettings
 from reef.core.records_types import RequestType
@@ -50,9 +50,11 @@ class Task2Batch(ABC, Plugin):
     #: The training modes that the recipe's batches support. ``manual`` and
     #: ``hybrid`` batch on a training instruction.
     supported_training_modes: frozenset[str] = frozenset({"auto"})
-    #: The kinds of record that the trainer gives the pipeline. To take uploads, a recipe lists
-    #: ``RequestType.TRAJECTORY`` or ``RequestType.TASK``. Admission refuses an upload that no trainer takes.
+    #: The kinds of record that the trainer gives the pipeline.
     required_request_types: frozenset[RequestType] = frozenset({RequestType.INFERENCE, RequestType.REPORT})
+    #: The kinds of uploaded data item that the recipe trains on. Admission refuses an
+    #: uploaded data item whose kind no trainer of the scenario accepts.
+    accepted_items: frozenset[type[TrajectoryItem] | type[TaskItem]] = frozenset()
 
     def __init__(self, context: PipelineContext, batch_size: int) -> None:
         self.context = context

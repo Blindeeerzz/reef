@@ -116,12 +116,6 @@ class ComponentTaskStorage(TaskStorage):
     def open(self, name: str, *, split: SplitSettings) -> TaskStore:
         return self.storage.open(f"{self.component}/{name}", split=split)
 
-    def put_files(self, source: Path) -> str:
-        return self.storage.put_files(source)
-
-    def files_path(self, digest: str) -> Path:
-        return self.storage.files_path(digest)
-
 
 @dataclass(frozen=True, kw_only=True)
 class CompositeRecipe(Recipe):

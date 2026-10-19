@@ -10,7 +10,7 @@ import pytest
 from tests.support._threshold_processor import threshold_pipeline
 from tests.train.test_record_stage_batch_parity import CountingBackend, inference, instruction, report
 
-from reef.core import AgentRecord, RequestType
+from reef.core import AgentRecord
 from reef.record2record import (
     GroupDecision,
     InferenceRecord2Record,
@@ -24,11 +24,10 @@ from reef.record2record import (
 )
 from reef.record2task import Record2Task, ReportTasks, SkippedReport, TaskResult
 from reef.storage.sqlite import SQLiteRecordStore
-from reef.storage.tasks import SplitSettings, TaskStorage, TaskStore
 from reef.task2batch import Task2Batch
 from reef.train import PipelineContext, Trainer
 from reef.train.pipeline import TrainingPipeline
-from reef.train.types import TaskItem, TrainDataItem, TrainingBatch
+from reef.train.types import TaskItem, TrainDataItem, TrainingBatch, TrajectoryItem
 
 
 class WithholdingRecord2Record(PassThroughRecord2Record):
@@ -384,19 +383,6 @@ def test_the_trainer_reserves_a_batch_when_a_pending_set_finishes() -> None:
     assert batch is not None and [str(item.task_path) for item in batch.items] == ["t1"]
 
 
-class FilesOnlyTaskStorage(TaskStorage):
-    """Names the directory of an uploaded task after its digest; it opens no task store."""
-
-    def open(self, name: str, *, split: SplitSettings) -> TaskStore:
-        raise NotImplementedError
-
-    def put_files(self, source: Path) -> str:
-        raise NotImplementedError
-
-    def files_path(self, digest: str) -> Path:
-        return Path("/task-files") / digest
-
-
 class InferenceTasks(Record2Task):
     """Each inference set becomes one task named after its record."""
 
@@ -405,60 +391,49 @@ class InferenceTasks(Record2Task):
         return TaskResult.ready((TaskItem(Path(record_ids[0]), source_agent_record_ids=record_ids),))
 
 
-class UploadBatches(PairBatches):
-    required_request_types = frozenset(RequestType) - {RequestType.TRAIN}
+class DataItemBatches(PairBatches):
+    accepted_items = frozenset({TrajectoryItem, TaskItem})
 
 
-def upload(record_id: str, request_type: RequestType) -> AgentRecord:
-    payload: dict[str, object] = (
-        {"schema_version": "ATIF-v1.4", "agent": {"name": "fixture"}, "steps": [{"step_id": 1}]}
-        if request_type is RequestType.TRAJECTORY
-        else {"task": {"name": "demo", "digest": f"digest-{record_id}"}}
-    )
-    return AgentRecord.create(scenario="s", request_type=request_type, agent_record_id=record_id, payload=payload)
+TRAJECTORY = TrajectoryItem({"schema_version": "ATIF-v1.4", "agent": {"name": "fixture"}, "steps": [{"step_id": 1}]})
 
 
 @pytest.mark.unit
-def test_uploads_skip_the_first_stages_and_go_first_in_a_batch() -> None:
-    context = PipelineContext("s", task_storage=FilesOnlyTaskStorage())
+def test_uploaded_data_items_go_first_in_a_batch_and_count_as_sets() -> None:
+    context = PipelineContext("s")
     processor = TrainingPipeline(
         context,
         record2record=InferenceRecord2Record(),
         record2task=InferenceTasks(),
-        task2batch=UploadBatches(context, 2),
+        task2batch=DataItemBatches(context, 2),
     )
     processor.ingest(inference("i1"))
     assert not processor.ready()
-    processor.ingest(upload("t1", RequestType.TRAJECTORY))
-    processor.ingest(upload("k1", RequestType.TASK))
+    processor.ingest_item("t1", TRAJECTORY)
+    processor.ingest_item("k1", TaskItem(Path("k1")))
     assert processor.status()["ready_units"] == 3
 
     batch = processor.build_batch()
-    assert [item.source_agent_record_ids for item in batch.items] == [("t1",), ("k1",)]
-    assert batch.items[1] == TaskItem(
-        Path("/task-files/digest-k1"),
-        source_agent_record_ids=("k1",),
-        metadata={"task": {"name": "demo", "digest": "digest-k1"}},
-    )
+    assert batch.items == (TRAJECTORY, TaskItem(Path("k1")))
     processor.release_batch(batch.batch_id)
     batch = processor.build_batch()
-    assert [item.source_agent_record_ids for item in batch.items] == [("t1",), ("k1",)]
-    assert processor.acknowledge(batch.batch_id) == {"t1", "k1"}
+    assert batch.items == (TRAJECTORY, TaskItem(Path("k1")))
+    assert processor.acknowledge(batch.batch_id) == {"item:t1", "item:k1"}
 
-    # A replay of a consumed upload does not queue it again before the commit releases it.
-    processor.ingest(upload("t1", RequestType.TRAJECTORY))
-    processor.ingest(upload("t2", RequestType.TRAJECTORY))
+    # A consumed data item that the trainer reads again before the commit releases it does not queue again.
+    processor.ingest_item("t1", TRAJECTORY)
+    processor.ingest_item("t2", TRAJECTORY)
     batch = processor.build_batch()
-    assert [item.source_agent_record_ids for item in batch.items] == [("t2",), ("i1",)]
-    assert processor.acknowledge(batch.batch_id) == {"t2", "i1"}
-    assert {"t1", "k1", "t2"} <= processor.releasable_record_ids()
-    processor.release_records(frozenset({"t1", "k1", "t2"}))
-    assert not processor.consumed_uploads
+    assert batch.items == (TRAJECTORY, TaskItem(Path("i1"), source_agent_record_ids=("i1",)))
+    assert processor.acknowledge(batch.batch_id) == {"item:t2", "i1"}
+    assert {"item:t1", "item:k1", "item:t2"} <= processor.releasable_record_ids()
+    processor.release_records(frozenset({"item:t1", "item:k1", "item:t2"}))
+    assert not processor.consumed_items
 
 
 @pytest.mark.unit
-def test_a_task_upload_needs_the_scenarios_task_storage() -> None:
+def test_a_pipeline_refuses_a_data_item_kind_that_its_batch_stage_does_not_accept() -> None:
     context = PipelineContext("s")
-    processor = TrainingPipeline(context, task2batch=UploadBatches(context, 1))
-    with pytest.raises(ValueError, match="needs the task storage"):
-        processor.ingest(upload("k1", RequestType.TASK))
+    processor = TrainingPipeline(context, task2batch=PairBatches(context, 1))
+    with pytest.raises(ValueError, match="does not accept TrajectoryItem uploads"):
+        processor.ingest_item("t1", TRAJECTORY)

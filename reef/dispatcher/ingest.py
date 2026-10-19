@@ -1,17 +1,16 @@
-"""Validate records and append them to one loaded scenario.
+"""Validate records and uploaded data items and append them to one loaded scenario.
 
 The dispatcher calls these functions under the scenario's lock. They append
-records durably and count the scenario's ``ingest/*`` metrics. They do not
-start training: the caller wakes the trainers after a new record lands.
+records and data items durably and count the ``ingest/*`` metrics of records.
+They do not start training: the caller wakes the trainers after new data lands.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from typing import Any
 
-from reef.core.batches import TrajectoryItem
+from reef.core.batches import TrainDataItem
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportValidationError, validate_report_payload
 from reef.core.training_request import normalize_training_request_payload
@@ -61,21 +60,6 @@ def validate_record(current: Scenario, item: AgentRecord, preceding: Mapping[str
             refusal = training_request_refusal(request["text"], request["requires"])
             if refusal is not None:
                 raise ValueError(refusal)
-        # An upload trains only through a recipe that takes it. Otherwise every trainer would skip it.
-        if item.request_type in (RequestType.TRAJECTORY, RequestType.TASK):
-            if (existing := current.records.existing_receipt(item)) is not None:
-                return existing
-            if not any(
-                item.request_type in bound.trainer.pipeline.required_request_types for bound in current.trainers
-            ):
-                raise ValueError(
-                    f"the recipe of scenario {item.scenario!r} does not take {item.request_type.value} uploads"
-                )
-            if item.references:
-                raise ValueError("an upload does not reference other records")
-            if item.request_type is RequestType.TRAJECTORY:
-                # The pipeline makes a TrajectoryItem of the document. Check the document now, at upload.
-                TrajectoryItem(item.payload)
         # Reject a malformed report before it is appended. Then the producer's
         # POST fails with an error that names the broken field. Otherwise the
         # record would fail silently at training time. A recipe without a
@@ -112,19 +96,11 @@ def validate_record(current: Scenario, item: AgentRecord, preceding: Mapping[str
     return None
 
 
-def append_record(
-    current: Scenario, item: AgentRecord, *, task_directory: Path | None = None
-) -> tuple[AgentRecord, bool]:
-    """Validate and append one record; return the stored record and whether it is new.
-
-    ``task_directory`` holds the files of a ``task`` record. They are saved
-    in the scenario's task file store before the record is appended.
-    """
+def append_record(current: Scenario, item: AgentRecord) -> tuple[AgentRecord, bool]:
+    """Validate and append one record; return the stored record and whether it is new."""
     if (existing := validate_record(current, item, {})) is not None:
         current.operations.increment("ingest/duplicates_total")
         return existing, False
-    if task_directory is not None:
-        current.store.tasks.put_files(task_directory)
     try:
         with current.operations.measure("ingest/write"):
             appended = current.records.append_result(item)
@@ -150,3 +126,15 @@ def append_records(current: Scenario, items: Sequence[AgentRecord]) -> tuple[tup
     for result in appended:
         current.operations.increment("ingest/accepted_total" if result.inserted else "ingest/duplicates_total")
     return tuple(result.item for result in appended), any(result.inserted for result in appended)
+
+
+def append_data_items(current: Scenario, items: tuple[tuple[str, TrainDataItem], ...]) -> bool:
+    """Save uploaded ``(item_id, item)`` pairs in one transaction. Return True if one or more is new.
+
+    A data item trains only through a recipe that accepts its kind. Otherwise
+    every trainer would skip it, so admission refuses it.
+    """
+    for _, item in items:
+        if not any(type(item) in bound.trainer.pipeline.accepted_items for bound in current.trainers):
+            raise ValueError(f"the recipe of scenario {current.name!r} does not accept {type(item).__name__} uploads")
+    return current.store.data_items.add(items)

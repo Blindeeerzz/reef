@@ -6,7 +6,6 @@ import asyncio
 import json
 import threading
 from collections.abc import Mapping
-from contextlib import closing
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -27,7 +26,6 @@ from reef.pipeline_context import PipelineContext
 from reef.recipe import CompositeRecipe, Recipe, RecipeConfigError, build_recipe
 from reef.recipe.base import ServedEndpoint
 from reef.recipe.checkpoint_strategy import EveryNVersions
-from reef.recipe.composite import ComponentTaskStorage
 from reef.recipe.config import recipe_config_from_file_layout
 from reef.runtime.interfaces import InferenceHandler
 from reef.service.app import create_app
@@ -1376,13 +1374,3 @@ def test_a_composite_reads_the_hyphenated_mode_and_a_component_agreeing_in_it() 
     assert isinstance(recipe, CompositeRecipe)
     assert recipe.training_mode == "hybrid"
     assert [component.training_mode for component in recipe.components.values()] == ["hybrid", "hybrid"]
-
-
-def test_a_component_reads_the_task_files_uploaded_to_its_scenario(tmp_path):
-    source = tmp_path / "demo"
-    source.mkdir()
-    (source / "instruction.md").write_text("Print hello.")
-    with closing(SQLiteScenarioStorage(None)) as storage, closing(storage.open("s")) as session:
-        component = ComponentTaskStorage(session.tasks, "weights")
-        digest = component.put_files(source)
-        assert component.files_path(digest) == session.tasks.files_path(digest)

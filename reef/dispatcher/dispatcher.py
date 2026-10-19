@@ -15,6 +15,7 @@ from typing import Any
 from reef.artifact.artifact import Artifact, ArtifactRef
 from reef.artifact.memory import InMemoryRepositoryBackend
 from reef.artifact.repository import EnumerableRepositoryBackendFactory, RepositoryBackendFactory
+from reef.core.batches import TrainDataItem
 from reef.core.errors import ScenarioBusy, ScenarioCapacityFull, UnknownScenario
 from reef.core.records_types import AgentRecord, RequestType
 from reef.dispatcher import ingest
@@ -394,12 +395,7 @@ class Dispatcher(ScenarioLifecycle):
         item: AgentRecord,
         *,
         release_id: str | None = None,
-        task_directory: Path | None = None,
     ) -> AgentRecord:
-        """Validate and append one record, then wake its consumer.
-
-        ``task_directory`` holds the files of an uploaded ``task`` record.
-        """
         with self.registry.lock_for(item.scenario):
             # An instruction names a scenario that exists; inference and reports keep implicit creation.
             current = self.get_or_create_scenario(
@@ -409,7 +405,7 @@ class Dispatcher(ScenarioLifecycle):
             )
             if current is None:
                 raise UnknownScenario(f"unknown scenario {item.scenario!r}")
-            stored, inserted = ingest.append_record(current, item, task_directory=task_directory)
+            stored, inserted = ingest.append_record(current, item)
             if inserted:
                 self.process_accepted_records(current)
             return stored
@@ -421,10 +417,8 @@ class Dispatcher(ScenarioLifecycle):
         if not items:
             raise ValueError("a record batch must not be empty")
         scenario = items[0].scenario
-        if any(
-            item.scenario != scenario or item.request_type in (RequestType.TRAIN, RequestType.TASK) for item in items
-        ):
-            raise ValueError("a record batch must contain inferences, reports or trajectories from one scenario")
+        if any(item.scenario != scenario or item.request_type is RequestType.TRAIN for item in items):
+            raise ValueError("a record batch must contain inferences or reports from one scenario")
         with self.registry.lock_for(scenario):
             current = self.get_or_create_scenario(scenario, release_id=release_id)
             if current is None:
@@ -433,6 +427,19 @@ class Dispatcher(ScenarioLifecycle):
             if inserted:
                 self.process_accepted_records(current)
             return stored
+
+    def accept_data_items(
+        self, scenario: str, items: tuple[tuple[str, TrainDataItem], ...], *, release_id: str | None = None
+    ) -> None:
+        """Save uploaded ``(item_id, item)`` pairs in one transaction, then wake their consumer."""
+        if not items:
+            raise ValueError("an upload must hold one or more data items")
+        with self.registry.lock_for(scenario):
+            current = self.get_or_create_scenario(scenario, release_id=release_id)
+            if current is None:
+                raise UnknownScenario(f"unknown scenario {scenario!r}")
+            if ingest.append_data_items(current, items):
+                self.process_accepted_records(current)
 
     def process_accepted_records(self, current: Scenario) -> None:
         """Start consumption only after the accepted records are durable."""
