@@ -1225,7 +1225,7 @@ place it on the host that has Docker.
 
 .. config::
 
-   generator.tasks-root | the directory generated tasks, manifests and Harbor job files live under. Required.
+   generator.tasks-root | the directory generated tasks and Harbor job files live under. Required.
    generator.host | 127.0.0.1 | bind address
    generator.port | 8910 | bind port
    generator.work-dir | ``<tasks-root>/.play`` | where the task player keeps trials
