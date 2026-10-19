@@ -207,7 +207,7 @@ class TaskStorage(ABC):
     """Opens the task stores of one scenario, and keeps the files of the tasks uploaded to it.
 
     Each task store has a name and its own split settings. An uploaded task
-    is in no task store: a ``task`` record names the digest of its files.
+    is not in a task store. A ``task`` record names the digest of its files.
     """
 
     @abstractmethod
@@ -220,7 +220,7 @@ class TaskStorage(ABC):
 
     @abstractmethod
     def put_files(self, source: Path) -> str:
-        """Save a copy of the uploaded task directory ``source`` in the scenario's file store; return its digest."""
+        """Save a copy of the uploaded task directory ``source`` in the scenario's file store. Return its digest."""
 
     @abstractmethod
     def files_path(self, digest: str) -> Path:

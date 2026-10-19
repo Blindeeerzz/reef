@@ -23,7 +23,7 @@ class RequestType(str, Enum):
     TRAIN = "train"
     #: An uploaded ATIF trajectory. The pipeline gives it to the task-to-batch stage as one training item.
     TRAJECTORY = "trajectory"
-    #: An uploaded Harbor task: its name and the digest of its files in the scenario's task file store.
+    #: An uploaded Harbor task. The record holds the task name and the digest of its files in the task file store.
     TASK = "task"
 
 

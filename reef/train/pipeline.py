@@ -322,7 +322,7 @@ class TrainingPipeline:
         self.record2record.settle(record_set, result.status, producing_runtime_load_ids(result.tasks))
 
     def ingest(self, item: AgentRecord) -> None:
-        """Read one record. Inferences and reports go through the record stage; instructions and uploads stay here."""
+        """Read one record. Inferences and reports go to the record stage. Instructions and uploads stay here."""
         if item.request_type in (RequestType.INFERENCE, RequestType.REPORT):
             self.record2record.ingest(item)
             self.make_formed_tasks()

@@ -74,7 +74,7 @@ def validate_record(current: Scenario, item: AgentRecord, preceding: Mapping[str
             if item.references:
                 raise ValueError("an upload does not reference other records")
             if item.request_type is RequestType.TRAJECTORY:
-                # Refuse a document now that the pipeline could not make a training item of.
+                # The pipeline makes a TrajectoryItem of the document. Check the document now, at upload.
                 TrajectoryItem(item.payload)
         # Reject a malformed report before it is appended. Then the producer's
         # POST fails with an error that names the broken field. Otherwise the

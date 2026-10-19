@@ -57,7 +57,7 @@ from reef.train.trainer import Trainer
 
 logger = logging.getLogger(__name__)
 
-#: The most bytes that the files of one uploaded task can hold when they are unpacked.
+#: The maximum size in bytes of the unpacked files of one uploaded task.
 MAX_TASK_FILES_BYTES = 256 * 1024 * 1024
 
 
@@ -134,26 +134,27 @@ def normalize_request_payload(
 def unpack_task_archive(archive: bytes, root: Path) -> Path:
     """Unpack a gzip tar of one Harbor task directory under ``root``, check it with Harbor, and return it.
 
-    The archive holds one top-level directory and only files and directories
-    below it. Raises ``ValueError`` for any other archive.
+    The archive must hold one top-level directory, with only files and
+    directories below it. Raises ``ValueError`` for any other archive.
     """
     try:
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
             members = tar.getmembers()
-            top_names = {PurePosixPath(member.name).parts[:1] for member in members}
-            if len(top_names) != 1 or () in top_names:
-                raise ValueError("the task archive must hold one task directory")
             for member in members:
+                path = PurePosixPath(member.name)
                 if not (member.isfile() or member.isdir()):
                     raise ValueError(f"the task archive entry {member.name!r} is not a file or a directory")
-                if member.name.startswith("/") or ".." in PurePosixPath(member.name).parts:
+                if path.is_absolute() or ".." in path.parts or not path.parts:
                     raise ValueError(f"the task archive entry {member.name!r} is not inside the task directory")
+            top_names = {PurePosixPath(member.name).parts[0] for member in members}
+            if len(top_names) != 1:
+                raise ValueError("the task archive must hold one task directory")
             if sum(member.size for member in members) > MAX_TASK_FILES_BYTES:
                 raise ValueError(f"the task files are larger than {MAX_TASK_FILES_BYTES} bytes")
             tar.extractall(root, members=members, filter="data")
     except tarfile.TarError as exc:
         raise ValueError(f"the task archive is not a valid gzip tar: {exc}") from exc
-    task_directory = root / next(iter(top_names))[0]
+    task_directory = root / top_names.pop()
     if not task_directory.is_dir():
         raise ValueError("the task archive must hold one task directory")
     try:
@@ -300,15 +301,14 @@ class RequestService:
         return parsed, item
 
     def upload_task(self, headers: Mapping[str, str], archive: bytes) -> AgentRecord:
-        """Save an uploaded Harbor task and its ``task`` record through ordinary admission.
+        """Save an uploaded Harbor task and its ``task`` record through the usual admission.
 
         ``archive`` is a gzip tar of one task directory. The record ID comes
-        from the ``x-reef-agent-record-id`` header, so a retry is safe.
+        from the ``x-reef-agent-record-id`` header. Thus a retry is safe.
         """
         parsed = parse_request_headers(headers, RequestType.TASK)
-        record_id = next(
-            (value.strip() for key, value in headers.items() if key.lower() == AGENT_RECORD_ID_HEADER), ""
-        )
+        normalized = {key.lower(): value for key, value in headers.items()}
+        record_id = normalized.get(AGENT_RECORD_ID_HEADER, "").strip()
         if not record_id:
             raise ValueError(f"missing or empty {AGENT_RECORD_ID_HEADER}")
         with tempfile.TemporaryDirectory(prefix="reef-task-upload-") as staging:
@@ -320,7 +320,7 @@ class RequestService:
                 agent_record_id=record_id,
                 references=(),
             )
-            return self._dispatcher.accept_task(item, task_directory, release_id=parsed.release_id)
+            return self._dispatcher.accept_record(item, release_id=parsed.release_id, task_directory=task_directory)
 
     async def infer_with_data(
         self,

@@ -394,7 +394,12 @@ class Dispatcher(ScenarioLifecycle):
         item: AgentRecord,
         *,
         release_id: str | None = None,
+        task_directory: Path | None = None,
     ) -> AgentRecord:
+        """Validate and append one record, then wake its consumer.
+
+        ``task_directory`` holds the files of an uploaded ``task`` record.
+        """
         with self.registry.lock_for(item.scenario):
             # An instruction names a scenario that exists; inference and reports keep implicit creation.
             current = self.get_or_create_scenario(
@@ -404,7 +409,7 @@ class Dispatcher(ScenarioLifecycle):
             )
             if current is None:
                 raise UnknownScenario(f"unknown scenario {item.scenario!r}")
-            stored, inserted = ingest.append_record(current, item)
+            stored, inserted = ingest.append_record(current, item, task_directory=task_directory)
             if inserted:
                 self.process_accepted_records(current)
             return stored
@@ -425,19 +430,6 @@ class Dispatcher(ScenarioLifecycle):
             if current is None:
                 raise UnknownScenario(f"unknown scenario {scenario!r}")
             stored, inserted = ingest.append_records(current, items)
-            if inserted:
-                self.process_accepted_records(current)
-            return stored
-
-    def accept_task(self, item: AgentRecord, task_directory: Path, *, release_id: str | None = None) -> AgentRecord:
-        """Save an uploaded task's files and its ``task`` record, then wake the consumer of the record."""
-        if item.request_type is not RequestType.TASK:
-            raise ValueError("an uploaded task must be a task record")
-        with self.registry.lock_for(item.scenario):
-            current = self.get_or_create_scenario(item.scenario, release_id=release_id)
-            if current is None:
-                raise UnknownScenario(f"unknown scenario {item.scenario!r}")
-            stored, inserted = ingest.append_record(current, item, task_directory=task_directory)
             if inserted:
                 self.process_accepted_records(current)
             return stored

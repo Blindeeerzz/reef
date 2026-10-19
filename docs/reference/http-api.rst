@@ -302,11 +302,11 @@ Upload trajectories and Harbor tasks
 ------------------------------------
 
 Use these uploads when your data is already a training item. Reef gives the
-item to the recipe's batch stage directly. It does not make the item from
-inferences and reports. The scenario's recipe must take the upload type;
-otherwise Reef refuses the upload with 400. See `Uploaded trajectories and
-tasks <../developer-guide/processors.rst#uploaded-trajectories-and-tasks>`__
-for the recipe side.
+item directly to the recipe's task-to-batch stage. Reef does not make the item
+from inferences and reports. The scenario's recipe must take the upload type.
+If it does not, Reef refuses the upload with 400. For the recipe side, see
+`Uploaded trajectories and tasks
+<../developer-guide/processors.rst#uploaded-trajectories-and-tasks>`__.
 
 To upload an ATIF trajectory, send it to ``POST /reef/records`` or
 ``POST /reef/records/batch`` with ``request_type`` set to ``trajectory``. The
@@ -344,13 +344,14 @@ header:
      -H 'Content-Type: application/gzip' \
      --data-binary @my-task.tar.gz
 
-The archive must hold one top-level directory, with files and directories
-only. Reef refuses links, absolute paths and ``..`` entries. Harbor's task
-loader must accept the directory: it needs ``task.toml``, ``instruction.md``
-and the verifier script in ``tests/``. The request body can be at
-most 64 MiB, and the unpacked files at most 256 MiB. Reef keeps the files in
-the scenario's task file store (``storage.task_file_backend``). The response
-is the receipt and the task's ``name`` and ``digest``:
+The archive must hold one top-level directory, with only files and
+directories below it. Reef refuses links, absolute paths and ``..`` entries.
+Harbor's task loader must accept the directory. The directory needs
+``task.toml``, ``instruction.md`` and the verifier script in ``tests/``. The
+request body can be at most 64 MiB. The unpacked files can be at most 256 MiB.
+Reef keeps the files in the scenario's task file store
+(``storage.task_file_backend``). The response holds the receipt and the task's
+``name`` and ``digest``:
 
 .. code:: json
 
@@ -362,9 +363,10 @@ existing receipt, also after training. The same ID with different content
 returns 409. An invalid upload returns 400 and stores nothing.
 
 Each upload counts as one record set toward the recipe's ``batch_size``. A
-batch takes uploads first, oldest first, and then record sets. A large upload
-can thus delay the training of live traffic until the batches use it up.
-Archiving the scenario retires the uploaded task files with its records.
+batch takes uploads first, in arrival order, and then record sets. Thus a
+large upload can delay the training of live traffic. The delay continues
+until the batches use all of the upload. Archiving the scenario retires the
+uploaded task files with its records.
 
 Manual training
 ---------------

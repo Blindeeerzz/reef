@@ -423,7 +423,7 @@ def write_task(root, name="demo", instruction="Print hello."):
 
 
 def task_archive(*entries):
-    """A gzip tar of ``(name, path)`` pairs; a path of None adds an empty directory entry."""
+    """A gzip tar that holds each ``(name, path)`` pair: the file or directory ``path`` under ``name``."""
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
         for name, path in entries:
