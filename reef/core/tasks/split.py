@@ -31,7 +31,7 @@ class TaskSplitError(ReefError):
 
 
 class TaskSplitConflict(TaskSplitError):
-    """New tasks connect sources already assigned to both train and eval."""
+    """New tasks share source records with tasks in the train split and with tasks in the eval split."""
 
 
 @dataclass(frozen=True)
@@ -73,7 +73,7 @@ def checked_split(split: str, names: object) -> tuple[str, ...]:
 
 
 def checked_source_records(sources: Mapping[str, Iterable[str]]) -> dict[str, tuple[str, ...]]:
-    """Materialize and validate source references once for either split path."""
+    """Check that ``sources`` maps task names to record ids, and return each task's ids as a tuple."""
     if not isinstance(sources, Mapping) or any(not isinstance(name, str) or not name for name in sources):
         raise TaskSplitError("sources must map non-empty task names to their record ids")
     record_ids_by_task: dict[str, tuple[str, ...]] = {}
@@ -221,11 +221,14 @@ def extend_split_by_source(
     previous_sources: Mapping[str, Iterable[str]],
     sources: Mapping[str, Iterable[str]],
 ) -> TaskSplit:
-    """Place new source components without moving previously assigned tasks.
+    """Assign new tasks to a split and keep the split of each assigned task.
 
-    Components sharing an existing placement inherit it. A component joining
-    train and eval is rejected. Independent components use a seeded hash so
-    incremental singleton writes do not each force an eval placement.
+    Tasks that share a source record form a group. A group with assigned
+    tasks in one split adds its new tasks to that split. A group with assigned
+    tasks in both splits raises ``TaskSplitConflict``. A group with no
+    assigned task goes to eval when a seeded hash of its record ids falls
+    below ``eval_fraction``. The hash does not depend on the other groups, so
+    a split that grows one task at a time keeps the expected eval fraction.
     """
     existing_names = set(previous.train) | set(previous.eval)
     if set(previous_sources) != existing_names:

@@ -145,7 +145,6 @@ def test_the_results_close_the_generation_with_regret_reports_and_the_next_exper
     assert metadata["regret"] == 0.5 and metadata["skill"] == "inspection" and metadata["generation"] == 0
     assert service.reports[1]["metadata"]["refusal"] == "reply refused: no json"
     names = ["harbor-00000-000-inspection", "harbor-00000-002-inspection"]
-    assert service.manifests == [], "the task store owns the split manifest"
 
     document = report(tmp_path, 0)
     assert document["error"] == "" and [task["name"] for task in document["tasks"]] == names
@@ -169,7 +168,7 @@ def test_an_unplayed_task_scores_zero_with_its_error(tmp_path: Path) -> None:
     asyncio.run(generator.record_results((TaskPlayResult(item.task, error="the agent could not play the task"),)))
     assert service.reports[0]["score"] == 0.0
     assert service.reports[0]["metadata"]["refusal"] == "the agent could not play the task"
-    assert service.manifests == [] and report(tmp_path, 0)["tasks"] == []
+    assert report(tmp_path, 0)["tasks"] == []
 
 
 @pytest.mark.unit
@@ -180,7 +179,6 @@ def test_eval_tasks_receive_no_designer_reward_or_training_experience(tmp_path: 
     assert asyncio.run(generator.validate(generated.task)).is_valid
     asyncio.run(generator.record_results((TaskPlayResult(task=generated.task, split="eval"),)))
     assert service.reports == []
-    assert service.manifests == []
     assert generator.experience == ()
     document = report(tmp_path, 0)
     assert document["tasks"] == []
@@ -209,7 +207,6 @@ def test_a_service_that_goes_away_ends_the_generation_with_what_ran(tmp_path: Pa
     assert document["error"] == "the generator went away" and [t["name"] for t in document["tasks"]] == [
         "harbor-00000-000"
     ]
-    assert service.manifests == [], "a generation that stopped writes no manifest"
 
 
 def test_a_check_that_could_not_run_raises_and_is_named_in_the_report(tmp_path: Path) -> None:
@@ -280,6 +277,6 @@ def test_a_round_of_the_generated_task_recipe_runs_spade_end_to_end(tmp_path: Pa
         ("designer-2", 0.0),
         ("designer-3", 0.5),
     ]
-    assert service.manifests == [] and report(tmp_path, 0)["error"] == ""
+    assert report(tmp_path, 0)["error"] == ""
     assert generation.task_store is not None and len(generation.task_store.tasks(split="train")) == 2
     assert read_harbor_task(tmp_path / "tasks" / "harbor-00000-000-inspection").name == "harbor-00000-000-inspection"

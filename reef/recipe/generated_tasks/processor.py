@@ -11,10 +11,10 @@ deployment's :class:`~reef.core.tasks.TaskGenerator`.
 One round is one job on a private worker, off the trainer's thread:
 
 1. Ask the generator for tasks, with the round's source sessions when the record stage gave any.
-2. Save the candidates and validate each task with the generator.
-3. Publish valid tasks to the scenario's task store, with their train/eval split, before play.
-4. Stage training tasks through the generator service and play their training and measurement arms.
-   Eval tasks remain saved without plays.
+2. Save the candidates in the scenario's task store, and validate each task with the generator.
+3. Publish each valid task with its train/eval split.
+4. Write each training task through the generator service and play it: ``plays_per_task`` times on the
+   training arm, then each measurement arm the generator asked for. Eval tasks are not played.
 5. Send the results to the generator.
 
 The first round starts when the pipeline first looks for a batch. The next round starts after
@@ -112,12 +112,39 @@ def split_source_ids(generated: GeneratedTask) -> tuple[str, ...]:
 
 
 def task_counts(store: TaskStore) -> dict[str, int]:
-    """Count the published tasks by split, and the rejected and pending candidates."""
-    counts = Counter(f"{'available' if task.split == 'train' else 'held_out'}/{task.split}" for task in store.tasks())
+    """Count the published tasks of each split, and the rejected and pending candidates."""
+    splits = Counter(task.split for task in store.tasks())
     candidates = [candidate for state in store.generations() for candidate in state.candidates or ()]
-    counts["rejected"] = sum(bool(candidate.error) for candidate in candidates)
-    counts["candidate"] = sum(candidate.is_pending for candidate in candidates)
-    return dict(counts)
+    return {
+        "train": splits["train"],
+        "eval": splits["eval"],
+        "rejected": sum(bool(candidate.error) for candidate in candidates),
+        "pending": sum(candidate.is_pending for candidate in candidates),
+    }
+
+
+def assigned_split(store: TaskStore, settings: SplitSettings, generated: GeneratedTask) -> SplitName:
+    """Return the split of a task: the split of its published name, or else the split of its source records.
+
+    Tasks that share a source record get the same split, and a published task keeps its split. Raises
+    ``TaskSplitConflict`` if the sources of the task join tasks of both splits.
+    """
+    published = {task.generated.task.name: task for task in store.tasks()}
+    existing = published.get(generated.task.name)
+    if existing is not None:
+        return existing.split
+    previous = TaskSplit(
+        train=tuple(name for name, task in published.items() if task.split == "train"),
+        eval=tuple(name for name, task in published.items() if task.split == "eval"),
+        seed=settings.seed,
+        eval_fraction=settings.eval_fraction,
+    )
+    assigned = extend_split_by_source(
+        previous=previous,
+        previous_sources={name: split_source_ids(task.generated) for name, task in published.items()},
+        sources={generated.task.name: split_source_ids(generated)},
+    )
+    return "eval" if generated.task.name in assigned.eval else "train"
 
 
 @dataclass(frozen=True)
@@ -253,7 +280,7 @@ class RoundSettings(PluginSettings):
     state_dir: str = config_option("", help="Where each scenario keeps its round summaries.")
     served_model: str = config_option("", help="The model the task player asks for; the deployment's by default.")
     eval_fraction: float = config_option(
-        DEFAULT_EVAL_FRACTION, help="The fraction of new source components held out before rollout."
+        DEFAULT_EVAL_FRACTION, help="The fraction of new source groups that go to the eval split."
     )
     split_seed: int = config_option(DEFAULT_SPLIT_SEED, help="The fixed seed of the task store's train/eval split.")
     scaffold_tolerance: int = config_option(
@@ -540,7 +567,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
                 validation = await self.task_generator.validate(item.task)
                 if validation.is_valid:
                     try:
-                        split = self.assigned_split(item)
+                        split = assigned_split(self.task_store, self.split_settings, item)
                         self.task_store.publish_task(generation=job.round_number, index=index, split=split)
                     except (TaskConflict, TaskSplitConflict) as conflict:
                         self.task_store.reject_task(generation=job.round_number, index=index, reason=str(conflict))
@@ -569,6 +596,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
                     results.append(result)
                     if result.is_played:
                         reported_plays[item.task.name] = reported
+                        # The task's group can close now, before the round ends.
                         self.reported_play_counts.put((item.task.name, reported))
         except Exception as exc:
             error = error or str(exc) or type(exc).__name__
@@ -580,31 +608,6 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             logger.exception("the task generator did not take the results of round %d", job.round_number)
         self.write_round_summary(job.round_number, tuple(results), error, reported_plays, job.source_records)
         return RoundOutcome(receipt=job.receipt, round_number=job.round_number, results=tuple(results), error=error)
-
-    def assigned_split(self, generated: GeneratedTask) -> SplitName:
-        """The split of a task: the split of its published name, or else the split of its source records.
-
-        Tasks that share a source record share a split, and a published task never moves. Raises
-        ``TaskSplitConflict`` if the task's sources join tasks of both splits.
-        """
-        if self.task_store is None:
-            raise RuntimeError("a split needs a task store")
-        published = {task.generated.task.name: task for task in self.task_store.tasks()}
-        existing = published.get(generated.task.name)
-        if existing is not None:
-            return existing.split
-        previous = TaskSplit(
-            train=tuple(name for name, task in published.items() if task.split == "train"),
-            eval=tuple(name for name, task in published.items() if task.split == "eval"),
-            seed=self.split_settings.seed,
-            eval_fraction=self.split_settings.eval_fraction,
-        )
-        assigned = extend_split_by_source(
-            previous=previous,
-            previous_sources={name: split_source_ids(task.generated) for name, task in published.items()},
-            sources={generated.task.name: split_source_ids(generated)},
-        )
-        return "eval" if generated.task.name in assigned.eval else "train"
 
     async def played(self, item: GeneratedTask, round_number: int) -> tuple[TaskPlayResult, int]:
         """Write one valid task and play it: the training arm, then each measurement arm.

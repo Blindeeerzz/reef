@@ -9,10 +9,9 @@ results in the prompt as SPADE's experience section. A task with ``solution/hint
 and removes it again: the generated-task recipe writes the valid task once more to play it.
 
 ``record_results`` closes the generation. It reports each proposal's regret against the Designer's
-receipt (0 for a refused one) and keeps the generation report under ``state_dir``.
-Eval tasks receive no Designer report and do not enter the experience.
-The recipe owns the cumulative split manifest.
-A restart reads the last report to continue with the next generation and the last experience.
+receipt (0 for a refused one) and keeps the generation report under ``state_dir``. An eval task gets no
+Designer report and does not go into the experience. A restart reads the last report to continue with the next
+generation and the last experience.
 """
 
 from __future__ import annotations
@@ -244,7 +243,7 @@ class SpadeTaskGenerator(TaskGenerator):
             return await self.service.write_task(task)
 
     async def record_results(self, results: tuple[TaskPlayResult, ...]) -> None:
-        """Save the generation report and training experience, and report Designer rewards for train tasks."""
+        """Close the generation: the Designer's reports for train tasks, the report file and the next experience."""
         proposals: list[tuple[ProposalRecord, TaskMeasure | None]] = [(proposal, None) for proposal in self.refused]
         for result in results:
             pending = self.pending.pop(result.task.name, None)
@@ -278,7 +277,7 @@ class SpadeTaskGenerator(TaskGenerator):
         proposals.sort(key=lambda entry: entry[0].index)
         reported = [await self.reported(proposal, measure) for proposal, measure in proposals]
         measures = tuple(measure for _, measure in proposals if measure is not None)
-        generation_record = GenerationRecord(self.generation, tuple(reported), measures, None, self.error)
+        generation_record = GenerationRecord(self.generation, tuple(reported), measures, self.error)
         report_path = write_generation_report(self.state_dir, generation_record)
         logger.info(
             "SPADE generation %d on scenario %r: %d tasks of %d proposals under %s",

@@ -495,7 +495,7 @@ def test_eval_tasks_are_saved_without_training_or_measurement_plays(tmp_path: Pa
     assert all(
         result.split == "eval" and not result.is_played and not result.error for result in task_generator.results[0]
     )
-    assert pipeline.status()["task_store"] == {"held_out/eval": 2, "rejected": 0, "candidate": 0}
+    assert pipeline.status()["task_store"] == {"train": 0, "eval": 2, "rejected": 0, "pending": 0}
     assert pipeline.record2task.task_store.generation(0).is_complete
     pipeline.close()
 
@@ -554,7 +554,7 @@ def test_a_task_joins_the_split_of_its_sources_and_a_task_that_joins_both_splits
         "follower": "eval",
     }
     assert store.path(store.tasks(split="train")[0]).joinpath("instruction.md").is_file()
-    assert pipeline.status()["task_store"] == {"available/train": 1, "held_out/eval": 2, "rejected": 2, "candidate": 0}
+    assert pipeline.status()["task_store"] == {"train": 1, "eval": 2, "rejected": 2, "pending": 0}
     pipeline.close()
 
 

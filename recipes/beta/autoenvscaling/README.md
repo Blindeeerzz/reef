@@ -49,7 +49,7 @@ AutoEnvScaling is a task generator. The deployment selects it in `pipeline.recor
 1. `generate` takes the next `count` sessions of the sources file. The author rebuilds each session as a task (see [the author](#the-author)).
 2. Admission holds each task to the generator service's parser and authoring checks, the rules a prompt Designer's reply is held to. Its Dockerfile gets a last step that keeps the repository's history up to the base commit only (below).
 3. `validate` writes the task under the generator service's tasks root, runs the task checks there, and removes the task again. The first check is Harbor's oracle and nop agents: the reference solution must score 1, and doing nothing must score below 1. The test review follows ([the task checks](#the-task-checks)). A duplicate task is invalid.
-4. The recipe saves each valid task and assigns its split before play. It plays training tasks `plays_per_task` times; eval tasks remain saved without plays.
+4. The recipe saves each valid task with its train/eval split before play. It plays each training task `plays_per_task` times. It does not play eval tasks.
 5. `record_results` computes each played task's pass rate and its place against the band, and writes the generation's report. It sends no Designer reports, because the Designer here is not trained.
 
 An accepted task names two source records: the author's last recorded call, the one that wrote the task, and the session's record. A task rebuilt from a repository gets 4 CPUs, 4 GB of memory, 10 GB of storage, 20 minutes to build, an hour for the solver and 7.5 minutes for the verifier.
@@ -75,14 +75,14 @@ The generation's report gives each session the stage where it stopped:
 | `unchecked` | a refusing check could not run, so `validate` refused the task |
 | `play` | the recipe could not play the task |
 | `band` | the task played, and its pass rate is outside the band |
-| `held_out` | the valid task was saved in eval without plays or a band measurement |
+| `held_out` | the valid task is in the eval split, so the recipe did not play it and it has no band position |
 | `unreached` | the round ended before it played the task |
 
 Three kinds of failure end differently:
 
 - **An outage** is a failure the author does not cause: the session or the repository could not be fetched, the sandbox did not start, or a model call failed while the run's budget still had calls. The generation ends, and its report keeps the outage as its error. Validated tasks made before it stay in the task store, and its training tasks still play. The outage's session counts as taken.
 - **The agent's own limits** are not outages: a run that spent `max_model_calls`, ran out of time or hit its reply budget leaves its task as it stands, and admission checks it like any other task.
-- **An oracle check that cannot run**, because the generator service failed, ends the round. `GET /reef/status` shows it as the round's last error, the generation's report names it, and the store retains tasks already published before the failure. A test review that cannot run is recorded instead (see [the task checks](#the-task-checks)).
+- **An oracle check that cannot run**, because the generator service failed, ends the round. `GET /reef/status` shows it as the round's last error, the generation's report names it, and the task store keeps the tasks that the round published before the failure. A test review that cannot run is recorded instead (see [the task checks](#the-task-checks)).
 
 ### The report and the task store
 
@@ -106,7 +106,7 @@ The generator's `config` keys:
 | `max_model_calls` | 250 | the agent's model calls in one run |
 | `agent_timeout_seconds` | 2700 | the longest one agent run lasts |
 
-Set `eval_fraction` and `split_seed` in `pipeline.record2task.config`, outside the generator configuration. Their defaults are 0.0 and 0. A scenario's task store keeps the split settings of its first open, and a scenario that loads with other settings fails.
+Set `eval_fraction` and `split_seed` in `pipeline.record2task.config`, outside the generator configuration. Their defaults are 0.0 and 0. The task store saves these settings when the scenario opens it for the first time. A scenario that loads with other settings fails.
 
 ## The author
 
@@ -230,7 +230,7 @@ The built-in generated-task recipe starts the next round after `batches_per_roun
            storage.close()
    ```
 
-   `generator_config` is the generator's `config` from the example, with its environment references filled in. The rounds save each valid task in the task store under `rounds_dir/records`, and the generator service writes each training task under its `tasks-root`. The band remains a diagnostic in the generation report. A restart continues with the next round.
+   `generator_config` is the generator's `config` from the example, with its environment references filled in. The rounds save each valid task in the task store under `rounds_dir/records`, and the generator service writes each training task under its `tasks-root`. The band is only recorded in the generation report. A restart continues with the next round.
 
 2. **Train from the pool.** Start the example with `rounds: 0`, in the environment of [Run it](#run-it), and create the scenario as there. With `rounds: 0` the recipe generates nothing and trains on the episodes that the task player reports with the label `arm=plain`, as [SPADE's README](../spade/README.md) describes. A task's group trains once it has `plays_per_task` episodes (4 in the example), so play each task directory under the generator service's `tasks-root` four times. `--agent-json` gives the task player the example's `generator.agent`, with thinking off.
 
