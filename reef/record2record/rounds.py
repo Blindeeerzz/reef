@@ -51,7 +51,7 @@ class RoundSet(RecordSet):
     """One task-generation round: its number and its source sessions. ``set_id`` is ``("round", round_number)``."""
 
     round_number: int
-    sources: tuple[ReportContext, ...] = ()
+    sources: tuple[ReportContext, ...]
 
     def record_ids(self) -> tuple[str, ...]:
         return tuple(
@@ -109,16 +109,12 @@ class RoundRecord2Record(ReportRecord2Record):
 
     # ---------------------------------------------------------------- rounds
 
-    def round_due(self) -> bool:
-        """Whether the next round should start now."""
-        if self.rounds_stopped or self.round_running:
-            return False
-        return self.follow_at_once or self.trained_batches >= self.batches_per_round
-
     def poll(self, now: float) -> None:
         """Form the next round set when a round is due, or stop the rounds at the limit."""
         super().poll(now)
-        if not self.round_due():
+        if self.rounds_stopped or self.round_running:
+            return
+        if not self.follow_at_once and self.trained_batches < self.batches_per_round:
             return
         if self.next_round >= self.round_limit:
             self.stop_rounds()

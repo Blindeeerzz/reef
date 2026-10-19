@@ -50,11 +50,10 @@ class Record2Task(ABC, Plugin):
     Runs on the trainer thread without network or model calls. Raise on a
     broken training contract. Slow work runs on a worker that the stage owns:
     ``make_tasks`` submits it and returns ``TaskResult.pending()``, and
-    ``take_finished`` hands back the result. ``close`` stops the worker; the
-    pipeline ignores a result that finishes after ``close``. A deployment names
-    a stage class in ``pipeline.record2task`` and gives its config. The class
-    parses the config into its settings dataclass and builds the stage in
-    ``from_config``.
+    ``take_finished`` hands back the result. ``close`` stops the worker. A
+    deployment names a stage class in ``pipeline.record2task`` and gives its
+    config. The class parses the config into its settings dataclass and builds
+    the stage in ``from_config``.
     """
 
     @classmethod

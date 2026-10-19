@@ -188,7 +188,6 @@ class TrainingPipeline:
         self.tasks: dict[Hashable, tuple[TrainDataItem, ...]] = {}
         #: Formed sets that the record-to-task stage still works on, by set ID. Their records stay held until settled.
         self.pending_sets: dict[Hashable, RecordSet] = {}
-        self.closed = False
         self.set_training_mode(context.training_mode)
 
     @property
@@ -302,7 +301,6 @@ class TrainingPipeline:
                     f"{stage_name}.take_finished returned a result for set {set_id!r}, which is not pending"
                 )
             self.settle_task_result(self.pending_sets.pop(set_id), result)
-        self.forget_ended_sets()
 
     def settle_task_result(self, record_set: RecordSet, result: TaskResult) -> None:
         """Hold a pending set, or keep a ready set's tasks and settle the set in the record stage."""
@@ -336,8 +334,6 @@ class TrainingPipeline:
     # acknowledged, then end the sets that it consumed.
 
     def ready(self) -> bool:
-        if self.closed:
-            return False
         # Background work, such as judgments or finished rounds, forms sets without a new record.
         self.settle_finished_tasks()
         self.record2record.poll(time.monotonic())
@@ -453,9 +449,8 @@ class TrainingPipeline:
         """Close the record and task stages; safe to call more than once.
 
         After ``close`` returns, no background worker of a stage may touch
-        shared state, and the pipeline settles no further result.
+        shared state or deliver further results.
         """
-        self.closed = True
         try:
             self.record2record.close()
         finally:

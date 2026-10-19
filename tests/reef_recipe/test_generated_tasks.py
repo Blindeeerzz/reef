@@ -36,7 +36,6 @@ from reef.recipe.generated_tasks.processor import (
     GeneratedTaskRecord2Record,
     GeneratedTaskTasks,
     RoundJob,
-    RoundOutcome,
     RoundSettings,
     TaskBatchSettings,
     TaskGroupSettings,
@@ -756,16 +755,6 @@ def test_a_generator_failure_ends_the_round_with_what_ran(
     status = p.status()["task_generation"]
     assert status["completed"] == 1 and status["last_error"] == error
     assert summary(tmp_path, 0)["error"] == error
-
-
-def test_a_closed_pipeline_starts_no_round_and_ignores_a_round_that_finishes_late(tmp_path: Path) -> None:
-    worker = DeferredWorker()
-    p, _ = rounds(tmp_path, ScriptedGenerator([generated(0, 0)]), worker=worker)
-    assert not p.ready() and [job.round_number for job in worker.submitted] == [0]
-    p.close()
-    worker.finished.append(RoundOutcome(receipt="round-00000", round_number=0, results=(), error=""))
-    assert not looked(p) and [job.round_number for job in worker.submitted] == [0]
-    assert p.status()["task_generation"]["completed"] == 0, "the late round settled nothing"
 
 
 def test_a_worker_that_refuses_a_round_stops_the_rounds_with_the_reason(tmp_path: Path) -> None:

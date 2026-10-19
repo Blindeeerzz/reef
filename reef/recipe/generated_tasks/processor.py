@@ -495,19 +495,17 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         """Close the task groups whose plays ended, and hand back each finished round."""
         while not self.reported_play_counts.empty():
             self.round_stage.plays_reported(*self.reported_play_counts.get_nowait())
-        if self.worker is None:
+        round_set = self.round_in_flight
+        if self.worker is None or round_set is None:
             return ()
         finished: list[tuple[Hashable, TaskResult]] = []
         for outcome in self.worker.poll():
-            if self.round_in_flight is None:
-                raise RuntimeError(f"the round worker handed back {outcome.receipt}, but no round runs")
-            set_id = self.round_in_flight.set_id
             self.round_in_flight = None
             if isinstance(outcome, Failed):
                 self.last_error = f"{outcome.receipt} did not finish; see the service log"
                 logger.error("generated-task %s failed on scenario %r", outcome.receipt, self.scenario)
                 # READY, not SKIPPED: a failing worker must not start round after round.
-                finished.append((set_id, TaskResult.ready(())))
+                finished.append((round_set.set_id, TaskResult.ready(())))
                 continue
             if not isinstance(outcome, RoundOutcome):
                 raise TypeError("the round worker must hand back a RoundOutcome")
@@ -523,7 +521,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
                 played,
                 len(outcome.results),
             )
-            finished.append((set_id, TaskResult.ready(()) if played else TaskResult.skipped()))
+            finished.append((round_set.set_id, TaskResult.ready(()) if played else TaskResult.skipped()))
         return tuple(finished)
 
     def close(self) -> None:

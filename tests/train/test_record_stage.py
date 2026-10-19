@@ -370,15 +370,6 @@ def test_take_finished_must_not_hand_back_a_pending_result() -> None:
 
 
 @pytest.mark.unit
-def test_a_closed_pipeline_ignores_a_late_result() -> None:
-    processor = PendingPipeline()
-    processor.ingest(inference("i1"))
-    processor.close()
-    processor.pending_tasks.finish("i1", TaskResult.ready((TaskItem(Path("t1")),)))
-    assert not processor.ready() and len(processor.record2record.pool) == 0
-
-
-@pytest.mark.unit
 def test_the_trainer_reserves_a_batch_when_a_pending_set_finishes() -> None:
     records = SQLiteRecordStore()
     records.append(inference("i1"))

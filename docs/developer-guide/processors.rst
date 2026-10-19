@@ -93,8 +93,8 @@ The trainer calls it on its own thread, under its lock; no call may block:
 The pipeline also merges the record and task stages' ``status()`` and metrics.
 ``background_jobs_running()`` is true while a set is pending or the record
 stage runs a background job. The trainer then polls ``ready()`` at a fixed
-interval. ``close()`` closes the record and task stages. After ``close()``,
-the pipeline settles no further result. ``releasable_record_ids()`` returns
+interval. ``close()`` closes the record and task stages.
+``releasable_record_ids()`` returns
 the completed records that no held or pending set references, and
 ``release_records(ids)`` frees their memory after a successful commit. New
 commits retain the stored bodies; consumption progress prevents retraining
@@ -122,13 +122,10 @@ stage owns and returns ``TaskResult.pending()``. The pipeline holds the set
 and its records. Each time the pipeline looks for a batch, it calls the
 stage's ``take_finished()``, which returns ``(set_id, TaskResult)`` pairs for
 the work that finished. The pipeline then settles each set in the record
-stage, the same way as an immediate result:
-
-- Each set settles one time.
-- A result from ``take_finished`` must not be pending, and its set must be
-  pending. Otherwise ``ready()`` raises ``ValueError``.
-- After ``close()``, the pipeline settles nothing. The stage's ``close``
-  stops its worker.
+stage, the same way as an immediate result. Each set settles one time. A
+result from ``take_finished`` must not be pending, and its set must be
+pending; otherwise ``ready()`` raises ``ValueError``. The stage's ``close``
+stops its worker.
 
 The record-to-record stage
 --------------------------
