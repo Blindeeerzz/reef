@@ -44,8 +44,11 @@ answers with text and no tool call. ``decide`` refuses a candidate whose
         reply_margin: 0.25       # allowed drop below the best selected reply_rate
         min_reply_rate: 0.75     # lowest reply_rate a candidate may have, also right after a restart
 
-The file is JSON: ``{"tools": [...], "conversations": [[message, ...], ...]}``,
-with the tools and messages in the format that the harness sends.
+The file is JSON: ``{"tools": [...], "conversations": [[message, ...], ...],
+"answers": [...]}``, with the tools and messages in the format that the harness
+sends. ``answers`` is optional and gives each conversation's gold answer; a
+reply then counts only when its visible text contains that number, so an
+incoherent reply does not count.
 """
 
 from __future__ import annotations
@@ -53,6 +56,7 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Self
@@ -159,8 +163,8 @@ class OpenClawRLCandidateEvaluationSettings(PluginSettings):
             raise ValueError(f"min_reply_rate must be between 0 and 1, got {self.min_reply_rate}")
 
 
-def load_reply_probe(path: pathlib.Path) -> tuple[list[dict[str, Any]], list[list[dict[str, Any]]]]:
-    """Read the tools and conversations of a reply-probe file; raise ``PluginConfigError`` for a malformed one."""
+def load_reply_probe(path: pathlib.Path) -> tuple[list[dict[str, Any]], list[list[dict[str, Any]]], list[str]]:
+    """Read the tools, conversations and gold answers of a reply-probe file; raise ``PluginConfigError`` for a malformed one."""
     try:
         content = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -175,19 +179,25 @@ def load_reply_probe(path: pathlib.Path) -> tuple[list[dict[str, Any]], list[lis
         raise PluginConfigError(
             f"every conversation in reply_probe_file {str(path)!r} must be a non-empty message list"
         )
-    return tools, conversations
+    answers = content.get("answers", [])
+    if not isinstance(answers, list) or (answers and len(answers) != len(conversations)):
+        raise PluginConfigError(f"reply_probe_file {str(path)!r}: 'answers' must give one answer per conversation")
+    return tools, conversations, [str(answer) for answer in answers]
 
 
-def answers_in_text(generated: str, *, opens_reasoning: bool = False) -> bool:
-    """Whether a generated turn is a text answer: visible text after any reasoning, and no tool call.
+def answers_in_text(generated: str, *, opens_reasoning: bool = False, answer: str = "") -> bool:
+    """Whether a generated turn answers in text: visible text after any reasoning, no tool call, and the answer.
 
     When the chat template opened the reasoning block, a turn that never closes it has no visible text:
-    the client reads all of it as reasoning.
+    the client reads all of it as reasoning. With ``answer``, the visible text must contain that number,
+    so an incoherent reply does not count.
     """
     if opens_reasoning and "</think>" not in generated:
         return False
     visible = generated.split("</think>")[-1]
-    return bool(visible.strip()) and "<tool_call>" not in visible
+    if not visible.strip() or "<tool_call>" in visible:
+        return False
+    return not answer or re.search(rf"(?<![\d.]){re.escape(answer)}(?![\d])", visible.replace(",", "")) is not None
 
 
 class OpenClawRLCandidateEvaluation(RegressionCheckMixin, ConfiguredEvaluationPlugin):
@@ -210,8 +220,11 @@ class OpenClawRLCandidateEvaluation(RegressionCheckMixin, ConfiguredEvaluationPl
         self.best_reply_rate: float | None = None
         self.reply_prompts: list[list[int]] = []
         self.reply_opens_reasoning: list[bool] = []
+        self.reply_answers: list[str] = []
         if settings.reply_probe_file.strip():
-            tools, conversations = load_reply_probe(pathlib.Path(settings.reply_probe_file.strip()))
+            tools, conversations, self.reply_answers = load_reply_probe(
+                pathlib.Path(settings.reply_probe_file.strip())
+            )
             self.reply_prompts = [runtime.engine.render_prompt(messages, tools=tools) for messages in conversations]
             self.reply_opens_reasoning = [runtime.engine.opens_reasoning(prompt) for prompt in self.reply_prompts]
 
@@ -231,10 +244,11 @@ class OpenClawRLCandidateEvaluation(RegressionCheckMixin, ConfiguredEvaluationPl
             answers = self.runtime.probe_candidate(
                 candidate.candidate_id, self.reply_prompts, max_tokens=self.reply_max_tokens
             )
+            golds = self.reply_answers or [""] * len(answers)
             reply_count = sum(
                 1
-                for answer, opens in zip(answers, self.reply_opens_reasoning, strict=True)
-                if answers_in_text(answer, opens_reasoning=opens)
+                for answer, opens, gold in zip(answers, self.reply_opens_reasoning, golds, strict=True)
+                if answers_in_text(answer, opens_reasoning=opens, answer=gold)
             )
             reply_metrics = {
                 REPLY_RATE_METRIC: reply_count / len(answers),

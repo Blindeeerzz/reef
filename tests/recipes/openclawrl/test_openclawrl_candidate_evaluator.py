@@ -188,6 +188,11 @@ def test_a_turn_that_never_closes_an_opened_reasoning_block_is_not_a_text_answer
     assert answers_in_text(unclosed)
     assert not answers_in_text(unclosed, opens_reasoning=True)
     assert answers_in_text(f"{unclosed}</think>\n\nShe sold 72 clips.", opens_reasoning=True)
+    # With a gold answer, the visible text must contain it.
+    assert answers_in_text("She sold 72 clips.", answer="72")
+    assert answers_in_text("That is 1,200 clips.", answer="1200")
+    assert not answers_in_text("import numpy as np", answer="72")
+    assert not answers_in_text("She sold 720 clips.", answer="72")
 
 
 def test_from_config_refuses_a_runtime_that_cannot_probe_a_candidate() -> None:
