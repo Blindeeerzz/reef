@@ -431,9 +431,8 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         self.reported_play_counts: queue.SimpleQueue[tuple[str, int]] = queue.SimpleQueue()
         round_stage.resume_rounds(next_round=recorded[-1] + 1 if recorded else 0, round_limit=self.rounds)
         self.completed_rounds = len(recorded)
-        self.round_in_flight: int | None = None
-        #: The set ID of each submitted round, by the round job's receipt.
-        self.round_set_ids: dict[str, Hashable] = {}
+        #: The round set that runs on the worker. One round runs at a time.
+        self.round_in_flight: RoundSet | None = None
         self.tasks_generated = 0
         self.tasks_played = 0
         self.last_error = ""
@@ -480,16 +479,16 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         """
         if not isinstance(record_set, RoundSet):
             return super().make_tasks(record_set)
-        receipt = f"round-{record_set.round_number:05d}"
         job = RoundJob(
-            receipt=receipt, round_number=record_set.round_number, source_records=session_records(record_set.sources)
+            receipt=f"round-{record_set.round_number:05d}",
+            round_number=record_set.round_number,
+            source_records=session_records(record_set.sources),
         )
         if self.worker is None or not self.worker.submit(job):
             self.last_error = "the round worker is closed or broken; no further round runs"
             self.round_stage.stop_rounds()
             return TaskResult.skipped()
-        self.round_set_ids[receipt] = record_set.set_id
-        self.round_in_flight = record_set.round_number
+        self.round_in_flight = record_set
         return TaskResult.pending()
 
     def take_finished(self) -> tuple[tuple[Hashable, TaskResult], ...]:
@@ -500,7 +499,9 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             return ()
         finished: list[tuple[Hashable, TaskResult]] = []
         for outcome in self.worker.poll():
-            set_id = self.round_set_ids.pop(outcome.receipt)
+            if self.round_in_flight is None:
+                raise RuntimeError(f"the round worker handed back {outcome.receipt}, but no round runs")
+            set_id = self.round_in_flight.set_id
             self.round_in_flight = None
             if isinstance(outcome, Failed):
                 self.last_error = f"{outcome.receipt} did not finish; see the service log"
@@ -537,7 +538,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             "task_store": task_counts(self.task_store) if self.task_store is not None else {},
             "task_generation": {
                 "generator": None if self.task_generator is None else type(self.task_generator).__name__,
-                "in_flight": self.round_in_flight,
+                "in_flight": None if self.round_in_flight is None else self.round_in_flight.round_number,
                 "next": self.round_stage.next_round,
                 "completed": self.completed_rounds,
                 "of": self.rounds,

@@ -83,9 +83,9 @@ class RoundRecord2Record(ReportRecord2Record):
         self.sources_per_round = sources_per_round
         self.next_round = 0
         self.round_limit = 0
-        self.started_rounds = 0
         self.round_running = False
-        self.follow_at_once = False
+        # The first round after a start is due at once.
+        self.follow_at_once = True
         self.rounds_stopped = False
         # Batches that trained since the last round started; the next round is due at batches_per_round.
         self.trained_batches = 0
@@ -113,7 +113,7 @@ class RoundRecord2Record(ReportRecord2Record):
         """Whether the next round should start now."""
         if self.rounds_stopped or self.round_running:
             return False
-        return self.started_rounds == 0 or self.follow_at_once or self.trained_batches >= self.batches_per_round
+        return self.follow_at_once or self.trained_batches >= self.batches_per_round
 
     def poll(self, now: float) -> None:
         """Form the next round set when a round is due, or stop the rounds at the limit."""
@@ -134,7 +134,6 @@ class RoundRecord2Record(ReportRecord2Record):
             )
         )
         self.next_round += 1
-        self.started_rounds += 1
         self.round_running = True
         self.follow_at_once = False
         # The batches that the round's plays make count toward the next one.
