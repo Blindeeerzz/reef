@@ -322,9 +322,9 @@ class SQLiteScenarioStorage(ScenarioStorage):
     Each scenario has one database file for its records, settings and generated
     tasks, and one JSONL commit log. Without a directory, all state is in memory.
     Records, commits and task states then last for one session, and settings
-    last for the storage. ``task_files`` keeps the files of published tasks;
-    the default is a ``LocalTaskFileStore`` in ``directory/task-files``, or in
-    a temporary directory without a directory.
+    last for the storage. ``task_files`` keeps the files of published tasks.
+    The default is a ``LocalTaskFileStore`` in ``directory/task-files``. If
+    the storage has no directory, the default store uses a temporary directory.
     """
 
     def __init__(self, directory: Path | None = None, *, task_files: TaskFileStore | None = None) -> None:

@@ -274,7 +274,7 @@ class Recipe:
         separate workers that take turns, one step at a time.
         ``algorithm_states`` carries each one's recovered state under its
         component name. ``task_storage`` opens the generated task stores of
-        the scenario session; each trainer gives it to its pipeline.
+        the scenario session. Each trainer gives it to its pipeline.
         """
         if len(surface.names) > 1:
             raise RecipeConfigError(

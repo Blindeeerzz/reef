@@ -2,9 +2,9 @@
 
 ``commits`` owns CommitRecord, RecordProgress, and registration/checkpoint metadata
 encoding. ``records``, ``tasks`` and ``scenario`` define storage interfaces without
-importing concrete adapters; ``tasks`` also holds the local task file store, as
-``commit_log`` holds the JSONL commit history. All four depend only on shared core
-values and each other.
+importing concrete adapters. ``tasks`` also holds the local task file store, in the
+same way that ``commit_log`` holds the JSONL commit history. All four depend only on
+shared core values and each other.
 Nothing in this package imports scenario coordination, recipes, runtimes, or training.
 This package initializer also loads no adapters. Record and commit implementations
 depend on ``reef.storage.records`` and ``reef.storage.scenario``.

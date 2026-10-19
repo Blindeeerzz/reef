@@ -126,19 +126,18 @@ class SQLTaskStore(TaskStore):
     def __init__(self, storage: SQLTaskStorage, name: str, *, split: SplitSettings) -> None:
         if not isinstance(name, str) or not name:
             raise ValueError("a task store name must be a non-empty string")
-        records = storage.records
-        tables = storage.tables
-        self.records = records
-        self.tables = tables
+        self.records = storage.records
+        self.tables = storage.tables
         self.files = storage.files
         self.scenario = storage.scenario
         self.name = name
-        self.key = {**tables.scope, "store_name": name}
-        with records._transaction(write=True) as connection:
-            records._insert_if_absent(
-                connection, tables.stores, {**self.key, "eval_fraction": split.eval_fraction, "seed": split.seed}
+        self.key = {**self.tables.scope, "store_name": name}
+        stores = self.tables.stores
+        with self.records._transaction(write=True) as connection:
+            self.records._insert_if_absent(
+                connection, stores, {**self.key, "eval_fraction": split.eval_fraction, "seed": split.seed}
             )
-            row = connection.execute(select(tables.stores).where(self.matching(tables.stores))).mappings().one()
+            row = connection.execute(select(stores).where(self.matching(stores))).mappings().one()
         stored = SplitSettings(eval_fraction=row["eval_fraction"], seed=row["seed"])
         if stored != split:
             raise TaskStoreError(
@@ -203,7 +202,8 @@ class SQLTaskStore(TaskStore):
             candidate = self.require_candidate(connection, generation, index)
         if candidate["error"]:
             raise TaskStoreError(f"candidate {index} of generation {generation} is rejected")
-        # Save the files first, so that a published row always has its files.
+        # Save the files before the row, so that a published row always has its files. The file
+        # store can be slow or remote, so the copy runs outside a database transaction.
         with tempfile.TemporaryDirectory(prefix="reef-task-") as staging:
             task = generated_from_document(candidate["generated_json"]).task
             digest = self.files.put(self.scenario, write_harbor_task(task, Path(staging)))

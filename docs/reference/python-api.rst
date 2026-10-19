@@ -190,8 +190,8 @@ Common members
 | ``checkpoint_strategy``                           | ``CheckpointStrategy``      | defaults to                    |
 |                                                   |                             | ``EveryNVersions(1)``          |
 +---------------------------------------------------+-----------------------------+--------------------------------+
-| ``build(scenario, records, algorithm_state=...,`` | ``Trainer``                 | construct the scenario trainer;|
-| ``task_storage=...)``                             |                             | give ``task_storage`` to       |
+| ``build(scenario, records, algorithm_state=...,`` | ``Trainer``                 | construct the scenario trainer |
+| ``task_storage=...)``                             |                             | and give ``task_storage`` to   |
 |                                                   |                             | ``Trainer.build``              |
 +---------------------------------------------------+-----------------------------+--------------------------------+
 | ``build_trainers(scenario, records,``             | ``tuple[ComponentTrainer,   | one trainer per release        |
@@ -457,7 +457,7 @@ Concrete storage classes live under ``reef.storage``:
 ``commit_log.CommitHistoryScenarioStore`` accepts a ``RecordStore``, a
 ``TaskStorage`` (``tasks=``), and a ``CommitHistory``, either the JSONL
 ``commit_log.CommitLog`` or the ``postgres.PostgresCommitTable``. The bundled
-record stores give their ``TaskStorage`` from ``task_storage()``; ``sqlite.SQLiteScenarioStorage`` and
+record stores give their ``TaskStorage`` from ``task_storage()``. ``sqlite.SQLiteScenarioStorage`` and
 ``postgres.PostgresScenarioStorage`` assemble their respective backends. The
 scenario package depends only on storage contracts. The storage contract is:
 
@@ -568,14 +568,16 @@ after a restart. The contract and its values are in ``reef.storage.tasks``.
 
 To open a store, call
 ``task_storage.open(name, split=SplitSettings(eval_fraction=..., seed=...))``.
+Each record-to-task stage uses its own ``name``. The first open saves the
+split settings. A later open with different settings raises
+``TaskStoreError``.
+
 A pipeline stage gets ``task_storage`` from ``PipelineContext.task_storage``.
 The scenario factory gives ``session.tasks`` to ``Recipe.build_trainers``,
 which gives it to ``Trainer.build``. A recipe that overrides ``build`` must
 give ``task_storage`` to ``Trainer.build`` too. A composite recipe gives each
 component a ``TaskStorage`` that opens ``<component>/<name>``. Thus two
-components never share a store. Each record-to-task stage uses its own
-``name``. The first open saves the split settings. A later open with
-different settings raises ``TaskStoreError``.
+components never share a store.
 
 A store holds generations. A generation holds its source record ids and its
 candidates. Each ``TaskCandidate`` holds a ``GeneratedTask`` and its outcome:

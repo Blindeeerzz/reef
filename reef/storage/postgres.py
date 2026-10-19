@@ -487,7 +487,7 @@ class PostgresScenarioStorage(ScenarioStorage):
     On start, it imports the commit logs and model configuration files that
     older versions kept under ``directory`` and moves them under
     ``directory/archived``. After that it keeps no scenario state in files.
-    ``task_files`` keeps the files of published tasks; the default is a
+    ``task_files`` keeps the files of published tasks. The default is a
     ``LocalTaskFileStore`` in ``directory/task-files``.
     """
 

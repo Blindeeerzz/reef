@@ -160,11 +160,13 @@ class TaskStore(ABC):
 
     @abstractmethod
     def publish_task(self, *, generation: int, index: int, split: SplitName) -> StoredTask:
-        """Save the task directory of one candidate, publish the candidate to ``split``, and return the task.
+        """Publish one candidate to ``split`` and return the published task.
 
-        The task files are durable before the publication. Each task name is
-        published once. A later candidate with the same files must name the
-        same split, and it returns the published task.
+        The method saves the task files before it records the publication.
+        Each task name is published once. A later candidate with the same
+        files must give the same split. The method then returns the published
+        task.
+
         Raises ``TaskConflict`` if the name is published with other files or
         in the other split. Raises ``TaskStoreError`` if the candidate does not
         exist or is rejected.
@@ -268,6 +270,7 @@ def files_digest(source: Path) -> str:
             raise TaskStoreError(f"task directory {source} holds {path.relative_to(source)}, which is not a file")
         name = path.relative_to(source).as_posix().encode("utf-8")
         content = path.read_bytes()
+        # Length prefixes keep two different file lists from giving the same bytes.
         digest.update(len(name).to_bytes(8, "big") + name + len(content).to_bytes(8, "big") + content)
     return digest.hexdigest()
 
@@ -275,10 +278,10 @@ def files_digest(source: Path) -> str:
 class LocalTaskFileStore(TaskFileStore):
     """Keeps the task directories in a local directory.
 
-    The layout is ``<directory>/<scenario key>/<digest>/<task name>/``. A copy
-    is first written under ``<directory>/.staging`` and then renamed into
-    place. The store never reads ``.staging``; an interrupted copy can stay
-    there, and an operator can delete it while no Reef service runs. Without
+    The layout is ``<directory>/<scenario key>/<digest>/<task name>/``. The
+    store writes a copy under ``<directory>/.staging`` first, and then renames
+    it into place. The store never reads ``.staging``. An interrupted copy can
+    stay there. An operator can delete it while no Reef service runs. Without
     a directory, the store uses a temporary directory and deletes it on
     ``close``. The store creates its directories on the first ``put``.
     """

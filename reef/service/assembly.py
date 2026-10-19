@@ -330,7 +330,7 @@ def build_dispatcher(
                     reference.config, directory=record_directory, task_files=task_files
                 )
         except BaseException:
-            # The storage owns the task file store once it exists; before that, close it here.
+            # The storage owns the task file store after it exists. Until then, this code closes it.
             task_files.close()
             raise
         # Record tracing observes storage events; the storage closes the observer with itself.
