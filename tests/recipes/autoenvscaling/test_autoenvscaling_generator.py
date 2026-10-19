@@ -59,6 +59,7 @@ from reef.record2task.generator import DuplicateTask, GeneratorError, WrittenTas
 from reef.record2task.generator.harbor import ORACLE_TIMEOUT_S
 from reef.service.deploy.orchestrator import resolve_deployment_config
 from reef.service.deploy.service_config import service_config_from_mapping
+from reef.storage.sqlite import SQLiteScenarioStorage
 
 
 @pytest.fixture(autouse=True)
@@ -577,7 +578,8 @@ def test_from_config_refuses_a_config_that_cannot_run(tmp_path: Path, fields: di
 def test_a_round_of_the_generated_task_recipe_runs_autoenvscaling_end_to_end(tmp_path: Path) -> None:
     service = StandInGenerator(tmp_path / "tasks", rewards={"plain": 0.5})
     generator = autoenvscaling(tmp_path, StandInAuthor(), service, count=2)
-    context = PipelineContext("autoenvscaling")
+    session = SQLiteScenarioStorage(tmp_path / "records").open("autoenvscaling")
+    context = PipelineContext("autoenvscaling", task_storage=session.tasks)
     generation = GeneratedTaskTasks(
         context,
         RoundSettings(rounds=1, description=DESCRIPTION, state_dir=str(tmp_path / "rounds")),
@@ -593,7 +595,7 @@ def test_a_round_of_the_generated_task_recipe_runs_autoenvscaling_end_to_end(tmp
         (NAMES[1], "plain", 2),
     ]
     assert service.manifests == []
-    assert (tmp_path / "rounds" / "autoenvscaling" / "store" / "split-manifest.json").is_file()
+    assert generation.task_store is not None and len(generation.task_store.tasks(split="train")) == 2
     assert [task["band"] for task in report(tmp_path)["tasks"]] == ["inside", "inside"]
     assert read_harbor_task(tmp_path / "tasks" / NAMES[0]).name == NAMES[0]
 

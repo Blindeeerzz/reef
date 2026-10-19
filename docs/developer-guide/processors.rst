@@ -340,7 +340,7 @@ time the pipeline looks for a batch, it starts a round when one is due. In each 
 1. Asks the generator for tasks with the configured ``description`` and the
    request's source sessions.
 2. Saves the candidates, then validates each task with the generator.
-3. Publishes valid tasks to the local store and assigns their train/eval split before play.
+3. Publishes valid tasks with their train/eval split to the scenario's task store before play.
    It stages training tasks through the generator service and plays each one ``plays_per_task`` times, then plays its measurement arms.
    Eval tasks remain saved without plays.
 4. Sends the results to ``record_results``.
@@ -376,15 +376,15 @@ round started; a batch that the backend dropped as stale does not count. A
 round that played no task is followed at once. An exception from the
 generator stops the round. The record-to-task stage still sends the results
 it has to ``record_results``. A summary of each round goes to
-``state_dir/<scenario>/store/plays/round-<round>.json``, with the IDs of its source records. After a restart, the
+``state_dir/<scenario>/round-<round>.json``, with the IDs of its source records. After a restart, the
 record-to-task stage continues with the next round. ``GET /reef/status`` shows the generator, the
 round, the task counts, and the last error under ``task_generation``.
 
-The store saves candidates before validation and records each publication or rejection independently of play results.
-Its generation documents own task metadata; task directories contain only Harbor files.
-The store rebuilds its cumulative ``split-manifest.json`` from publication outcomes when reopened.
-``GET /reef/status`` exposes task counts under ``task_store``.
-Legacy summaries outside the store remain untouched and do not resume into the new store.
+The record-to-task stage keeps its tasks in the task store ``generated-tasks`` of the scenario session
+(see `Where the stages live`_). It saves the candidates before validation. It records each publication
+or rejection before play, so a retry of a round does not generate the tasks again. Tasks that share a
+source record get the same split, and a published task keeps its split. A task whose sources join tasks
+of both splits is rejected. ``GET /reef/status`` shows the task counts under ``task_store``.
 
 Container operations run in the generator service, ``reef.record2task.generator``.
 The record-to-task stage calls this service over HTTP. The ``generator`` deployment

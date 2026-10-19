@@ -29,7 +29,7 @@ SPADE is a task generator. The deployment selects it in `pipeline.record2task.co
 
 Regret is the mean hint reward minus the mean plain reward. Without hint episodes, regret is 0. The mean plain reward determines the task's band: mastered above 0.9, out of reach below 0.1, and frontier otherwise. The next prompt lists frontier tasks by regret, highest first.
 
-The recipe stores tasks under its `state_dir/<scenario>/store/tasks/` and writes `split-manifest.json` beside that directory. Related source sessions keep the same split across generations. The generator saves each proposal, refusal, and measurement in `state_dir/<scenario>/generation-<generation>.json`. After a restart, it reads the last report to recover the experience and continue with the next generation.
+The recipe saves each task and its train/eval split in the scenario's task store before play. Related source sessions keep the same split across generations. The generator saves each proposal, refusal, and measurement in `state_dir/<scenario>/generation-<generation>.json`. After a restart, it reads the last report to recover the experience and continue with the next generation.
 
 The Designer's reports and the hint episodes share the scenario with the training episodes. The recipe trains only on the plain arm.
 
@@ -48,7 +48,7 @@ The generator's `config` keys:
 | `designer_report` | true | report each proposal's regret against the Designer's receipt |
 | `served_model` | the deployment's | the model the Designer asks for |
 
-Set `eval_fraction` and `split_seed` in `pipeline.record2task.config`, outside the generator configuration. Their defaults are 0.0 and 0, so all tasks train unless a holdout is configured. Existing stores require the same split settings when reopened.
+Set `eval_fraction` and `split_seed` in `pipeline.record2task.config`, outside the generator configuration. Their defaults are 0.0 and 0, so all tasks train unless a holdout is configured. A scenario's task store keeps the split settings of its first open, and a scenario that loads with other settings fails.
 
 The generated-task recipe uses the `task_group` objective. It centers and scales each episode's reward within its task group. If all rewards in a group are equal, each advantage is 0. Tinker's `importance_sampling` loss applies that advantage to every response token. The recipe requires the `tinker` backend. Selecting Slime fails because it has no loss family with that name.
 
