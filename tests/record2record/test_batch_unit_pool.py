@@ -84,7 +84,7 @@ def test_a_record_set_unit_holds_one_or_more_record_sets_and_consumes_all_their_
     assert unit.consumed_ids() == frozenset({"a", "b"})
     record_set = single("c", 3)
     assert SingleSetUnit.of(record_set) == SingleSetUnit(unit_id="c", arrival_index=3, record_set=record_set)
-    with pytest.raises(ValueError, match="must consume one or more IDs"):
+    with pytest.raises(ValueError, match="one or more record sets"):
         ManySetUnit(unit_id="empty", arrival_index=1, held=())
 
 

@@ -101,18 +101,15 @@ the pipeline pushes. Its status settles all records of the set together:
 - ``READY``: one or more tasks. The records wait in one batch unit.
 - ``SKIPPED``: no task. The stage ends the records.
 
-A batch unit (``BatchUnit``) is what a batch takes all of or none of.
-``batch_size`` counts batch units, and consuming a unit writes its
-``consumed_ids`` to the commit. A unit has one of two forms:
+A batch unit is what a batch takes all of or none of, and what
+``batch_size`` counts. A unit is a record set unit or one uploaded data item
+(see `Uploaded data items <#uploaded-data-items>`__).
 
-- A record set unit (``RecordSetUnit``) holds one or more record sets that
-  must train in the same batch. A report by itself is a unit of one record
-  set. A ready group is a unit of the record sets of all its reports. The
-  record stage holds these units in its pool. Consuming one writes the IDs of
-  all its records.
-- A data item unit (``DataItemUnit``) holds one uploaded data item (see
-  `Uploaded data items <#uploaded-data-items>`__). Consuming one writes
-  ``item:<item_id>``.
+A record set unit (``RecordSetUnit``) holds one or more record sets that must
+train in the same batch. A report by itself is a unit of one record set. A
+ready group is a unit of the record sets of all its reports. The record stage
+holds these units in its pool. Consuming a unit writes the IDs of all its
+records to the commit.
 
 The pipeline
 ------------
@@ -195,14 +192,15 @@ default is no kind. Admission refuses an upload with 400 when no trainer of
 the scenario accepts its kind.
 
 A data item does not go to the record stage or the record-to-task stage. The
-pipeline holds it as a ``DataItemUnit``:
+pipeline holds it until a batch takes it:
 
 - An uploaded trajectory is a ``TrajectoryItem`` of the uploaded document.
 - An uploaded task is a ``TaskItem``. Its ``task_path`` is the task directory
   in the scenario's task file store.
 
-A batch takes data item units first, in upload order, and then record set
-units. In ``manual`` mode, an instruction's batch takes no units. In a
+A batch takes data items first, in upload order, and then record set units.
+Each data item counts as one batch unit. In ``manual`` mode, an instruction's
+batch takes no units. In a
 scenario of several components, each trainer that accepts the kind trains on
 the item. Acknowledgement consumes all units of the batch. The commit lists
 each data item as ``item:<item_id>``. Thus a rebuilt trainer does not read it
