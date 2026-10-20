@@ -5,9 +5,10 @@ episode of the training arm names its task under ``metadata.task``, the episodes
 group, and a group is complete at ``plays_per_task`` episodes. A training play that reports nothing, such
 as a failed trial, never joins its group. So when a task's plays end, its group is complete at the number
 of plays that reported, and a group of one is discarded. ``GeneratedTaskBatches`` batches
-``tasks_per_step`` complete groups, in arrival order. When a round is due, the record stage forms a round
-set. ``GeneratedTaskTasks`` runs it with the deployment's :class:`~reef.core.tasks.TaskGenerator` and
-returns pending until the round finishes.
+``tasks_per_step`` complete groups, in arrival order. When a round is due, the record stage gives a
+``TaskGenerationRound`` to ``GeneratedTaskTasks``, its ``RoundRunner``. That stage runs the round with the
+deployment's :class:`~reef.core.tasks.TaskGenerator` and returns a ``RoundResult`` when the round ends. A
+round is not a record set and does not train; the episodes that its plays report do.
 
 One round is one job on a private worker, off the trainer's thread:
 
