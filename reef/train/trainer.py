@@ -160,7 +160,7 @@ class Trainer:
         Unread records are not necessarily trainable. Pipeline counts retain
         their recipe-defined names rather than being guessed into batch depth.
         A busy pipeline omits its gauges for this sample instead of blocking
-        execution metrics behind ingestion or commit work.
+        execution metrics behind record push or commit work.
         """
         loss = self._records.loss(self.scenario)
         values = {f"training/{key}": value for key, value in self.operations.snapshot().items()}
@@ -196,7 +196,7 @@ class Trainer:
         return self._scenario
 
     def set_training_mode(self, training_mode: str) -> None:
-        """Serialize mode selection with record ingestion and batch reservation."""
+        """Serialize mode selection with record push and batch reservation."""
         with self._lock:
             self._pipeline.set_training_mode(training_mode)
 
@@ -318,7 +318,7 @@ class Trainer:
             )
         return batch
 
-    def ingest_retained(self, item: AgentRecord) -> None:
+    def push_retained(self, item: AgentRecord) -> None:
         """Consumption state is independent of record visibility in storage."""
         if item.agent_record_id in self.consumed_record_ids:
             return
@@ -338,7 +338,7 @@ class Trainer:
                 self.skipped_record_ids.add(item.agent_record_id)
                 return
         if item.request_type in self.pipeline.required_request_types:
-            self._pipeline.ingest(item)
+            self._pipeline.push(item)
 
     def _consume_data(self) -> None:
         while True:
@@ -350,7 +350,7 @@ class Trainer:
             if not items:
                 return
             for sequence, item in items:
-                self.ingest_retained(item)
+                self.push_retained(item)
                 self._data_offset += 1
                 self._data_sequence = sequence
                 if self._pipeline.ready():
@@ -639,7 +639,7 @@ class Trainer:
         """Release pipeline and backend resources owned by the trainer.
 
         Held under the trainer lock so a pipeline is never closed while a
-        batch is being ingested or built on the training thread.
+        record is being pushed or a batch built on the training thread.
         """
         with self._lock:
             try:
@@ -648,7 +648,7 @@ class Trainer:
                 if self._candidate_backend is not None:
                     self._candidate_backend.close()
 
-    def reingest(self, *, up_to_sequence: int, consumed_ids: frozenset[str]) -> None:
+    def replay_retained(self, *, up_to_sequence: int, consumed_ids: frozenset[str]) -> None:
         """Rebuild pipeline memory from retained rows at or below a watermark.
 
         The committed high-water mark is a consumption cursor, not a liveness
@@ -656,7 +656,7 @@ class Trainer:
         passes rows of the next, still-incomplete step, and retention keeps
         them stored. Only pipeline memory knew about them, and a rebuilt
         pipeline starts empty: without this replay, a report arriving after
-        recovery waits forever on a reference that can never be ingested
+        recovery waits forever on a reference that can never be pushed
         again. ``consumed_ids`` names the rows committed batches consumed —
         the commit log records them per step because retention may keep a
         consumed row stored (audit-only retention is contract-legal), and a
@@ -683,14 +683,14 @@ class Trainer:
                         return
                     if item.agent_record_id in consumed_ids:
                         continue
-                    self.ingest_retained(item)
+                    self.push_retained(item)
 
     def restore_record_progress(self, *, after_sequence: int, offset: int) -> None:
         """Resume consumption from a recovered commit record's high-water mark.
 
         Without this, a recovered trainer would page the record store from
-        sequence 0 and re-ingest consumed rows the retention policy protected
-        from deletion — re-training them. Restoring the watermark makes
+        sequence 0 and push again the consumed rows that the retention policy
+        protected from deletion — re-training them. Restoring the watermark makes
         replay start exactly where the recovered step left off.
         """
         if after_sequence < 0 or offset < 0:
