@@ -205,8 +205,8 @@ class Dispatcher(ScenarioLifecycle):
             self.local_workers.remove(scenario)
             self.errors.forget(scenario)
             if dropped is not None:
-                for bound in dropped.trainers:
-                    backend = bound.trainer.candidate_backend
+                for component_trainer in dropped.trainers:
+                    backend = component_trainer.trainer.candidate_backend
                     if backend is not None:
                         backend.retire_scenario(scenario)
                 dropped.close()
@@ -249,7 +249,7 @@ class Dispatcher(ScenarioLifecycle):
             return False
         if self.local_workers.instance_change_pending(current.name):
             return False
-        return not any(bound.trainer.holds_untrained_records() for bound in current.trainers)
+        return not any(component_trainer.trainer.holds_untrained_records() for component_trainer in current.trainers)
 
     def unload_if_idle(self, scenario: str) -> bool:
         """Unload ``scenario`` if it is idle, and return whether it was unloaded.
@@ -449,9 +449,9 @@ class Dispatcher(ScenarioLifecycle):
         self.local_workers.wake(current)
         if current.training_runtime is not None:
             return
-        for bound in current.trainers:
-            if bound.trainer.candidate_backend is None:
-                current.prepare_training_step(bound.component)
+        for component_trainer in current.trainers:
+            if component_trainer.trainer.candidate_backend is None:
+                current.prepare_training_step(component_trainer.component)
 
     # -- Preload ---------------------------------------------------------
 

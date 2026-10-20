@@ -52,7 +52,7 @@ def validate_record(current: Scenario, item: AgentRecord, preceding: Mapping[str
                 return existing
             if current.training_mode == "auto":
                 raise ValueError("explicit training requests require training_mode='manual' or 'hybrid'")
-            if all(bound.trainer.candidate_backend is None for bound in current.trainers):
+            if all(component_trainer.trainer.candidate_backend is None for component_trainer in current.trainers):
                 raise ValueError("explicit training requests require a training backend")
             request = normalize_training_request_payload(item.payload)
             if item.references:
@@ -135,6 +135,8 @@ def append_data_items(current: Scenario, items: tuple[tuple[str, TrainDataItem],
     every trainer would skip it, so admission refuses it.
     """
     for _, item in items:
-        if not any(type(item) in bound.trainer.pipeline.accepted_items for bound in current.trainers):
+        if not any(
+            type(item) in component_trainer.trainer.pipeline.accepted_items for component_trainer in current.trainers
+        ):
             raise ValueError(f"the recipe of scenario {current.name!r} does not accept {type(item).__name__} uploads")
     return current.store.data_items.add(items)
