@@ -364,8 +364,8 @@ task's ``name`` and ``digest``:
    {"scenario": "my-agent", "item_id": "task-0001", "kind": "task",
     "task": {"name": "my-task", "digest": "<sha256 of the task files>"}}
 
-Each data item counts as one record set toward the recipe's ``batch_size``. A
-batch takes data items first, in upload order, and then record sets. Thus a
+Each data item counts as one batch unit toward the recipe's ``batch_size``. A
+batch takes data items first, in upload order, and then batch units. Thus a
 large upload can delay the training of live traffic. The delay continues
 until the batches use all of the upload. Archiving the scenario retires its
 data items and their task files with its records. Record retention does not

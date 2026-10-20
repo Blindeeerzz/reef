@@ -291,6 +291,7 @@ class AssembledTasks(ReportTasks):
     """One report as one assembled policy sample."""
 
     def __init__(self) -> None:
+        super().__init__()
         self.assembly = SampleAssembly(SampleAssemblySettings())
 
     @classmethod

@@ -97,7 +97,7 @@ import a concrete integration.
 |                         | episodes, built-in selection policies, and the           | artifact publication                       |
 |                         | ``evaluation`` plugin configuration                      |                                            |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
-| ``reef/task2batch/``    | shaping the tasks of the selected record sets into one   | which records train, the training loop,    |
+| ``reef/task2batch/``    | shaping the tasks of the selected batch units into one   | which records train, the training loop,    |
 |                         | batch (``Task2Batch``)                                   | step signals                               |
 +-------------------------+----------------------------------------------------------+--------------------------------------------+
 | ``reef/runtime/``       | backend-neutral runtime contracts, scheduling,           | concrete inference and training            |

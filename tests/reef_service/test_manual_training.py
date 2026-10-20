@@ -22,7 +22,7 @@ from reef.core.trajectories import source_record_id
 from reef.dispatcher import Dispatcher
 from reef.pipeline_context import PipelineContext
 from reef.recipe import Recipe, RecipeConfigError
-from reef.record2record import InferenceRecord2Record, SingleRecordSet
+from reef.record2record import InferenceRecord2Record, SingleRecordSet, SingleSetUnit
 from reef.runtime.interfaces import TrainingRuntime
 from reef.service.app import create_app
 from reef.storage.sqlite import SQLiteRecordStore, SQLiteScenarioStorage
@@ -369,7 +369,9 @@ def test_status_shows_how_far_a_partly_filled_batch_still_has_to_go():
     def hold(count):
         for index in range(len(stage.pool), count):
             record = inference(f"inf-{index}")
-            stage.pool.put(SingleRecordSet(set_id=record.agent_record_id, arrival_index=index, record=record))
+            stage.pool.put(
+                SingleSetUnit.of(SingleRecordSet(set_id=record.agent_record_id, arrival_index=index, record=record))
+            )
 
     assert pipeline.status() == {"ready_units": 0, "batch_size": 4}
     hold(3)

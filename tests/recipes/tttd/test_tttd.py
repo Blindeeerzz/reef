@@ -24,7 +24,7 @@ from reef.core.plugins import PluginConfigError
 from reef.core.reports import ReportValidationError
 from reef.core.trajectories import trajectory_reward
 from reef.recipe.config import RecipeConfigError
-from reef.record2record import PassThroughRecord2Record
+from reef.record2record import NoRecordSets
 from reef.record2task.assembly import SampleAssemblySettings
 from reef.runtime.interfaces import TrainingMethod
 from reef.train import PipelineContext
@@ -171,7 +171,7 @@ def test_tttd_refuses_a_bad_stage_config_when_the_pipeline_builds(pipeline: dict
 @pytest.mark.parametrize("stage", [TTTDTasks, TTTDBatches])
 def test_tttd_later_stages_need_the_tttd_record_stage(stage: type) -> None:
     context = PipelineContext("discovery")
-    stages = {"record2record": PassThroughRecord2Record()}
+    stages = {"record2record": NoRecordSets()}
     if stage is TTTDBatches:
         stages["record2task"] = TTTDTasks(SampleAssemblySettings(), TTTDRecord2Record(context, TTTDGridSettings()))
     with pytest.raises(PluginConfigError, match=f"{stage.__name__} needs TTTDRecord2Record"):
