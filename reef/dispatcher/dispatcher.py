@@ -15,7 +15,7 @@ from typing import Any
 from reef.artifact.artifact import Artifact, ArtifactRef
 from reef.artifact.memory import InMemoryRepositoryBackend
 from reef.artifact.repository import EnumerableRepositoryBackendFactory, RepositoryBackendFactory
-from reef.core.batches import TrainDataItem
+from reef.core.batches import TrajectoryItem
 from reef.core.errors import ScenarioBusy, ScenarioCapacityFull, UnknownScenario
 from reef.core.records_types import AgentRecord, RequestType
 from reef.dispatcher import ingest
@@ -428,17 +428,17 @@ class Dispatcher(ScenarioLifecycle):
                 self.process_accepted_records(current)
             return stored
 
-    def accept_data_items(
-        self, scenario: str, items: tuple[tuple[str, TrainDataItem], ...], *, release_id: str | None = None
+    def accept_trajectories(
+        self, scenario: str, trajectories: tuple[tuple[str, TrajectoryItem], ...], *, release_id: str | None = None
     ) -> None:
-        """Save uploaded ``(item_id, item)`` pairs in one transaction, then wake their consumer."""
-        if not items:
-            raise ValueError("an upload must hold one or more data items")
+        """Save uploaded ``(trajectory_id, trajectory)`` pairs in one transaction, then wake their consumer."""
+        if not trajectories:
+            raise ValueError("an upload must hold one or more trajectories")
         with self.registry.lock_for(scenario):
             current = self.get_or_create_scenario(scenario, release_id=release_id)
             if current is None:
                 raise UnknownScenario(f"unknown scenario {scenario!r}")
-            if ingest.append_data_items(current, items):
+            if ingest.append_trajectories(current, trajectories):
                 self.process_accepted_records(current)
 
     def process_accepted_records(self, current: Scenario) -> None:

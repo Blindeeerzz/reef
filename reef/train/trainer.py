@@ -29,9 +29,9 @@ from reef.evaluation.evaluators import BackendAlwaysSelectPlugin
 from reef.observability import ExperimentLogger, NullExperimentLogger
 from reef.observability.operations import OperationMetrics
 from reef.pipeline_context import PipelineContext
-from reef.storage.data_items import DataItemStore, consumed_id
 from reef.storage.records import RecordStore
 from reef.storage.tasks import TaskStorage
+from reef.storage.trajectories import TrajectoryStore, consumed_trajectory_id
 from reef.train.backend import CandidateBackend, PreparedStep, StepExecution
 from reef.train.pipeline import InstructionFailure, TrainingPipeline
 from reef.train.types import PreparedCommit, TrainingBatch, TrainStepResult
@@ -147,10 +147,10 @@ class Trainer:
         self._state = dict(state)
         self._data_offset = 0
         self._data_sequence = 0
-        #: The uploaded data items of the scenario, after ``read_data_items``.
-        self.data_item_store: DataItemStore | None = None
-        #: The sequence of the last data item that the trainer read.
-        self.item_sequence = 0
+        #: The uploaded trajectories of the scenario, after ``read_uploaded_trajectories``.
+        self.trajectory_store: TrajectoryStore | None = None
+        #: The sequence of the last uploaded trajectory that the trainer read.
+        self.trajectory_sequence = 0
         self.consumed_record_ids: set[str] = set()
         self.skipped_record_ids: set[str] = set()
         self._pending: _PendingStep | None = None
@@ -291,25 +291,25 @@ class Trainer:
         with self._lock:
             if self._pending is not None or self._pipeline.background_jobs_running() or self._pipeline.ready():
                 return True
-            data_items = self.data_item_store
+            trajectories = self.trajectory_store
             if (
-                data_items is not None
-                and self._pipeline.accepted_items
-                and data_items.count(after_sequence=self.item_sequence) > 0
+                trajectories is not None
+                and self._pipeline.accepts_trajectories
+                and trajectories.count(after_sequence=self.trajectory_sequence) > 0
             ):
                 return True
             return self._records.count(self.scenario, after_sequence=self._data_sequence) > 0
 
-    def read_data_items(self, store: DataItemStore) -> None:
-        """Read the uploaded data items of the scenario from ``store``, from the first one.
+    def read_uploaded_trajectories(self, store: TrajectoryStore) -> None:
+        """Read the uploaded trajectories of the scenario from ``store``, from the first one.
 
-        The scenario factory calls this when it builds the trainer. A data item
-        that a commit consumed is in ``consumed_record_ids`` after recovery, so
-        the trainer skips it.
+        The scenario factory calls this when it builds the trainer. An uploaded
+        trajectory that a commit consumed is in ``consumed_record_ids`` after
+        recovery, so the trainer skips it.
         """
         with self._lock:
-            self.data_item_store = store
-            self.item_sequence = 0
+            self.trajectory_store = store
+            self.trajectory_sequence = 0
 
     def pipeline_status(self) -> Mapping[str, Any]:
         """Return caller-visible pipeline state under the pipeline's lock."""
@@ -364,19 +364,18 @@ class Trainer:
             self._pipeline.push(item)
 
     def _consume_data(self) -> None:
-        # Uploaded data items go first in a batch, so the trainer reads them before the records.
-        accepted_items = self._pipeline.accepted_items
-        while self.data_item_store is not None and accepted_items:
-            stored_items = self.data_item_store.page(
-                after_sequence=self.item_sequence, limit=self._DATA_READ_BATCH_SIZE
+        # Uploaded trajectories go first in a batch, so the trainer reads them before the records.
+        while self.trajectory_store is not None and self._pipeline.accepts_trajectories:
+            stored_trajectories = self.trajectory_store.page(
+                after_sequence=self.trajectory_sequence, limit=self._DATA_READ_BATCH_SIZE
             )
-            if not stored_items:
+            if not stored_trajectories:
                 break
-            for stored in stored_items:
-                self.item_sequence = stored.sequence
-                if type(stored.item) not in accepted_items or consumed_id(stored.item_id) in self.consumed_record_ids:
+            for stored in stored_trajectories:
+                self.trajectory_sequence = stored.sequence
+                if consumed_trajectory_id(stored.trajectory_id) in self.consumed_record_ids:
                     continue
-                self._pipeline.push_item(stored.item_id, stored.item)
+                self._pipeline.push_trajectory(stored.trajectory_id, stored.trajectory)
                 if self._pipeline.ready():
                     return
         while True:

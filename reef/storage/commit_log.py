@@ -22,10 +22,10 @@ from threading import RLock
 
 from reef.core.errors import ReefError
 from reef.storage.commits import RECORD_KIND, CommitLogError, CommitRecord
-from reef.storage.data_items import DataItemStore
 from reef.storage.records import RecordStore
 from reef.storage.scenario import ScenarioStore, ScenarioStoreConflict
 from reef.storage.tasks import TaskStorage
+from reef.storage.trajectories import TrajectoryStore
 
 
 def same_commit(left: CommitRecord, right: CommitRecord) -> bool:
@@ -275,11 +275,11 @@ class CommitLog(CommitHistory):
 
 
 class CommitHistoryScenarioStore(ScenarioStore):
-    """Own one records connection, its task stores and data items, and an optional durable commit history.
+    """Own one records connection, its task stores and uploaded trajectories, and an optional durable commit history.
 
     Passing no commit history preserves the existing in-memory configuration. Its
     commits still enforce step fencing and retries for the session lifetime.
-    ``tasks`` opens the task stores, and ``data_items`` keeps the uploaded data items.
+    ``tasks`` opens the task stores, and ``trajectories`` keeps the uploaded trajectories.
     Usually, both are in the same database as the records.
     ``initial_step`` supports existing scenarios constructed at a saved step.
     """
@@ -291,7 +291,7 @@ class CommitHistoryScenarioStore(ScenarioStore):
         commit_history: CommitHistory | None = None,
         *,
         tasks: TaskStorage,
-        data_items: DataItemStore,
+        trajectories: TrajectoryStore,
         initial_step: int = 0,
     ) -> None:
         if not isinstance(scenario, str) or not scenario:
@@ -301,7 +301,7 @@ class CommitHistoryScenarioStore(ScenarioStore):
         self._scenario = scenario
         self._records = records
         self._tasks = tasks
-        self._data_items = data_items
+        self._trajectories = trajectories
         self._commit_history = commit_history
         self._initial_step = initial_step
         self._memory_history: list[CommitRecord] = []
@@ -329,10 +329,10 @@ class CommitHistoryScenarioStore(ScenarioStore):
             return self._tasks
 
     @property
-    def data_items(self) -> DataItemStore:
+    def trajectories(self) -> TrajectoryStore:
         with self._lock:
             self._ensure_open()
-            return self._data_items
+            return self._trajectories
 
     @property
     def commit_history(self) -> CommitHistory | None:

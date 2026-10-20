@@ -1,4 +1,4 @@
-"""Storage boundary for a scenario's records, commits, settings, tasks, data items, and recovery.
+"""Storage boundary for a scenario's records, commits, settings, tasks, uploaded trajectories, and recovery.
 
 Artifact publication remains the responsibility of the committer. A
 store settles record consumption and the committed scenario state together;
@@ -16,9 +16,9 @@ from typing import Any, Self
 from reef.core.errors import ReefError
 from reef.core.plugins import Plugin
 from reef.storage.commits import CommitRecord
-from reef.storage.data_items import DataItemStore
 from reef.storage.records import RecordStore
 from reef.storage.tasks import TaskFileStore, TaskStorage
+from reef.storage.trajectories import TrajectoryStore
 
 
 class ScenarioStoreConflict(ReefError):
@@ -73,10 +73,10 @@ class ScenarioStore(ABC):
 
     @property
     @abstractmethod
-    def data_items(self) -> DataItemStore:
-        """The data items that clients uploaded to this scenario.
+    def trajectories(self) -> TrajectoryStore:
+        """The trajectories that clients uploaded to this scenario.
 
-        The store closes with this session. Its items survive a restart if ``durable`` is true.
+        The store closes with this session. Its trajectories survive a restart if ``durable`` is true.
         """
 
     @abstractmethod
@@ -123,7 +123,7 @@ class ScenarioStorage(Plugin, ABC):
     shared resources only; sessions remain owned by their scenarios.
 
     Every piece of per-scenario state that Reef owns goes through this
-    interface: records, commits, generated tasks and data items through sessions, settings
+    interface: records, commits, generated tasks and uploaded trajectories through sessions, settings
     through ``read_settings`` and ``write_settings``. Archiving a scenario
     retires all of it. A deployment names a subclass in ``storage.record_backend``.
     """

@@ -210,14 +210,9 @@ def test_close_is_idempotent_and_rejects_further_use(store, monkeypatch):
 
 def sqlite_session(journal=None, *, database=None, initial_step=0):
     records = SQLiteRecordStore(database)
-    files = LocalTaskFileStore()
+    tasks = records.task_storage(LocalTaskFileStore(), "math")
     return CommitHistoryScenarioStore(
-        "math",
-        records,
-        journal,
-        tasks=records.task_storage(files, "math"),
-        data_items=records.data_item_store(files, "math"),
-        initial_step=initial_step,
+        "math", records, journal, tasks=tasks, trajectories=records.trajectory_store(), initial_step=initial_step
     )
 
 

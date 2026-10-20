@@ -1,7 +1,7 @@
-"""Validate records and uploaded data items and append them to one loaded scenario.
+"""Validate records and uploaded trajectories and append them to one loaded scenario.
 
 The dispatcher calls these functions under the scenario's lock. They append
-records and data items durably and count the ``ingest/*`` metrics of records.
+records and uploaded trajectories durably and count the ``ingest/*`` metrics of records.
 They do not start training: the caller wakes the trainers after new data lands.
 """
 
@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from reef.core.batches import TrainDataItem
+from reef.core.batches import TrajectoryItem
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.reports import ReportValidationError, validate_report_payload
 from reef.core.training_request import normalize_training_request_payload
@@ -128,15 +128,12 @@ def append_records(current: Scenario, items: Sequence[AgentRecord]) -> tuple[tup
     return tuple(result.item for result in appended), any(result.inserted for result in appended)
 
 
-def append_data_items(current: Scenario, items: tuple[tuple[str, TrainDataItem], ...]) -> bool:
-    """Save uploaded ``(item_id, item)`` pairs in one transaction. Return True if one or more is new.
+def append_trajectories(current: Scenario, trajectories: tuple[tuple[str, TrajectoryItem], ...]) -> bool:
+    """Save uploaded ``(trajectory_id, trajectory)`` pairs in one transaction. Return True if one or more is new.
 
-    A data item trains only through a recipe that accepts its kind. Otherwise
-    every trainer would skip it, so admission refuses it.
+    An uploaded trajectory trains only through a recipe that accepts uploaded
+    trajectories. Otherwise every trainer would skip it, so admission refuses it.
     """
-    for _, item in items:
-        if not any(
-            type(item) in component_trainer.trainer.pipeline.accepted_items for component_trainer in current.trainers
-        ):
-            raise ValueError(f"the recipe of scenario {current.name!r} does not accept {type(item).__name__} uploads")
-    return current.store.data_items.add(items)
+    if not any(component_trainer.trainer.pipeline.accepts_trajectories for component_trainer in current.trainers):
+        raise ValueError(f"the recipe of scenario {current.name!r} does not accept uploaded trajectories")
+    return current.store.trajectories.add(trajectories)
