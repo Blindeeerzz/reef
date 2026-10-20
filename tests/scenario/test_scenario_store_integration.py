@@ -15,11 +15,11 @@ from reef.dispatcher import Dispatcher
 from reef.observability import ExperimentLogger
 from reef.recipe.base import Recipe
 from reef.storage.commits import CommitRecord
-from reef.storage.data_items import DataItemStore
 from reef.storage.records import RecordRetention, RecordStore
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage, ScenarioStore
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.storage.tasks import TaskFileStore, TaskStorage
+from reef.storage.trajectories import TrajectoryStore
 from reef.train.trainer import Trainer
 from reef.train.types import TrainStepResult
 
@@ -47,8 +47,8 @@ class OpaqueStore(ScenarioStore):
         return self._inner.tasks
 
     @property
-    def data_items(self) -> DataItemStore:
-        return self._inner.data_items
+    def trajectories(self) -> TrajectoryStore:
+        return self._inner.trajectories
 
     def history(self) -> tuple[CommitRecord, ...]:
         return self._inner.history()

@@ -17,8 +17,8 @@ from reef.artifact.release_chain import ReleaseNotRestorable
 from reef.core.errors import ReefError, ScenarioBusy, ScenarioCapacityFull, ScenarioLimitReached, UnknownScenario
 from reef.runtime.interfaces import UpstreamStatusError
 from reef.service.request_service import InferenceRetryTimeout
-from reef.storage.data_items import DataItemConflict
 from reef.storage.records import RecordConflict
+from reef.storage.trajectories import TrajectoryConflict
 from reef.surface.weights import RuntimeLoadMismatch
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ ERROR_STATUS_TABLE: tuple[tuple[type[Exception], type[web.HTTPError]], ...] = (
     (ArtifactConflict, web.HTTPConflict),
     (ReleaseNotRestorable, web.HTTPConflict),
     (RecordConflict, web.HTTPConflict),
-    (DataItemConflict, web.HTTPConflict),
+    (TrajectoryConflict, web.HTTPConflict),
     (RuntimeLoadMismatch, web.HTTPConflict),
     (InferenceRetryTimeout, web.HTTPServiceUnavailable),
     (ArtifactError, web.HTTPServiceUnavailable),

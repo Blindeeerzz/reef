@@ -21,9 +21,9 @@ each record set's task result back to its stage, keeps the tasks of held sets,
 hands out one batch at a time until the trainer acknowledges or releases it,
 and runs the training modes and the training instructions.
 
-A client can also upload a data item. It is not a record, so it does not go
-through the first two stages. The pipeline gives it to the task-to-batch stage.
-A batch takes uploaded data items first.
+A client can also upload an ATIF trajectory. It is not a record, so it does not
+go through the first two stages. The pipeline gives it to the task-to-batch
+stage. A batch takes uploaded trajectories first.
 """
 
 from __future__ import annotations
@@ -42,9 +42,9 @@ from reef.pipeline_context import PipelineContext
 from reef.record2record import NoRecordSets, Record2Record, RecordSet, TaskStatus
 from reef.record2record.staleness import producing_runtime_load_ids
 from reef.record2task import NoTasks, Record2Task
-from reef.storage.data_items import consumed_id
+from reef.storage.trajectories import consumed_trajectory_id
 from reef.task2batch import NoBatches, Task2Batch
-from reef.train.types import TaskItem, TrainDataItem, TrainingBatch, TrajectoryItem
+from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem
 
 
 #: In manual mode the pipeline holds at most this many batches of units; it releases older ones.
@@ -194,12 +194,12 @@ class TrainingPipeline:
         self.tasks: dict[Hashable, tuple[TrainDataItem, ...]] = {}
         #: Record sets pushed to the record-to-task stage that have no result yet, by set ID. Their records stay held.
         self.waiting_sets: dict[Hashable, RecordSet] = {}
-        #: Uploaded data items by item ID, in upload order, until a batch consumes them.
-        self.data_items: dict[str, TrainDataItem] = {}
-        #: The IDs of the data items in the handed out batch.
-        self.reserved_item_ids: tuple[str, ...] = ()
-        #: The commit IDs of the data items that a batch consumed. A second read of one does not queue it again.
-        self.consumed_items: set[str] = set()
+        #: Uploaded trajectories by trajectory ID, in upload order, until a batch consumes them.
+        self.uploaded_trajectories: dict[str, TrajectoryItem] = {}
+        #: The IDs of the uploaded trajectories in the handed out batch.
+        self.reserved_trajectory_ids: tuple[str, ...] = ()
+        #: The commit IDs of the uploaded trajectories that a batch consumed. A second read of one does not queue it.
+        self.consumed_trajectory_ids: set[str] = set()
         self.set_training_mode(context.training_mode)
 
     @property
@@ -213,13 +213,13 @@ class TrainingPipeline:
         return self.task2batch.required_request_types
 
     @property
-    def accepted_items(self) -> frozenset[type[TrajectoryItem] | type[TaskItem]]:
-        """The kinds of uploaded data item that the trainer gives the pipeline."""
-        return self.task2batch.accepted_items
+    def accepts_trajectories(self) -> bool:
+        """Whether the trainer gives the pipeline uploaded trajectories."""
+        return self.task2batch.accepts_trajectories
 
     @property
     def batch_size(self) -> int:
-        """The number of batch units in one batch. An uploaded data item counts as one unit."""
+        """The number of batch units in one batch. An uploaded trajectory counts as one unit."""
         return self.task2batch.batch_size
 
     @property
@@ -333,12 +333,12 @@ class TrainingPipeline:
         self.record2record.push(item)
         self.move_record_sets()
 
-    def push_item(self, item_id: str, item: TrainDataItem) -> None:
-        """Read one uploaded data item. It waits here for a batch."""
-        if type(item) not in self.accepted_items:
-            raise ValueError(f"{type(self.task2batch).__name__} does not accept {type(item).__name__} uploads")
-        if consumed_id(item_id) not in self.consumed_items:
-            self.data_items.setdefault(item_id, item)
+    def push_trajectory(self, trajectory_id: str, trajectory: TrajectoryItem) -> None:
+        """Read one uploaded trajectory. It waits here for a batch."""
+        if not self.accepts_trajectories:
+            raise ValueError(f"{type(self.task2batch).__name__} does not accept uploaded trajectories")
+        if consumed_trajectory_id(trajectory_id) not in self.consumed_trajectory_ids:
+            self.uploaded_trajectories.setdefault(trajectory_id, trajectory)
 
     def observe_serving_runtime_load_id(self, runtime_load_id: str) -> None:
         """Give the record stage the runtime load ID that serves the scenario now, for its staleness check."""
@@ -346,9 +346,9 @@ class TrainingPipeline:
 
     # ------------------------------------------------------------ batch cycle
     #
-    # Batch when enough units and data items are held (auto, hybrid) or an
-    # instruction is queued (manual, hybrid), hand the same batch out until it
-    # is acknowledged, then end the units and data items that it consumed.
+    # Batch when enough units and uploaded trajectories are held (auto, hybrid)
+    # or an instruction is queued (manual, hybrid), hand the same batch out
+    # until it is acknowledged, then end the units and trajectories it consumed.
 
     def ready(self) -> bool:
         # Background work, such as judgments or finished rounds, forms sets without a new record.
@@ -362,7 +362,7 @@ class TrainingPipeline:
             return bool(self.training_requests)
         if self.training_mode == "hybrid" and self.training_requests:
             return True
-        return len(self.record2record.pool) + len(self.data_items) >= self.batch_size
+        return len(self.record2record.pool) + len(self.uploaded_trajectories) >= self.batch_size
 
     def build_batch(self) -> TrainingBatch:
         if self.pending is None:
@@ -377,11 +377,11 @@ class TrainingPipeline:
             )
             # In manual mode an instruction runs alone; in hybrid it takes the units that an automatic batch would.
             unit_count = 0 if request is not None and self.training_mode == "manual" else self.batch_size
-            # Uploaded data items go first, in upload order. Record set units fill the rest of the batch.
-            self.reserved_item_ids = tuple(self.data_items)[:unit_count]
-            selected = self.record2record.pool.reserve(unit_count - len(self.reserved_item_ids))
+            # Uploaded trajectories go first, in upload order. Record set units fill the rest of the batch.
+            self.reserved_trajectory_ids = tuple(self.uploaded_trajectories)[:unit_count]
+            selected = self.record2record.pool.reserve(unit_count - len(self.reserved_trajectory_ids))
             tasks = (
-                *(self.data_items[item_id] for item_id in self.reserved_item_ids),
+                *(self.uploaded_trajectories[trajectory_id] for trajectory_id in self.reserved_trajectory_ids),
                 *(task for unit in selected for set_id in unit.set_ids() for task in self.tasks[set_id]),
             )
             if request is None:
@@ -392,7 +392,7 @@ class TrainingPipeline:
         return self.pending
 
     def acknowledge(self, batch_id: str, *, trained: bool = True) -> frozenset[str]:
-        """The training step consumed the batch: end its units and data items, and return the consumed IDs.
+        """The training step consumed the batch: end its units and uploaded trajectories, and return the consumed IDs.
 
         ``trained`` is False when the backend dropped the batch as stale, for
         a record stage that paces work on what trained.
@@ -402,11 +402,11 @@ class TrainingPipeline:
         consumed_units = self.record2record.pool.consume_reserved()
         consumed = self.record2record.consume(consumed_units, trained=trained)
         self.forget_ended_sets()
-        for item_id in self.reserved_item_ids:
-            self.data_items.pop(item_id)
-            self.consumed_items.add(consumed_id(item_id))
-        consumed = consumed | {consumed_id(item_id) for item_id in self.reserved_item_ids}
-        self.reserved_item_ids = ()
+        for trajectory_id in self.reserved_trajectory_ids:
+            self.uploaded_trajectories.pop(trajectory_id)
+            self.consumed_trajectory_ids.add(consumed_trajectory_id(trajectory_id))
+        consumed = consumed | {consumed_trajectory_id(trajectory_id) for trajectory_id in self.reserved_trajectory_ids}
+        self.reserved_trajectory_ids = ()
         if self.pending.request is not None:
             self.consume_request(self.pending.request.id)
             consumed = consumed | {self.pending.request.id}
@@ -418,7 +418,7 @@ class TrainingPipeline:
         if self.pending is None or self.pending.batch_id != batch_id:
             raise ValueError(f"unknown batch_id {batch_id!r}")
         self.pending = None
-        self.reserved_item_ids = ()
+        self.reserved_trajectory_ids = ()
         self.record2record.pool.release_reservation()
 
     # ------------------------------------------------------------- lifecycle
@@ -428,14 +428,14 @@ class TrainingPipeline:
         waiting = {record_id for record_set in self.waiting_sets.values() for record_id in record_set.record_ids()}
         return (
             frozenset(self.consumed_requests)
-            | frozenset(self.consumed_items)
+            | frozenset(self.consumed_trajectory_ids)
             | self.record2record.releasable_record_ids()
         ) - waiting
 
     def release_records(self, agent_record_ids: frozenset[str]) -> None:
         """Release committed in-memory state without changing stored records."""
         self.consumed_requests -= agent_record_ids
-        self.consumed_items -= agent_record_ids
+        self.consumed_trajectory_ids -= agent_record_ids
         self.record2record.release_records(agent_record_ids)
 
     def background_jobs_running(self) -> bool:
@@ -467,7 +467,7 @@ class TrainingPipeline:
         external wait can fail explicitly.
         """
         state: dict[str, Any] = {
-            "ready_units": len(self.record2record.pool) + len(self.data_items),
+            "ready_units": len(self.record2record.pool) + len(self.uploaded_trajectories),
             "batch_size": self.batch_size,
         }
         if self.supported_training_modes & {"manual", "hybrid"}:

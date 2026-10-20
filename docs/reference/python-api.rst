@@ -1066,10 +1066,8 @@ the judged samples into batches.
 | ``required_request_types``               | optionally restrict which record  |
 |                                          | types reach the pipeline          |
 +------------------------------------------+-----------------------------------+
-| ``accepted_items``                       | optionally name the uploaded data |
-|                                          | item kinds that the recipe trains |
-|                                          | on: ``TrajectoryItem``,           |
-|                                          | ``TaskItem``                      |
+| ``accepts_trajectories``                 | optionally set True to train on   |
+|                                          | uploaded ATIF trajectories        |
 +------------------------------------------+-----------------------------------+
 
 Before each ``observe``, the stage retires expired records and absorbs finished

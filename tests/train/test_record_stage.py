@@ -384,49 +384,50 @@ class InferenceTasks(ImmediateRecord2Task):
         return TaskResult.ready((TaskItem(Path(record_ids[0]), source_agent_record_ids=record_ids),))
 
 
-class DataItemBatches(PairBatches):
-    accepted_items = frozenset({TrajectoryItem, TaskItem})
+class UploadBatches(PairBatches):
+    accepts_trajectories = True
 
 
 TRAJECTORY = TrajectoryItem({"schema_version": "ATIF-v1.4", "agent": {"name": "fixture"}, "steps": [{"step_id": 1}]})
 
 
 @pytest.mark.unit
-def test_uploaded_data_items_go_first_in_a_batch_and_count_as_units() -> None:
+def test_uploaded_trajectories_go_first_in_a_batch_and_count_as_units() -> None:
     context = PipelineContext("s")
     processor = TrainingPipeline(
         context,
         record2record=InferenceRecord2Record(),
         record2task=InferenceTasks(),
-        task2batch=DataItemBatches(context, 2),
+        task2batch=UploadBatches(context, 2),
     )
     processor.push(inference("i1"))
     assert not processor.ready()
-    processor.push_item("t1", TRAJECTORY)
-    processor.push_item("k1", TaskItem(Path("k1")))
+    processor.push_trajectory("t1", TRAJECTORY)
+    processor.push_trajectory("t2", TRAJECTORY)
     assert processor.status()["ready_units"] == 3
 
     batch = processor.build_batch()
-    assert batch.items == (TRAJECTORY, TaskItem(Path("k1")))
+    assert batch.items == (TRAJECTORY, TRAJECTORY)
     processor.release_batch(batch.batch_id)
     batch = processor.build_batch()
-    assert batch.items == (TRAJECTORY, TaskItem(Path("k1")))
-    assert processor.acknowledge(batch.batch_id) == {"item:t1", "item:k1"}
+    assert batch.items == (TRAJECTORY, TRAJECTORY)
+    assert processor.acknowledge(batch.batch_id) == {"trajectory:t1", "trajectory:t2"}
 
-    # A consumed data item that the trainer reads again before the commit releases it does not queue again.
-    processor.push_item("t1", TRAJECTORY)
-    processor.push_item("t2", TRAJECTORY)
+    # A consumed trajectory that the trainer reads again before the commit releases it does not queue again.
+    processor.push_trajectory("t1", TRAJECTORY)
+    processor.push_trajectory("t3", TRAJECTORY)
     batch = processor.build_batch()
     assert batch.items == (TRAJECTORY, TaskItem(Path("i1"), source_agent_record_ids=("i1",)))
-    assert processor.acknowledge(batch.batch_id) == {"item:t2", "i1"}
-    assert {"item:t1", "item:k1", "item:t2"} <= processor.releasable_record_ids()
-    processor.release_records(frozenset({"item:t1", "item:k1", "item:t2"}))
-    assert not processor.consumed_items
+    assert processor.acknowledge(batch.batch_id) == {"trajectory:t3", "i1"}
+    consumed = frozenset({"trajectory:t1", "trajectory:t2", "trajectory:t3"})
+    assert consumed <= processor.releasable_record_ids()
+    processor.release_records(consumed)
+    assert not processor.consumed_trajectory_ids
 
 
 @pytest.mark.unit
-def test_a_pipeline_refuses_a_data_item_kind_that_its_batch_stage_does_not_accept() -> None:
+def test_a_pipeline_refuses_a_trajectory_that_its_batch_stage_does_not_accept() -> None:
     context = PipelineContext("s")
     processor = TrainingPipeline(context, task2batch=PairBatches(context, 1))
-    with pytest.raises(ValueError, match="does not accept TrajectoryItem uploads"):
-        processor.push_item("t1", TRAJECTORY)
+    with pytest.raises(ValueError, match="does not accept uploaded trajectories"):
+        processor.push_trajectory("t1", TRAJECTORY)

@@ -435,7 +435,7 @@ class ScenarioFactory:
                     scenario.replay_retained(
                         up_to_sequence=0, consumed_ids=recovered.consumed_ids, component=component_trainer.component
                     )
-                component_trainer.trainer.read_data_items(store.data_items)
+                component_trainer.trainer.read_uploaded_trajectories(store.trajectories)
             # A scenario created or last stepped by an older Reef serves that Reef's shipped content (the harness
             # requests extension, for one) until it is republished; every later step builds on what it serves.
             scenario.publish_shipped_content()
