@@ -319,6 +319,30 @@ def test_a_rejected_candidate_never_reaches_serving(tmp_path: Path) -> None:
         serving.activate_candidate(candidate)
 
 
+def test_a_rejected_candidate_returns_the_optimizer_to_its_state_before_the_step(tmp_path: Path) -> None:
+    runtime = build(tmp_path)
+    scheduler = RuntimeScheduler(runtime, runtime.serving)
+    selected = train(runtime, 0)
+    scheduler.activate_candidate(selected)
+    scheduler.finish_committed_training_job(selected.training_job_id)
+    assert runtime.engine.optimizer_steps == 1
+
+    scheduler.reject_candidate(train(runtime, 1))
+
+    # The next step trains from the served weights with their own moments.
+    assert runtime.engine.optimizer_steps == 1
+
+
+def test_a_failed_step_returns_the_optimizer_to_its_state_before_the_step(tmp_path: Path) -> None:
+    engine = FakeMLXEngine(moves_weights=False)
+    runtime = build(tmp_path, engine)
+
+    with pytest.raises(RuntimeContractError, match="unchanged"):
+        train(runtime)
+
+    assert engine.optimizer_steps == 0
+
+
 def published_adapter(tmp_path: Path, metadata: dict | None = None) -> Artifact:
     directory = tmp_path / "published"
     directory.mkdir()

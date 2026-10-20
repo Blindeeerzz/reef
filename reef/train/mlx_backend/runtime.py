@@ -26,7 +26,7 @@ from reef.runtime.interfaces import (
 )
 from reef.train.algos.registry import resolve_objective
 from reef.train.mlx_backend.config import MLXConfig
-from reef.train.mlx_backend.contracts import LossOptions, ModelEngine
+from reef.train.mlx_backend.contracts import LossOptions, ModelEngine, OptimizerSnapshot
 from reef.train.mlx_backend.serving import MLXServingRuntime
 from reef.train.types import TrainingBatch, trajectories
 
@@ -53,6 +53,8 @@ class MLXRuntime(TrainingRuntime):
         self._loss_options = loss_options
         self._max_train_tokens = max_train_tokens
         self._min_train_rows = min_train_rows
+        #: The optimizer state before the step of the candidate that awaits Reef's decision.
+        self._pending_optimizer: tuple[str, OptimizerSnapshot] | None = None
 
     @property
     def serving(self) -> MLXServingRuntime:
@@ -135,13 +137,17 @@ class MLXRuntime(TrainingRuntime):
 
         Requests wait for the whole step, because the step changes the weights
         that serving reads. The served weights are restored before admission
-        reopens, whether the step succeeds or fails.
+        reopens, whether the step succeeds or fails. A failed step also
+        restores the optimizer state; a rejected candidate restores it in
+        :meth:`reject_candidate`.
         """
         scenario_step = payload["scenario_step"]
         source_runtime_load_id = self._serving.current_runtime_load_id()
         engine = self.engine
+        self._pending_optimizer = None
         with self._serving.paused_admission():
             before = engine.adapter_snapshot()
+            optimizer_before = engine.optimizer_snapshot()
             try:
                 try:
                     metrics = engine.train(
@@ -170,6 +176,10 @@ class MLXRuntime(TrainingRuntime):
                     },
                 )
                 self._serving.stage_candidate(candidate_id, after)
+                self._pending_optimizer = (candidate_id, optimizer_before)
+            except BaseException:
+                engine.restore_optimizer(optimizer_before)
+                raise
             finally:
                 engine.apply_adapter(before)
         return ModelCandidate(
@@ -181,7 +191,16 @@ class MLXRuntime(TrainingRuntime):
         )
 
     def reject_candidate(self, candidate: ModelCandidate) -> None:
+        """Drop a rejected candidate, and return the optimizer to its state before the candidate's step.
+
+        The next step then trains from the served weights with the moments
+        that belong to them. Without the restore, each rejected step would
+        leave its gradient in the moments and push the next step the same way.
+        """
         self._serving.discard_candidate(candidate.candidate_id)
+        if self._pending_optimizer is not None and self._pending_optimizer[0] == candidate.candidate_id:
+            self.engine.restore_optimizer(self._pending_optimizer[1])
+            self._pending_optimizer = None
         logger.info("rejected mlx candidate %s", candidate.candidate_id)
 
     def probe_candidate(self, candidate_id: str, prompts: Sequence[Sequence[int]], *, max_tokens: int) -> list[str]:
