@@ -33,9 +33,6 @@ Stages:
   background worker after later traffic completes them. A recipe's
   ``RecordJudging`` holds the correlation and the judge.
 * ``InferenceRecord2Record`` (``base.py``): one set per inference record.
-* ``RoundRecord2Record`` (``rounds.py``): a ``ReportRecord2Record`` that also
-  paces task-generation rounds and holds their source sessions. A
-  ``RoundRunner`` runs each ``TaskGenerationRound``. A round is not a record set.
 
 Components of the pool:
 
@@ -66,7 +63,6 @@ from reef.record2record.reports import (
     ReportRecord2Record,
     ReportSet,
 )
-from reef.record2record.rounds import RoundGrouping, RoundRecord2Record, RoundResult, RoundRunner, TaskGenerationRound
 from reef.record2record.selection import ArrivalOrder, GroupKeyOrder, SelectionPolicy
 from reef.record2record.sets import BatchUnit, RecordSet, SingleRecordSet, SingleSetUnit
 
@@ -89,13 +85,8 @@ __all__ = [
     "ReportGrouping",
     "ReportRecord2Record",
     "ReportSet",
-    "RoundGrouping",
-    "RoundRecord2Record",
-    "RoundResult",
-    "RoundRunner",
     "SelectionPolicy",
     "SingleRecordSet",
     "SingleSetUnit",
-    "TaskGenerationRound",
     "TaskStatus",
 ]

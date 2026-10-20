@@ -224,8 +224,6 @@ A stage that holds groups overrides ``drop_held_unit`` to end a whole group.
      - correlation and the judging worker
    * - ``InferenceRecord2Record``
      - one set per inference record; other records are released
-   * - ``RoundRecord2Record``
-     - a ``ReportRecord2Record`` that also starts a task-generation round when it is due
 
 Training modes
 --------------
@@ -401,13 +399,12 @@ as 0, and reports it, so a training play of that kind trains. The task's
 oracle passed the same verifier, so the timeout is the agent's.
 
 The recipe splits the rounds across its stages. A round is not a record set,
-and it does not train. The record stage (``GeneratedTaskRecord2Record``, a
-``RoundRecord2Record``) decides when a round is due, holds the source
-sessions, and starts a ``TaskGenerationRound`` with the round number and its
-sessions. The record-to-task stage (``GeneratedTaskTasks``) is the stage's
-``RoundRunner``. It runs the round on its own ``BackgroundJobWorker``, outside
-the trainer lock, and returns a ``RoundResult`` when the round ends. One round
-runs at a time. In each round it:
+and it does not train. The record stage (``GeneratedTaskRecord2Record``)
+decides when a round is due, holds the source sessions, and gives the round
+number and its sessions to the record-to-task stage (``GeneratedTaskTasks``).
+That stage runs the round on its own ``BackgroundJobWorker``, outside the
+trainer lock, and tells the record stage when the round ends. One round runs
+at a time. In each round it:
 
 1. Asks the generator for tasks with the configured ``description`` and the
    request's source sessions.
