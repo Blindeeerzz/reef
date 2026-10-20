@@ -275,12 +275,19 @@ host's LAN address. With these runtimes, do these steps:
 - Set `OPENCLAWRL_USER_LLM_URL` to a `host.docker.internal` address if the
   student model runs on the host.
 
-Serving on a Mac is slower than on GPUs. Set
-`OPENCLAWRL_TURN_TIMEOUT_S` above its 600-second default, and keep
+Serving on a Mac is slower than on GPUs. A turn can wait for a whole
+training step and the candidate evaluation, which together take about 15
+minutes on a 9B model. Set `OPENCLAWRL_TURN_TIMEOUT_S` to 1800, and keep
 `pipeline.record2record.config.session_ttl_s` at the 1800 that
 `serve-mlx.yaml` sets. [Train on Apple Silicon with
 MLX](../../../../docs/user-guide/mlx.rst) documents the backend, its options
 and the sizing measurements.
+
+To resume a stream after `reef-eval stream` stops, keep Reef running and
+start the stream again on the remaining tasks with the same `--name`. Set
+`OPENCLAWRL_SCENARIO` to the scenario that the stream used, as
+`/reef/status` shows it. Otherwise the stream mints a new scenario, and Reef
+refuses it because the process already trains the first one.
 
 ## Results
 
