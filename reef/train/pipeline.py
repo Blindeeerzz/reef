@@ -39,10 +39,10 @@ from reef.core.reports import ReportBase
 from reef.core.training_request import TrainingRequest
 from reef.observability import ExperimentLogger
 from reef.pipeline_context import PipelineContext
-from reef.record2record import NoRecordSets, Record2Record, RecordSet, TaskStatus
+from reef.record2record import BatchUnit, NoRecordSets, Record2Record, RecordSet, TaskStatus
 from reef.record2record.staleness import producing_runtime_load_ids
 from reef.record2task import NoTasks, Record2Task
-from reef.storage.data_items import consumed_id
+from reef.storage.data_items import StoredDataItem, consumed_id
 from reef.task2batch import NoBatches, Task2Batch
 from reef.train.types import TrainDataItem, TrainingBatch
 
@@ -53,6 +53,26 @@ MANUAL_HELD_BATCHES = 4
 
 #: The keys of the deployment's ``pipeline`` section, one for each stage.
 PIPELINE_STAGES = ("record2record", "record2task", "task2batch")
+
+
+@dataclass(frozen=True, kw_only=True)
+class DataItemUnit(BatchUnit):
+    """One uploaded data item, as a batch unit.
+
+    Values: ``unit_id`` is the ID that the client gave the item, and ``item`` is
+    the item. ``arrival_index`` is the sequence of the item in the scenario's
+    data item store, so it gives the upload order. ``consumed_ids(U)`` is
+    ``{"item:<unit_id>"}``. ``group_key`` is None.
+
+    Purpose: the pipeline makes it from each uploaded item that the trainer
+    reads (``ingest_item``). A batch takes these units first, in upload order.
+    """
+
+    unit_id: str
+    item: TrainDataItem
+
+    def consumed_ids(self) -> frozenset[str]:
+        return frozenset({consumed_id(self.unit_id)})
 
 
 @dataclass(frozen=True)
@@ -194,10 +214,10 @@ class TrainingPipeline:
         self.tasks: dict[Hashable, tuple[TrainDataItem, ...]] = {}
         #: Record sets pushed to the record-to-task stage that have no result yet, by set ID. Their records stay held.
         self.waiting_sets: dict[Hashable, RecordSet] = {}
-        #: Uploaded data items by item ID, in upload order, until a batch consumes them.
-        self.data_items: dict[str, TrainDataItem] = {}
-        #: The IDs of the data items in the handed out batch.
-        self.reserved_item_ids: tuple[str, ...] = ()
+        #: The units of uploaded data items by item ID, in upload order, until a batch consumes them.
+        self.item_units: dict[str, DataItemUnit] = {}
+        #: The data item units in the handed out batch.
+        self.reserved_item_units: tuple[DataItemUnit, ...] = ()
         #: The commit IDs of the data items that a batch consumed. A second read of one does not queue it again.
         self.consumed_items: set[str] = set()
         self.set_training_mode(context.training_mode)
@@ -333,12 +353,14 @@ class TrainingPipeline:
         self.record2record.push(item)
         self.move_record_sets()
 
-    def ingest_item(self, item_id: str, item: TrainDataItem) -> None:
-        """Read one uploaded data item. It waits here for a batch."""
-        if type(item) not in self.accepted_items:
-            raise ValueError(f"{type(self.task2batch).__name__} does not accept {type(item).__name__} uploads")
-        if consumed_id(item_id) not in self.consumed_items:
-            self.data_items.setdefault(item_id, item)
+    def ingest_item(self, stored: StoredDataItem) -> None:
+        """Read one uploaded data item. Its unit waits here for a batch."""
+        if type(stored.item) not in self.accepted_items:
+            raise ValueError(f"{type(self.task2batch).__name__} does not accept {type(stored.item).__name__} uploads")
+        if consumed_id(stored.item_id) not in self.consumed_items:
+            self.item_units.setdefault(
+                stored.item_id, DataItemUnit(unit_id=stored.item_id, arrival_index=stored.sequence, item=stored.item)
+            )
 
     def observe_serving_runtime_load_id(self, runtime_load_id: str) -> None:
         """Give the record stage the runtime load ID that serves the scenario now, for its staleness check."""
@@ -362,7 +384,7 @@ class TrainingPipeline:
             return bool(self.training_requests)
         if self.training_mode == "hybrid" and self.training_requests:
             return True
-        return len(self.record2record.pool) + len(self.data_items) >= self.batch_size
+        return len(self.record2record.pool) + len(self.item_units) >= self.batch_size
 
     def build_batch(self) -> TrainingBatch:
         if self.pending is None:
@@ -377,11 +399,11 @@ class TrainingPipeline:
             )
             # In manual mode an instruction runs alone; in hybrid it takes the units that an automatic batch would.
             unit_count = 0 if request is not None and self.training_mode == "manual" else self.batch_size
-            # Uploaded data items go first, in upload order. Batch units fill the rest of the batch.
-            self.reserved_item_ids = tuple(self.data_items)[:unit_count]
-            selected = self.record2record.pool.reserve(unit_count - len(self.reserved_item_ids))
+            # Data item units go first, in upload order. Record set units fill the rest of the batch.
+            self.reserved_item_units = tuple(self.item_units.values())[:unit_count]
+            selected = self.record2record.pool.reserve(unit_count - len(self.reserved_item_units))
             tasks = (
-                *(self.data_items[item_id] for item_id in self.reserved_item_ids),
+                *(unit.item for unit in self.reserved_item_units),
                 *(task for unit in selected for set_id in unit.set_ids() for task in self.tasks[set_id]),
             )
             if request is None:
@@ -402,11 +424,11 @@ class TrainingPipeline:
         consumed_units = self.record2record.pool.consume_reserved()
         consumed = self.record2record.consume(consumed_units, trained=trained)
         self.forget_ended_sets()
-        for item_id in self.reserved_item_ids:
-            self.data_items.pop(item_id)
-            self.consumed_items.add(consumed_id(item_id))
-        consumed = consumed | {consumed_id(item_id) for item_id in self.reserved_item_ids}
-        self.reserved_item_ids = ()
+        for unit in self.reserved_item_units:
+            self.item_units.pop(unit.unit_id)
+            self.consumed_items |= unit.consumed_ids()
+            consumed = consumed | unit.consumed_ids()
+        self.reserved_item_units = ()
         if self.pending.request is not None:
             self.consume_request(self.pending.request.id)
             consumed = consumed | {self.pending.request.id}
@@ -418,7 +440,7 @@ class TrainingPipeline:
         if self.pending is None or self.pending.batch_id != batch_id:
             raise ValueError(f"unknown batch_id {batch_id!r}")
         self.pending = None
-        self.reserved_item_ids = ()
+        self.reserved_item_units = ()
         self.record2record.pool.release_reservation()
 
     # ------------------------------------------------------------- lifecycle
@@ -467,7 +489,7 @@ class TrainingPipeline:
         external wait can fail explicitly.
         """
         state: dict[str, Any] = {
-            "ready_units": len(self.record2record.pool) + len(self.data_items),
+            "ready_units": len(self.record2record.pool) + len(self.item_units),
             "batch_size": self.batch_size,
         }
         if self.supported_training_modes & {"manual", "hybrid"}:

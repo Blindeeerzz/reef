@@ -21,6 +21,7 @@ from reef.record2record import (
     ReportRecord2Record,
 )
 from reef.record2task import ImmediateRecord2Task, Record2Task, ReportTasks, SkippedReport, TaskResult
+from reef.storage.data_items import StoredDataItem
 from reef.storage.sqlite import SQLiteRecordStore
 from reef.task2batch import Task2Batch
 from reef.train import PipelineContext, Trainer
@@ -402,8 +403,8 @@ def test_uploaded_data_items_go_first_in_a_batch_and_count_as_units() -> None:
     )
     processor.ingest(inference("i1"))
     assert not processor.ready()
-    processor.ingest_item("t1", TRAJECTORY)
-    processor.ingest_item("k1", TaskItem(Path("k1")))
+    processor.ingest_item(StoredDataItem(1, "t1", TRAJECTORY))
+    processor.ingest_item(StoredDataItem(2, "k1", TaskItem(Path("k1"))))
     assert processor.status()["ready_units"] == 3
 
     batch = processor.build_batch()
@@ -414,8 +415,8 @@ def test_uploaded_data_items_go_first_in_a_batch_and_count_as_units() -> None:
     assert processor.acknowledge(batch.batch_id) == {"item:t1", "item:k1"}
 
     # A consumed data item that the trainer reads again before the commit releases it does not queue again.
-    processor.ingest_item("t1", TRAJECTORY)
-    processor.ingest_item("t2", TRAJECTORY)
+    processor.ingest_item(StoredDataItem(1, "t1", TRAJECTORY))
+    processor.ingest_item(StoredDataItem(3, "t2", TRAJECTORY))
     batch = processor.build_batch()
     assert batch.items == (TRAJECTORY, TaskItem(Path("i1"), source_agent_record_ids=("i1",)))
     assert processor.acknowledge(batch.batch_id) == {"item:t2", "i1"}
@@ -429,4 +430,4 @@ def test_a_pipeline_refuses_a_data_item_kind_that_its_batch_stage_does_not_accep
     context = PipelineContext("s")
     processor = TrainingPipeline(context, task2batch=PairBatches(context, 1))
     with pytest.raises(ValueError, match="does not accept TrajectoryItem uploads"):
-        processor.ingest_item("t1", TRAJECTORY)
+        processor.ingest_item(StoredDataItem(1, "t1", TRAJECTORY))

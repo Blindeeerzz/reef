@@ -14,11 +14,11 @@ from reef.core.artifact_ref import RuntimeLoadSpan
 from reef.core.batches import TaskItem
 from reef.record2record import (
     ArrivalOrder,
-    BatchUnit,
     BatchUnitPool,
     GroupKeyOrder,
     InferenceRecord2Record,
     RecordSet,
+    RecordSetUnit,
     SelectionPolicy,
     SingleRecordSet,
     SingleSetUnit,
@@ -47,7 +47,7 @@ class RecordsSet(RecordSet):
 
 
 @dataclass(frozen=True, kw_only=True)
-class ManySetUnit(BatchUnit):
+class ManySetUnit(RecordSetUnit):
     held: tuple[RecordSet, ...]
 
     def record_sets(self) -> tuple[RecordSet, ...]:
@@ -58,7 +58,7 @@ def single(record_id: str, arrival_index: int) -> SingleRecordSet:
     return SingleRecordSet(set_id=record_id, arrival_index=arrival_index, record=inference(record_id))
 
 
-def named(unit_id: str, arrival_index: int, group_key: int | None = None) -> BatchUnit:
+def named(unit_id: str, arrival_index: int, group_key: int | None = None) -> RecordSetUnit:
     """A unit of one inference record whose ID is ``unit_id``."""
     return ManySetUnit(
         unit_id=unit_id, arrival_index=arrival_index, group_key=group_key, held=(single(unit_id, arrival_index),)
@@ -66,7 +66,7 @@ def named(unit_id: str, arrival_index: int, group_key: int | None = None) -> Bat
 
 
 class ForeignUnit(SelectionPolicy):
-    def select(self, candidates: Sequence[BatchUnit], max_unit_count: int) -> tuple[BatchUnit, ...]:
+    def select(self, candidates: Sequence[RecordSetUnit], max_unit_count: int) -> tuple[RecordSetUnit, ...]:
         return (named("not-held", 1),)
 
 
@@ -78,13 +78,13 @@ def test_a_record_set_holds_one_or_more_records_and_every_record_they_reference(
         RecordsSet(set_id="r", arrival_index=1, held=(report("r", "i"),))
 
 
-def test_a_batch_unit_holds_one_or_more_record_sets_and_consumes_all_their_records() -> None:
+def test_a_record_set_unit_holds_one_or_more_record_sets_and_consumes_all_their_records() -> None:
     unit = ManySetUnit(unit_id="u", arrival_index=1, held=(single("a", 1), single("b", 2)))
     assert unit.set_ids() == ("a", "b")
     assert unit.consumed_ids() == frozenset({"a", "b"})
     record_set = single("c", 3)
     assert SingleSetUnit.of(record_set) == SingleSetUnit(unit_id="c", arrival_index=3, record_set=record_set)
-    with pytest.raises(ValueError, match="one or more record sets"):
+    with pytest.raises(ValueError, match="must consume one or more IDs"):
         ManySetUnit(unit_id="empty", arrival_index=1, held=())
 
 

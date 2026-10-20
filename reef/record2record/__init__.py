@@ -13,7 +13,7 @@ Entry point: ``Record2Record`` in ``base.py``.
 * The stage forms ``RecordSet`` values, which the pipeline pulls (``pull``):
   the records that the record-to-task stage makes tasks from, together. No
   record is in two record sets. The pipeline gives each task result back
-  (``settle``). The stage holds the sets that train in ``BatchUnit`` values
+  (``settle``). The stage holds the sets that train in ``RecordSetUnit`` values
   in its pool, drops the units that can no longer train, and gives the
   pipeline the next batch's units in order. The stage never calls the other stages.
 * Every stage runs the staleness check. It is the only place where Reef
@@ -36,8 +36,10 @@ Stages:
 
 Components of the pool:
 
-* ``RecordSet`` and ``BatchUnit`` (``sets.py``): the input of the record-to-task
-  stage, and the unit that a batch takes and that ``batch_size`` counts.
+* ``RecordSet`` and ``RecordSetUnit`` (``sets.py``): the input of the
+  record-to-task stage, and the record sets that train in one batch.
+  ``RecordSetUnit`` is a ``BatchUnit``, what a batch takes and ``batch_size``
+  counts.
 * ``BatchUnitPool`` (``pool.py``): the held units, and the reserved batch.
 * ``SelectionPolicy`` (``selection.py``): the order in which units go into a
   batch. ``ArrivalOrder`` takes the oldest first. ``GroupKeyOrder`` takes
@@ -64,7 +66,7 @@ from reef.record2record.reports import (
     ReportSet,
 )
 from reef.record2record.selection import ArrivalOrder, GroupKeyOrder, SelectionPolicy
-from reef.record2record.sets import BatchUnit, RecordSet, SingleRecordSet, SingleSetUnit
+from reef.record2record.sets import BatchUnit, RecordSet, RecordSetUnit, SingleRecordSet, SingleSetUnit
 
 __all__ = [
     "ArrivalOrder",
@@ -80,6 +82,7 @@ __all__ = [
     "Record2Record",
     "RecordJudging",
     "RecordSet",
+    "RecordSetUnit",
     "ReportCandidate",
     "ReportContext",
     "ReportGrouping",

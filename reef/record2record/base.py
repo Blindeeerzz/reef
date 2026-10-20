@@ -16,7 +16,7 @@ from reef.core.records_types import AgentRecord, RequestType
 from reef.pipeline_context import PipelineContext
 from reef.record2record.pool import BatchUnitPool
 from reef.record2record.selection import SelectionPolicy
-from reef.record2record.sets import BatchUnit, RecordSet, SingleRecordSet, SingleSetUnit
+from reef.record2record.sets import RecordSet, RecordSetUnit, SingleRecordSet, SingleSetUnit
 from reef.record2record.staleness import canonical_runtime_load_id, stale_units
 
 
@@ -183,13 +183,13 @@ class Record2Record(ABC, Plugin):
         ):
             self.drop_held_unit(unit)
 
-    def drop_held_unit(self, unit: BatchUnit) -> None:
+    def drop_held_unit(self, unit: RecordSetUnit) -> None:
         """End a held unit that can no longer train. A stage that holds groups overrides it."""
         self.pool.remove(unit.unit_id)
         for record_set in unit.record_sets():
             self.reject(record_set)
 
-    def consume(self, units: tuple[BatchUnit, ...], *, trained: bool) -> frozenset[str]:
+    def consume(self, units: tuple[RecordSetUnit, ...], *, trained: bool) -> frozenset[str]:
         """End the units that an acknowledged batch consumed, and return their keys.
 
         ``trained`` is False when the backend dropped the batch as stale: its

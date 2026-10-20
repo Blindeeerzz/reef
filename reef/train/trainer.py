@@ -372,7 +372,7 @@ class Trainer:
                 self._item_sequence = stored.sequence
                 if type(stored.item) not in accepted_items or consumed_id(stored.item_id) in self.consumed_record_ids:
                     continue
-                self._pipeline.ingest_item(stored.item_id, stored.item)
+                self._pipeline.ingest_item(stored)
                 if self._pipeline.ready():
                     return
         while True:

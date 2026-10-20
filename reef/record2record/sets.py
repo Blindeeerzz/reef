@@ -1,4 +1,4 @@
-"""Record sets and batch units: the input of the record-to-task stage, and the unit that a batch takes.
+"""Record sets and batch units: the input of the record-to-task stage, and what a batch takes.
 
 Notation: ``refs(r)`` is the set of records that a record ``r`` references.
 """
@@ -58,18 +58,19 @@ class SingleRecordSet(RecordSet):
 
 @dataclass(frozen=True, kw_only=True)
 class BatchUnit(ABC):
-    """Record sets that must train in the same batch.
+    """What a batch takes all of or none of.
 
-    Values: ``U`` is a batch unit if and only if ``record_sets(U)`` is not empty.
-    Its record sets are distinct and share no record, because a record stage
-    forms each record into one set only. ``unit_id`` identifies ``U`` in its
-    pool. ``arrival_index`` orders the units of a pool. ``group_key`` names the
-    group of a unit that is a group. It is None for any other unit.
+    Values: ``U`` is a batch unit if and only if ``consumed_ids(U)``, the IDs
+    that consuming ``U`` writes to the commit, is not empty. ``unit_id``
+    identifies ``U`` among the units of its kind. ``arrival_index`` orders the
+    units of a pool. ``group_key`` names the group of a unit that is a group.
+    It is None for any other unit. A unit has one of two forms:
+    ``RecordSetUnit``, the record sets of a record stage, and
+    ``reef.train.pipeline.DataItemUnit``, one uploaded data item.
 
-    Purpose: the record stage puts it in its pool when the tasks of its record
-    sets are ready. A batch takes all its tasks or none of them, and
-    ``batch_size`` counts batch units. Consuming ``U`` writes ``consumed_ids(U)``,
-    the IDs of the records of its record sets, to the commit.
+    Purpose: a batch is a sequence of batch units, and ``batch_size`` counts
+    them. The pipeline writes ``consumed_ids(U)`` of each unit of an
+    acknowledged batch to the commit.
     """
 
     unit_id: Hashable
@@ -77,8 +78,27 @@ class BatchUnit(ABC):
     group_key: Hashable | None = None
 
     def __post_init__(self) -> None:
-        if not self.record_sets():
-            raise ValueError(f"batch unit {self.unit_id!r} must hold one or more record sets")
+        if not self.consumed_ids():
+            raise ValueError(f"batch unit {self.unit_id!r} must consume one or more IDs")
+
+    @abstractmethod
+    def consumed_ids(self) -> frozenset[str]:
+        """Return the IDs that consuming the unit writes to the commit."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class RecordSetUnit(BatchUnit):
+    """Record sets that must train in the same batch.
+
+    Values: ``U`` is a record set unit if and only if ``record_sets(U)`` is not
+    empty. Its record sets are distinct and share no record, because a record
+    stage forms each record into one set only. ``consumed_ids(U)`` is the set
+    of the IDs of the records of its record sets.
+
+    Purpose: the record stage puts it in its pool when the tasks of its record
+    sets are ready. The pipeline reserves it from the pool for a batch and
+    gives the consumed units back to the stage.
+    """
 
     @abstractmethod
     def record_sets(self) -> tuple[RecordSet, ...]:
@@ -89,12 +109,11 @@ class BatchUnit(ABC):
         return tuple(record_set.set_id for record_set in self.record_sets())
 
     def consumed_ids(self) -> frozenset[str]:
-        """Return the record IDs that consuming the unit writes to the commit."""
         return frozenset(record_id for record_set in self.record_sets() for record_id in record_set.record_ids())
 
 
 @dataclass(frozen=True, kw_only=True)
-class SingleSetUnit(BatchUnit):
+class SingleSetUnit(RecordSetUnit):
     """A batch unit of one record set, with the ID and the arrival index of that set. ``of`` makes it."""
 
     record_set: RecordSet
