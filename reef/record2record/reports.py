@@ -230,7 +230,7 @@ class ReportRecord2Record(Record2Record):
         self.scenario = context.scenario
         self.report_type = context.report_type
         self.admitted_report_type = context.admitted_report_type
-        self.available_limit = context.held_set_limit
+        self.held_unit_limit = context.held_unit_limit
         self.grouping = grouping
         self.exclusive_sources = exclusive_sources
         self.candidate_count = 0
@@ -253,7 +253,7 @@ class ReportRecord2Record(Record2Record):
 
     def context_changed(self, context: PipelineContext) -> None:
         self.admitted_report_type = context.admitted_report_type
-        self.available_limit = context.held_set_limit
+        self.held_unit_limit = context.held_unit_limit
         self.apply_limit()
 
     # ------------------------------------------------------------- formation
@@ -389,11 +389,11 @@ class ReportRecord2Record(Record2Record):
             self.end_report(entry.context.report)
         group.entries = {}
 
-    # ------------------------------------------------------- available limit
+    # ------------------------------------------------------- held unit limit
 
     def apply_limit(self) -> None:
-        """Release the oldest unreserved sets beyond the limit. The reserved batch stays."""
-        limit = self.available_limit
+        """Release the oldest unreserved units beyond the limit. The reserved batch stays."""
+        limit = self.held_unit_limit
         if limit is None or len(self.pool) <= limit:
             return
         reserved = self.reserved_report_ids()
