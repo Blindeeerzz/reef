@@ -147,7 +147,7 @@ class TrainingPipeline:
     Without stages it is the no-update default: it reads records for audit
     but never becomes ready and never produces a batch.
 
-    The trainer-facing methods (``ingest``, ``ready``, ``build_batch``, and
+    The trainer-facing methods (``push``, ``ready``, ``build_batch``, and
     the others) run on the trainer's thread under its lock and must not block
     on network or model latency. Stages that call models run that work on a
     background worker and release it in ``close``, which the owning scenario
@@ -305,7 +305,7 @@ class TrainingPipeline:
             self.record2record.settle(record_set, result.status, producing_runtime_load_ids(result.tasks))
         self.forget_ended_sets()
 
-    def ingest(self, item: AgentRecord) -> None:
+    def push(self, item: AgentRecord) -> None:
         """Read one record. Training instructions stay here; every other record goes through the record stage."""
         if item.request_type is RequestType.TRAIN:
             if item.scenario != self.scenario:

@@ -203,9 +203,9 @@ def test_the_inference_stage_forms_one_set_per_inference_record_in_arrival_order
 @pytest.mark.unit
 def test_the_pipeline_keeps_instructions_and_sends_other_records_through_its_stage() -> None:
     processor = RecordingPipeline(PipelineContext("s", training_mode="hybrid"))
-    processor.ingest(inference("i1"))
-    processor.ingest(inference("drop-1"))
-    processor.ingest(instruction("train-1"))
+    processor.push(inference("i1"))
+    processor.push(inference("drop-1"))
+    processor.push(instruction("train-1"))
     assert processor.recording.assembled == ["i1"]
     assert processor.buffered_requests() == 1
     assert processor.releasable_record_ids() == {"drop-1"}
@@ -263,10 +263,10 @@ def test_the_trainer_reports_the_stages_background_work() -> None:
 def test_a_retry_in_a_taken_slot_is_terminal_and_released() -> None:
     processor = PairPipeline()
     for record_id in ("i1", "i2", "i3"):
-        processor.ingest(inference(record_id))
-    processor.ingest(slotted("r1", "i1", "a"))
-    processor.ingest(slotted("r2", "i2", "a"))
-    processor.ingest(slotted("r3", "i3", "b"))
+        processor.push(inference(record_id))
+    processor.push(slotted("r1", "i1", "a"))
+    processor.push(slotted("r2", "i2", "a"))
+    processor.push(slotted("r3", "i3", "b"))
     batch = processor.build_batch()
     assert [str(item.task_path) for item in batch.items] == ["r1", "r3"]
     assert {"r2", "i2"} <= processor.releasable_record_ids()
@@ -277,22 +277,22 @@ def test_a_retry_in_a_taken_slot_is_terminal_and_released() -> None:
 def test_a_failed_assembly_keeps_the_report_and_leaves_its_slot_free() -> None:
     processor = PairPipeline()
     for record_id in ("i1", "i2"):
-        processor.ingest(inference(record_id))
+        processor.push(inference(record_id))
     processor.pair_tasks.fail_assembly = True
     with pytest.raises(ValueError, match="broken training data"):
-        processor.ingest(slotted("r1", "i1", "a"))
+        processor.push(slotted("r1", "i1", "a"))
     assert not processor.releasable_record_ids() & {"r1", "i1"}
     processor.pair_tasks.fail_assembly = False
-    processor.ingest(slotted("r1", "i1", "a"))
-    processor.ingest(slotted("r2", "i2", "b"))
+    processor.push(slotted("r1", "i1", "a"))
+    processor.push(slotted("r2", "i2", "b"))
     assert [str(item.task_path) for item in processor.build_batch().items] == ["r1", "r2"]
 
 
 @pytest.mark.unit
 def test_a_skipped_report_is_released_and_never_batched() -> None:
     processor = PairPipeline()
-    processor.ingest(inference("i1"))
-    processor.ingest(slotted("skip-1", "i1", "a"))
+    processor.push(inference("i1"))
+    processor.push(slotted("skip-1", "i1", "a"))
     assert {"skip-1", "i1"} <= processor.releasable_record_ids()
     assert not processor.ready()
 
@@ -301,9 +301,9 @@ def test_a_skipped_report_is_released_and_never_batched() -> None:
 def test_a_batch_holds_the_tasks_of_every_report_in_a_group_in_arrival_order() -> None:
     processor = PairPipeline()
     for record_id in ("i1", "i2"):
-        processor.ingest(inference(record_id))
-    processor.ingest(slotted("r2", "i2", "b"))
-    processor.ingest(slotted("r1", "i1", "a"))
+        processor.push(inference(record_id))
+    processor.push(slotted("r2", "i2", "b"))
+    processor.push(slotted("r1", "i1", "a"))
     batch = processor.build_batch()
     assert [str(item.task_path) for item in batch.items] == ["r2", "r1"]
     assert processor.acknowledge(batch.batch_id) == {"i1", "i2", "r1", "r2"}
@@ -314,11 +314,11 @@ def test_a_batch_holds_the_tasks_of_every_report_in_a_group_in_arrival_order() -
 def test_the_report_stage_releases_a_report_whose_data_is_behind_the_serving_version() -> None:
     processor = threshold_pipeline(PipelineContext("s"))
     processor.observe_serving_runtime_load_id("e:1")
-    processor.ingest(inference("i1", version="e:1"))
-    processor.ingest(report("r1", "i1"))
+    processor.push(inference("i1", version="e:1"))
+    processor.push(report("r1", "i1"))
     processor.observe_serving_runtime_load_id("e:2")
-    processor.ingest(inference("i2", version="e:2"))
-    processor.ingest(report("r2", "i2"))
+    processor.push(inference("i2", version="e:2"))
+    processor.push(report("r2", "i2"))
     batch = processor.build_batch()
     assert [item.source_agent_record_ids for item in batch.items] == [("i2", "r2")]
     # The stale report ended with the inference that it owns, and its tasks are gone.
@@ -330,8 +330,8 @@ def test_the_report_stage_releases_a_report_whose_data_is_behind_the_serving_ver
 def test_the_default_pipeline_forms_no_record_set_and_makes_no_batch() -> None:
     processor = TrainingPipeline(PipelineContext("s"))
     assert isinstance(processor.record2record, NoRecordSets)
-    processor.ingest(inference("i1"))
-    processor.ingest(report("r1", "i1"))
+    processor.push(inference("i1"))
+    processor.push(report("r1", "i1"))
     assert processor.record2record.pull() == ()
     assert not processor.ready() and not processor.releasable_record_ids()
 
@@ -339,8 +339,8 @@ def test_the_default_pipeline_forms_no_record_set_and_makes_no_batch() -> None:
 @pytest.mark.unit
 def test_a_waiting_set_holds_its_records_and_settles_when_its_result_comes_back() -> None:
     processor = WaitingPipeline()
-    processor.ingest(inference("i1"))
-    processor.ingest(inference("i2"))
+    processor.push(inference("i1"))
+    processor.push(inference("i2"))
     assert not processor.ready() and processor.background_jobs_running()
     processor.later_tasks.finish("i2", TaskResult.skipped())
     assert not processor.ready() and processor.releasable_record_ids() == {"i2"}
@@ -353,7 +353,7 @@ def test_a_waiting_set_holds_its_records_and_settles_when_its_result_comes_back(
 @pytest.mark.unit
 def test_a_second_result_for_a_settled_set_is_refused() -> None:
     processor = WaitingPipeline()
-    processor.ingest(inference("i1"))
+    processor.push(inference("i1"))
     result = TaskResult.ready((TaskItem(Path("t1")),))
     processor.later_tasks.finish("i1", result)
     assert processor.ready()

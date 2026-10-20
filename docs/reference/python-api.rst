@@ -964,7 +964,7 @@ in the same scenario.
 ``TrainingPipeline.training_mode`` selects automatic, instruction-triggered or
 combined batching. A ``Task2Batch`` declares ``supported_training_modes``. In
 ``manual`` an instruction's batch has no tasks; in ``hybrid`` it takes the sets
-an automatic batch would. Ingestion, acknowledgement, retention, buffer release
+an automatic batch would. Record push, acknowledgement, retention, buffer release
 and background derivation are shared. See
 `Training pipeline <../developer-guide/processors.rst>`__ for the instruction queue and batch contract.
 

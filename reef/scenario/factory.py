@@ -78,7 +78,7 @@ def recovered_trainer_states(
     the state and the cursor stay the last commit's.
 
     Rehydration must skip consumed rows: retention may keep a consumed row
-    stored (audit-only retention is contract-legal), and re-ingesting one would
+    stored (audit-only retention is contract-legal), and pushing one again would
     train it twice. Consumption is permanent, so the union over the whole log
     and every receipt is the exclusion set; with several trainers each keeps
     its own share, the rows of its own commits and of its own stale drops.
@@ -421,7 +421,7 @@ class ScenarioFactory:
                 # Scenario() checked that every trainer names a component the surface serves: each has a state.
                 recovered = recovered_states[bound.component]
                 if recovered.high_water is not None:
-                    scenario.reingest(
+                    scenario.replay_retained(
                         up_to_sequence=recovered.high_water[0],
                         consumed_ids=recovered.consumed_ids,
                         component=bound.component,
@@ -432,7 +432,9 @@ class ScenarioFactory:
                         component=bound.component,
                     )
                 elif recovered.consumed_ids:
-                    scenario.reingest(up_to_sequence=0, consumed_ids=recovered.consumed_ids, component=bound.component)
+                    scenario.replay_retained(
+                        up_to_sequence=0, consumed_ids=recovered.consumed_ids, component=bound.component
+                    )
             # A scenario created or last stepped by an older Reef serves that Reef's shipped content (the harness
             # requests extension, for one) until it is republished; every later step builds on what it serves.
             scenario.publish_shipped_content()
