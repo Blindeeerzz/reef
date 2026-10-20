@@ -44,67 +44,47 @@ class FakeTokenizer:
         return f"<{token_ids[0]}>"
 
 
-@pytest.mark.unit
-def test_reasoning_template_failure_propagates_without_caching_a_false_result() -> None:
-    class ThinkingTokenizer(FakeTokenizer):
-        template_available = False
-
-        def apply_chat_template(self, messages, *, tokenize, add_generation_prompt, **kwargs):
-            if not self.template_available:
-                raise TypeError("chat template is unavailable")
-            return "<user></user><assistant><think>"
-
-    tokenizer = ThinkingTokenizer()
-    backend = SGLangInferenceHandler("http://unused", model_path="model", tokenizer=tokenizer)
-    with pytest.raises(TypeError, match="chat template is unavailable"):
-        backend.reasoning_is_pre_opened()
-
-    tokenizer.template_available = True
-    message, _ = backend._assistant_message(
-        "unfinished reasoning", None, force_reasoning=backend.reasoning_is_pre_opened()
-    )
-    assert message == {"role": "assistant", "content": "", "reasoning_content": "unfinished reasoning"}
-
-
 class HybridThinkingTokenizer(FakeTokenizer):
-    """A Qwen3-style hybrid template: <think> opens by default and closes at once for enable_thinking=False."""
+    """A Qwen3.5-style hybrid template: <think> opens by default and closes at once for enable_thinking=False."""
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.sniffed = []
+    vocabulary = {10: "<user>", 11: "<assistant>", 12: "<think>", 13: "\n", 14: "</think>"}
 
     def apply_chat_template(self, messages, *, tokenize, add_generation_prompt, **kwargs):
-        if tokenize:
-            return super().apply_chat_template(
-                messages, tokenize=tokenize, add_generation_prompt=add_generation_prompt, **kwargs
-            )
-        self.sniffed.append(kwargs)
+        prompt = super().apply_chat_template(
+            messages, tokenize=tokenize, add_generation_prompt=add_generation_prompt, **kwargs
+        )
         if kwargs.get("enable_thinking", True):
-            return "<user></user><assistant><think>\n"
-        return "<user></user><assistant><think>\n\n</think>\n\n"
+            return [*prompt, 12, 13]
+        return [*prompt, 12, 13, 13, 14, 13, 13]
+
+    def decode(self, token_ids, *, skip_special_tokens=False):
+        return "".join(self.vocabulary[token_id] for token_id in token_ids)
 
 
 @pytest.mark.unit
-def test_reasoning_sniff_renders_the_request_template_kwargs() -> None:
+def test_reasoning_check_reads_the_rendered_prompt() -> None:
     tokenizer = HybridThinkingTokenizer()
-    backend = SGLangInferenceHandler("http://unused", model_path="model", tokenizer=tokenizer)
+    thinking = tokenizer.apply_chat_template([], tokenize=True, add_generation_prompt=True)
+    answering = tokenizer.apply_chat_template([], tokenize=True, add_generation_prompt=True, enable_thinking=False)
 
-    assert backend.reasoning_is_pre_opened() is True
-    assert backend.reasoning_is_pre_opened({"enable_thinking": False}) is False
-    assert backend.reasoning_is_pre_opened({"enable_thinking": False}) is False
-    assert tokenizer.sniffed == [{}, {"enable_thinking": False}]
-    message, _ = backend._assistant_message(
-        "The answer.", None, force_reasoning=backend.reasoning_is_pre_opened({"enable_thinking": False})
-    )
-    assert message == {"role": "assistant", "content": "The answer."}
+    backend = SGLangInferenceHandler("http://unused", model_path="model", tokenizer=tokenizer)
+    assert backend.reasoning_is_pre_opened(thinking) is True
+    assert backend.reasoning_is_pre_opened(answering) is False
 
     pinned = SGLangInferenceHandler("http://unused", model_path="model", tokenizer=tokenizer, force_reasoning=True)
-    assert pinned.reasoning_is_pre_opened({"enable_thinking": False}) is True
+    assert pinned.reasoning_is_pre_opened(answering) is True
 
 
 @pytest.mark.unit
-def test_chat_facade_keeps_the_reply_in_content_when_thinking_is_disabled(tmp_path) -> None:
-    """A hybrid template with enable_thinking=False closes <think> itself, so a tag-free sample is the answer."""
+@pytest.mark.parametrize(
+    ("template_kwargs", "message"),
+    [
+        ({}, {"role": "assistant", "content": "", "reasoning_content": "The answer is 5."}),
+        ({"enable_thinking": False}, {"role": "assistant", "content": "The answer is 5."}),
+    ],
+)
+def test_chat_facade_splits_a_tag_free_reply_by_the_rendered_prompt(tmp_path, template_kwargs, message) -> None:
+    """A tag-free sample is truncated reasoning after an open <think>, and the answer after a closed one."""
 
     async def run() -> None:
         async def generate(request):
@@ -135,14 +115,14 @@ def test_chat_facade_keeps_the_reply_in_content_when_thinking_is_disabled(tmp_pa
                 {
                     "model": "served-model",
                     "messages": [{"role": "user", "content": "what is 2+3?"}],
-                    "chat_template_kwargs": {"enable_thinking": False},
+                    "chat_template_kwargs": template_kwargs,
                     "max_completion_tokens": 2,
                 },
             )
         finally:
             await server.close()
 
-        assert response["choices"][0]["message"] == {"role": "assistant", "content": "The answer is 5."}
+        assert response["choices"][0]["message"] == message
 
     asyncio.run(run())
 
