@@ -1191,7 +1191,7 @@ The task files go in the task file store; see `Choose the task file store
 <../user-guide/operate.rst#choose-the-task-file-store>`__.
 Related source sessions keep the same split across generations.
 A task that joins existing train and eval source groups is rejected.
-Eval tasks are saved without training plays, measurement plays or Designer rewards.
+Eval tasks are saved without plays or Designer rewards.
 The generator's pass-rate band does not filter the store.
 
 Set ``eval_fraction`` and ``split_seed`` here rather than in a generator's configuration.
