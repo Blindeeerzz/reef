@@ -66,6 +66,87 @@ def test_reasoning_template_failure_propagates_without_caching_a_false_result() 
     assert message == {"role": "assistant", "content": "", "reasoning_content": "unfinished reasoning"}
 
 
+class HybridThinkingTokenizer(FakeTokenizer):
+    """A Qwen3-style hybrid template: <think> opens by default and closes at once for enable_thinking=False."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sniffed = []
+
+    def apply_chat_template(self, messages, *, tokenize, add_generation_prompt, **kwargs):
+        if tokenize:
+            return super().apply_chat_template(
+                messages, tokenize=tokenize, add_generation_prompt=add_generation_prompt, **kwargs
+            )
+        self.sniffed.append(kwargs)
+        if kwargs.get("enable_thinking", True):
+            return "<user></user><assistant><think>\n"
+        return "<user></user><assistant><think>\n\n</think>\n\n"
+
+
+@pytest.mark.unit
+def test_reasoning_sniff_renders_the_request_template_kwargs() -> None:
+    tokenizer = HybridThinkingTokenizer()
+    backend = SGLangInferenceHandler("http://unused", model_path="model", tokenizer=tokenizer)
+
+    assert backend.reasoning_is_pre_opened() is True
+    assert backend.reasoning_is_pre_opened({"enable_thinking": False}) is False
+    assert backend.reasoning_is_pre_opened({"enable_thinking": False}) is False
+    assert tokenizer.sniffed == [{}, {"enable_thinking": False}]
+    message, _ = backend._assistant_message(
+        "The answer.", None, force_reasoning=backend.reasoning_is_pre_opened({"enable_thinking": False})
+    )
+    assert message == {"role": "assistant", "content": "The answer."}
+
+    pinned = SGLangInferenceHandler("http://unused", model_path="model", tokenizer=tokenizer, force_reasoning=True)
+    assert pinned.reasoning_is_pre_opened({"enable_thinking": False}) is True
+
+
+@pytest.mark.unit
+def test_chat_facade_keeps_the_reply_in_content_when_thinking_is_disabled(tmp_path) -> None:
+    """A hybrid template with enable_thinking=False closes <think> itself, so a tag-free sample is the answer."""
+
+    async def run() -> None:
+        async def generate(request):
+            return web.json_response(
+                {
+                    "text": "The answer is 5.",
+                    "meta_info": {
+                        "finish_reason": {"type": "stop"},
+                        "output_token_logprobs": [[-0.25, 20], [-0.5, 21]],
+                        "weight_version": "wv-9",
+                    },
+                }
+            )
+
+        app = web.Application()
+        app.router.add_post("/generate", generate)
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            backend = SGLangInferenceHandler(
+                str(server.make_url("")).rstrip("/"),
+                model_path="model",
+                tokenizer=HybridThinkingTokenizer(),
+            )
+            response = await backend.inference(
+                _artifact(tmp_path),
+                "/v1/chat/completions",
+                {
+                    "model": "served-model",
+                    "messages": [{"role": "user", "content": "what is 2+3?"}],
+                    "chat_template_kwargs": {"enable_thinking": False},
+                    "max_completion_tokens": 2,
+                },
+            )
+        finally:
+            await server.close()
+
+        assert response["choices"][0]["message"] == {"role": "assistant", "content": "The answer is 5."}
+
+    asyncio.run(run())
+
+
 def _artifact(tmp_path) -> Artifact:
     checkpoint = tmp_path / "checkpoint"
     checkpoint.mkdir()

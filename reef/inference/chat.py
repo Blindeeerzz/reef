@@ -511,8 +511,8 @@ class TokenNativeChatHandler(HttpInferenceHandler):
     # Set when the chat template pre-opens ``<think>``: the sample then
     # carries only the closing tag, so a sample with no ``</think>`` is
     # reasoning that ran out of tokens, not an answer. Sniffed from the
-    # rendered template at first use; ``force_reasoning`` in the handler
-    # config pins it either way.
+    # template rendered with each request's ``chat_template_kwargs``;
+    # ``force_reasoning`` in the handler config pins it either way.
     force_reasoning: bool | None = None
 
     @classmethod
@@ -552,8 +552,9 @@ class TokenNativeChatHandler(HttpInferenceHandler):
         # that reproduces a reference run pins its effective temperature
         # here (e.g. OpenClaw-RL: 0.6/0.95/20).
         self._sampling_defaults = dict(sampling_defaults or {})
-        # None = sniff the chat template on first render.
+        # None = sniff the chat template for each distinct chat_template_kwargs.
         self.force_reasoning = force_reasoning
+        self._pre_opened: dict[str, bool] = {}
 
     @property
     def client(self) -> NativeGenerateClient:
@@ -617,7 +618,7 @@ class TokenNativeChatHandler(HttpInferenceHandler):
         if text is None:
             text = self._require_tokenizer().decode(captured.output_ids, skip_special_tokens=True)
         message, parsed_tool_calls = self._assistant_message(
-            text, tool_parser, force_reasoning=self.reasoning_is_pre_opened()
+            text, tool_parser, force_reasoning=self.reasoning_is_pre_opened(call.request.get("chat_template_kwargs"))
         )
         choice: dict[str, Any] = {
             "index": 0,
@@ -1171,22 +1172,29 @@ class TokenNativeChatHandler(HttpInferenceHandler):
             normalized.append(entry)
         return normalized
 
-    def reasoning_is_pre_opened(self) -> bool:
+    def reasoning_is_pre_opened(self, template_kwargs: Mapping[str, Any] | None = None) -> bool:
         """Whether this model's chat template opens ``<think>`` for the model.
 
         Qwen3-*-Thinking templates end the generation prompt with an open
         ``<think>``, so the sample carries only the closing tag and a sample
-        without one is truncated reasoning. Sniffed once from the rendered
-        prompt; an explicit ``force_reasoning`` in the handler config wins.
-        Rendering errors propagate without caching a result.
+        without one is truncated reasoning. Hybrid templates (Qwen3, Qwen3.5)
+        open it by default but close it at once for ``enable_thinking:
+        false``; a sample without a tag is then the answer. Thus the prompt is
+        rendered with the request's ``chat_template_kwargs``, and the result
+        is cached for each distinct value. An explicit ``force_reasoning`` in
+        the handler config wins. Rendering errors propagate without caching a
+        result.
         """
         if self.force_reasoning is not None:
             return self.force_reasoning
-        rendered = self._require_tokenizer().apply_chat_template(
-            [{"role": "user", "content": ""}], tokenize=False, add_generation_prompt=True
-        )
-        self.force_reasoning = str(rendered).rstrip().endswith("<think>")
-        return self.force_reasoning
+        kwargs = dict(template_kwargs or {})
+        key = json.dumps(kwargs, sort_keys=True, default=str)
+        if key not in self._pre_opened:
+            rendered = self._require_tokenizer().apply_chat_template(
+                [{"role": "user", "content": ""}], tokenize=False, add_generation_prompt=True, **kwargs
+            )
+            self._pre_opened[key] = str(rendered).rstrip().endswith("<think>")
+        return self._pre_opened[key]
 
     @classmethod
     def _assistant_message(

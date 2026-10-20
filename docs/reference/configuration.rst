@@ -409,10 +409,13 @@ would lift that restriction. Verify with Slime's
 
 For both handlers, set ``inference.handler-config.force_reasoning`` to
 ``true`` if the chat template pre-opens ``<think>``, or ``false`` if it does
-not. When omitted, the handler detects this by rendering the template and
-caches only a successful result. Tokenizer or template errors propagate to the
-request; they do not silently disable reasoning separation. An explicit value
-bypasses this detection.
+not. When omitted, the handler detects this by rendering the template with
+the request's ``chat_template_kwargs`` and caches each successful result. A
+hybrid template (Qwen3, Qwen3.5) pre-opens ``<think>`` by default but closes it
+for ``enable_thinking: false``, so such a request keeps its reply in
+``content``. Tokenizer or template errors propagate to the request; they do not
+silently disable reasoning separation. An explicit value bypasses this
+detection.
 
 Explicit file selection
 ~~~~~~~~~~~~~~~~~~~~~~~
