@@ -21,7 +21,7 @@ from reef_client.client import ReefClientError
 from recipes.beta.spade import SpadeTaskGenerator
 from reef.core import AgentRecord, RequestType
 from reef.core.artifact_ref import LiveWeightArtifactRef
-from reef.core.tasks import HarborTask, TaskGenerationRequest, read_harbor_task
+from reef.core.tasks import HarborTask, read_harbor_task
 from reef.harness.client.tasks import TaskPlay
 from reef.pipeline_context import PipelineContext
 from reef.recipe.generated_tasks import GeneratedTaskTasks
@@ -46,6 +46,7 @@ from reef.record2task.generator import (
     TaskPlays,
     readiness_probes,
 )
+from reef.record2task.generator.inputs import TaskGenerationRequest
 from reef.record2task.generator.service import CLOSE_GRACE_S, DockerProbe, HarborProbe, ModuleProbe
 from reef.record2task.generator.wire import (
     WireError,

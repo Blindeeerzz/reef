@@ -51,12 +51,14 @@ from recipes.beta.autoenvscaling.author import AgentTools
 from recipes.beta.autoenvscaling.checks import CheckResult
 from reef.core import AgentRecord, RequestType
 from reef.core.plugins import PluginConfigError
-from reef.core.tasks import HarborTask, TaskGenerationRequest, TaskPlayResult, read_harbor_task
+from reef.core.tasks import HarborTask, read_harbor_task
 from reef.pipeline_context import PipelineContext
 from reef.recipe.generated_tasks import GeneratedTaskRecord2Record, GeneratedTaskTasks
+from reef.recipe.generated_tasks.generator import TaskPlayResult
 from reef.recipe.generated_tasks.processor import RoundJob, RoundSettings, TaskGroupSettings
 from reef.record2task.generator import DuplicateTask, GeneratorError, WrittenTask
 from reef.record2task.generator.harbor import ORACLE_TIMEOUT_S
+from reef.record2task.generator.inputs import TaskGenerationRequest
 from reef.service.deploy.orchestrator import resolve_deployment_config
 from reef.service.deploy.service_config import service_config_from_mapping
 from reef.storage.sqlite import SQLiteScenarioStorage

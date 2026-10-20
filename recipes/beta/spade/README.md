@@ -20,7 +20,7 @@ SPADE is a task generator. The deployment selects it in `pipeline.record2task.co
 
 ## The generator
 
-`SpadeTaskGenerator` implements `reef.core.tasks.TaskGenerator`. One round of the recipe is one SPADE generation:
+`SpadeTaskGenerator` implements `reef.recipe.generated_tasks.TaskGenerator`. One round of the recipe is one SPADE generation:
 
 1. `generate` makes `count` Designer proposals across the configured `skills`. Each prompt includes the previous generation's results as SPADE's experience section.
 2. `validate` writes the task under the service's tasks root, runs Harbor's oracle and nop agents, and removes the task again. The reference solution must score 1. Doing nothing must score below 1. A duplicate task is invalid. After a reload cancels a generation, a rerun replaces a task with the same name from the earlier attempt.
@@ -85,8 +85,8 @@ from pathlib import Path
 
 from recipes.beta.spade import SpadeTaskGenerator
 from reef.core import AgentRecord
-from reef.core.tasks import HarborTask, TaskGenerationRequest
-from reef.record2task.generator import HttpGenerator
+from reef.core.tasks import HarborTask
+from reef.record2task.generator import HttpGenerator, TaskGenerationRequest
 
 
 async def rebuild_task(
@@ -112,7 +112,7 @@ Materials can be UTF-8 files or directories on the caller's machine. The client 
 
 Use a prepared snapshot containing only the materials the Designer should see. The client rejects symlinks, special files, non-text files, and unreadable files. Limits are 128 files, 256 KiB of file contents, and 512 KiB of JSON for records and files combined. Oversized inputs fail before a Designer call. The client and service do not truncate these inputs.
 
-The input contract is `TaskGenerationRequest` in `reef.core.tasks`. Both SPADE and the generator service use this type. For materials already in memory, pass `asset_files={"state.txt": "file contents"}` instead of `assets`.
+The input contract is `TaskGenerationRequest` in `reef.record2task.generator`. Both SPADE and the generator service use this type. For materials already in memory, pass `asset_files={"state.txt": "file contents"}` instead of `assets`.
 
 To call the generator directly, wrap the shared request in `DesignerRequest(inputs=request, difficulty="hard")`. Then call `HttpGenerator.propose(...)`. `DesignerRequest` holds the shared input and adds Designer settings. The HTTP client reads local `assets` into `asset_files`. The service reconstructs the same input type. Each source record retains its payload, type, timestamp, references, and artifact version. Existing `DesignerRequest(target="...")` calls still work for description-only generation. Use matching client and generator versions for historical inputs.
 

@@ -35,17 +35,12 @@ from recipes.beta.autoenvscaling.author import (
 from recipes.beta.autoenvscaling.checks import CheckResult, OracleCheck, ReviewCheck, TaskCheck, check_mode
 from recipes.beta.autoenvscaling.sources import SessionSource, load_sources
 from reef.core.plugins import PluginConfigError
-from reef.core.tasks import (
-    HarborTask,
-    HarborTaskError,
-    TaskGenerationRequest,
-    TaskGenerator,
-    TaskPlayResult,
-    TaskValidationResult,
-)
+from reef.core.tasks import HarborTask, HarborTaskError
+from reef.recipe.generated_tasks.generator import TaskGenerator, TaskPlayResult, TaskValidationResult
 from reef.record2task.generator.client import DuplicateTask, Generator, GeneratorError, HttpGenerator, TaskNameConflict
 from reef.record2task.generator.designer import parse_harbor_reply
 from reef.record2task.generator.harbor import GeneratedHarborTask, OracleResult, dockerfile_logical_lines, harbor_task
+from reef.record2task.generator.inputs import TaskGenerationRequest
 from reef.sandbox.e2b import E2BExecutor
 from reef.sandbox.process import SandboxUnavailable
 

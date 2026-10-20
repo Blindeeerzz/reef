@@ -29,7 +29,8 @@ from recipes.beta.autoenvscaling import AutoEnvScalingGenerator, checks
 from recipes.beta.autoenvscaling import generator as generator_module
 from recipes.beta.autoenvscaling.author import REVIEW_TEXT
 from reef.core.plugins import PluginConfigError
-from reef.core.tasks import HarborTask, TaskPlayResult
+from reef.core.tasks import HarborTask
+from reef.recipe.generated_tasks.generator import TaskPlayResult
 
 
 @pytest.fixture(autouse=True)

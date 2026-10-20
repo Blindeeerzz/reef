@@ -40,7 +40,8 @@ from recipes.beta.spade.generation import (
     write_generation_report,
 )
 from reef.core.plugins import PluginConfigError
-from reef.core.tasks import HarborTask, TaskGenerationRequest, TaskGenerator, TaskPlayResult, TaskValidationResult
+from reef.core.tasks import HarborTask
+from reef.recipe.generated_tasks.generator import TaskGenerator, TaskPlayResult, TaskValidationResult
 from reef.recipe.generated_tasks.processor import rewards_of
 from reef.record2task.generator.client import (
     DuplicateTask,
@@ -52,6 +53,7 @@ from reef.record2task.generator.client import (
     WrittenTask,
 )
 from reef.record2task.generator.designer import DIFFICULTIES, DesignerRequest
+from reef.record2task.generator.inputs import TaskGenerationRequest
 
 logger = logging.getLogger(__name__)
 

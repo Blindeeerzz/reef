@@ -1093,10 +1093,9 @@ Task generation
 
 .. code:: python
 
-   from reef.core.tasks import (
-       HarborTask, TaskGenerationRequest, TaskGenerator, TaskPlayResult,
-       TaskValidationResult,
-   )
+   from reef.core.tasks import HarborTask
+   from reef.recipe.generated_tasks import TaskGenerator, TaskPlayResult, TaskValidationResult
+   from reef.record2task.generator import TaskGenerationRequest
 
 ``TaskGenerator`` is the plugin base class that a deployment names in
 ``pipeline.record2task.config.generator``. Subclasses implement:
@@ -1139,7 +1138,7 @@ its ``generate`` and ``validate`` methods to a ``TaskGenerator`` subclass:
 
 - ``generate`` returns a tuple of ``HarborTask`` values instead of one task.
 - ``validate`` receives the ``HarborTask`` instead of a directory path.
-- Import ``TaskValidationResult`` from ``reef.core.tasks``.
+- Import ``TaskValidationResult`` from ``reef.recipe.generated_tasks``.
 
 Name the class in ``pipeline.record2task.config.generator`` and use the generated-task recipe. The recipe plays and trains, so the processor half of the method is
 not needed.

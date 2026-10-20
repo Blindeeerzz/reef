@@ -17,20 +17,14 @@ from tests.support.task_service_stubs import StandInGenerator, task_for
 from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Failed, SupportsReceipt
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ScoredRolloutReport
-from reef.core.tasks import (
-    HarborTask,
-    TaskGenerationRequest,
-    TaskGenerator,
-    TaskPlayResult,
-    TaskValidationResult,
-    write_harbor_task,
-)
+from reef.core.tasks import HarborTask, write_harbor_task
 from reef.harness.client.tasks import TaskPlay
 from reef.inference.http import InferenceProxyRuntime
 from reef.pipeline_context import PipelineContext
 from reef.recipe.base import WeightTrainingRecipe
 from reef.recipe.errors import RecipeConfigError
 from reef.recipe.generated_tasks import GeneratedTaskBatches, GeneratedTaskRecipe, TaskGroupObjective
+from reef.recipe.generated_tasks.generator import TaskGenerator, TaskPlayResult, TaskValidationResult
 from reef.recipe.generated_tasks.processor import (
     GeneratedTaskRecord2Record,
     GeneratedTaskTasks,
@@ -43,6 +37,7 @@ from reef.recipe.generated_tasks.processor import (
     rewards_of,
 )
 from reef.record2record import GroupDecision, ReportContext
+from reef.record2task.generator.inputs import TaskGenerationRequest
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.storage.tasks import TaskStorage
 from reef.train.algos.registry import resolve_objective
@@ -966,7 +961,7 @@ def test_a_pipeline_section_that_names_no_usable_stage_is_refused(pipeline: Mapp
     [
         (f"{MODULE}:ScriptedGenerator.missing", "cannot import pipeline.record2task.config.generator"),
         ("reef.recipe.generated_tasks:GeneratedTaskRecipe", "must name a class that inherits TaskGenerator"),
-        ("reef.core.tasks:TaskGenerator", "names an abstract class"),
+        ("reef.recipe.generated_tasks:TaskGenerator", "names an abstract class"),
     ],
 )
 def test_a_generator_setting_that_names_no_usable_generator_is_refused(generator: str, message: str) -> None:

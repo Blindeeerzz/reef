@@ -7,7 +7,7 @@ as a failed trial, never joins its group. So when a task's plays end, its group 
 of plays that reported, and a group of one is discarded. ``GeneratedTaskBatches`` batches
 ``tasks_per_step`` complete groups, in arrival order. When a round is due, the record stage gives a
 ``TaskGenerationRound`` to ``GeneratedTaskTasks``. That stage runs the round with the
-deployment's :class:`~reef.core.tasks.TaskGenerator` and returns a ``RoundResult`` when the round ends. A
+deployment's :class:`~reef.recipe.generated_tasks.TaskGenerator` and returns a ``RoundResult`` when the round ends. A
 round is not a record set and does not train; the episodes that its plays report do.
 
 One round is one job on a private worker, off the trainer's thread:
@@ -46,18 +46,11 @@ from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Faile
 from reef.core import AgentRecord
 from reef.core.config import config_option
 from reef.core.plugins import PluginConfigError, PluginSettings
-from reef.core.tasks import (
-    HarborTask,
-    TaskGenerationRequest,
-    TaskGenerator,
-    TaskPlayResult,
-    read_harbor_task,
-    write_harbor_task,
-)
-from reef.core.tasks.metadata import TRAINING_ARM, reported_arm, reported_task_name
+from reef.core.tasks import HarborTask, read_harbor_task, write_harbor_task
 from reef.core.tasks.split import TaskSplit, TaskSplitConflict, extend_split_by_source
 from reef.harness.client.tasks import TaskPlay
 from reef.pipeline_context import PipelineContext
+from reef.recipe.generated_tasks.generator import TaskGenerator, TaskPlayResult
 from reef.record2record import (
     GroupDecision,
     Record2Record,
@@ -69,6 +62,7 @@ from reef.record2record import (
 from reef.record2task import Record2Task, ReportTasks
 from reef.record2task.assembly import SampleAssembly, SampleAssemblySettings
 from reef.record2task.generator.client import DuplicateTask, Generator, HttpGenerator, TaskNameConflict
+from reef.record2task.generator.inputs import TaskGenerationRequest
 from reef.storage.tasks import SplitName, SplitSettings, TaskConflict, TaskStore
 from reef.task2batch import Task2Batch
 from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem
@@ -87,6 +81,25 @@ ROUND_PREFIX = "round-"
 TASK_STORE_NAME = "generated-tasks"
 DEFAULT_EVAL_FRACTION = 0.0
 DEFAULT_SPLIT_SEED = 0
+#: The arm label of the training plays. Only reports with this label train.
+TRAINING_ARM = "plain"
+
+
+def reported_task_name(report: AgentRecord) -> str | None:
+    """Read the task player's task name from a report."""
+    metadata = report.payload.get("metadata")
+    task = metadata.get("task") if isinstance(metadata, Mapping) else None
+    name = task.get("name") if isinstance(task, Mapping) else None
+    return name if isinstance(name, str) and name else None
+
+
+def reported_arm(report: AgentRecord) -> str | None:
+    """Read the episode's arm label from a task-player report."""
+    metadata = report.payload.get("metadata")
+    episode = metadata.get("episode") if isinstance(metadata, Mapping) else None
+    labels = episode.get("labels") if isinstance(episode, Mapping) else None
+    arm = labels.get("arm") if isinstance(labels, Mapping) else None
+    return arm if isinstance(arm, str) else None
 
 
 def rewards_of(plays: tuple[TaskPlay, ...]) -> tuple[float, ...]:

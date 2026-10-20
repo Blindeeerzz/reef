@@ -393,7 +393,8 @@ the ``pipeline`` section, and names a ``TaskGenerator`` class in
 depend on the generator's method, so a team can replace the generator without
 a new recipe. SPADE (``recipes/beta/spade``) is one generator.
 
-``TaskGenerator`` is in ``reef.core.tasks``. Reef calls its class method
+``TaskGenerator`` is in ``reef.recipe.generated_tasks``, and
+``TaskGenerationRequest`` in ``reef.record2task.generator``. Reef calls its class method
 ``from_config(config, *, scenario, environ)`` once for each scenario. The
 generator gets what it needs from its ``config`` and from these calls only:
 

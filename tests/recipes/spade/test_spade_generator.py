@@ -13,9 +13,10 @@ from tests.support.task_service_stubs import StandInGenerator, task_for
 from recipes.beta.spade import SpadeTaskGenerator
 from reef.core import AgentRecord, RequestType
 from reef.core.plugins import PluginConfigError
-from reef.core.tasks import TaskGenerationRequest, TaskPlayResult, read_harbor_task, write_harbor_task
+from reef.core.tasks import read_harbor_task, write_harbor_task
 from reef.pipeline_context import PipelineContext
 from reef.recipe.generated_tasks import GeneratedTaskTasks
+from reef.recipe.generated_tasks.generator import TaskPlayResult
 from reef.recipe.generated_tasks.processor import (
     GeneratedTaskRecord2Record,
     RoundJob,
@@ -23,6 +24,7 @@ from reef.recipe.generated_tasks.processor import (
     TaskGroupSettings,
 )
 from reef.record2task.generator import GeneratorError, TaskNameConflict
+from reef.record2task.generator.inputs import TaskGenerationRequest
 from reef.storage.sqlite import SQLiteScenarioStorage
 
 DESCRIPTION = "shell tasks with hidden state under /var and /etc"
