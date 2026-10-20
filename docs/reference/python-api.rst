@@ -582,7 +582,9 @@ component a ``TaskStorage`` that opens ``<component>/<name>``. Thus two
 components never share a store.
 
 A store holds generations. A generation holds its source record ids and its
-candidates. Each ``TaskCandidate`` holds a ``GeneratedTask`` and its outcome:
+candidates. ``save_candidates`` saves a copy of each candidate task directory
+in the task file store. Each ``TaskCandidate`` holds the task ``name``, the
+``files_digest`` of its directory, and its outcome:
 
 - A published candidate has a ``split``, ``train`` or ``eval``. The stage
   chooses the split, and the store keeps it.
@@ -590,16 +592,12 @@ candidates. Each ``TaskCandidate`` holds a ``GeneratedTask`` and its outcome:
 - A pending candidate has neither. After a restart, the stage validates the
   candidates in ``GenerationState.pending_indices``.
 
-A published task is a Harbor task directory. ``publish_task`` and
-``add_task`` save the directory in the task file store first, and then they
-record the publication in the database. The database keeps the digest of the
-files (``StoredTask.files_digest``). A ``GeneratedTask`` holds text files
-only. An added task directory can also hold binary files, such as images.
-
-A ``StoredTask`` holds the task ``name``, its ``split``, its
-``files_digest`` and its ``origin``. ``origin`` is the ``GeneratedOrigin``
-(generation, candidate index and ``GeneratedTask``) of the candidate that
-published the task first, or ``None`` for an added task.
+A task is a Harbor task directory. The database keeps the state of the store
+and the digest of each task directory. The task file store keeps the files,
+text or binary, under that digest. ``publish_task`` records the publication of
+a saved candidate. ``add_task`` saves a task directory, such as one with
+images, and then records its publication. A ``StoredTask`` holds the task
+``name``, its ``split`` and its ``files_digest``.
 
 .. list-table::
    :header-rows: 1
@@ -610,8 +608,9 @@ published the task first, or ``None`` for an added task.
    * - ``begin_generation(generation=..., source_record_ids=...)``
      - Create the checkpoint of a generation. A retry with the same source
        record ids returns the checkpoint.
-   * - ``save_candidates(generation=..., candidates=...)``
-     - Save the candidates once, before validation or play.
+   * - ``save_candidates(generation=..., directories=...)``
+     - Save a copy of each candidate task directory once, before validation or
+       play. The name of a candidate is the name of its directory.
    * - ``publish_task(generation=..., index=..., split=...)``
      - Publish one candidate and return its ``StoredTask``. Each task name is
        published once. A later candidate with the same files must give the
@@ -629,9 +628,10 @@ published the task first, or ``None`` for an added task.
    * - ``tasks(split=None)``
      - Return the published tasks in publication order. Give a ``split`` to
        return only the tasks of that split.
-   * - ``path(task)``
-     - Return the local Harbor task directory of a published task, for
-       example for ``TaskPlayer.play``. Do not change it.
+   * - ``path(files_digest)``
+     - Return the local task directory of a candidate or a published task,
+       for example for ``read_harbor_task`` or ``TaskPlayer.play``. Do not
+       change it.
 
 Each write is durable when it returns. An identical retry of a write changes
 nothing. A write that conflicts with the stored state raises
@@ -1094,7 +1094,7 @@ Task generation
 .. code:: python
 
    from reef.core.tasks import (
-       GeneratedTask, HarborTask, PlayArm, TaskGenerationRequest, TaskGenerator,
+       HarborTask, PlayArm, TaskGenerationRequest, TaskGenerator,
        TaskPlayResult, TaskValidationResult,
    )
 
@@ -1103,7 +1103,7 @@ Task generation
 
 - the class method ``from_config(config, *, scenario, environ)``, which returns
   the generator of one scenario;
-- ``async generate(request: TaskGenerationRequest) -> tuple[GeneratedTask, ...]``;
+- ``async generate(request: TaskGenerationRequest) -> tuple[HarborTask, ...]``;
 - ``async validate(task: HarborTask) -> TaskValidationResult``.
 
 ``async record_results(results: tuple[TaskPlayResult, ...])`` is optional. The
@@ -1126,10 +1126,12 @@ Record2dataset accepts the same input through ``DesignerRequest(inputs=request,
 service rebuilds ``TaskGenerationRequest`` from the JSON fields. The generated
 task preserves source record IDs in order.
 
-``GeneratedTask(task, measurement_arms=())`` holds one task and the
-measurement arms the generator wants played on it. ``PlayArm(name, count,
-extra_instruction_files=())`` names an arm, its number of plays, and the task
-files shown after the instruction. Arm names are unique for each task.
+``HarborTask.measurement_arms`` holds the measurement arms that the generator
+wants played on the task. ``PlayArm(name, count, extra_instruction_files=())``
+names an arm, its number of plays, and the task files shown after the
+instruction. Arm names are unique for each task. The task directory keeps the
+arms in the ``[metadata.reef]`` table of ``task.toml``. A task without arms
+writes no arms key, so its digest does not change.
 
 ``TaskPlayResult(task, training_rewards=(), measurement_rewards={}, error="")``
 holds the rewards of the training plays and, by arm name, of each measurement
@@ -1143,7 +1145,7 @@ exceptions instead.
 Migration: ``reef.train.processors.TaskGenerationProcessor`` is removed. Move
 its ``generate`` and ``validate`` methods to a ``TaskGenerator`` subclass:
 
-- ``generate`` returns a tuple of ``GeneratedTask`` values instead of one task.
+- ``generate`` returns a tuple of ``HarborTask`` values instead of one task.
 - ``validate`` receives the ``HarborTask`` instead of a directory path.
 - Import ``TaskValidationResult`` from ``reef.core.tasks``.
 

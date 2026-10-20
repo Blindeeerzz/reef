@@ -18,7 +18,6 @@ from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Faile
 from reef.core import AgentRecord, RequestType
 from reef.core.reports import ScoredRolloutReport
 from reef.core.tasks import (
-    GeneratedTask,
     HarborTask,
     PlayArm,
     TaskGenerationRequest,
@@ -258,7 +257,6 @@ def test_a_batch_whose_groups_are_all_constant_is_skipped_and_keeps_the_step_cou
         (lambda: PlayArm("hint", 0), "positive integer"),
         (lambda: PlayArm("hint", 1, ("../hint.txt",)), "inside the task"),
         (lambda: PlayArm("hint", 1, ("/hint.txt",)), "inside the task"),
-        (lambda: GeneratedTask(task_for("t-a", "r", 1), (PlayArm("hint", 1), PlayArm("hint", 2))), "unique"),
         (lambda: TaskPlayResult(task_for("t-a", "r", 1), (1.0,), error="refused"), "no rewards"),
         (lambda: TaskPlayResult(task_for("t-a", "r", 1), (float("nan"),)), "finite"),
         (lambda: TaskPlayResult(task_for("t-a", "r", 1), (), {"hint": [1.0]}), "tuples"),
@@ -278,7 +276,7 @@ class ScriptedGenerator(TaskGenerator):
 
     def __init__(
         self,
-        rounds: list[tuple[GeneratedTask, ...]] | None = None,
+        rounds: list[tuple[HarborTask, ...]] | None = None,
         *,
         invalid: Mapping[str, str] | None = None,
         failing: str | None = None,
@@ -297,7 +295,7 @@ class ScriptedGenerator(TaskGenerator):
         cls.built.append({"config": dict(config), "scenario": scenario, "environ": dict(environ)})
         return cls()
 
-    async def generate(self, request: TaskGenerationRequest) -> tuple[GeneratedTask, ...]:
+    async def generate(self, request: TaskGenerationRequest) -> tuple[HarborTask, ...]:
         self.requests.append(request)
         if not self.rounds:
             return ()
@@ -316,13 +314,13 @@ class ScriptedGenerator(TaskGenerator):
             raise RuntimeError("the generator lost its state directory")
 
 
-def generated(round_number: int, *indices: int, hint: bool = True) -> tuple[GeneratedTask, ...]:
+def generated(round_number: int, *indices: int, hint: bool = True) -> tuple[HarborTask, ...]:
     """Tasks of one round; each asks for a hint arm of one play unless ``hint`` is off."""
     arms = (PlayArm("hint", 1, ("solution/hint.txt",)),) if hint else ()
     return tuple(
-        GeneratedTask(
+        dataclasses.replace(
             task_for(f"harbor-{round_number:05d}-{index:03d}", f"designer-{index}", 9000 + 10 * round_number + index),
-            arms,
+            measurement_arms=arms,
         )
         for index in indices
     )
@@ -516,11 +514,11 @@ def test_a_round_retry_uses_saved_candidates_and_validation_outcomes(tmp_path: P
     pipeline.close()
 
 
-def sourced(name: str, *record_ids: str, port: int, designer_record_id: str = "") -> GeneratedTask:
+def sourced(name: str, *record_ids: str, port: int, designer_record_id: str = "") -> HarborTask:
     """A task made from ``record_ids``; ``designer_record_id`` names the one that is the author's own record."""
     task = task_for(name, record_ids[0], port)
     metadata = {**task.metadata, "designer_record_id": designer_record_id} if designer_record_id else task.metadata
-    return GeneratedTask(dataclasses.replace(task, source_agent_record_ids=record_ids, metadata=metadata))
+    return dataclasses.replace(task, source_agent_record_ids=record_ids, metadata=metadata)
 
 
 @pytest.mark.unit
@@ -537,12 +535,12 @@ def test_a_task_joins_the_split_of_its_sources_and_a_task_that_joins_both_splits
         sourced("eval-task", "eval-source", port=9101),
     )
     store.begin_generation(generation=100, source_record_ids=())
-    store.save_candidates(generation=100, candidates=earlier)
+    store.save_candidates(
+        generation=100, directories=tuple(write_harbor_task(task, tmp_path / "earlier") for task in earlier)
+    )
     store.publish_task(generation=100, index=0, split="train")
     store.publish_task(generation=100, index=1, split="eval")
     store.complete_generation(generation=100)
-    # An added task has no source records, so it places no generated task.
-    store.add_task(directory=write_harbor_task(task_for("added-task", "x", 9105), tmp_path / "added"), split="eval")
 
     assert not looked(pipeline)
 
@@ -554,11 +552,10 @@ def test_a_task_joins_the_split_of_its_sources_and_a_task_that_joins_both_splits
     assert {task.name: task.split for task in store.tasks()} == {
         "train-task": "train",
         "eval-task": "eval",
-        "added-task": "eval",
         "follower": "eval",
     }
-    assert store.path(store.tasks(split="train")[0]).joinpath("instruction.md").is_file()
-    assert pipeline.status()["task_store"] == {"train": 1, "eval": 3, "rejected": 2, "pending": 0}
+    assert store.path(store.tasks(split="train")[0].files_digest).joinpath("instruction.md").is_file()
+    assert pipeline.status()["task_store"] == {"train": 1, "eval": 2, "rejected": 2, "pending": 0}
     pipeline.close()
 
 
@@ -576,7 +573,9 @@ def test_an_invalid_task_comes_back_with_its_errors_and_is_never_written(tmp_pat
 
 
 def test_a_measurement_arm_with_the_training_arms_name_is_refused_unplayed(tmp_path: Path) -> None:
-    clashing = GeneratedTask(task_for("harbor-00000-000", "designer-0", 9000), (PlayArm("plain", 1),))
+    clashing = dataclasses.replace(
+        task_for("harbor-00000-000", "designer-0", 9000), measurement_arms=(PlayArm("plain", 1),)
+    )
     task_generator = ScriptedGenerator([(clashing, *generated(0, 1))])
     p, player = rounds(tmp_path, task_generator)
     assert not looked(p)

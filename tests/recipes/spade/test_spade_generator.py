@@ -47,14 +47,14 @@ def spade(tmp_path: Path, service: StandInGenerator | None = None, **fields: Any
 def played(generator: SpadeTaskGenerator, *, plain: float = 0.25, hint: float = 0.75) -> tuple[TaskPlayResult, ...]:
     """Generate, validate, write and play every task the way the generated-task recipe does, with fixed rewards."""
     results = []
-    for item in asyncio.run(generator.generate(REQUEST)):
-        validation = asyncio.run(generator.validate(item.task))
+    for task in asyncio.run(generator.generate(REQUEST)):
+        validation = asyncio.run(generator.validate(task))
         if not validation.is_valid:
-            results.append(TaskPlayResult(item.task, error="; ".join(validation.errors)))
+            results.append(TaskPlayResult(task, error="; ".join(validation.errors)))
             continue
-        asyncio.run(generator.service.write_task(item.task))
-        measurement_rewards = {arm.name: (hint,) * arm.count for arm in item.measurement_arms}
-        results.append(TaskPlayResult(item.task, (plain, plain), measurement_rewards))
+        asyncio.run(generator.service.write_task(task))
+        measurement_rewards = {arm.name: (hint,) * arm.count for arm in task.measurement_arms}
+        results.append(TaskPlayResult(task, (plain, plain), measurement_rewards))
     return tuple(results)
 
 
@@ -73,7 +73,7 @@ def test_a_generation_asks_the_designer_count_times_across_the_skills_and_asks_f
     assert service.proposals[0]["scenario"] == "spade" and service.proposals[0]["model"] == "Qwen/Qwen3-8B"
     assert "nothing recorded yet" in service.proposals[0]["request"].experience_text
     assert service.proposals[0]["request"].target == DESCRIPTION
-    assert [item.task.name for item in tasks] == [
+    assert [task.name for task in tasks] == [
         "harbor-00000-000-inspection",
         "harbor-00000-001-repair",
         "harbor-00000-002-inspection",
@@ -86,15 +86,15 @@ def test_validation_checks_a_written_copy_and_removes_it(tmp_path: Path) -> None
     service = StandInGenerator(tmp_path / "tasks")
     generator = spade(tmp_path, service, count=1)
     (item,) = asyncio.run(generator.generate(REQUEST))
-    assert asyncio.run(generator.validate(item.task)).is_valid
-    assert service.checks == [tmp_path / "tasks" / item.task.name]
-    assert service.deleted == [item.task.name] and not (tmp_path / "tasks" / item.task.name).exists()
+    assert asyncio.run(generator.validate(item)).is_valid
+    assert service.checks == [tmp_path / "tasks" / item.name]
+    assert service.deleted == [item.name] and not (tmp_path / "tasks" / item.name).exists()
 
     refusing = StandInGenerator(tmp_path / "refusing", is_solvable=False)
     generator = spade(tmp_path / "second", refusing, count=1)
     (item,) = asyncio.run(generator.generate(REQUEST))
-    assert asyncio.run(generator.validate(item.task)).errors == ("oracle check refused: the oracle scored 0",)
-    assert refusing.deleted == [item.task.name]
+    assert asyncio.run(generator.validate(item)).errors == ("oracle check refused: the oracle scored 0",)
+    assert refusing.deleted == [item.name]
 
 
 def test_a_duplicate_is_invalid_and_a_rerun_replaces_the_task_its_earlier_attempt_wrote(tmp_path: Path) -> None:
@@ -104,17 +104,15 @@ def test_a_duplicate_is_invalid_and_a_rerun_replaces_the_task_its_earlier_attemp
     service = StandInGenerator(root, same_port=True)
     generator = spade(tmp_path, service, skills=(), count=2)
     first, second = asyncio.run(generator.generate(REQUEST))
-    assert asyncio.run(generator.validate(first.task)).is_valid
+    assert asyncio.run(generator.validate(first)).is_valid
     assert service.deleted == ["harbor-00000-000", "harbor-00000-000"], "the earlier attempt, then the checked copy"
-    write_harbor_task(first.task, root)
-    assert asyncio.run(generator.validate(second.task)).errors == (
-        "refused: duplicate of a task already under the root",
-    )
+    write_harbor_task(first, root)
+    assert asyncio.run(generator.validate(second)).errors == ("refused: duplicate of a task already under the root",)
 
     taken = StandInGenerator(tmp_path / "taken", taken=("harbor-00000-000",))
     generator = spade(tmp_path / "again", taken, skills=(), count=1)
     (item,) = asyncio.run(generator.generate(REQUEST))
-    errors = asyncio.run(generator.validate(item.task)).errors
+    errors = asyncio.run(generator.validate(item)).errors
     assert errors[0].startswith("refused: a different task holds the name harbor-00000-000")
     assert taken.deleted == ["harbor-00000-000"], "replaced once; a second conflict is a refusal"
 
@@ -165,7 +163,7 @@ def test_an_unplayed_task_scores_zero_with_its_error(tmp_path: Path) -> None:
     service = StandInGenerator(tmp_path / "tasks")
     generator = spade(tmp_path, service, count=1)
     (item,) = asyncio.run(generator.generate(REQUEST))
-    asyncio.run(generator.record_results((TaskPlayResult(item.task, error="the agent could not play the task"),)))
+    asyncio.run(generator.record_results((TaskPlayResult(item, error="the agent could not play the task"),)))
     assert service.reports[0]["score"] == 0.0
     assert service.reports[0]["metadata"]["refusal"] == "the agent could not play the task"
     assert report(tmp_path, 0)["tasks"] == []
@@ -176,8 +174,8 @@ def test_eval_tasks_receive_no_designer_reward_or_training_experience(tmp_path: 
     service = StandInGenerator(tmp_path / "tasks")
     generator = spade(tmp_path, service, count=1)
     (generated,) = asyncio.run(generator.generate(REQUEST))
-    assert asyncio.run(generator.validate(generated.task)).is_valid
-    asyncio.run(generator.record_results((TaskPlayResult(task=generated.task, split="eval"),)))
+    assert asyncio.run(generator.validate(generated)).is_valid
+    asyncio.run(generator.record_results((TaskPlayResult(task=generated, split="eval"),)))
     assert service.reports == []
     assert generator.experience == ()
     document = report(tmp_path, 0)
@@ -214,7 +212,7 @@ def test_a_check_that_could_not_run_raises_and_is_named_in_the_report(tmp_path: 
     generator = spade(tmp_path, service, count=1)
     (item,) = asyncio.run(generator.generate(REQUEST))
     with pytest.raises(Exception, match="the harbor command line is not installed"):
-        asyncio.run(generator.validate(item.task))
+        asyncio.run(generator.validate(item))
     asyncio.run(generator.record_results(()))
     document = report(tmp_path, 0)
     assert "OracleUnavailable" in document["error"] and document["proposals"] == []

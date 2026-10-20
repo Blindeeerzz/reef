@@ -397,10 +397,10 @@ a new recipe. SPADE (``recipes/beta/spade``) is one generator.
 ``from_config(config, *, scenario, environ)`` once for each scenario. The
 generator gets what it needs from its ``config`` and from these calls only:
 
-- ``async generate(request: TaskGenerationRequest) -> tuple[GeneratedTask, ...]``
-  returns zero or more tasks. A ``GeneratedTask`` holds a ``HarborTask`` and
-  its ``measurement_arms``. Preserve the request's source record IDs in each
-  task's ``source_agent_record_ids``.
+- ``async generate(request: TaskGenerationRequest) -> tuple[HarborTask, ...]``
+  returns zero or more tasks. Preserve the request's source record IDs in each
+  task's ``source_agent_record_ids``. Put the extra plays that the generator
+  wants in each task's ``measurement_arms``.
 - ``async validate(task: HarborTask) -> TaskValidationResult`` checks one
   task. Empty ``errors`` means the task passed. Return task defects as errors.
   Raise when the checks cannot run. The task is a value, so the check does not
@@ -408,8 +408,9 @@ generator gets what it needs from its ``config`` and from these calls only:
 - ``async record_results(results: tuple[TaskPlayResult, ...])`` receives the
   results of the last ``generate`` call. The default keeps nothing.
 
-A ``PlayArm(name, count, extra_instruction_files)`` asks for ``count`` more
-plays of a task. Each play shows the agent the files that
+A ``PlayArm(name, count, extra_instruction_files)`` in
+``HarborTask.measurement_arms`` asks for ``count`` more plays of the task. The
+task directory keeps the arms in ``task.toml``. Each play shows the agent the files that
 ``extra_instruction_files`` names after the instruction, for example
 ``solution/hint.txt``. The recipe never trains on a measurement arm.
 

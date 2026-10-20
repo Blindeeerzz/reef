@@ -39,7 +39,6 @@ from recipes.beta.spade.generation import (
 )
 from reef.core.plugins import PluginConfigError
 from reef.core.tasks import (
-    GeneratedTask,
     HarborTask,
     PlayArm,
     TaskGenerationRequest,
@@ -172,12 +171,12 @@ class SpadeTaskGenerator(TaskGenerator):
         except (OSError, ValueError) as exc:
             raise PluginConfigError(f"invalid SpadeTaskGenerator config: {exc}") from exc
 
-    async def generate(self, request: TaskGenerationRequest) -> tuple[GeneratedTask, ...]:
+    async def generate(self, request: TaskGenerationRequest) -> tuple[HarborTask, ...]:
         """One generation: ``count`` Designer proposals; a failed service call ends it with what ran."""
         if any(record.scenario != self.scenario for record in request.source_records):
             raise ValueError("source records must belong to the generator's scenario")
         self.refused, self.pending, self.error = [], {}, ""
-        tasks: list[GeneratedTask] = []
+        tasks: list[HarborTask] = []
         try:
             for index in range(self.count):
                 skill = self.skills[index % len(self.skills)] if self.skills else None
@@ -191,7 +190,7 @@ class SpadeTaskGenerator(TaskGenerator):
                     if self.hint_plays and HINT_NAME in proposed.task.solution
                     else ()
                 )
-                tasks.append(GeneratedTask(proposed.task, arms))
+                tasks.append(replace(proposed.task, measurement_arms=arms))
         except GeneratorError as exc:
             self.error = str(exc)
             logger.error("SPADE generation %d stopped: %s", self.generation, exc)

@@ -315,12 +315,12 @@ def played(generator: AutoEnvScalingGenerator, *training: tuple[float, ...]) -> 
     rewards = training or ((0.0, 1.0),)
     results = []
     for item in asyncio.run(generator.generate(REQUEST)):
-        validation = asyncio.run(generator.validate(item.task))
+        validation = asyncio.run(generator.validate(item))
         if not validation.is_valid:
-            results.append(TaskPlayResult(item.task, error="; ".join(validation.errors)))
+            results.append(TaskPlayResult(item, error="; ".join(validation.errors)))
             continue
-        asyncio.run(generator.service.write_task(item.task))
-        results.append(TaskPlayResult(item.task, rewards[len(results) % len(rewards)]))
+        asyncio.run(generator.service.write_task(item))
+        results.append(TaskPlayResult(item, rewards[len(results) % len(rewards)]))
     return tuple(results)
 
 

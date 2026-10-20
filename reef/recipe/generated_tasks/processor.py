@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import tempfile
 from collections import Counter
 from collections.abc import Hashable, Mapping
 from dataclasses import dataclass, replace
@@ -45,7 +46,14 @@ from reef.background_jobs import BackgroundJobRunner, BackgroundJobWorker, Faile
 from reef.core import AgentRecord
 from reef.core.config import config_option
 from reef.core.plugins import PluginConfigError, PluginSettings
-from reef.core.tasks import GeneratedTask, TaskGenerationRequest, TaskGenerator, TaskPlayResult
+from reef.core.tasks import (
+    HarborTask,
+    TaskGenerationRequest,
+    TaskGenerator,
+    TaskPlayResult,
+    read_harbor_task,
+    write_harbor_task,
+)
 from reef.core.tasks.metadata import TRAINING_ARM, reported_arm, reported_task_name
 from reef.core.tasks.split import TaskSplit, TaskSplitConflict, extend_split_by_source
 from reef.harness.client.tasks import TaskPlay
@@ -114,10 +122,10 @@ def recorded_reported_plays(state_dir: Path) -> dict[str, int]:
     return counts
 
 
-def split_source_ids(generated: GeneratedTask) -> tuple[str, ...]:
+def split_source_ids(task: HarborTask) -> tuple[str, ...]:
     """The source record ids that place a task in a split: its sources without the author's own record."""
-    designer_record_id = generated.task.metadata.get("designer_record_id")
-    return tuple(record_id for record_id in generated.task.source_agent_record_ids if record_id != designer_record_id)
+    designer_record_id = task.metadata.get("designer_record_id")
+    return tuple(record_id for record_id in task.source_agent_record_ids if record_id != designer_record_id)
 
 
 def task_counts(store: TaskStore) -> dict[str, int]:
@@ -132,32 +140,31 @@ def task_counts(store: TaskStore) -> dict[str, int]:
     }
 
 
-def assigned_split(store: TaskStore, settings: SplitSettings, generated: GeneratedTask) -> SplitName:
+def assigned_split(store: TaskStore, settings: SplitSettings, task: HarborTask) -> SplitName:
     """Return the split of a task: the split of its published name, or else the split of its source records.
 
     Tasks that share a source record get the same split, and a published task keeps its split. Raises
     ``TaskSplitConflict`` if the sources of the task join tasks of both splits.
     """
-    published = {task.name: task for task in store.tasks()}
-    existing = published.get(generated.task.name)
+    published = {stored.name: stored for stored in store.tasks()}
+    existing = published.get(task.name)
     if existing is not None:
         return existing.split
     previous = TaskSplit(
-        train=tuple(name for name, task in published.items() if task.split == "train"),
-        eval=tuple(name for name, task in published.items() if task.split == "eval"),
+        train=tuple(name for name, stored in published.items() if stored.split == "train"),
+        eval=tuple(name for name, stored in published.items() if stored.split == "eval"),
         seed=settings.seed,
         eval_fraction=settings.eval_fraction,
     )
     assigned = extend_split_by_source(
         previous=previous,
-        # An added task has no source records.
         previous_sources={
-            name: () if task.origin is None else split_source_ids(task.origin.generated)
-            for name, task in published.items()
+            name: split_source_ids(read_harbor_task(store.path(stored.files_digest)))
+            for name, stored in published.items()
         },
-        sources={generated.task.name: split_source_ids(generated)},
+        sources={task.name: split_source_ids(task)},
     )
-    return "eval" if generated.task.name in assigned.eval else "train"
+    return "eval" if task.name in assigned.eval else "train"
 
 
 @dataclass(frozen=True)
@@ -696,18 +703,23 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
                 generated = await self.task_generator.generate(
                     TaskGenerationRequest(job.source_records, self.description)
                 )
-                generation = self.task_store.save_candidates(generation=job.round_number, candidates=generated)
+                with tempfile.TemporaryDirectory(prefix="reef-candidates-") as staging:
+                    # One directory for each candidate, because two candidates can have the same name.
+                    directories = tuple(
+                        write_harbor_task(task, Path(staging) / str(index)) for index, task in enumerate(generated)
+                    )
+                    generation = self.task_store.save_candidates(generation=job.round_number, directories=directories)
             candidates = generation.candidates or ()
             for index in generation.pending_indices:
-                item = candidates[index].generated
-                if any(arm.name == TRAINING_ARM for arm in item.measurement_arms):
+                task = read_harbor_task(self.task_store.path(candidates[index].files_digest))
+                if any(arm.name == TRAINING_ARM for arm in task.measurement_arms):
                     refusal = f"the measurement arm {TRAINING_ARM!r} has the name of the training arm"
                     self.task_store.reject_task(generation=job.round_number, index=index, reason=refusal)
                     continue
-                validation = await self.task_generator.validate(item.task)
+                validation = await self.task_generator.validate(task)
                 if validation.is_valid:
                     try:
-                        split = assigned_split(self.task_store, self.split_settings, item)
+                        split = assigned_split(self.task_store, self.split_settings, task)
                         self.task_store.publish_task(generation=job.round_number, index=index, split=split)
                     except (TaskConflict, TaskSplitConflict) as conflict:
                         self.task_store.reject_task(generation=job.round_number, index=index, reason=str(conflict))
@@ -726,18 +738,18 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             for candidate in saved_candidates:
                 if candidate.is_pending:
                     continue
-                item = candidate.generated
+                task = read_harbor_task(self.task_store.path(candidate.files_digest))
                 if candidate.error:
-                    results.append(TaskPlayResult(task=item.task, error=candidate.error))
+                    results.append(TaskPlayResult(task=task, error=candidate.error))
                 elif candidate.split == "eval":
-                    results.append(TaskPlayResult(task=item.task, split="eval"))
+                    results.append(TaskPlayResult(task=task, split="eval"))
                 else:
-                    result, reported = await self.played(item, job.round_number)
+                    result, reported = await self.played(task, job.round_number)
                     results.append(result)
                     if result.is_played:
-                        reported_plays[item.task.name] = reported
+                        reported_plays[task.name] = reported
                         # The task's group can close now, before the round ends.
-                        self.reported_play_counts.put((item.task.name, reported))
+                        self.reported_play_counts.put((task.name, reported))
         except Exception as exc:
             error = error or str(exc) or type(exc).__name__
             logger.exception("generated-task rollout %d stopped on scenario %r", job.round_number, self.scenario)
@@ -749,7 +761,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         self.write_round_summary(job.round_number, tuple(results), error, reported_plays, job.source_records)
         return RoundOutcome(receipt=job.receipt, round_number=job.round_number, results=tuple(results), error=error)
 
-    async def played(self, item: GeneratedTask, round_number: int) -> tuple[TaskPlayResult, int]:
+    async def played(self, task: HarborTask, round_number: int) -> tuple[TaskPlayResult, int]:
         """Write one valid task and play it: the training arm, then each measurement arm.
 
         Returns the task's result and how many of its training episodes reached Reef, 0 for a task that was
@@ -758,7 +770,6 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         """
         if self.task_player is None:
             raise RuntimeError("playing a task needs the generator service")
-        task = item.task
         try:
             written = await self.task_player.write_task(task)
         except (DuplicateTask, TaskNameConflict) as exc:
@@ -779,7 +790,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             error = f"the agent could not play the task: {training[0].error[:ERROR_EXCERPT_CHARS]}"
             return TaskPlayResult(task, error=error), 0
         measurement_rewards: dict[str, tuple[float, ...]] = {}
-        for arm in item.measurement_arms:
+        for arm in task.measurement_arms:
             plays = await self.task_player.play(
                 written.path,
                 scenario=self.scenario,

@@ -201,8 +201,9 @@ class PostgresRecordDatabase:
                 if versions and versions not in ([1], [2], [3], [4], [5], [6], [7]):
                     raise ReefError("unsupported PostgreSQL record schema version")
                 # Version 4 adds the commit and settings tables. Version 5 adds the task tables.
-                # Version 6 adds the uploaded trajectory table. Version 7 replaces the generated_task table
-                # with published_task, which also holds added tasks. create_all adds them to an older schema.
+                # Version 6 adds the uploaded trajectory table. Version 7 replaces task_candidate and
+                # generated_task with candidate_task and published_task, which keep each task by the digest
+                # of its directory. create_all adds them to an older schema.
                 metadata.create_all(connection)
                 migrate_record_storage(connection, self.tables.records, self.tables.consumption)
                 for index in self.tables.records.indexes:

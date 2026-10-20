@@ -10,7 +10,6 @@ generator interface. Consumers own file reads, transport limits, and execution.
 from __future__ import annotations
 
 import math
-import re
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -20,8 +19,6 @@ from typing import Any, Literal, Self
 from reef.core.plugins import Plugin
 from reef.core.records_types import AgentRecord
 from reef.core.tasks.harbor import HarborTask
-
-ARM_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
 @dataclass(frozen=True)
@@ -98,51 +95,6 @@ class TaskValidationResult:
 
 
 @dataclass(frozen=True)
-class PlayArm:
-    """Plays of a task that only the generator reads. The recipe never trains on them.
-
-    Each play shows the agent the task's instruction and then the files that
-    ``extra_instruction_files`` names, relative to the task directory (for
-    example ``solution/hint.txt``).
-    """
-
-    name: str
-    count: int
-    extra_instruction_files: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.name, str) or not ARM_NAME_PATTERN.fullmatch(self.name):
-            raise ValueError(f"an arm name must match {ARM_NAME_PATTERN.pattern}")
-        if isinstance(self.count, bool) or not isinstance(self.count, int) or self.count < 1:
-            raise ValueError("an arm's count must be a positive integer")
-        if not isinstance(self.extra_instruction_files, tuple):
-            raise TypeError("extra_instruction_files must be a tuple of relative file names")
-        for name in self.extra_instruction_files:
-            path = PurePosixPath(name) if isinstance(name, str) else None
-            if path is None or not name or path.is_absolute() or ".." in path.parts or "\\" in name:
-                raise ValueError("extra_instruction_files must be relative file names inside the task")
-
-
-@dataclass(frozen=True)
-class GeneratedTask:
-    """One task from a generator, with the measurement arms the generator wants played on it."""
-
-    task: HarborTask
-    measurement_arms: tuple[PlayArm, ...] = ()
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.task, HarborTask):
-            raise TypeError("task must be a HarborTask")
-        if not isinstance(self.measurement_arms, tuple) or any(
-            not isinstance(arm, PlayArm) for arm in self.measurement_arms
-        ):
-            raise TypeError("measurement_arms must be a tuple of PlayArm values")
-        names = [arm.name for arm in self.measurement_arms]
-        if len(set(names)) != len(names):
-            raise ValueError("measurement arm names must be unique")
-
-
-@dataclass(frozen=True)
 class TaskPlayResult:
     """What became of one generated task in a round.
 
@@ -209,11 +161,12 @@ class TaskGenerator(Plugin, ABC):
         """
 
     @abstractmethod
-    async def generate(self, request: TaskGenerationRequest) -> tuple[GeneratedTask, ...]:
+    async def generate(self, request: TaskGenerationRequest) -> tuple[HarborTask, ...]:
         """Return zero or more new tasks.
 
         Preserve the request's source record ids in each task's
-        ``source_agent_record_ids``. An exception stops the round.
+        ``source_agent_record_ids``. Put the extra plays that the generator
+        wants in each task's ``measurement_arms``. An exception stops the round.
         """
 
     @abstractmethod

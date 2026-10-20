@@ -63,8 +63,8 @@ def reef_url(server: ThreadingHTTPServer) -> str:
 
 def validated(generator: AutoEnvScalingGenerator) -> tuple[HarborTask, tuple[str, ...]]:
     """Generate one task and validate it: the task and its validation errors."""
-    (item,) = asyncio.run(generator.generate(REQUEST))
-    return item.task, asyncio.run(generator.validate(item.task)).errors
+    (task,) = asyncio.run(generator.generate(REQUEST))
+    return task, asyncio.run(generator.validate(task)).errors
 
 
 def closed_with(generator: AutoEnvScalingGenerator, task: HarborTask, errors: tuple[str, ...]) -> dict[str, Any]:
