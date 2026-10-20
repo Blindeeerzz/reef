@@ -327,14 +327,19 @@ Serving on a Mac is slower than on the reference GPUs. Two settings depend on
 that speed:
 
 - ``OPENCLAWRL_TURN_TIMEOUT_S`` sets the harness's limit for one agent turn,
-  600 seconds by default. In a 72-session stream with Qwen3.5-9B on an M4 Pro,
-  the median turn took 397 s and the slowest took 1141 s. Turns that reach
-  the limit are recorded as failed sessions. Raise the limit on this backend.
+  600 seconds by default. A turn waits while a training step and its
+  candidate evaluation hold the engine, about 16 minutes with Qwen3.5-9B on
+  an M4 Pro. A first turn that reaches the limit leaves its session without
+  a reply. Set 1800 seconds on this backend.
 - ``pipeline.record2record.config.session_ttl_s`` must be longer than the gap
   between a reply and the reaction that judges it. ``serve-mlx.yaml`` sets
-  1800. The `session TTL result
-  <../../recipes/openclawrl/examples/openclawrl/results/2026-09-16-mlx-session-ttl/README.md>`__
-  shows that 45 seconds lost about half of the training pairs.
+  1800. With 45 seconds, about half of the judging-stage sessions expired
+  before they bound a reply to its reaction, and those replies were not
+  trained.
+
+The `Apple Silicon result
+<../../recipes/openclawrl/examples/openclawrl/README.md#gsm8k-homework-stream-on-apple-silicon>`__
+of the OpenClaw-RL example records a full stream with these settings.
 
 Verification scope
 ------------------
