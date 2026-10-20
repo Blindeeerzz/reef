@@ -918,15 +918,16 @@ record2task=..., task2batch=...)``):
   train, including data more than ``max_staleness`` versions behind the
   serving version (see `the staleness check
   <../developer-guide/processors.rst#the-record-to-record-stage>`__). Without
-  one, each record passes through and nothing trains.
+  one, the pipeline forms no record set and nothing trains.
 - ``record2task``: the record-to-task stage
   (``reef.record2task.Record2Task``). It turns each record set into tasks
   (``TrainDataItem`` values). Reported feedback supplies a ``make_sample`` hook
   on ``ReportTasks`` that assembles valid reports; computed feedback supplies
   a ``JudgedTasks`` after an asynchronous ``judge`` derives new feedback.
-  A stage with slow work returns ``TaskResult.pending()`` from ``make_tasks``
-  and hands the result back through ``take_finished()`` (see `pending tasks
-  <../developer-guide/processors.rst#pending-tasks>`__).
+  The pipeline pushes each record set (``push``) and pulls the results
+  (``pull``). Most stages inherit ``ImmediateRecord2Task`` and implement
+  ``make_tasks``; a stage with slow work returns a result later (see `slow
+  record-to-task work <../developer-guide/processors.rst#slow-record-to-task-work>`__).
 - ``task2batch``: the task-to-batch stage (``reef.task2batch.Task2Batch``).
   Its ``make_batch(tasks, batch_id)`` shapes the tasks of the selected
   sets into a batch with the ID ``batch_id``. The pipeline assigns the ID.
@@ -993,7 +994,8 @@ The recipe owns the report policy. Its record stage is a subclass of
 ordered_groups=False)``; ``ReportRecord2Record(context, ReportGrouping())``
 trains every report by itself. ``ExclusiveReportRecord2Record(context)`` also
 trains every report by itself, and a report that ends owns its inference
-records. A ``ReportGrouping`` runs in the
+records. No inference is in two record sets: a report that references an
+inference of another report ends without training. A ``ReportGrouping`` runs in the
 record-to-record stage and reads only records:
 
 .. list-table::

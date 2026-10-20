@@ -323,13 +323,14 @@ def test_cookbook_processors_assemble_before_rejecting_multi_turn_reports(
 def test_failed_multi_turn_assembly_preserves_inputs_and_other_live_reports() -> None:
     processor = threshold_pipeline(PipelineContext("math"))
     processor.ingest(training_inference("i1", [10, 20], [1], [-0.1]))
-    processor.ingest(training_inference("i2", [10, 20, 11, 21], [1], [-0.2]))
+    processor.ingest(training_inference("i2", [10, 20], [1], [-0.1]))
+    processor.ingest(training_inference("i3", [10, 20, 11, 21], [1], [-0.2]))
     processor.ingest(report("single", "i1", 1.0))
     with pytest.raises(ValueError, match="accept_multi_turn"):
-        processor.ingest(report("multi", ("i1", "i2"), 1.0))
-    assert processor.releasable_record_ids().isdisjoint({"i1", "i2", "single", "multi"})
+        processor.ingest(report("multi", ("i2", "i3"), 1.0))
+    assert processor.releasable_record_ids().isdisjoint({"i1", "i2", "i3", "single", "multi"})
     processor.acknowledge(processor.build_batch().batch_id)
-    assert processor.releasable_record_ids().isdisjoint({"i1", "i2", "multi"})
+    assert processor.releasable_record_ids().isdisjoint({"i2", "i3", "multi"})
 
 
 @pytest.mark.unit
@@ -354,23 +355,19 @@ def test_pairing_processor_rejects_report_eligibility_flags() -> None:
 
 
 @pytest.mark.unit
-def test_pairing_retention_consumes_reports_exactly_and_releases_trained_inference() -> None:
+def test_pairing_retention_trains_one_report_per_inference_and_releases_it() -> None:
     processor = threshold_pipeline(PipelineContext("math"))
     processor.ingest(inference("i1"))
     processor.ingest(report("r1", "i1", 1.0))
+    # r2 ends at once: r1 holds i1.
     processor.ingest(report("r2", "i1", 0.5))
+    assert processor.releasable_record_ids() == frozenset({"r2"})
 
-    first = processor.build_batch()
-    processor.acknowledge(first.batch_id)
-    decision = processor.releasable_record_ids()
-    assert decision == frozenset({"r1"})
-    assert decision.isdisjoint(frozenset({"i1", "r2"}))
-
-    second = processor.build_batch()
-    assert trajectory_reward(second.items[0]) == 0.5
-    processor.acknowledge(second.batch_id)
-    decision = processor.releasable_record_ids()
-    assert decision == frozenset({"i1", "r1", "r2"})
+    batch = processor.build_batch()
+    assert trajectory_reward(batch.items[0]) == 1.0
+    processor.acknowledge(batch.batch_id)
+    assert not processor.ready()
+    assert processor.releasable_record_ids() == frozenset({"i1", "r1", "r2"})
 
     processor.ingest(report("late", "i1", 0.25))
     assert not processor.ready()

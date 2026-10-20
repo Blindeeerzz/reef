@@ -751,7 +751,7 @@ policy.
 
 The training pipeline receives ``PipelineContext.training_mode`` as its
 initial batching mode. The modes share ingestion and retention. In ``manual``
-an instruction's batch has no record sets; in ``hybrid`` it takes the sets that
+an instruction's batch has no batch units; in ``hybrid`` it takes the units that
 an automatic batch would. A recipe's ``Task2Batch`` declares
 ``supported_training_modes``; an unsupported mode raises ``NotImplementedError``.
 Harness evolution supports the three modes and requires a proposer that

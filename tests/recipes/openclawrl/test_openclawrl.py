@@ -435,7 +435,7 @@ def test_the_recipe_refuses_a_bad_stage_config_when_the_pipeline_builds(pipeline
 
 @pytest.mark.unit
 def test_the_batches_need_the_openclawrl_record_stage() -> None:
-    recipe = openclawrl_recipe({"record2record": {"module": "reef.record2record:PassThroughRecord2Record"}})
+    recipe = openclawrl_recipe({"record2record": {"module": "reef.record2record:NoRecordSets"}})
     with pytest.raises(RecipeConfigError, match="OpenClawRLBatches needs OpenClawRLRecord2Record"):
         recipe.build_pipeline(PipelineContext("s"))
 
