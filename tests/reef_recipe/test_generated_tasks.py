@@ -25,6 +25,7 @@ from reef.core.tasks import (
     TaskGenerator,
     TaskPlayResult,
     TaskValidationResult,
+    write_harbor_task,
 )
 from reef.harness.client.tasks import TaskPlay
 from reef.inference.http import InferenceProxyRuntime
@@ -540,6 +541,8 @@ def test_a_task_joins_the_split_of_its_sources_and_a_task_that_joins_both_splits
     store.publish_task(generation=100, index=0, split="train")
     store.publish_task(generation=100, index=1, split="eval")
     store.complete_generation(generation=100)
+    # An added task has no source records, so it places no generated task.
+    store.add_task(directory=write_harbor_task(task_for("added-task", "x", 9105), tmp_path / "added"), split="eval")
 
     assert not looked(pipeline)
 
@@ -548,13 +551,14 @@ def test_a_task_joins_the_split_of_its_sources_and_a_task_that_joins_both_splits
     assert "split conflict" in results["bridge"].error
     assert "other files" in results["train-task"].error
     assert player.writes == []
-    assert {task.generated.task.name: task.split for task in store.tasks()} == {
+    assert {task.name: task.split for task in store.tasks()} == {
         "train-task": "train",
         "eval-task": "eval",
+        "added-task": "eval",
         "follower": "eval",
     }
     assert store.path(store.tasks(split="train")[0]).joinpath("instruction.md").is_file()
-    assert pipeline.status()["task_store"] == {"train": 1, "eval": 2, "rejected": 2, "pending": 0}
+    assert pipeline.status()["task_store"] == {"train": 1, "eval": 3, "rejected": 2, "pending": 0}
     pipeline.close()
 
 

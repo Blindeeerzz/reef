@@ -1,4 +1,4 @@
-"""Generated task store contract on every bundled scenario storage."""
+"""Task store contract on every bundled scenario storage."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from reef.service.deploy.service_config import ServiceConfig
 from reef.storage.postgres import PostgresScenarioStorage
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.storage.tasks import (
+    GeneratedOrigin,
     GenerationState,
     LocalTaskFileStore,
     SplitSettings,
@@ -82,7 +83,10 @@ def test_a_generation_records_candidates_and_outcomes(session):
     completed = store.complete_generation(generation=0)
 
     assert alpha == StoredTask(
-        generated=candidates[0], split="train", generation=0, index=0, files_digest=alpha.files_digest
+        name="alpha",
+        split="train",
+        files_digest=alpha.files_digest,
+        origin=GeneratedOrigin(generation=0, index=0, generated=candidates[0]),
     )
     directory = store.path(alpha)
     assert directory.name == "alpha"
@@ -100,8 +104,8 @@ def test_a_generation_records_candidates_and_outcomes(session):
     assert store.generation(0) == completed
     assert store.generation(1) is None
     assert store.generations() == (completed,)
-    assert [task.generated.task.name for task in store.tasks()] == ["alpha", "beta"]
-    assert [task.generated for task in store.tasks(split="eval")] == [candidates[1]]
+    assert [task.name for task in store.tasks()] == ["alpha", "beta"]
+    assert [task.origin.generated for task in store.tasks(split="eval") if task.origin] == [candidates[1]]
 
 
 def test_identical_retries_change_nothing(session):
@@ -168,6 +172,47 @@ def test_a_task_name_is_published_once(session):
     assert store.tasks() == (first,)
 
 
+def binary_task(root: Path, name: str, content: bytes = bytes(range(256))) -> Path:
+    directory = root / name
+    (directory / "environment").mkdir(parents=True)
+    (directory / "environment" / "image.png").write_bytes(content)
+    (directory / "instruction.md").write_text("Describe the image.\n")
+    return directory
+
+
+def test_an_added_task_keeps_its_binary_files_and_publication_order(session, tmp_path):
+    store = session.tasks.open("tasks", split=SPLIT)
+    store.begin_generation(generation=0, source_record_ids=("record-1",))
+    store.save_candidates(generation=0, candidates=(generated("alpha"), generated("beta")))
+    store.publish_task(generation=0, index=1, split="train")
+    source = binary_task(tmp_path, "image-task")
+
+    added = store.add_task(directory=source, split="eval")
+    store.publish_task(generation=0, index=0, split="train")
+
+    assert added == StoredTask(name="image-task", split="eval", files_digest=files_digest(source))
+    assert (store.path(added) / "environment" / "image.png").read_bytes() == bytes(range(256))
+    assert store.add_task(directory=source, split="eval") == added
+    assert [task.name for task in store.tasks()] == ["beta", "image-task", "alpha"]
+    assert store.tasks(split="eval") == (added,)
+
+
+def test_an_added_task_conflicts_with_a_published_name(session, tmp_path):
+    store = session.tasks.open("tasks", split=SPLIT)
+    store.add_task(directory=binary_task(tmp_path / "first", "image-task"), split="eval")
+    with pytest.raises(TaskConflict, match="published to eval, not train"):
+        store.add_task(directory=binary_task(tmp_path / "second", "image-task"), split="train")
+    with pytest.raises(TaskConflict, match="other files"):
+        store.add_task(directory=binary_task(tmp_path / "third", "image-task", b"other"), split="eval")
+    store.begin_generation(generation=0, source_record_ids=("record-1",))
+    store.save_candidates(generation=0, candidates=(generated("image-task"),))
+    with pytest.raises(TaskConflict, match="other files"):
+        store.publish_task(generation=0, index=0, split="eval")
+    with pytest.raises(ValueError, match="split"):
+        store.add_task(directory=binary_task(tmp_path / "fourth", "other-task"), split="test")
+    assert [task.name for task in store.tasks()] == ["image-task"]
+
+
 def test_split_settings_are_fixed_and_names_are_separate(session):
     alpha = session.tasks.open("alpha", split=SPLIT)
     alpha.begin_generation(generation=0, source_record_ids=("record-1",))
@@ -179,7 +224,7 @@ def test_split_settings_are_fixed_and_names_are_separate(session):
     beta = session.tasks.open("beta", split=SplitSettings(eval_fraction=0.0, seed=0))
     assert beta.tasks() == ()
     assert beta.generations() == ()
-    assert [task.generated.task.name for task in session.tasks.open("alpha", split=SPLIT).tasks()] == ["one"]
+    assert [task.name for task in session.tasks.open("alpha", split=SPLIT).tasks()] == ["one"]
 
 
 def test_a_closed_session_opens_no_task_store(storage):
@@ -197,21 +242,24 @@ def open_durable_storage(request, tmp_path):
     return lambda: SQLiteScenarioStorage(tmp_path)
 
 
-def test_tasks_survive_a_restart_and_archive_retires_them(open_durable_storage):
+def test_tasks_survive_a_restart_and_archive_retires_them(open_durable_storage, tmp_path):
     with closing(open_durable_storage()) as storage, closing(storage.open("math")) as session:
         store = session.tasks.open("tasks", split=SPLIT)
         store.begin_generation(generation=0, source_record_ids=("record-1",))
         store.save_candidates(generation=0, candidates=(generated("alpha"), generated("beta")))
         store.publish_task(generation=0, index=0, split="train")
+        added = store.add_task(directory=binary_task(tmp_path / "source", "image-task"), split="eval")
 
     with closing(open_durable_storage()) as storage:
         with closing(storage.open("math")) as session:
             store = session.tasks.open("tasks", split=SPLIT)
             state = store.generation(0)
             assert state is not None and state.pending_indices == (1,)
-            (published,) = store.tasks()
-            assert published.generated == generated("alpha")
+            published, restored = store.tasks()
+            assert published.origin == GeneratedOrigin(generation=0, index=0, generated=generated("alpha"))
             assert read_harbor_task(store.path(published)) == generated("alpha").task
+            assert restored == added
+            assert (store.path(restored) / "environment" / "image.png").read_bytes() == bytes(range(256))
         storage.archive("math")
         with closing(storage.open("math")) as session:
             store = session.tasks.open("tasks", split=SPLIT)

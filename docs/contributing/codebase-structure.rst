@@ -267,7 +267,7 @@ The extension points those packages expose are in `Python API
   or value in ``reef/storage/records.py``. It defines the ``RecordStore`` abstract base
   without importing scenario coordination, training, or concrete adapters.
   ``ScenarioStore`` combines a ``RecordStore`` with committed scenario state
-  and opens the scenario's generated task stores (``reef/storage/tasks.py``);
+  and opens the scenario's task stores (``reef/storage/tasks.py``);
   ``ScenarioStorage`` owns scenario settings, archival, and retention.
 - Does it turn a designer's replies into Harbor tasks, check them with Harbor
   or play them with an agent? Put it in ``reef/record2task/generator/``, the

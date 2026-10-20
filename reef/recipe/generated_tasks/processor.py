@@ -138,7 +138,7 @@ def assigned_split(store: TaskStore, settings: SplitSettings, generated: Generat
     Tasks that share a source record get the same split, and a published task keeps its split. Raises
     ``TaskSplitConflict`` if the sources of the task join tasks of both splits.
     """
-    published = {task.generated.task.name: task for task in store.tasks()}
+    published = {task.name: task for task in store.tasks()}
     existing = published.get(generated.task.name)
     if existing is not None:
         return existing.split
@@ -150,7 +150,11 @@ def assigned_split(store: TaskStore, settings: SplitSettings, generated: Generat
     )
     assigned = extend_split_by_source(
         previous=previous,
-        previous_sources={name: split_source_ids(task.generated) for name, task in published.items()},
+        # An added task has no source records.
+        previous_sources={
+            name: () if task.origin is None else split_source_ids(task.origin.generated)
+            for name, task in published.items()
+        },
         sources={generated.task.name: split_source_ids(generated)},
     )
     return "eval" if generated.task.name in assigned.eval else "train"

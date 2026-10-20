@@ -424,8 +424,8 @@ directory preserves SQLite schemas, JSONL format, and scenario filenames.
 The storage service keeps all per-scenario state. This includes the
 ``ScenarioSettings`` of each scenario: the model configuration and the
 selected training mode. The scenario registry uses ``read_settings`` and
-``write_settings``. The per-scenario state also includes the tasks that
-record-to-task stages generate (see `Generated task stores`_). ``archive``
+``write_settings``. The per-scenario state also includes the published
+Harbor tasks of its task stores (see `Task stores`_). ``archive``
 retires the settings and tasks with the records and commits.
 
 ``Recipe.with_model_config(config)`` accepts the concrete ``ModelConfig`` from
@@ -504,8 +504,8 @@ The session contract is:
      - Whether committed history survives session/process restart. A durable
        store requires a repository backend supporting staged releases.
    * - ``tasks``
-     - The ``TaskStorage`` that opens the generated task stores of the
-       scenario (see `Generated task stores`_). The stores close with the
+     - The ``TaskStorage`` that opens the task stores of the
+       scenario (see `Task stores`_). The stores close with the
        session and survive restarts when ``durable``.
    * - ``history()``
      - Committed ``CommitRecord`` values in step order, including rollback and
@@ -559,12 +559,14 @@ closes after its trainer, including on construction or recovery failure. The
 dispatcher closes its storage service on shutdown. Application assembly should use
 the scenario storage service; direct record store construction is described below.
 
-Generated task stores
-~~~~~~~~~~~~~~~~~~~~~
+Task stores
+~~~~~~~~~~~
 
-A record-to-task stage that generates tasks saves them in a ``TaskStore``
-before any rollout. Thus generation and rollout can recover independently
-after a restart. The contract and its values are in ``reef.storage.tasks``.
+A ``TaskStore`` holds published Harbor tasks, each in the ``train`` or
+``eval`` split. A record-to-task stage that generates tasks saves them in a
+task store before any rollout. Thus generation and rollout can recover
+independently after a restart. A caller can also add a task directory with
+``add_task``. The contract and its values are in ``reef.storage.tasks``.
 
 To open a store, call
 ``task_storage.open(name, split=SplitSettings(eval_fraction=..., seed=...))``.
@@ -588,11 +590,16 @@ candidates. Each ``TaskCandidate`` holds a ``GeneratedTask`` and its outcome:
 - A pending candidate has neither. After a restart, the stage validates the
   candidates in ``GenerationState.pending_indices``.
 
-A published task is a Harbor task directory. ``publish_task`` saves the
-directory in the task file store first, and then it records the publication
-in the database. The database keeps the digest of the files
-(``StoredTask.files_digest``). The task file store accepts text and binary
-files. A ``GeneratedTask`` holds text files only.
+A published task is a Harbor task directory. ``publish_task`` and
+``add_task`` save the directory in the task file store first, and then they
+record the publication in the database. The database keeps the digest of the
+files (``StoredTask.files_digest``). A ``GeneratedTask`` holds text files
+only. An added task directory can also hold binary files, such as images.
+
+A ``StoredTask`` holds the task ``name``, its ``split``, its
+``files_digest`` and its ``origin``. ``origin`` is the ``GeneratedOrigin``
+(generation, candidate index and ``GeneratedTask``) of the candidate that
+published the task first, or ``None`` for an added task.
 
 .. list-table::
    :header-rows: 1
@@ -609,6 +616,10 @@ files. A ``GeneratedTask`` holds text files only.
      - Publish one candidate and return its ``StoredTask``. Each task name is
        published once. A later candidate with the same files must give the
        same split. It then returns the published task.
+   * - ``add_task(directory=..., split=...)``
+     - Publish a Harbor task directory under its directory name, and return
+       its ``StoredTask``. The caller checks that the directory is a Harbor
+       task. A retry with the same files and split returns the published task.
    * - ``reject_task(generation=..., index=..., reason=...)``
      - Save the rejection of one candidate.
    * - ``complete_generation(generation=...)``
@@ -616,8 +627,8 @@ files. A ``GeneratedTask`` holds text files only.
    * - ``generation(generation)``, ``generations()``
      - Return one checkpoint or all checkpoints.
    * - ``tasks(split=None)``
-     - Return the published tasks in generation and candidate order. Give a
-       ``split`` to return only the tasks of that split.
+     - Return the published tasks in publication order. Give a ``split`` to
+       return only the tasks of that split.
    * - ``path(task)``
      - Return the local Harbor task directory of a published task, for
        example for ``TaskPlayer.play``. Do not change it.
