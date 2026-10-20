@@ -31,14 +31,14 @@ SFT_TARGETS = ("demonstration", "response")
 
 
 class SFTRecord2Record(ExclusiveReportRecord2Record):
-    """Make each valid report its own record set, and never drop a set as stale. No config.
+    """Make each valid report its own record set, and never drop a unit as stale. No config.
 
     The staleness check drops tokens that an older model version sampled. An
     SFT target is fixed text, not sampled tokens. Thus the stage keeps each
-    held set until a batch uses it.
+    held unit until a batch uses it.
     """
 
-    def drop_stale_sets(self, max_staleness: int) -> None:
+    def drop_stale_units(self, max_staleness: int) -> None:
         return
 
 

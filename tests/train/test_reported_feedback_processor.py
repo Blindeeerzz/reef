@@ -289,14 +289,16 @@ def test_duplicate_reports_and_batch_polls_do_not_assemble_twice() -> None:
     assert processor.assembled == ["r1"]
 
 
-def test_live_report_keeps_a_shared_source_protected_until_its_consumption() -> None:
+def test_a_second_report_on_the_inference_of_a_live_report_ends_without_training() -> None:
     processor = SamplePipeline()
     processor.ingest(inference("i1"))
     processor.ingest(report("r1", "i1"))
     processor.ingest(report("r2", "i1"))
+    # r2 ends at once. The live r1 keeps i1.
+    assert processor.releasable_record_ids() == {"r2"}
     processor.acknowledge(processor.build_batch().batch_id)
-    assert processor.releasable_record_ids().isdisjoint({"i1", "r2"})
-    processor.acknowledge(processor.build_batch().batch_id)
+    assert processor.assembled == ["r1"]
+    assert not processor.ready()
     assert processor.releasable_record_ids() == {"i1", "r1", "r2"}
     processor.release_records(frozenset({"i1", "r1", "r2"}))
     assert processor.releasable_record_ids() == set()

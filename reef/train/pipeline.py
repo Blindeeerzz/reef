@@ -9,14 +9,15 @@ that the trainer gives records to and takes batches from. A recipe writes the
 stages; it does not subclass the pipeline:
 
 * the record-to-record stage (:class:`~reef.record2record.Record2Record`)
-  decides which records train, in which sets, and in what order;
+  decides which records train, in which record sets and batch units, and in
+  what order;
 * the record-to-task stage (:class:`~reef.record2task.Record2Task`) turns each
   record set into tasks;
 * the task-to-batch stage (:class:`~reef.task2batch.Task2Batch`) shapes
-  the tasks of the selected sets into a batch.
+  the tasks of the selected batch units into a batch.
 
 The pipeline owns what is the same for every recipe: it routes records, gives
-each formed set's task result back to its stage, keeps the tasks of held sets,
+each record set's task result back to its stage, keeps the tasks of held sets,
 hands out one batch at a time until the trainer acknowledges or releases it,
 and runs the training modes and the training instructions.
 """
@@ -34,14 +35,14 @@ from reef.core.reports import ReportBase
 from reef.core.training_request import TrainingRequest
 from reef.observability import ExperimentLogger
 from reef.pipeline_context import PipelineContext
-from reef.record2record import PassThroughRecord2Record, Record2Record, RecordSet, TaskStatus
+from reef.record2record import NoRecordSets, Record2Record, RecordSet, TaskStatus
 from reef.record2record.staleness import producing_runtime_load_ids
 from reef.record2task import NoTasks, Record2Task, TaskResult
 from reef.task2batch import NoBatches, Task2Batch
 from reef.train.types import TrainDataItem, TrainingBatch
 
 
-#: In manual mode the pipeline holds at most this many batches of sets; it releases older ones.
+#: In manual mode the pipeline holds at most this many batches of units; it releases older ones.
 MANUAL_HELD_BATCHES = 4
 
 
@@ -53,7 +54,7 @@ PIPELINE_STAGES = ("record2record", "record2task", "task2batch")
 class PipelineSpec:
     """A recipe's default stage classes. A deployment's ``pipeline`` section can name others."""
 
-    record2record: type[Record2Record] = PassThroughRecord2Record
+    record2record: type[Record2Record] = NoRecordSets
     record2task: type[Record2Task] = NoTasks
     task2batch: type[Task2Batch] = NoBatches
 
@@ -166,10 +167,10 @@ class TrainingPipeline:
         self.context = context
         self.scenario = context.scenario
         #: The record-to-record stage that turns the records into record sets.
-        self.record2record = PassThroughRecord2Record() if record2record is None else record2record
+        self.record2record = NoRecordSets() if record2record is None else record2record
         #: The record-to-task stage that turns each record set into tasks.
         self.record2task = NoTasks() if record2task is None else record2task
-        #: The task-to-batch stage that shapes the tasks of the selected sets into a batch.
+        #: The task-to-batch stage that shapes the tasks of the selected units into a batch.
         self.task2batch = NoBatches(context) if task2batch is None else task2batch
         self.supported_training_modes = self.task2batch.supported_training_modes
         # The two modes that take an instruction go together: a recipe that cannot run one cannot run it in either.
@@ -186,7 +187,7 @@ class TrainingPipeline:
         self.batch_number = 0
         #: Tasks by the ID of the record set that made them, until the set trains or ends.
         self.tasks: dict[Hashable, tuple[TrainDataItem, ...]] = {}
-        #: Formed sets that the record-to-task stage still works on, by set ID. Their records stay held until settled.
+        #: Record sets that the record-to-task stage still works on, by set ID. Their records stay held until settled.
         self.pending_sets: dict[Hashable, RecordSet] = {}
         self.set_training_mode(context.training_mode)
 
@@ -202,7 +203,7 @@ class TrainingPipeline:
 
     @property
     def batch_size(self) -> int:
-        """The number of record sets in one batch."""
+        """The number of batch units in one batch."""
         return self.task2batch.batch_size
 
     @property
@@ -216,14 +217,14 @@ class TrainingPipeline:
         return self.context.experiment_logger
 
     def set_training_mode(self, training_mode: str) -> None:
-        """Select future batches while preserving the held sets and the reservation."""
+        """Select future batches while preserving the held units and the reservation."""
         if training_mode not in ("auto", "manual", "hybrid"):
             raise ValueError("training_mode must be 'auto', 'manual' or 'hybrid'")
         if training_mode not in self.supported_training_modes:
             raise NotImplementedError(
                 f"{type(self.task2batch).__name__} does not implement training_mode={training_mode!r}"
             )
-        # Manual mode batches on instructions, not sets, so the held sets are bounded instead.
+        # Manual mode batches on instructions, not units, so the held units are bounded instead.
         held_set_limit = self.batch_size * MANUAL_HELD_BATCHES if training_mode == "manual" else None
         self.context = replace(self.context, training_mode=training_mode, held_set_limit=held_set_limit)
         self.record2record.context_changed(self.context)
@@ -329,9 +330,9 @@ class TrainingPipeline:
 
     # ------------------------------------------------------------ batch cycle
     #
-    # Batch when enough sets are held (auto, hybrid) or an instruction is
+    # Batch when enough units are held (auto, hybrid) or an instruction is
     # queued (manual, hybrid), hand the same batch out until it is
-    # acknowledged, then end the sets that it consumed.
+    # acknowledged, then end the units that it consumed.
 
     def ready(self) -> bool:
         # Background work, such as judgments or finished rounds, forms sets without a new record.
@@ -340,7 +341,7 @@ class TrainingPipeline:
         self.make_formed_tasks()
         if self.pending is not None:
             return True
-        self.record2record.drop_stale_sets(self.context.max_staleness)
+        self.record2record.drop_stale_units(self.context.max_staleness)
         self.forget_ended_sets()
         if self.training_mode == "manual":
             return bool(self.training_requests)
@@ -359,16 +360,11 @@ class TrainingPipeline:
                 if self.training_mode != "auto" and self.training_requests
                 else None
             )
-            # In manual mode an instruction runs alone; in hybrid it takes the sets that an automatic batch would.
+            # In manual mode an instruction runs alone; in hybrid it takes the units that an automatic batch would.
             selected = self.record2record.pool.reserve(
                 0 if request is not None and self.training_mode == "manual" else self.batch_size
             )
-            tasks = tuple(
-                task
-                for record_set in selected
-                for formed_set_id in record_set.formed_set_ids()
-                for task in self.tasks[formed_set_id]
-            )
+            tasks = tuple(task for unit in selected for set_id in unit.set_ids() for task in self.tasks[set_id])
             if request is None:
                 self.pending = self.task2batch.make_batch(tasks, f"{self.scenario}:batch:{self.batch_number}")
             else:
@@ -377,15 +373,15 @@ class TrainingPipeline:
         return self.pending
 
     def acknowledge(self, batch_id: str, *, trained: bool = True) -> frozenset[str]:
-        """The training step consumed the batch: end its sets, and return the IDs of the records they consumed.
+        """The training step consumed the batch: end its units, and return the IDs of the records they consumed.
 
         ``trained`` is False when the backend dropped the batch as stale, for
         a record stage that paces work on what trained.
         """
         if self.pending is None or self.pending.batch_id != batch_id:
             raise ValueError(f"unknown batch_id {batch_id!r}")
-        consumed_sets = self.record2record.pool.consume_reserved()
-        consumed = self.record2record.consume(consumed_sets, trained=trained)
+        consumed_units = self.record2record.pool.consume_reserved()
+        consumed = self.record2record.consume(consumed_units, trained=trained)
         self.forget_ended_sets()
         if self.pending.request is not None:
             self.consume_request(self.pending.request.id)

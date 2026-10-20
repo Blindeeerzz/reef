@@ -918,7 +918,7 @@ record2task=..., task2batch=...)``):
   train, including data more than ``max_staleness`` versions behind the
   serving version (see `the staleness check
   <../developer-guide/processors.rst#the-record-to-record-stage>`__). Without
-  one, each record passes through and nothing trains.
+  one, the pipeline forms no record set and nothing trains.
 - ``record2task``: the record-to-task stage
   (``reef.record2task.Record2Task``). It turns each record set into tasks
   (``TrainDataItem`` values). Reported feedback supplies a ``make_sample`` hook
@@ -993,7 +993,8 @@ The recipe owns the report policy. Its record stage is a subclass of
 ordered_groups=False)``; ``ReportRecord2Record(context, ReportGrouping())``
 trains every report by itself. ``ExclusiveReportRecord2Record(context)`` also
 trains every report by itself, and a report that ends owns its inference
-records. A ``ReportGrouping`` runs in the
+records. No inference is in two record sets: a report that references an
+inference of another report ends without training. A ``ReportGrouping`` runs in the
 record-to-record stage and reads only records:
 
 .. list-table::

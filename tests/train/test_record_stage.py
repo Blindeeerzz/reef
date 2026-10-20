@@ -14,13 +14,11 @@ from reef.core import AgentRecord
 from reef.record2record import (
     GroupDecision,
     InferenceRecord2Record,
-    PassThroughRecord2Record,
+    NoRecordSets,
     RecordSet,
     ReportContext,
     ReportGrouping,
     ReportRecord2Record,
-    SingleRecordSet,
-    TaskStatus,
 )
 from reef.record2task import Record2Task, ReportTasks, SkippedReport, TaskResult
 from reef.storage.sqlite import SQLiteRecordStore
@@ -30,8 +28,8 @@ from reef.train.pipeline import TrainingPipeline
 from reef.train.types import TaskItem, TrainDataItem, TrainingBatch
 
 
-class WithholdingRecord2Record(PassThroughRecord2Record):
-    """Passes records through, except records whose ID starts with ``drop``: it ends those itself."""
+class WithholdingRecord2Record(InferenceRecord2Record):
+    """Forms a set of each inference record, except records whose ID starts with ``drop``: it ends those itself."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -64,14 +62,14 @@ class WithholdingRecord2Record(PassThroughRecord2Record):
 
 
 class RecordingTasks(Record2Task):
-    """Keeps the record IDs of every set that it sees, and makes no tasks."""
+    """Keeps the record IDs of every set that it sees, and skips the set."""
 
     def __init__(self) -> None:
         self.assembled: list[str] = []
 
     def make_tasks(self, record_set: RecordSet) -> TaskResult:
         self.assembled.extend(record_set.record_ids())
-        return TaskResult(TaskStatus.INGESTED)
+        return TaskResult.skipped()
 
 
 class RecordingBatches(Task2Batch):
@@ -188,15 +186,16 @@ def slotted(record_id: str, reference: str, slot: str) -> AgentRecord:
 
 
 @pytest.mark.unit
-def test_the_pass_through_stage_forms_one_set_per_record_in_arrival_order() -> None:
-    stage = PassThroughRecord2Record()
-    for record_id in ("i1", "r1", "i2"):
+def test_the_inference_stage_forms_one_set_per_inference_record_in_arrival_order() -> None:
+    stage = InferenceRecord2Record()
+    for record_id in ("i1", "i2"):
         stage.ingest(inference(record_id))
+    stage.ingest(report("r1", "i1"))
     formed = stage.take_formed()
-    assert [record_set.record_ids() for record_set in formed] == [("i1",), ("r1",), ("i2",)]
-    assert [record_set.arrival_index for record_set in formed] == [1, 2, 3]
+    assert [record_set.record_ids() for record_set in formed] == [("i1",), ("i2",)]
+    assert [record_set.arrival_index for record_set in formed] == [1, 2]
     assert stage.take_formed() == ()
-    assert stage.releasable_record_ids() == frozenset() and not stage.background_jobs_running()
+    assert stage.releasable_record_ids() == {"r1"} and not stage.background_jobs_running()
 
 
 @pytest.mark.unit
@@ -326,11 +325,12 @@ def test_the_report_stage_releases_a_report_whose_data_is_behind_the_serving_ver
 
 
 @pytest.mark.unit
-def test_the_default_pipeline_makes_no_tasks_and_no_batch() -> None:
+def test_the_default_pipeline_forms_no_record_set_and_makes_no_batch() -> None:
     processor = TrainingPipeline(PipelineContext("s"))
-    record_set = SingleRecordSet(set_id="i1", arrival_index=1, record=inference("i1"))
-    assert processor.record2task.make_tasks(record_set) == TaskResult(TaskStatus.INGESTED)
+    assert isinstance(processor.record2record, NoRecordSets)
     processor.ingest(inference("i1"))
+    processor.ingest(report("r1", "i1"))
+    assert processor.record2record.take_formed() == ()
     assert not processor.ready() and not processor.releasable_record_ids()
 
 

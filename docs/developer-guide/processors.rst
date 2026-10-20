@@ -21,15 +21,14 @@ The three stages
    record ─► record2record ─► record set ─► record2task ─► task ─► task2batch ─► batch ─► trainer
 
 - The **record-to-record stage** (``Record2Record``, ``reef.record2record``)
-  decides which records train, in which sets, and in what order. A set is a
-  report with the inference records that it references, a ready group, one
-  judged record, or a round set.
+  decides which records train, in which record sets and batch units, and in
+  what order (see `Record sets and batch units <#record-sets-and-batch-units>`__).
 - The **record-to-task stage** (``Record2Task``, ``reef.record2task``) turns
   one record set into tasks. A task is a ``TrainDataItem``: a ``TrajectoryItem``
   that trains directly, or a ``TaskItem`` (a Harbor task) that an algorithm
   rolls out. A batch may mix both.
 - The **task-to-batch stage** (``Task2Batch``, ``reef.task2batch``)
-  shapes the tasks of the selected sets into one ``TrainingBatch``. Grouped
+  shapes the tasks of the selected batch units into one ``TrainingBatch``. Grouped
   recipes set ``group_id`` on each member.
 
 The recipe names a default class for each stage in its ``pipeline_spec()``.
@@ -54,12 +53,38 @@ with ``Settings.parse(config, plugin_class=cls)`` and gives the settings
 object to the constructor; the stage never reads a raw mapping. A stage
 without config parses with ``NoSettings``, which refuses any key. Reading the
 deployment checks the stage classes; a bad config fails when the first
-scenario builds its pipeline. Without a record stage, the pipeline passes
-each record through and makes no tasks.
+scenario builds its pipeline. Without a record stage, the pipeline forms no
+record set and makes no tasks.
 
 Nothing numeric lives in the stages. Advantages and the loss family are the
 step objective's. See `batch values <../reference/python-api.rst#batch>`__ for
 formats and algorithm support.
+
+Record sets and batch units
+---------------------------
+
+The record stage forms two kinds of value. Each kind has an exact definition.
+
+A record set (``RecordSet``) is the input of one ``make_tasks`` call. A value
+is a record set if and only if it holds one or more records, and it holds each
+record that its records reference. A report and the inference records that it
+references form one record set. One judged record, or one inference record,
+also forms one. No record is in two record sets of one stage. Thus a report
+that references an inference of another record set ends without training.
+
+``make_tasks`` returns a ``TaskResult``. Its status settles all records of the
+set together:
+
+- ``READY``: one or more tasks. The records wait in one batch unit.
+- ``SKIPPED``: no task. The stage ends the records.
+- ``PENDING``: no task yet. ``take_finished`` returns ``READY`` or ``SKIPPED``
+  for the set later, one time.
+
+A batch unit (``BatchUnit``) holds one or more record sets that must train in
+the same batch. A report by itself is a unit of one record set. A ready group
+is a unit of the record sets of all its reports. The pool holds batch units,
+and ``batch_size`` counts them. A batch takes all tasks of a unit, or none of
+them. Consuming a unit writes the IDs of all its records to the commit.
 
 The pipeline
 ------------
@@ -76,23 +101,23 @@ The trainer calls it on its own thread, under its lock; no call may block:
   returns ``TaskResult.pending()`` instead, and the pipeline holds the set
   and its records (see `Pending tasks <#pending-tasks>`__).
 - ``ready()``: is a batch available. It first lets background work land: the
-  results that the record-to-task stage's ``take_finished`` hands back (for
-  example a finished round), then the record stage's ``poll`` (for example
-  finished judgments, or a round that is due).
-- ``build_batch()``: reserve ``batch_size`` sets from the record stage, in
+  results that the record-to-task stage's ``take_finished`` hands back, then
+  the record stage's ``poll`` (for example finished judgments, or a
+  task-generation round that ended or is due).
+- ``build_batch()``: reserve ``batch_size`` batch units from the record stage, in
   its selection order, and give their tasks to ``make_batch``. The trainer
   validates the batch against ``output_schema``. The same batch stays
   reserved until it is acknowledged or released.
 - ``acknowledge(batch_id, trained=True)``: the training step consumed that
   batch. The pipeline consumes the reservation from the record stage's pool,
-  and the stage ends the sets and returns the IDs of the records that they
+  and the stage ends the units and returns the IDs of the records that they
   consumed. The commit record persists these IDs, so recovery never ingests
   them again. ``trained=False`` says the backend dropped the batch as stale,
   for a record stage that paces work on what trained.
 
 The pipeline also merges the record and task stages' ``status()`` and metrics.
 ``background_jobs_running()`` is true while a set is pending or the record
-stage runs a background job. The trainer then polls ``ready()`` at a fixed
+stage runs a background job, such as a judgment or a task-generation round. The trainer then polls ``ready()`` at a fixed
 interval. ``close()`` closes the record and task stages.
 ``releasable_record_ids()`` returns
 the completed records that no held or pending set references, and
@@ -108,7 +133,7 @@ report shaped for another component instead of failing it. The pipeline
 passes such changes to the record stage as its updated ``PipelineContext``
 (``context_changed``).
 
-``status()`` reports ``ready_units`` (the held sets) and ``batch_size``. A
+``status()`` reports ``ready_units`` (the held batch units) and ``batch_size``. A
 stage adds an entry only when a terminal outcome cannot become a batch and an
 external runner must stop waiting (TTTD reports a complete mixed-artifact
 step as an invariant failure).
@@ -116,8 +141,7 @@ step as an invariant failure).
 Pending tasks
 -------------
 
-A record-to-task stage that needs slow work, such as task generation, must
-not block the trainer. Its ``make_tasks`` submits the work to a worker that the
+A record-to-task stage that needs slow work must not block the trainer. Its ``make_tasks`` submits the work to a worker that the
 stage owns and returns ``TaskResult.pending()``. The pipeline holds the set
 and its records. Each time the pipeline looks for a batch, it calls the
 stage's ``take_finished()``, which returns ``(set_id, TaskResult)`` pairs for
@@ -130,15 +154,15 @@ stops its worker.
 The record-to-record stage
 --------------------------
 
-1. The stage reads each record and forms record sets.
-2. The record-to-task stage makes tasks from each formed set.
-3. The stage holds the sets that train in its ``pool``, places reports in
-   their groups, and drops sets that can no longer train. The selection
-   policy orders the pool.
-4. ``build_batch`` reserves sets from the pool. ``acknowledge`` consumes the
-   reservation, and the stage ends the consumed sets (``consume``).
+1. The stage reads each record and forms record sets (``form``).
+2. The record-to-task stage makes tasks from each record set.
+3. The stage holds the record sets that train in batch units in its
+   ``pool``, places reports in their groups, and drops units that can no
+   longer train. The selection policy orders the pool.
+4. ``build_batch`` reserves units from the pool. ``acknowledge`` consumes the
+   reservation, and the stage ends the consumed units (``consume``).
 
-A record that the stage ends, for example a report in a taken slot or a set
+A record that the stage ends, for example a report in a taken slot or a unit
 that is too stale, appears in ``releasable_record_ids()``. The next commit
 names it, so the record never trains after a restart.
 
@@ -148,8 +172,8 @@ version of training data. The check has these steps:
 1. When the scenario reserves a batch, it gives the pipeline the runtime load
    ID that serves its committed release (``observe_serving_runtime_load_id``).
    The stage keeps these versions, oldest first.
-2. Before each batch, the stage ends every held set that has data more than
-   ``max_staleness`` versions behind the current version (``drop_stale_sets``).
+2. Before each batch, the stage ends every held unit that has data more than
+   ``max_staleness`` versions behind the current version (``drop_stale_units``).
 
 The lag counts only the versions of this scenario. A publication of another
 scenario on a shared engine does not age the data. These rules also apply:
@@ -160,16 +184,16 @@ scenario on a shared engine does not age the data. These rules also apply:
 * While the serving version is unknown, for example before the first
   publication, no data is stale.
 
-A stage that holds combined sets overrides ``drop_held_set`` to end a whole
-set. ``ReportRecord2Record`` does this for a ready group.
+A stage that holds groups overrides ``drop_held_unit`` to end a whole group.
+``ReportRecord2Record`` does this for a ready group.
 
 .. list-table::
    :header-rows: 1
 
    * - Stage
      - Decides
-   * - ``PassThroughRecord2Record``
-     - nothing; the default of a pipeline that trains no weights
+   * - ``NoRecordSets``
+     - nothing; it forms no record set. The default of a pipeline that trains no weights
    * - ``ReportRecord2Record``
      - report validation, groups and slots, the manual-mode limit, source release
    * - ``ExclusiveReportRecord2Record``
@@ -179,7 +203,7 @@ set. ``ReportRecord2Record`` does this for a ready group.
    * - ``InferenceRecord2Record``
      - one set per inference record; other records are released
    * - ``RoundRecord2Record``
-     - a ``ReportRecord2Record`` that also forms a request when a task-generation round is due
+     - a ``ReportRecord2Record`` that also starts a task-generation round when it is due
 
 Training modes
 --------------
@@ -193,11 +217,11 @@ mode. ``GET /reef/status`` reports ``pending_instructions`` as the
 pipeline's ``buffered_requests`` plus the instructions still unread in
 storage.
 
-- ``auto`` batches when ``batch_size`` sets are held.
+- ``auto`` batches when ``batch_size`` batch units are held.
 - ``manual`` batches on a queued TRAIN instruction. The instruction's batch
-  has no sets, so ``make_batch`` receives no tasks.
+  has no units, so ``make_batch`` receives no tasks.
 - ``hybrid`` batches on either, and a queued instruction goes first. The
-  instruction's batch takes the sets that an automatic batch would.
+  instruction's batch takes the units that an automatic batch would.
 
 The pipeline runs the oldest instruction first, one per step. It gives the
 instruction's batch the id ``<scenario>:instruction:<request id>`` and attaches
@@ -209,7 +233,7 @@ in the ``Task2Batch``'s ``required_request_types``. The pipeline queues them
 FIFO regardless of the selected mode; ``auto`` leaves the queue for a mode that
 takes it. Data ingestion continues normally in manual mode, so changing to auto
 or hybrid can batch data already collected. In manual mode the record stage
-holds at most four batches of sets and releases the oldest beyond that with a
+holds at most four batches of units and releases the oldest beyond that with a
 warning, at the switch and as reports arrive.
 
 Unsupported modes raise ``NotImplementedError``. An invalid mode name raises
@@ -257,11 +281,12 @@ A reported-feedback recipe writes:
   The stage attaches the source and report ids to the returned item.
 - ``make_batch(tasks, batch_id)`` on a ``Task2Batch`` subclass: assemble
   the flat tuple of selected tasks into a batch with the ID ``batch_id``.
-  The pipeline tracks consumption by set, including tasks that the recipe
-  removes from training.
+  The pipeline tracks consumption by batch unit, including tasks that the
+  recipe removes from training.
 
-``exclusive_sources`` makes a terminal report own its referenced inference
-records outright, and ``ordered_groups`` batches ready groups in key order.
+A report that ends after it was a record set owns its referenced inference
+records outright. ``exclusive_sources`` gives the same ownership to a report
+that ends before, and ``ordered_groups`` batches ready groups in key order.
 The grouping runs on the trainer thread and reads only records:
 
 - ``is_training_report(report)`` when another role's reports share the
@@ -284,9 +309,10 @@ cannot train, as Distill does for a teacher sequence that is too long. The
 stage releases the report.
 
 The stage handles report-id deduplication, group-slot retries, consumption,
-and retention. A batch is ready in automatic mode after ``batch_size`` sets
-accumulate; a set is one report or one complete group. Reports arriving later
-for already consumed sources cannot train those sources again.
+and retention. A batch is ready in automatic mode after ``batch_size`` batch
+units accumulate; a unit is one report or one complete group. A report that
+references an inference of another report ends without training, whether the
+other report waits or already trained.
 
 Training data errors propagate: missing required tokens/logprobs are checked by
 the training backend, and unsupported trajectory assembly raises an error rather
@@ -352,12 +378,14 @@ The generator service scores an episode whose verifier ran past its timeout
 as 0, and reports it, so a training play of that kind trains. The task's
 oracle passed the same verifier, so the timeout is the agent's.
 
-The recipe splits the rounds across its stages. The record stage
-(``GeneratedTaskRecord2Record``, a ``RoundRecord2Record``) decides when a round is due,
-holds the source sessions, and forms a round set with the round number and its sessions.
-The record-to-task stage (``GeneratedTaskTasks``) takes the round set. It runs the
-round on its own ``BackgroundJobWorker``, outside the trainer lock, and returns
-pending until the round finishes. One round runs at a time. In each round it:
+The recipe splits the rounds across its stages. A round is not a record set,
+and it does not train. The record stage (``GeneratedTaskRecord2Record``, a
+``RoundRecord2Record``) decides when a round is due, holds the source
+sessions, and starts a ``TaskGenerationRound`` with the round number and its
+sessions. The record-to-task stage (``GeneratedTaskTasks``) is the stage's
+``RoundRunner``. It runs the round on its own ``BackgroundJobWorker``, outside
+the trainer lock, and returns a ``RoundResult`` when the round ends. One round
+runs at a time. In each round it:
 
 1. Asks the generator for tasks with the configured ``description`` and the
    request's source sessions.
@@ -389,8 +417,8 @@ header ``x-reef-tag-<name>: <value>``, is a source session. The record stage
 holds source sessions in arrival order. Each round takes at most
 ``source_records_per_round`` of them, and a round without a waiting session
 has none. The generator receives each session's inference records and then
-its report as ``source_records``. The pipeline keeps a session's records
-while its round set is pending, then releases them. A session that arrives
+its report as ``source_records``. The record stage keeps a session's records
+while its round runs, then releases them. A session that arrives
 after the last round is released at once. A restart before the release can use a
 session again.
 
@@ -426,11 +454,13 @@ A record's path to a batch
 
 .. code:: text
 
-   report -> record2record: validate references, filter, group -> record set
-       -> record2task: make_sample -> TrainDataItem -> task2batch: make_batch -> batch -> acknowledge
+   report -> record2record: validate references, filter -> record set
+       -> record2task: make_sample -> TrainDataItem -> record2record: group -> batch unit
+       -> task2batch: make_batch -> batch -> acknowledge
 
    computed record -> record2record: observe/track -> dispatch -> async judge -> judged set
-       -> record2task: make_sample -> TrainDataItem -> task2batch: make_batch -> batch -> acknowledge
+       -> record2task: make_sample -> TrainDataItem -> record2record: batch unit
+       -> task2batch: make_batch -> batch -> acknowledge
 
 Where the stages live
 ---------------------

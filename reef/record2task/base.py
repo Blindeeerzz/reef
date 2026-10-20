@@ -23,10 +23,18 @@ from reef.record2record import Record2Record, RecordSet, TaskStatus
 
 @dataclass(frozen=True)
 class TaskResult:
-    """The tasks made from one record set, and what the record stage does with the set."""
+    """The tasks made from one record set, and what the record stage does with the set.
+
+    Values: a ``READY`` result holds one or more tasks. A ``SKIPPED`` or a
+    ``PENDING`` result holds no task.
+    """
 
     status: TaskStatus
     tasks: tuple[TrainDataItem, ...] = ()
+
+    def __post_init__(self) -> None:
+        if (self.status is TaskStatus.READY) != bool(self.tasks):
+            raise ValueError("a READY result holds one or more tasks, and any other result holds no task")
 
     @classmethod
     def ready(cls, tasks: tuple[TrainDataItem, ...]) -> TaskResult:
@@ -103,7 +111,7 @@ class Record2Task(ABC, Plugin):
 
 
 class NoTasks(Record2Task):
-    """Make no tasks. The record stage forgets each set; the no-update default."""
+    """The record-to-task stage of a pipeline that trains nothing. Its record stage, ``NoRecordSets``, forms no set."""
 
     @classmethod
     def from_config(
@@ -118,4 +126,4 @@ class NoTasks(Record2Task):
         return cls()
 
     def make_tasks(self, record_set: RecordSet) -> TaskResult:
-        return TaskResult(TaskStatus.INGESTED)
+        raise TypeError(f"{type(self).__name__} makes no tasks: pair it with NoRecordSets")
