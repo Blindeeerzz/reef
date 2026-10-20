@@ -54,6 +54,7 @@ from reef.record2task.generator.client import (
 )
 from reef.record2task.generator.designer import DIFFICULTIES, DesignerRequest
 from reef.record2task.generator.inputs import TaskGenerationRequest
+from reef.record2task.generator.runner import EpisodeRunner
 
 logger = logging.getLogger(__name__)
 
@@ -220,28 +221,28 @@ class SpadeTaskGenerator(TaskGenerator):
         except GeneratorError as exc:
             self.error = str(exc)
             raise
-        await self.service.delete_task(task.name)
+        # A copy that was already staged belongs to its writer, which may be playing it.
+        if written.created:
+            await self.service.delete_task(task.name)
         return TaskValidationResult(() if oracle.is_solvable else (f"oracle check refused: {oracle.reason}",))
 
     async def hint_rewards(self, task: HarborTask) -> tuple[float, ...]:
         """Play a task that the recipe played ``hint_plays`` times with its hint, and return the rewards of the plays.
 
-        The recipe wrote the task to play it, and a second write of the same task is refused, so the task is
-        written again in place. The plays report on the ``hint`` arm, which the recipe does not train on.
+        Staging the task again returns the copy that the recipe played. The plays report on the ``hint`` arm,
+        which the recipe does not train on.
         """
-        await self.service.delete_task(task.name)
-        written = await self.service.write_task(task)
-        plays = await self.service.play(
-            written.path,
+        runner = EpisodeRunner(self.service)
+        episodes = await runner.play(
+            await runner.stage(task),
             scenario=self.scenario,
             arm=HINT_ARM,
             plays=self.hint_plays,
-            is_reporting=True,
             extra_instruction_files=(HINT_FILE,),
-            tags={"generation": str(self.generation)},
+            labels={"generation": str(self.generation)},
             model=self.served_model,
         )
-        return rewards_of(plays)
+        return rewards_of(episodes)
 
     async def write(self, task: HarborTask) -> WrittenTask:
         """Write a task; only a description-based generation's rerun may replace a conflicting name."""

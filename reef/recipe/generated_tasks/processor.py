@@ -48,7 +48,6 @@ from reef.core.config import config_option
 from reef.core.plugins import PluginConfigError, PluginSettings
 from reef.core.tasks import HarborTask, read_harbor_task, write_harbor_task
 from reef.core.tasks.split import TaskSplit, TaskSplitConflict, extend_split_by_source
-from reef.harness.client.tasks import TaskPlay
 from reef.pipeline_context import PipelineContext
 from reef.recipe.generated_tasks.generator import TaskGenerator, TaskPlayResult
 from reef.record2record import (
@@ -63,6 +62,7 @@ from reef.record2task import Record2Task, ReportTasks
 from reef.record2task.assembly import SampleAssembly, SampleAssemblySettings
 from reef.record2task.generator.client import DuplicateTask, Generator, HttpGenerator, TaskNameConflict
 from reef.record2task.generator.inputs import TaskGenerationRequest
+from reef.record2task.generator.runner import Episode, EpisodeRunner
 from reef.storage.tasks import SplitName, SplitSettings, TaskConflict, TaskStore
 from reef.task2batch import Task2Batch
 from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem
@@ -102,10 +102,12 @@ def reported_arm(report: AgentRecord) -> str | None:
     return arm if isinstance(arm, str) else None
 
 
-def rewards_of(plays: tuple[TaskPlay, ...]) -> tuple[float, ...]:
+def rewards_of(episodes: tuple[Episode, ...]) -> tuple[float, ...]:
     """The rewards of the episodes that ran. An episode that ran without a reward counts as 0."""
     return tuple(
-        play.reward if play.reward is not None else 0.0 for play in plays if play.reward is not None or not play.error
+        episode.reward if episode.reward is not None else 0.0
+        for episode in episodes
+        if not episode.is_infrastructure_failure
     )
 
 
@@ -564,7 +566,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             if context.task_storage is None:
                 raise ValueError("rounds need the task storage of a scenario session")
         self.task_generator = task_generator
-        self.task_player = task_player
+        self.episode_runner = EpisodeRunner(task_player) if task_player is not None else None
         self.worker = worker
         if self.worker is None and self.rounds > 0:
             self.worker = BackgroundJobWorker(self, thread_name="generated-task-rounds", concurrency=1)
@@ -774,30 +776,28 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         """Write one valid task and play it on the training arm.
 
         Returns the task's result and how many of its training episodes reached Reef, 0 for a task that was
-        not played. A task the agent could not play at all (every training episode ended before the agent
-        ran) is removed and comes back with the first episode's error.
+        not played. A task whose training episodes all could not run comes back with the first episode's error;
+        its staged copy stays for the next play.
         """
-        if self.task_player is None:
+        if self.episode_runner is None:
             raise RuntimeError("playing a task needs the generator service")
         try:
-            written = await self.task_player.write_task(task)
+            task_path = await self.episode_runner.stage(task)
         except (DuplicateTask, TaskNameConflict) as exc:
             return TaskPlayResult(task, error=f"refused: {exc}"), 0
-        training = await self.task_player.play(
-            written.path,
+        training = await self.episode_runner.play(
+            task_path,
             scenario=self.scenario,
             arm=TRAINING_ARM,
             plays=self.plays_per_task,
-            is_reporting=True,
             extra_instruction_files=(),
-            tags={"round": str(round_number)},
+            labels={"round": str(round_number)},
             model=self.served_model,
         )
-        if training and all(play.reward is None and play.error for play in training):
-            await self.task_player.delete_task(task.name)
+        if training and all(episode.is_infrastructure_failure for episode in training):
             error = f"the agent could not play the task: {training[0].error[:ERROR_EXCERPT_CHARS]}"
             return TaskPlayResult(task, error=error), 0
-        reported = sum(play.is_reported for play in training)
+        reported = sum(episode.is_reported for episode in training)
         return TaskPlayResult(task, rewards_of(training)), reported
 
     def write_round_summary(
