@@ -15,8 +15,8 @@ One round is one job on a private worker, off the trainer's thread:
 1. Ask the generator for tasks, with the round's source sessions when the record stage gave any.
 2. Save the candidates in the scenario's task store, and validate each task with the generator.
 3. Publish each valid task with its train/eval split.
-4. Write each training task through the generator service and play it: ``plays_per_task`` times on the
-   training arm, then each measurement arm the generator asked for. Eval tasks are not played.
+4. Write each training task through the generator service and play it ``plays_per_task`` times on the
+   training arm. Eval tasks are not played.
 5. Send the results to the generator.
 
 The first round starts when the pipeline first looks for a batch. The next round starts after
@@ -25,9 +25,9 @@ while it runs, so the generator always writes for the policy that trains now. A 
 task is followed at once. A summary of each round goes under ``state_dir/<scenario>``; a restart
 reads it to continue with the next round.
 
-Only the training arm, labeled ``plain``, trains. The record stage releases reports of other arms, and
-reports without an arm, such as a generator's own reports, without assembling them. A generated task
-whose measurement arm is named ``plain`` is not played.
+Only the training arm, labeled ``plain``, trains. The record stage releases reports of other arms, such as
+the plays that a generator runs itself, and reports without an arm, such as a generator's own reports,
+without assembling them.
 """
 
 from __future__ import annotations
@@ -51,7 +51,6 @@ from reef.core.tasks import (
     TaskGenerationRequest,
     TaskGenerator,
     TaskPlayResult,
-    measurement_arms,
     read_harbor_task,
     write_harbor_task,
 )
@@ -268,8 +267,8 @@ class TaskGroupGrouping(ReportGrouping):
     """The training arm's episodes of one task form one group, ready at ``plays_per_task`` episodes.
 
     A group is ready at fewer episodes when fewer of the task's plays reported (``reported_plays``), and a
-    group of one is discarded. Measurement arms and the generator's own reports share the scenario; only
-    the training arm trains. A source session is a report whose inference records all carry ``source_tag``.
+    group of one is discarded. The generator's own plays and reports share the scenario; only the training
+    arm trains. A source session is a report whose inference records all carry ``source_tag``.
     """
 
     def __init__(self, plays_per_task: int, source_tag: tuple[str, str] | None = None) -> None:
@@ -713,15 +712,6 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             candidates = generation.candidates or ()
             for index in generation.pending_indices:
                 task = read_harbor_task(self.task_store.path(candidates[index].files_digest))
-                try:
-                    arms = measurement_arms(task)
-                except ValueError as invalid:
-                    self.task_store.reject_task(generation=job.round_number, index=index, reason=str(invalid))
-                    continue
-                if any(arm.name == TRAINING_ARM for arm in arms):
-                    refusal = f"the measurement arm {TRAINING_ARM!r} has the name of the training arm"
-                    self.task_store.reject_task(generation=job.round_number, index=index, reason=refusal)
-                    continue
                 validation = await self.task_generator.validate(task)
                 if validation.is_valid:
                     try:
@@ -768,11 +758,11 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
         return RoundOutcome(receipt=job.receipt, round_number=job.round_number, results=tuple(results), error=error)
 
     async def played(self, task: HarborTask, round_number: int) -> tuple[TaskPlayResult, int]:
-        """Write one valid task and play it: the training arm, then each measurement arm.
+        """Write one valid task and play it on the training arm.
 
         Returns the task's result and how many of its training episodes reached Reef, 0 for a task that was
         not played. A task the agent could not play at all (every training episode ended before the agent
-        ran) is removed and comes back with the first episode's error, and its measurement arms are not played.
+        ran) is removed and comes back with the first episode's error.
         """
         if self.task_player is None:
             raise RuntimeError("playing a task needs the generator service")
@@ -780,7 +770,6 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             written = await self.task_player.write_task(task)
         except (DuplicateTask, TaskNameConflict) as exc:
             return TaskPlayResult(task, error=f"refused: {exc}"), 0
-        tags = {"round": str(round_number)}
         training = await self.task_player.play(
             written.path,
             scenario=self.scenario,
@@ -788,29 +777,15 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             plays=self.plays_per_task,
             is_reporting=True,
             extra_instruction_files=(),
-            tags=tags,
+            tags={"round": str(round_number)},
             model=self.served_model,
         )
         if training and all(play.reward is None and play.error for play in training):
             await self.task_player.delete_task(task.name)
             error = f"the agent could not play the task: {training[0].error[:ERROR_EXCERPT_CHARS]}"
             return TaskPlayResult(task, error=error), 0
-        measurement_rewards: dict[str, tuple[float, ...]] = {}
-        # The round rejected each task whose arms are invalid before it played any task.
-        for arm in measurement_arms(task):
-            plays = await self.task_player.play(
-                written.path,
-                scenario=self.scenario,
-                arm=arm.name,
-                plays=arm.count,
-                is_reporting=True,
-                extra_instruction_files=arm.extra_instruction_files,
-                tags=tags,
-                model=self.served_model,
-            )
-            measurement_rewards[arm.name] = rewards_of(plays)
         reported = sum(play.is_reported for play in training)
-        return TaskPlayResult(task, rewards_of(training), measurement_rewards), reported
+        return TaskPlayResult(task, rewards_of(training)), reported
 
     def write_round_summary(
         self,
@@ -837,7 +812,6 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
                     "error": result.error,
                     "split": result.split,
                     "training_rewards": list(result.training_rewards),
-                    "measurement_rewards": {arm: list(rewards) for arm, rewards in result.measurement_rewards.items()},
                     "reported_plays": reported_plays.get(result.task.name),
                 }
                 for result in results

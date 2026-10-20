@@ -19,12 +19,10 @@ from reef.core import AgentRecord, RequestType
 from reef.core.reports import ScoredRolloutReport
 from reef.core.tasks import (
     HarborTask,
-    PlayArm,
     TaskGenerationRequest,
     TaskGenerator,
     TaskPlayResult,
     TaskValidationResult,
-    with_measurement_arms,
     write_harbor_task,
 )
 from reef.harness.client.tasks import TaskPlay
@@ -162,17 +160,17 @@ def test_a_training_report_without_a_task_is_refused_and_keeps_its_report_retrya
         p.push(report("rep-x", "rec-x", None, 1.0))
 
 
-def test_measurement_arms_and_reports_without_an_arm_are_released_not_trained() -> None:
+def test_reports_of_other_arms_and_without_an_arm_are_released_not_trained() -> None:
     p = processor()
     played(p, "harbor-00000-000", 0, 0.0, arm="hint")
     played(p, "harbor-00000-000", 1, 1.0, arm="hint")
-    assert not p.ready(), "measurement episodes never form a group"
+    assert not p.ready(), "episodes of another arm never form a group"
     p.push(inference("rec-generator"))
     p.push(report("rep-generator", "rec-generator", "harbor-00000-000", 0.5, arm=None))
     assert not p.ready()
     released = p.releasable_record_ids()
     assert {"rep-generator", "rec-generator"} <= released
-    assert {"rec-harbor-00000-000-0", "rec-harbor-00000-000-1"} <= released, "the measurement arm's calls too"
+    assert {"rec-harbor-00000-000-0", "rec-harbor-00000-000-1"} <= released, "the other arm's calls too"
     played(p, "harbor-00000-000", 2, 1.0)
     played(p, "harbor-00000-000", 3, 0.0)
     played(p, "harbor-00000-001", 0, 1.0)
@@ -254,14 +252,9 @@ def test_a_batch_whose_groups_are_all_constant_is_skipped_and_keeps_the_step_cou
 @pytest.mark.parametrize(
     ("build", "message"),
     [
-        (lambda: PlayArm("Hint", 1), "arm name must match"),
-        (lambda: PlayArm("hint", 0), "positive integer"),
-        (lambda: PlayArm("hint", 1, ("../hint.txt",)), "inside the task"),
-        (lambda: PlayArm("hint", 1, ("/hint.txt",)), "inside the task"),
-        (lambda: with_measurement_arms(task_for("t-a", "r", 1), (PlayArm("hint", 1), PlayArm("hint", 2))), "unique"),
         (lambda: TaskPlayResult(task_for("t-a", "r", 1), (1.0,), error="refused"), "no rewards"),
         (lambda: TaskPlayResult(task_for("t-a", "r", 1), (float("nan"),)), "finite"),
-        (lambda: TaskPlayResult(task_for("t-a", "r", 1), (), {"hint": [1.0]}), "tuples"),
+        (lambda: TaskPlayResult(task_for("t-a", "r", 1), [1.0]), "tuple"),
         (lambda: TaskPlayResult(task=task_for("t-a", "r", 1), training_rewards=(1.0,), split="eval"), "eval"),
         (lambda: TaskValidationResult(("",)), "non-empty"),
     ],
@@ -316,14 +309,10 @@ class ScriptedGenerator(TaskGenerator):
             raise RuntimeError("the generator lost its state directory")
 
 
-def generated(round_number: int, *indices: int, hint: bool = True) -> tuple[HarborTask, ...]:
-    """Tasks of one round; each asks for a hint arm of one play unless ``hint`` is off."""
-    arms = (PlayArm("hint", 1, ("solution/hint.txt",)),) if hint else ()
+def generated(round_number: int, *indices: int) -> tuple[HarborTask, ...]:
+    """Tasks of one round."""
     return tuple(
-        with_measurement_arms(
-            task_for(f"harbor-{round_number:05d}-{index:03d}", f"designer-{index}", 9000 + 10 * round_number + index),
-            arms,
-        )
+        task_for(f"harbor-{round_number:05d}-{index:03d}", f"designer-{index}", 9000 + 10 * round_number + index)
         for index in indices
     )
 
@@ -449,7 +438,7 @@ def summary(tmp_path: Path, round_number: int) -> dict[str, Any]:
 
 
 def test_the_first_look_for_a_batch_runs_round_zero_end_to_end(tmp_path: Path) -> None:
-    task_generator = ScriptedGenerator([generated(0, 0, 1) + generated(0, 2, hint=False)])
+    task_generator = ScriptedGenerator([generated(0, 0, 1, 2)])
     p, player = rounds(tmp_path, task_generator)
     status = p.status()["task_generation"]
     assert status["generator"] == "ScriptedGenerator" and (status["next"], status["completed"], status["of"]) == (
@@ -466,29 +455,20 @@ def test_the_first_look_for_a_batch_runs_round_zero_end_to_end(tmp_path: Path) -
     names = ["harbor-00000-000", "harbor-00000-001", "harbor-00000-002"]
     assert task_generator.validated == names and player.writes == names
     arms = [(call["task"], call["arm"], call["plays"], call["is_reporting"], call["extra"]) for call in player.plays]
-    assert arms == [
-        (names[0], "plain", 2, True, ()),
-        (names[0], "hint", 1, True, ("solution/hint.txt",)),
-        (names[1], "plain", 2, True, ()),
-        (names[1], "hint", 1, True, ("solution/hint.txt",)),
-        (names[2], "plain", 2, True, ()),
-    ]
+    assert arms == [(name, "plain", 2, True, ()) for name in names]
     assert all(call["tags"] == {"round": "0"} and call["model"] == "Qwen/Qwen3-8B" for call in player.plays)
 
     (results,) = task_generator.results
     assert [result.task.name for result in results] == names
-    assert results[0].training_rewards == (0.25, 0.25) and results[0].measurement_rewards == {"hint": (0.75,)}
-    assert results[2].training_rewards == (0.25, 0.25) and results[2].measurement_rewards == {}
-    assert results[2].is_played
+    assert all(result.training_rewards == (0.25, 0.25) and result.is_played for result in results)
     document = summary(tmp_path, 0)
     assert document["error"] == "" and [task["name"] for task in document["tasks"]] == names
     assert document["tasks"][0]["training_rewards"] == [0.25, 0.25]
-    assert document["tasks"][0]["measurement_rewards"] == {"hint": [0.75]}
     assert p.operational_metrics()["rounds_completed"] == 1
 
 
 @pytest.mark.unit
-def test_eval_tasks_are_saved_without_training_or_measurement_plays(tmp_path: Path) -> None:
+def test_eval_tasks_are_saved_without_plays(tmp_path: Path) -> None:
     task_generator = ScriptedGenerator([generated(0, 0, 1)])
     pipeline, player = rounds(tmp_path, task_generator, eval_fraction=1.0)
     assert not looked(pipeline)
@@ -574,20 +554,6 @@ def test_an_invalid_task_comes_back_with_its_errors_and_is_never_written(tmp_pat
     assert p.status()["task_generation"]["tasks_played"] == 1
 
 
-def test_invalid_arms_or_an_arm_with_the_training_arms_name_are_refused_unplayed(tmp_path: Path) -> None:
-    clashing = with_measurement_arms(task_for("harbor-00000-000", "designer-0", 9000), (PlayArm("plain", 1),))
-    invalid = dataclasses.replace(
-        task_for("harbor-00000-002", "designer-2", 9002), metadata={"measurement_arms": [{"name": "hint"}]}
-    )
-    task_generator = ScriptedGenerator([(clashing, *generated(0, 1), invalid)])
-    p, player = rounds(tmp_path, task_generator)
-    assert not looked(p)
-    assert task_generator.validated == ["harbor-00000-001"] and player.writes == ["harbor-00000-001"]
-    (results,) = task_generator.results
-    assert results[0].error == "the measurement arm 'plain' has the name of the training arm"
-    assert results[2].error.startswith("metadata.measurement_arms must be a list of arms")
-
-
 def test_a_refused_write_or_a_task_the_agent_cannot_play_comes_back_unplayed(tmp_path: Path) -> None:
     taken = StandInGenerator(tmp_path / "tasks", taken=("harbor-00000-000",))
     task_generator = ScriptedGenerator([generated(0, 0)])
@@ -600,7 +566,7 @@ def test_a_refused_write_or_a_task_the_agent_cannot_play_comes_back_unplayed(tmp
     task_generator = ScriptedGenerator([generated(0, 0)])
     p, _ = rounds(tmp_path / "second", task_generator, unplayable)
     assert not looked(p)
-    assert [call["arm"] for call in unplayable.plays] == ["plain"], "no measurement arm for a task that cannot run"
+    assert [call["arm"] for call in unplayable.plays] == ["plain"]
     assert unplayable.deleted == ["harbor-00000-000"]
     assert task_generator.results[0][0].error == "the agent could not play the task: Failed to start tmux session."
 

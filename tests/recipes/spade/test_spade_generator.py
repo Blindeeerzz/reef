@@ -1,4 +1,4 @@
-"""SPADE as a task generator: the Designer's generations, the hint arm, and the regret reports from the results."""
+"""SPADE as a task generator: the Designer's generations, the hint plays, and the regret reports from the results."""
 
 from __future__ import annotations
 
@@ -13,14 +13,7 @@ from tests.support.task_service_stubs import StandInGenerator, task_for
 from recipes.beta.spade import SpadeTaskGenerator
 from reef.core import AgentRecord, RequestType
 from reef.core.plugins import PluginConfigError
-from reef.core.tasks import (
-    PlayArm,
-    TaskGenerationRequest,
-    TaskPlayResult,
-    measurement_arms,
-    read_harbor_task,
-    write_harbor_task,
-)
+from reef.core.tasks import TaskGenerationRequest, TaskPlayResult, read_harbor_task, write_harbor_task
 from reef.pipeline_context import PipelineContext
 from reef.recipe.generated_tasks import GeneratedTaskTasks
 from reef.recipe.generated_tasks.processor import (
@@ -29,7 +22,7 @@ from reef.recipe.generated_tasks.processor import (
     RoundSettings,
     TaskGroupSettings,
 )
-from reef.record2task.generator import TaskNameConflict
+from reef.record2task.generator import GeneratorError, TaskNameConflict
 from reef.storage.sqlite import SQLiteScenarioStorage
 
 DESCRIPTION = "shell tasks with hidden state under /var and /etc"
@@ -51,7 +44,7 @@ def spade(tmp_path: Path, service: StandInGenerator | None = None, **fields: Any
     )
 
 
-def played(generator: SpadeTaskGenerator, *, plain: float = 0.25, hint: float = 0.75) -> tuple[TaskPlayResult, ...]:
+def played(generator: SpadeTaskGenerator, *, plain: float = 0.25) -> tuple[TaskPlayResult, ...]:
     """Generate, validate, write and play every task the way the generated-task recipe does, with fixed rewards."""
     results = []
     for task in asyncio.run(generator.generate(REQUEST)):
@@ -60,8 +53,7 @@ def played(generator: SpadeTaskGenerator, *, plain: float = 0.25, hint: float = 
             results.append(TaskPlayResult(task, error="; ".join(validation.errors)))
             continue
         asyncio.run(generator.service.write_task(task))
-        measurement_rewards = {arm.name: (hint,) * arm.count for arm in measurement_arms(task)}
-        results.append(TaskPlayResult(task, (plain, plain), measurement_rewards))
+        results.append(TaskPlayResult(task, (plain, plain)))
     return tuple(results)
 
 
@@ -69,9 +61,7 @@ def report(tmp_path: Path, generation: int) -> dict[str, Any]:
     return json.loads((tmp_path / "state" / f"generation-{generation:05d}.json").read_text())
 
 
-def test_a_generation_asks_the_designer_count_times_across_the_skills_and_asks_for_the_hint_arm(
-    tmp_path: Path,
-) -> None:
+def test_a_generation_asks_the_designer_count_times_across_the_skills(tmp_path: Path) -> None:
     service = StandInGenerator(tmp_path / "tasks")
     tasks = asyncio.run(spade(tmp_path, service).generate(REQUEST))
     assert [call["index"] for call in service.proposals] == [0, 1, 2]
@@ -85,9 +75,6 @@ def test_a_generation_asks_the_designer_count_times_across_the_skills_and_asks_f
         "harbor-00000-001-repair",
         "harbor-00000-002-inspection",
     ]
-    assert all(measurement_arms(task) == (PlayArm("hint", 1, ("solution/hint.txt",)),) for task in tasks)
-    assert measurement_arms(asyncio.run(spade(tmp_path / "off", hint_plays=0).generate(REQUEST))[0]) == ()
-    assert "measurement_arms" not in asyncio.run(spade(tmp_path / "plain", hint_plays=0).generate(REQUEST))[0].metadata
 
 
 def test_validation_checks_a_written_copy_and_removes_it(tmp_path: Path) -> None:
@@ -141,6 +128,12 @@ def test_the_results_close_the_generation_with_regret_reports_and_the_next_exper
     generator = spade(tmp_path, service)
     asyncio.run(generator.record_results(played(generator)))
 
+    names = ["harbor-00000-000-inspection", "harbor-00000-002-inspection"]
+    # The hint plays of each played task, on a copy written again in place, after the recipe's plays.
+    assert [(c["task"], c["arm"], c["plays"], c["extra"], c["tags"], c["model"]) for c in service.plays] == [
+        (name, "hint", 1, ("solution/hint.txt",), {"generation": "0"}, "Qwen/Qwen3-8B") for name in names
+    ]
+    assert service.deleted[-2:] == names
     assert [(r["record_id"], r["score"]) for r in service.reports] == [
         ("designer-1", 0.5),
         ("designer-2", 0.0),
@@ -150,7 +143,6 @@ def test_the_results_close_the_generation_with_regret_reports_and_the_next_exper
     assert metadata["task"]["name"] == "harbor-00000-000-inspection" and metadata["outcome"] == "frontier"
     assert metadata["regret"] == 0.5 and metadata["skill"] == "inspection" and metadata["generation"] == 0
     assert service.reports[1]["metadata"]["refusal"] == "reply refused: no json"
-    names = ["harbor-00000-000-inspection", "harbor-00000-002-inspection"]
 
     document = report(tmp_path, 0)
     assert document["error"] == "" and [task["name"] for task in document["tasks"]] == names
@@ -184,7 +176,7 @@ def test_eval_tasks_receive_no_designer_reward_or_training_experience(tmp_path: 
     (generated,) = asyncio.run(generator.generate(REQUEST))
     assert asyncio.run(generator.validate(generated)).is_valid
     asyncio.run(generator.record_results((TaskPlayResult(task=generated, split="eval"),)))
-    assert service.reports == []
+    assert service.reports == [] and service.plays == []
     assert generator.experience == ()
     document = report(tmp_path, 0)
     assert document["tasks"] == []
@@ -213,6 +205,27 @@ def test_a_service_that_goes_away_ends_the_generation_with_what_ran(tmp_path: Pa
     assert document["error"] == "the generator went away" and [t["name"] for t in document["tasks"]] == [
         "harbor-00000-000"
     ]
+
+
+class FailingPlays(StandInGenerator):
+    """A generator service that writes tasks but cannot play them."""
+
+    async def play(self, task_path, **arguments):
+        raise GeneratorError("the play job failed")
+
+
+def test_without_hint_plays_or_when_they_fail_the_return_with_hint_is_the_plain_return(tmp_path: Path) -> None:
+    service = StandInGenerator(tmp_path / "tasks")
+    generator = spade(tmp_path, service, count=1, hint_plays=0)
+    asyncio.run(generator.record_results(played(generator)))
+    assert service.plays == [] and service.reports[0]["score"] == 0.0
+
+    failing = FailingPlays(tmp_path / "failing")
+    generator = spade(tmp_path / "second", failing, count=1)
+    asyncio.run(generator.record_results(played(generator)))
+    assert failing.reports[0]["score"] == 0.0
+    document = json.loads((tmp_path / "second" / "state" / "generation-00000.json").read_text())
+    assert document["error"] == "the hint plays of harbor-00000-000-inspection failed: the play job failed"
 
 
 def test_a_check_that_could_not_run_raises_and_is_named_in_the_report(tmp_path: Path) -> None:
@@ -274,9 +287,11 @@ def test_a_round_of_the_generated_task_recipe_runs_spade_end_to_end(tmp_path: Pa
     generation.close()
     assert outcome.error == "" and [result.is_played for result in outcome.results] == [True, True]
     plays = [(call["task"], call["arm"], call["plays"], call["extra"]) for call in service.plays]
-    assert plays[:2] == [
+    assert plays == [
         ("harbor-00000-000-inspection", "plain", 2, ()),
+        ("harbor-00000-002-inspection", "plain", 2, ()),
         ("harbor-00000-000-inspection", "hint", 1, ("solution/hint.txt",)),
+        ("harbor-00000-002-inspection", "hint", 1, ("solution/hint.txt",)),
     ]
     assert [(r["record_id"], r["score"]) for r in service.reports] == [
         ("designer-1", 0.5),

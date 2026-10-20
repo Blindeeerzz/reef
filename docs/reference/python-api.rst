@@ -1094,8 +1094,8 @@ Task generation
 .. code:: python
 
    from reef.core.tasks import (
-       HarborTask, PlayArm, TaskGenerationRequest, TaskGenerator,
-       TaskPlayResult, TaskValidationResult, measurement_arms, with_measurement_arms,
+       HarborTask, TaskGenerationRequest, TaskGenerator, TaskPlayResult,
+       TaskValidationResult,
    )
 
 ``TaskGenerator`` is the plugin base class that a deployment names in
@@ -1126,17 +1126,8 @@ Record2dataset accepts the same input through ``DesignerRequest(inputs=request,
 service rebuilds ``TaskGenerationRequest`` from the JSON fields. The generated
 task preserves source record IDs in order.
 
-``PlayArm(name, count, extra_instruction_files=())`` names a measurement arm,
-its number of plays, and the task files shown after the instruction.
-``with_measurement_arms(task, arms)`` returns the task with the arms under
-``metadata["measurement_arms"]``, and ``measurement_arms(task)`` reads them
-back. Arm names are unique for each task. A task without arms has no such key,
-so its digest does not change. ``measurement_arms`` raises ``ValueError`` if
-the key holds anything other than arms.
-
-``TaskPlayResult(task, training_rewards=(), measurement_rewards={}, error="")``
-holds the rewards of the training plays and, by arm name, of each measurement
-arm. Each tuple holds only the episodes that ran. ``is_played`` is true when
+``TaskPlayResult(task, training_rewards=(), error="", split="train")`` holds
+the rewards of the training plays, only of the episodes that ran. ``is_played`` is true when
 ``error`` is empty. A task that was not played has no rewards.
 
 ``TaskValidationResult(errors=())`` exposes ``is_valid``. Each error is a
