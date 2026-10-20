@@ -238,10 +238,12 @@ class Scenario:
         """Drop the reserved batch and persist its consumption."""
         self._committer.reject_pending(component, metrics)
 
-    def reingest(self, *, up_to_sequence: int, consumed_ids: frozenset[str], component: str | None = None) -> None:
+    def replay_retained(
+        self, *, up_to_sequence: int, consumed_ids: frozenset[str], component: str | None = None
+    ) -> None:
         """Rebuild processor memory from retained rows behind a recovered watermark."""
         with self._committer.lock:
-            self.trainer_for(component).reingest(up_to_sequence=up_to_sequence, consumed_ids=consumed_ids)
+            self.trainer_for(component).replay_retained(up_to_sequence=up_to_sequence, consumed_ids=consumed_ids)
 
     def restore_record_progress(self, *, after_sequence: int, offset: int, component: str | None = None) -> None:
         """Resume record consumption at a recovered commit's high-water mark."""

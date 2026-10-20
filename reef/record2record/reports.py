@@ -92,7 +92,7 @@ class ReportGrouping:
 
         A report that is not, such as another role's signal sharing the
         scenario, is released and never assembled; nothing about it can fail
-        ingestion. Its sources are released with it only under ``exclusive_sources``
+        a push. Its sources are released with it only under ``exclusive_sources``
         or when it references more than one inference; a single referenced
         inference stays retained for a report that trains on it.
         """
@@ -101,7 +101,7 @@ class ReportGrouping:
     def placement(self, context: ReportContext) -> tuple[Hashable | None, Hashable | None]:
         """Return the batching group and retry slot of a report that has tasks. The default is an independent report.
 
-        These coordinates belong to ingestion, separately from an item's
+        These coordinates belong to the record stage, separately from an item's
         comparison group. For example, TTTD batches a whole step containing
         several comparison groups. A None slot uses the report ID.
         """

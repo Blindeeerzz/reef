@@ -121,7 +121,7 @@ The pipeline
 trainer gives records to and takes batches from. Recipes do not subclass it.
 The trainer calls it on its own thread, under its lock; no call may block:
 
-- ``ingest(record)``: one record arrives. A TRAIN instruction stays in the
+- ``push(record)``: one record arrives. A TRAIN instruction stays in the
   pipeline. The pipeline pushes every other record to the record stage. It
   then moves the record sets: it pulls the sets that the record stage
   formed, pushes each one to the record-to-task stage, pulls the results
@@ -131,7 +131,7 @@ The trainer calls it on its own thread, under its lock; no call may block:
 - ``ready()``: is a batch available. It first advances the record stage
   (``advance``), for example to take in finished judgments or to start a
   task-generation round that is due. Then it moves the record sets as
-  ``ingest`` does.
+  ``push`` does.
 - ``build_batch()``: reserve ``batch_size`` batch units from the record stage, in
   its selection order, and give their tasks to ``make_batch``. Uploaded data
   items come first (see `Uploaded data items <#uploaded-data-items>`__). The trainer
@@ -140,7 +140,7 @@ The trainer calls it on its own thread, under its lock; no call may block:
 - ``acknowledge(batch_id, trained=True)``: the training step consumed that
   batch. The pipeline consumes the reservation from the record stage's pool,
   and the stage ends the units and returns the IDs of the records that they
-  consumed. The commit record persists these IDs, so recovery never ingests
+  consumed. The commit record persists these IDs, so recovery never pushes
   them again. ``trained=False`` says the backend dropped the batch as stale,
   for a record stage that paces work on what trained.
 
@@ -271,7 +271,7 @@ Training modes
 ``training_mode`` is an attribute of each pipeline. The recipe passes its
 initial value through ``Trainer.build`` and ``PipelineContext``; it defaults
 to ``auto``. A ``Task2Batch`` declares the modes it supports in
-``supported_training_modes``; the default is ``auto`` only. Ingestion,
+``supported_training_modes``; the default is ``auto`` only. Record push,
 acknowledgement and buffer release use the same methods and buffers in every
 mode. ``GET /reef/status`` reports ``pending_instructions`` as the
 pipeline's ``buffered_requests`` plus the instructions still unread in
@@ -291,7 +291,7 @@ instruction. Batch construction must not call models or perform training.
 The trainer gives TRAIN records to the pipeline when ``RequestType.TRAIN`` is
 in the ``Task2Batch``'s ``required_request_types``. The pipeline queues them
 FIFO regardless of the selected mode; ``auto`` leaves the queue for a mode that
-takes it. Data ingestion continues normally in manual mode, so changing to auto
+takes it. The pipeline takes records normally in manual mode, so changing to auto
 or hybrid can batch data already collected. In manual mode the record stage
 holds at most four batches of units and releases the oldest beyond that with a
 warning, at the switch and as reports arrive.
@@ -304,7 +304,7 @@ Changing training mode
 
 ``POST /reef/scenarios/{scenario}/update`` selects ``auto``, ``manual`` or
 ``hybrid`` on the existing pipeline. The trainer serializes selection with
-ingestion and reservation. A reserved batch stays unchanged and acknowledgement
+record push and reservation. A reserved batch stays unchanged and acknowledgement
 consumes its actual contents, independently of subsequent mode changes.
 
 Buffered data and queued instructions stay on the same instance. The selector

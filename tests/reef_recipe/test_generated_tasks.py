@@ -118,8 +118,8 @@ def processor(**config: object) -> TrainingPipeline:
 
 
 def played(processor: TrainingPipeline, task: str, index: int, score: float, **fields: Any) -> None:
-    processor.ingest(inference(f"rec-{task}-{index}"))
-    processor.ingest(report(f"rep-{task}-{index}", f"rec-{task}-{index}", task, score, **fields))
+    processor.push(inference(f"rec-{task}-{index}"))
+    processor.push(report(f"rep-{task}-{index}", f"rec-{task}-{index}", task, score, **fields))
 
 
 def test_rewards_of_counts_an_unscored_run_as_a_loss_and_skips_an_episode_that_never_ran(tmp_path: Path) -> None:
@@ -156,9 +156,9 @@ def test_episodes_of_one_task_form_a_group_and_a_batch_holds_complete_groups_onl
 
 def test_a_training_report_without_a_task_is_refused_and_keeps_its_report_retryable() -> None:
     p = processor()
-    p.ingest(inference("rec-x"))
+    p.push(inference("rec-x"))
     with pytest.raises(ValueError, match=r"requires metadata\.task\.name"):
-        p.ingest(report("rep-x", "rec-x", None, 1.0))
+        p.push(report("rep-x", "rec-x", None, 1.0))
 
 
 def test_measurement_arms_and_reports_without_an_arm_are_released_not_trained() -> None:
@@ -166,8 +166,8 @@ def test_measurement_arms_and_reports_without_an_arm_are_released_not_trained() 
     played(p, "harbor-00000-000", 0, 0.0, arm="hint")
     played(p, "harbor-00000-000", 1, 1.0, arm="hint")
     assert not p.ready(), "measurement episodes never form a group"
-    p.ingest(inference("rec-generator"))
-    p.ingest(report("rep-generator", "rec-generator", "harbor-00000-000", 0.5, arm=None))
+    p.push(inference("rec-generator"))
+    p.push(report("rep-generator", "rec-generator", "harbor-00000-000", 0.5, arm=None))
     assert not p.ready()
     released = p.releasable_record_ids()
     assert {"rep-generator", "rec-generator"} <= released
@@ -211,10 +211,10 @@ def test_an_episode_whose_response_was_cut_at_max_tokens_still_trains() -> None:
         )
 
     p = processor(tasks_per_step=1)
-    p.ingest(turn("rec-0", [1, 2, *scaffold, *response], len(response)))
-    p.ingest(turn("rec-1", [1, 2, *response, 3, *scaffold, 4], 1))
+    p.push(turn("rec-0", [1, 2, *scaffold, *response], len(response)))
+    p.push(turn("rec-1", [1, 2, *response, 3, *scaffold, 4], 1))
     payload = {**report("rep-0", "rec-0", "harbor-00000-000", 1.0).payload, "references": ["rec-0", "rec-1"]}
-    p.ingest(
+    p.push(
         AgentRecord.create(scenario="tasks", request_type=RequestType.REPORT, payload=payload, agent_record_id="rep-0")
     )
     played(p, "harbor-00000-000", 1, 0.0)
@@ -814,7 +814,7 @@ def session(name: str, tags: Mapping[str, str]) -> tuple[AgentRecord, AgentRecor
 def sessions(p: TrainingPipeline, *names: str, tags: Mapping[str, str] | None = None) -> None:
     for name in names:
         for record in session(name, {"source": "session"} if tags is None else tags):
-            p.ingest(record)
+            p.push(record)
 
 
 def source_ids(request: TaskGenerationRequest) -> list[str]:

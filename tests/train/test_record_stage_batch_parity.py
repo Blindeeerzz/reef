@@ -169,10 +169,10 @@ class StreamRun:
         rebuilt = self.build()
         if self.high_water is not None:
             sequence, offset = self.high_water
-            rebuilt.reingest(up_to_sequence=sequence, consumed_ids=frozenset(self.consumed))
+            rebuilt.replay_retained(up_to_sequence=sequence, consumed_ids=frozenset(self.consumed))
             rebuilt.restore_record_progress(after_sequence=sequence, offset=offset)
         elif self.consumed:
-            rebuilt.reingest(up_to_sequence=0, consumed_ids=frozenset(self.consumed))
+            rebuilt.replay_retained(up_to_sequence=0, consumed_ids=frozenset(self.consumed))
         return rebuilt
 
     def drain(self, trainer: Trainer) -> None:
