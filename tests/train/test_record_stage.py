@@ -422,7 +422,7 @@ def test_uploaded_trajectories_go_first_in_a_batch_and_count_as_units() -> None:
     consumed = frozenset({"trajectory:t1", "trajectory:t2", "trajectory:t3"})
     assert consumed <= processor.releasable_record_ids()
     processor.release_records(consumed)
-    assert not processor.consumed_trajectories
+    assert not processor.consumed_trajectory_ids
 
 
 @pytest.mark.unit

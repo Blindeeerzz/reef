@@ -199,7 +199,7 @@ class TrainingPipeline:
         #: The IDs of the uploaded trajectories in the handed out batch.
         self.reserved_trajectory_ids: tuple[str, ...] = ()
         #: The commit IDs of the uploaded trajectories that a batch consumed. A second read of one does not queue it.
-        self.consumed_trajectories: set[str] = set()
+        self.consumed_trajectory_ids: set[str] = set()
         self.set_training_mode(context.training_mode)
 
     @property
@@ -337,7 +337,7 @@ class TrainingPipeline:
         """Read one uploaded trajectory. It waits here for a batch."""
         if not self.accepts_trajectories:
             raise ValueError(f"{type(self.task2batch).__name__} does not accept uploaded trajectories")
-        if consumed_trajectory_id(trajectory_id) not in self.consumed_trajectories:
+        if consumed_trajectory_id(trajectory_id) not in self.consumed_trajectory_ids:
             self.uploaded_trajectories.setdefault(trajectory_id, trajectory)
 
     def observe_serving_runtime_load_id(self, runtime_load_id: str) -> None:
@@ -404,7 +404,7 @@ class TrainingPipeline:
         self.forget_ended_sets()
         for trajectory_id in self.reserved_trajectory_ids:
             self.uploaded_trajectories.pop(trajectory_id)
-            self.consumed_trajectories.add(consumed_trajectory_id(trajectory_id))
+            self.consumed_trajectory_ids.add(consumed_trajectory_id(trajectory_id))
         consumed = consumed | {consumed_trajectory_id(trajectory_id) for trajectory_id in self.reserved_trajectory_ids}
         self.reserved_trajectory_ids = ()
         if self.pending.request is not None:
@@ -428,14 +428,14 @@ class TrainingPipeline:
         waiting = {record_id for record_set in self.waiting_sets.values() for record_id in record_set.record_ids()}
         return (
             frozenset(self.consumed_requests)
-            | frozenset(self.consumed_trajectories)
+            | frozenset(self.consumed_trajectory_ids)
             | self.record2record.releasable_record_ids()
         ) - waiting
 
     def release_records(self, agent_record_ids: frozenset[str]) -> None:
         """Release committed in-memory state without changing stored records."""
         self.consumed_requests -= agent_record_ids
-        self.consumed_trajectories -= agent_record_ids
+        self.consumed_trajectory_ids -= agent_record_ids
         self.record2record.release_records(agent_record_ids)
 
     def background_jobs_running(self) -> bool:
