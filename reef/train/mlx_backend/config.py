@@ -41,6 +41,7 @@ class MLXEngineConfig:
     )
     temperature: float = config_option(1.0, help="Sampling temperature of a request that sets none.")
     top_p: float = config_option(1.0, help="Nucleus sampling threshold of every request.")
+    top_k: int = config_option(0, help="Candidate tokens sampled from in every request; 0 keeps every token.")
     seed: int = config_option(0, help="Seed of the MLX random generator.")
     micro_batch_size: int = config_option(8, help="Rows in one backward pass; a step accumulates over passes.")
     capture_topk: int = config_option(
@@ -76,6 +77,7 @@ class MLXEngineConfig:
                 raise ValueError(f"{name} must be a positive integer")
         for name, value in (
             ("max_context_tokens", self.max_context_tokens),
+            ("top_k", self.top_k),
             ("capture_topk", self.capture_topk),
             ("prefill_step_size", self.prefill_step_size),
             ("log_probs_chunk_size", self.log_probs_chunk_size),

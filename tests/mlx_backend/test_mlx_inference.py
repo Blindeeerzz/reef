@@ -133,6 +133,7 @@ def test_the_request_steers_the_chat_template(payload: dict, rendered: dict) -> 
         ({"messages": HI, "stop": ["\n"]}, 400, "'stop'"),
         ({"messages": HI, "n": 2}, 400, "n must be 1"),
         ({"messages": HI, "top_p": 0.9}, 400, "training.options.top_p"),
+        ({"messages": HI, "top_k": 20}, 400, "training.options.top_k"),
         (
             {"messages": [{"role": "assistant", "tool_calls": [{"function": {"name": "f", "arguments": "{"}}]}]},
             400,
@@ -151,6 +152,7 @@ def test_the_request_steers_the_chat_template(payload: dict, rendered: dict) -> 
         "stop",
         "n",
         "top-p",
+        "top-k",
         "tool-call-arguments",
     ],
 )
@@ -161,8 +163,8 @@ def test_a_request_the_backend_cannot_serve_is_a_client_error(payload: dict, sta
     assert caught.value.status == status
 
 
-def test_the_configured_top_p_is_accepted() -> None:
-    assert serve({"messages": HI, "top_p": 1.0, "n": 1})["choices"][0]["finish_reason"] == "stop"
+def test_the_configured_top_p_and_top_k_are_accepted() -> None:
+    assert serve({"messages": HI, "top_p": 1.0, "top_k": 0, "n": 1})["choices"][0]["finish_reason"] == "stop"
 
 
 def test_an_empty_completion_is_a_server_error() -> None:

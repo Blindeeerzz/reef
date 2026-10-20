@@ -216,7 +216,7 @@ class MLXEngine(ModelEngine):
         tokenizer = self._loaded.tokenizer
         stop_ids = set(tokenizer.eos_token_ids)
         capture_topk = self._config.capture_topk
-        sampler = make_sampler(temp=temperature, top_p=self._config.top_p)
+        sampler = make_sampler(temp=temperature, top_p=self._config.top_p, top_k=self._config.top_k)
         detokenizer = tokenizer.detokenizer
         detokenizer.reset()
         output: list[int] = []

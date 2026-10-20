@@ -38,7 +38,6 @@ from reef.train.mlx_backend.contracts import GenerationListener, ModelEngine, Ro
 
 #: Request fields that would change sampling or the response, which the engine does not implement.
 UNSUPPORTED_REQUEST_FIELDS = (
-    "top_k",
     "min_p",
     "seed",
     "stop",
@@ -252,12 +251,12 @@ class MLXInferenceHandler(InferenceHandler):
                 raise UpstreamStatusError(f"the mlx backend does not support the request field {name!r}", status=400)
         if payload.get("n", 1) != 1:
             raise UpstreamStatusError("the mlx backend samples one choice per request; n must be 1", status=400)
-        top_p = payload.get("top_p")
-        if top_p is not None and top_p != self._engine.config.top_p:
-            raise UpstreamStatusError(
-                f"the mlx backend samples every request at training.options.top_p ({self._engine.config.top_p})",
-                status=400,
-            )
+        for name, configured in (("top_p", self._engine.config.top_p), ("top_k", self._engine.config.top_k)):
+            requested = payload.get(name)
+            if requested is not None and requested != configured:
+                raise UpstreamStatusError(
+                    f"the mlx backend samples every request at training.options.{name} ({configured})", status=400
+                )
         try:
             max_tokens = positive_max_tokens(payload, {"max_tokens": self._engine.config.max_tokens}, "max_tokens")
         except ValueError as exc:

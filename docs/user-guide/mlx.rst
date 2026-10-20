@@ -106,6 +106,7 @@ All keys are under ``training.options``. Only ``checkpoint_dir`` is required.
    training.options.min_train_rows | 1 | rows a step needs once ``max_train_tokens`` has left long rows out; a batch with fewer is skipped, because the optimizer takes a full-size step toward the rows that remain
    training.options.temperature | 1.0 | sampling temperature when a request sets none; must be positive
    training.options.top_p | 1.0 | top-p for every request
+   training.options.top_k | 0 | top-k for every request; 0 keeps every token
    training.options.seed | 0 | MLX random seed
    training.options.capture_topk | 0 | top-K candidates recorded for each generated token; the ``openclawrl`` loss needs a value above 0
    training.options.chat_template_kwargs | {} | default chat-template values for every request, such as ``enable_thinking``
@@ -179,11 +180,12 @@ Anthropic routes, return HTTP 404. The backend reads these request fields:
 - ``tools`` and ``tool_choice``;
 - ``chat_template_kwargs``, which overrides the deployment default.
 
-``training.options.top_p`` applies to every request. A request that sets
-``top_p`` to another value fails with HTTP 400. The request also fails when
-it sets ``n`` above 1, or sets any of ``top_k``, ``min_p``, ``seed``,
-``stop``, ``frequency_penalty``, ``presence_penalty``,
-``repetition_penalty``, ``logit_bias``, ``logprobs`` or ``top_logprobs``.
+``training.options.top_p`` and ``training.options.top_k`` apply to every
+request. A request that sets ``top_p`` or ``top_k`` to another value fails
+with HTTP 400. The request also fails when it sets ``n`` above 1, or sets
+any of ``min_p``, ``seed``, ``stop``, ``frequency_penalty``,
+``presence_penalty``, ``repetition_penalty``, ``logit_bias``, ``logprobs``
+or ``top_logprobs``.
 ``max_tokens`` must be a positive integer, and ``temperature`` must be finite
 and not negative.
 

@@ -49,6 +49,18 @@ The file is JSON: ``{"tools": [...], "conversations": [[message, ...], ...],
 sends. ``answers`` is optional and gives each conversation's gold answer; a
 reply then counts only when its visible text contains that number, so an
 incoherent reply does not count.
+
+With ``answers``, ``evaluate`` also reports ``reply_clean_rate``: the fraction
+of the conversations that the candidate answers in text with the gold answer
+and no ``student_violations``. This is the student's acceptance criterion on
+a first reply, in the harness context. ``regression_metric:
+reply_clean_rate`` makes the regression check use it instead of
+``clean_rate``:
+
+    evaluation:
+      config:
+        regression_metric: reply_clean_rate
+        regression_margin: 0.07  # with 16 conversations, accepts a drop of one answer
 """
 
 from __future__ import annotations
@@ -76,6 +88,8 @@ EVALUATOR_NAME = "openclawrl-style-probe"
 EVALUATOR_VERSION = "2"
 CLEAN_RATE_METRIC = "clean_rate"
 REPLY_RATE_METRIC = "reply_rate"
+REPLY_CLEAN_RATE_METRIC = "reply_clean_rate"
+REGRESSION_METRICS = (CLEAN_RATE_METRIC, REPLY_CLEAN_RATE_METRIC)
 
 # Fixed GSM8K problems with gold answers; a run probes the first ``probe_size``.
 # Each candidate generates one reply per problem on the engine thread, between
@@ -135,7 +149,11 @@ class OpenClawRLCandidateEvaluationSettings(PluginSettings):
     probe_size: int = config_option(8, help=f"The probe problems, 1 to {len(PROBE_PROBLEMS)}.")
     max_tokens: int = config_option(320, help="The generation budget in tokens for one probe reply.")
     regression_margin: float = config_option(
-        0.17, help="The allowed drop of clean_rate below the best selected clean_rate."
+        0.17, help="The allowed drop of the regression metric below the best selected value."
+    )
+    regression_metric: str = config_option(
+        CLEAN_RATE_METRIC,
+        help="The metric of the regression check: clean_rate, or reply_clean_rate, which needs reply-probe answers.",
     )
     reply_probe_file: str = config_option(
         "", help="A JSON file of conversations where the policy should answer in text; empty disables the reply probe."
@@ -155,6 +173,8 @@ class OpenClawRLCandidateEvaluationSettings(PluginSettings):
             raise ValueError(f"max_tokens must be positive, got {self.max_tokens}")
         if self.regression_margin < 0:
             raise ValueError(f"regression_margin must be non-negative, got {self.regression_margin}")
+        if self.regression_metric not in REGRESSION_METRICS:
+            raise ValueError(f"regression_metric must be one of {REGRESSION_METRICS}, got {self.regression_metric!r}")
         if self.reply_max_tokens <= 0:
             raise ValueError(f"reply_max_tokens must be positive, got {self.reply_max_tokens}")
         if self.reply_margin < 0:
@@ -185,6 +205,11 @@ def load_reply_probe(path: pathlib.Path) -> tuple[list[dict[str, Any]], list[lis
     return tools, conversations, [str(answer) for answer in answers]
 
 
+def visible_reply(generated: str) -> str:
+    """The text of a generated turn that the client reads as the reply: what follows any reasoning."""
+    return generated.split("</think>")[-1]
+
+
 def answers_in_text(generated: str, *, opens_reasoning: bool = False, answer: str = "") -> bool:
     """Whether a generated turn answers in text: visible text after any reasoning, no tool call, and the answer.
 
@@ -194,17 +219,17 @@ def answers_in_text(generated: str, *, opens_reasoning: bool = False, answer: st
     """
     if opens_reasoning and "</think>" not in generated:
         return False
-    visible = generated.split("</think>")[-1]
+    visible = visible_reply(generated)
     if not visible.strip() or "<tool_call>" in visible:
         return False
     return not answer or re.search(rf"(?<![\d.]){re.escape(answer)}(?![\d])", visible.replace(",", "")) is not None
 
 
 class OpenClawRLCandidateEvaluation(RegressionCheckMixin, ConfiguredEvaluationPlugin):
-    """The style and reply probes as ``evaluate``; the regression checks on ``reply_rate`` and ``clean_rate`` as ``decide``."""
+    """The style and reply probes as ``evaluate``; the regression checks on ``reply_rate`` and ``regression_metric`` as ``decide``."""
 
     def __init__(self, runtime: MLXRuntime, settings: OpenClawRLCandidateEvaluationSettings) -> None:
-        super().__init__(metric=CLEAN_RATE_METRIC, margin=settings.regression_margin)
+        super().__init__(metric=settings.regression_metric, margin=settings.regression_margin)
         self.runtime = runtime
         self.max_tokens = settings.max_tokens
         self.probe = PROBE_PROBLEMS[: settings.probe_size]
@@ -227,6 +252,10 @@ class OpenClawRLCandidateEvaluation(RegressionCheckMixin, ConfiguredEvaluationPl
             )
             self.reply_prompts = [runtime.engine.render_prompt(messages, tools=tools) for messages in conversations]
             self.reply_opens_reasoning = [runtime.engine.opens_reasoning(prompt) for prompt in self.reply_prompts]
+        if settings.regression_metric == REPLY_CLEAN_RATE_METRIC and not self.reply_answers:
+            raise PluginConfigError(
+                f"regression_metric {REPLY_CLEAN_RATE_METRIC} needs a reply_probe_file with 'answers'"
+            )
 
     def evaluate(self, candidate: UpdateCandidate) -> EvaluationResult:
         replies = self.runtime.probe_candidate(candidate.candidate_id, self.prompts, max_tokens=self.max_tokens)
@@ -245,16 +274,26 @@ class OpenClawRLCandidateEvaluation(RegressionCheckMixin, ConfiguredEvaluationPl
                 candidate.candidate_id, self.reply_prompts, max_tokens=self.reply_max_tokens
             )
             golds = self.reply_answers or [""] * len(answers)
-            reply_count = sum(
-                1
+            replied = [
+                answers_in_text(answer, opens_reasoning=opens, answer=gold)
                 for answer, opens, gold in zip(answers, self.reply_opens_reasoning, golds, strict=True)
-                if answers_in_text(answer, opens_reasoning=opens, answer=gold)
-            )
+            ]
+            reply_count = sum(replied)
             reply_metrics = {
                 REPLY_RATE_METRIC: reply_count / len(answers),
                 "reply_count": reply_count,
                 "reply_probe_count": len(answers),
             }
+            if self.reply_answers:
+                # The student's acceptance criterion on a first reply in the
+                # harness context: the correct answer, the work shown, no style marker.
+                reply_clean_count = sum(
+                    1
+                    for answer, ok in zip(answers, replied, strict=True)
+                    if ok and not student_violations(visible_reply(answer))
+                )
+                reply_metrics[REPLY_CLEAN_RATE_METRIC] = reply_clean_count / len(answers)
+                reply_metrics["reply_clean_count"] = reply_clean_count
         return EvaluationResult(
             evaluator=EVALUATOR_NAME,
             evaluator_version=EVALUATOR_VERSION,
@@ -273,7 +312,7 @@ class OpenClawRLCandidateEvaluation(RegressionCheckMixin, ConfiguredEvaluationPl
         )
 
     def decide(self, candidate: UpdateCandidate, evaluation: EvaluationResult) -> SelectionDecision:
-        """Refuse a candidate whose ``reply_rate`` regressed, then apply the ``clean_rate`` check."""
+        """Refuse a candidate whose ``reply_rate`` regressed, then apply the ``regression_metric`` check."""
         if not self.reply_prompts:
             return super().decide(candidate, evaluation)
         reply_rate = float(evaluation.metrics[REPLY_RATE_METRIC])

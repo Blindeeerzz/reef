@@ -58,6 +58,10 @@ training:
     # the same step cut them to 0.25, but two more steps left 0 of 16 correct.
     learning_rate: 3.0e-5
     max_tokens: 2048
+    # The sampling of the reference run: requests from hermes set none.
+    temperature: 0.6
+    top_p: 0.95
+    top_k: 20
     # With the reasoning block opened by the template, this 9B model often
     # writes its answer inside it and stops without closing it: the client
     # then reads an empty reply (2 of 5 samples on one stream prompt closed
@@ -160,9 +164,11 @@ storage:
   artifact-cache-dir: work/mlx/artifact-cache
 
 # Candidate evaluation: each candidate runs a fixed style probe and a reply
-# probe before Reef publishes it. Reef does not publish a candidate whose clean
-# rate or reply rate drops more than its margin below the best. Without this
-# section, Reef uses the `always` policy and publishes every step.
+# probe before Reef publishes it. Reef does not publish a candidate whose
+# reply_clean_rate or reply_rate drops more than its margin below the best.
+# Serving then keeps the last selected weights, and the next step trains from
+# them. Without this section, Reef uses the `always` policy and publishes every
+# step.
 #
 # The probe generates from the weights of the candidate, so it needs a training
 # runtime that holds an unpublished candidate, such as this one. Reef refuses a
@@ -175,18 +181,22 @@ evaluation:
     # full reply with its arithmetic. A cut reply can fail the shown-work check
     # because of its length, not its style.
     max_tokens: 320
-    # The allowed drop of the clean rate below the best selected candidate.
-    # One probe problem is worth 1 / probe_size, which is 0.125 here. A margin
-    # of 0.17 accepts a drop of one problem and refuses a drop of two or more.
-    # The check stops a collapse, not small changes between steps.
-    regression_margin: 0.17
-    # The style probe has no tools, so it cannot see a policy that only calls
-    # tools. The reply probe holds hermes conversations where the policy has
-    # read the homework and should answer in text. Reef refuses a candidate
-    # whose reply_rate drops more than reply_margin below the best. With 8
-    # conversations, 0.25 accepts a drop of two answers and refuses three.
+    # The reply probe holds hermes conversations where the policy has read
+    # the homework and should answer: 16 GSM8K test problems that are not in
+    # the stream. reply_clean_rate is the fraction of first replies that the
+    # student accepts: the correct answer, the work shown, and no style
+    # marker. The style probe has no tools and no harness context; its
+    # clean_rate stayed at 0 for every candidate of a run whose stream passed
+    # 7 of 19 sessions, so it is reported but does not select.
+    regression_metric: reply_clean_rate
+    # One conversation is worth 1 / 16 = 0.0625. A margin of 0.07 accepts a
+    # drop of one accepted reply and refuses a drop of two.
+    regression_margin: 0.07
     reply_probe_file: recipes/openclawrl/examples/openclawrl/reply_probe.json
     reply_max_tokens: 512
+    # Reef also refuses a candidate whose reply_rate drops more than this
+    # below the best. With 16 conversations, 0.25 accepts a drop of four
+    # answers and refuses five.
     reply_margin: 0.25
     # The best selected reply_rate lives in the Reef process, so after a
     # restart the first candidate sets it. The floor holds in any case: without

@@ -122,7 +122,7 @@ def test_the_plugin_accepts_the_climb_and_rejects_the_collapse(probe) -> None:
     assert probe([CLEAN] * 5 + [EMPTY])[0].selected
 
 
-def write_reply_probe(tmp_path: Path, conversation_count: int = 2) -> Path:
+def write_reply_probe(tmp_path: Path, conversation_count: int = 2, answers: list[str] | None = None) -> Path:
     path = tmp_path / "reply_probe.json"
     conversation = [
         {"role": "user", "content": "Hey, I have my homework in the file homework/0.txt."},
@@ -138,6 +138,7 @@ def write_reply_probe(tmp_path: Path, conversation_count: int = 2) -> Path:
             {
                 "tools": [{"type": "function", "function": {"name": "read_file"}}],
                 "conversations": [conversation] * conversation_count,
+                **({"answers": answers} if answers else {}),
             }
         )
     )
@@ -166,6 +167,41 @@ def test_the_reply_probe_counts_text_answers_and_refuses_a_policy_that_stops_ans
     assert collapse.reason.startswith("reply_rate 0 regressed")
     # The refused candidate does not lower the bar: 1/2 is still more than 0.25 below 1.0.
     assert not run([TEXT_ANSWER, TOOL_CALL])[0].selected
+
+
+def test_reply_clean_rate_selects_on_the_style_of_correct_first_replies(tmp_path: Path) -> None:
+    training, engine = probe_runtime(tmp_path)
+    plugin = build_plugin(
+        training,
+        reply_probe_file=str(write_reply_probe(tmp_path, 3, answers=["72", "72", "72"])),
+        regression_metric="reply_clean_rate",
+        regression_margin=0.0,
+        reply_margin=1.0,
+    )
+    plain = "She sold 48 in April and 48 / 2 = 24 in May, so 48 + 24 = 72 clips."
+    bold = "She sold 48 in April and 48 / 2 = 24 in May, so 48 + 24 = **72** clips."
+
+    def run(answers: list[str]):
+        engine.replies = [MARKDOWN] * 6 + answers
+        candidate = UpdateCandidate(candidate_id="c")
+        evaluation = plugin.evaluate(candidate)
+        return plugin.decide(candidate, evaluation), evaluation
+
+    # A wrong answer, a styled answer and a tool call do not count; the style probe is ignored.
+    first, evaluation = run([plain, bold, "She sold 70 clips."])
+    assert evaluation.metrics["reply_clean_rate"] == pytest.approx(1 / 3)
+    assert evaluation.metrics["clean_rate"] == 0.0
+    assert first.selected
+    regressed, _ = run([bold, bold, plain.replace("72", "70")])
+    assert not regressed.selected
+    assert regressed.reason.startswith("reply_clean_rate 0 regressed")
+    assert run([plain, plain, bold])[0].selected
+
+
+def test_reply_clean_rate_needs_reply_probe_answers(tmp_path: Path) -> None:
+    training, _ = probe_runtime(tmp_path)
+    with pytest.raises(PluginConfigError, match="needs a reply_probe_file with 'answers'"):
+        build_plugin(training, reply_probe_file=str(write_reply_probe(tmp_path)), regression_metric="reply_clean_rate")
 
 
 def test_min_reply_rate_refuses_the_first_candidate_too(tmp_path: Path) -> None:
@@ -212,6 +248,7 @@ def test_from_config_refuses_a_runtime_that_cannot_probe_a_candidate() -> None:
         ({"reply_max_tokens": 0}, "reply_max_tokens must be positive"),
         ({"reply_margin": -0.1}, "reply_margin must be non-negative"),
         ({"min_reply_rate": 1.5}, "min_reply_rate must be between 0 and 1"),
+        ({"regression_metric": "gold_rate"}, "regression_metric must be one of"),
         ({"reply_probe_file": "/nonexistent/reply_probe.json"}, "cannot read reply_probe_file"),
     ],
 )
