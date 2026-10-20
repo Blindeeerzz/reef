@@ -187,7 +187,7 @@ A client can upload a training item directly: an ATIF trajectory to
 ``POST /reef/trajectories``, or a Harbor task to ``POST /reef/tasks`` (see the
 `HTTP API <../reference/http-api.rst#upload-trajectories-and-harbor-tasks>`__).
 An upload is not a record. Reef keeps it as a data item in the scenario
-storage, and the trainer gives it to the pipeline with ``ingest_item``.
+storage, and the trainer gives it to the pipeline with ``push_item``.
 
 A recipe takes uploads when its ``Task2Batch`` lists the item kinds in
 ``accepted_items``, for example ``frozenset({TrajectoryItem, TaskItem})``. The

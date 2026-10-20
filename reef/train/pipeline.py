@@ -65,7 +65,7 @@ class DataItemUnit(BatchUnit):
     ``{"item:<unit_id>"}``. ``group_key`` is None.
 
     Purpose: the pipeline makes it from each uploaded item that the trainer
-    reads (``ingest_item``). A batch takes these units first, in upload order.
+    reads (``push_item``). A batch takes these units first, in upload order.
     """
 
     unit_id: str
@@ -353,7 +353,7 @@ class TrainingPipeline:
         self.record2record.push(item)
         self.move_record_sets()
 
-    def ingest_item(self, stored: StoredDataItem) -> None:
+    def push_item(self, stored: StoredDataItem) -> None:
         """Read one uploaded data item. Its unit waits here for a batch."""
         if type(stored.item) not in self.accepted_items:
             raise ValueError(f"{type(self.task2batch).__name__} does not accept {type(stored.item).__name__} uploads")
