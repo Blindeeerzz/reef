@@ -225,8 +225,8 @@ class TrainingPipeline:
                 f"{type(self.task2batch).__name__} does not implement training_mode={training_mode!r}"
             )
         # Manual mode batches on instructions, not units, so the held units are bounded instead.
-        held_set_limit = self.batch_size * MANUAL_HELD_BATCHES if training_mode == "manual" else None
-        self.context = replace(self.context, training_mode=training_mode, held_set_limit=held_set_limit)
+        held_unit_limit = self.batch_size * MANUAL_HELD_BATCHES if training_mode == "manual" else None
+        self.context = replace(self.context, training_mode=training_mode, held_unit_limit=held_unit_limit)
         self.record2record.context_changed(self.context)
         self.forget_ended_sets()
 
