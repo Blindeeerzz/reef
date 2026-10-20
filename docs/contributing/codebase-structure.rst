@@ -267,7 +267,7 @@ The extension points those packages expose are in `Python API
   or value in ``reef/storage/records.py``. It defines the ``RecordStore`` abstract base
   without importing scenario coordination, training, or concrete adapters.
   ``ScenarioStore`` combines a ``RecordStore`` with committed scenario state
-  and opens the scenario's generated task stores (``reef/storage/tasks.py``);
+  and opens the scenario's task stores (``reef/storage/tasks.py``);
   ``ScenarioStorage`` owns scenario settings, archival, and retention.
 - Does it turn a designer's replies into Harbor tasks, check them with Harbor
   or play them with an agent? Put it in ``reef/record2task/generator/``, the
@@ -275,8 +275,11 @@ The extension points those packages expose are in `Python API
   ``generator`` section. ``reef/service/deploy/generator.py`` assembles that
   child, and ``reef/service/deploy/generator_process.py`` runs it. The built-in generated-task recipe, which plays generated tasks
   through that service and trains on them, is in
-  ``reef/recipe/generated_tasks/``. The ``TaskGenerator`` contract is in
-  ``reef/core/tasks/``. What a method asks the designer for, and what it does
+  ``reef/recipe/generated_tasks/``, with the ``TaskGenerator`` contract
+  (``generator.py``). The request, ``TaskGenerationRequest``, is in
+  ``reef/record2task/generator/inputs.py``, because the generator service
+  reads it too. ``reef/core/tasks/`` keeps the Harbor task values and the
+  split manifests. What a method asks the designer for, and what it does
   with the results, stays in the method's task generator under ``recipes/``.
 - Does it implement storage? Put it in ``reef/storage/``. ``sql_records.py``
   shares SQL record and retention operations. ``sql_tasks.py`` shares the
