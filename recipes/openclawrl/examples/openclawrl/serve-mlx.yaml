@@ -60,9 +60,9 @@ training:
     max_tokens: 2048
     # With the reasoning block opened by the template, this 9B model often
     # writes its answer inside it and stops without closing it: the client
-    # then reads an empty reply (2 of 5 samples closed it on a run-6 prompt,
-    # and greedy decoding never did). Training made it worse: after one step,
-    # 35 of 50 answer turns were empty. Without thinking, the base model answered
+    # then reads an empty reply (2 of 5 samples on one stream prompt closed
+    # it, and greedy decoding never did). Training made it worse: after one
+    # step, 35 of 50 answer turns were empty. Without thinking, the base model answered
     # 16 of 16 reply-probe turns in visible text.
     chat_template_kwargs:
       enable_thinking: false
@@ -74,8 +74,8 @@ training:
     # Mac with less memory.
     max_train_tokens: 10240
     # Rows a step needs once long rows are left out. A step on one row moves
-    # the adapter a full step toward that row alone: run 5's step 6 trained on
-    # 1 of 8 rows and dropped reply_rate from 1.0 to 0.125.
+    # the adapter a full step toward that row alone: one step that trained on
+    # 1 of 8 rows dropped reply_rate from 1.0 to 0.125.
     min_train_rows: 4
     # The prompt and completion tokens of one request, as the reference's
     # rollout-max-context-len. Generation needs much less memory than
@@ -115,7 +115,8 @@ pipeline:
       # Allow for one generation, the student round trip, and one training
       # step, which blocks the engine. On this runtime each of these can take
       # minutes. A longer value only delays the retirement of the last turn of
-      # a finished session. See results/ for the measured gaps.
+      # a finished session. With 45 seconds on this runtime, about half of the
+    # judging-stage sessions expired before they bound a reply to its reaction.
       session_ttl_s: 1800
       prm_url: https://openrouter.ai/api/v1/chat/completions
       prm_api: openai
@@ -160,8 +161,8 @@ storage:
 
 # Candidate evaluation: each candidate runs a fixed style probe and a reply
 # probe before Reef publishes it. Reef does not publish a candidate whose clean
-# rate or reply rate drops more than its margin below the best. Without this section, Reef uses the `always`
-# policy and publishes every step.
+# rate or reply rate drops more than its margin below the best. Without this
+# section, Reef uses the `always` policy and publishes every step.
 #
 # The probe generates from the weights of the candidate, so it needs a training
 # runtime that holds an unpublished candidate, such as this one. Reef refuses a
@@ -188,6 +189,6 @@ evaluation:
     reply_max_tokens: 512
     reply_margin: 0.25
     # The best selected reply_rate lives in the Reef process, so after a
-    # restart the first candidate sets it. The floor holds in any case: run 5
-    # selected a 0.125 candidate right after a restart.
+    # restart the first candidate sets it. The floor holds in any case: without
+    # it, a 0.125 candidate was selected right after a restart.
     min_reply_rate: 0.75

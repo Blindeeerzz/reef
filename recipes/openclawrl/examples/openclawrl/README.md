@@ -47,7 +47,8 @@ results/
   learning_curve.py              per-session accept and style metrics, logged to W&B during a stream or exported afterwards
   2026-08-27-gsm8k-stream-qwen3-4b-thinking/
                                  the learning curve of a complete run
-  2026-09-16-mlx-session-ttl/    the session TTL comparison on MLX
+  2026-10-19-mlx-gsm8k-stream-qwen3.5-9b/
+                                 the learning curve and training steps of a run on one Mac
 serve.yaml                       Reef/Slime configuration and the recipe's PRM endpoint
 serve-mlx.yaml                   Reef/MLX configuration for one Apple Silicon Mac, with a hosted PRM
 reply_probe.json                 hermes conversations for the candidate evaluation's reply probe (serve-mlx.yaml)
@@ -311,12 +312,52 @@ The demo above replays two sessions from this run. In session 1 the student
 rejects a formatted reply, reef keeps the training going, and by session 16
 the first reply passes directly.
 
-### Session TTL on MLX
+### GSM8K homework stream on Apple Silicon
 
-`results/2026-09-16-mlx-session-ttl/` compares `session_ttl_s` 45 and 1800 on
-the MLX stream. With 45 seconds, about half the training pairs were lost.
-With 1800 seconds, none were lost, but neither run reached the adaptation
-criterion.
+`results/2026-10-19-mlx-gsm8k-stream-qwen3.5-9b/` is a run of `serve-mlx.yaml`
+on one Mac. The result covers the first 59 sessions of the stream.
+
+| Setting | Value |
+| --- | --- |
+| Config | `serve-mlx.yaml` as committed, with machine-specific paths and port |
+| Task | the 72-session GSM8K homework stream, sessions 0 to 58 |
+| Model | `mlx-community/Qwen3.5-9B-MLX-4bit` as the policy, thinking off |
+| PRM | `z-ai/glm-5.3` through OpenRouter, 3 votes per turn |
+| Student | `qwen/qwen3-32b` through OpenRouter |
+| Hardware | one Apple Silicon Mac with 48 GB of memory |
+| Hermes turn timeout | 1800 s for sessions 0 to 13, then 900 s (`OPENCLAWRL_TURN_TIMEOUT_S`) |
+
+The run reached the adaptation criterion at session 21, after 8 training
+steps: sessions 21, 22 and 23 passed. The habit did not hold. In sessions
+21 to 39, 7 of 19 sessions passed. In sessions 40 to 58, 1 of 19 passed, and
+the first reply of 17 of them used bold text again.
+
+![Accumulated accepts and the rolling bold and list rates over the first 59 sessions of the MLX run](results/2026-10-19-mlx-gsm8k-stream-qwen3.5-9b/learning_curve.png)
+
+| Sessions | Passed | First reply with bold text | First reply with a list |
+| --- | --- | --- | --- |
+| 0 to 6 | 0 of 7 | 7 | 6 |
+| 7 to 20 | 3 of 14 | 9 | 8 |
+| 21 to 39 | 7 of 19 | 6 | 8 |
+| 40 to 58 | 1 of 19 | 17 | 17 |
+
+Other observations from the run:
+
+- The candidate evaluation selected 17 of 19 steps. Step 2 was skipped
+  because 5 of its 8 rows were longer than `max_train_tokens`. Step 18 was
+  held because its `reply_rate` was 0.375, below `min_reply_rate`.
+- The style probe's `clean_rate` stayed at 0 for every candidate. The
+  stream shows the style change; the probe does not.
+- No step had a negative advantage. Tool turns are not trained, and a
+  rejected reply trains only from its hint.
+- 18 of 59 sessions ended in a hermes turn timeout. The first reply of these
+  sessions is still judged.
+
+`learning_curve.csv` holds the per-session verdicts, written by
+`results/learning_curve.py`. `training_steps.csv` holds one row per training
+step: the stream sessions finished before the step, the outcome of the
+candidate evaluation, the rows kept and left out, the loss, the adapter
+change, the advantage signs and the probe metrics.
 
 ## Configuration ownership
 
