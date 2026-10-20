@@ -1264,6 +1264,18 @@ token from ``reef.token``, and the served model from ``inference.model-path``
 or ``inference.upstream-model``. Without ``reef serve``,
 ``python -m reef.service.deploy.generator_process -c serve.yaml`` runs it from the same file.
 
+The ``task-import`` section
+---------------------------
+
+Absent by default. When present, each scenario imports the Harbor tasks of a
+split manifest into its task store ``imported-tasks`` when it opens. See
+`Import Harbor tasks <../user-guide/operate.rst#import-harbor-tasks>`__.
+
+.. config::
+
+   task-import.manifest | a split manifest: a JSON file with ``version``, ``seed``, ``eval_fraction``, and the task names of ``train`` and ``eval``. Required with ``tasks-root``.
+   task-import.tasks-root | the directory that holds a Harbor task directory for each task name of the manifest. Required with ``manifest``.
+
 Experiment tracking
 -------------------
 
