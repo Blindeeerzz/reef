@@ -147,8 +147,10 @@ class Trainer:
         self._state = dict(state)
         self._data_offset = 0
         self._data_sequence = 0
-        self._data_items: DataItemStore | None = None
-        self._item_sequence = 0
+        #: The uploaded data items of the scenario, after ``read_data_items``.
+        self.data_item_store: DataItemStore | None = None
+        #: The sequence of the last data item that the trainer read.
+        self.item_sequence = 0
         self.consumed_record_ids: set[str] = set()
         self.skipped_record_ids: set[str] = set()
         self._pending: _PendingStep | None = None
@@ -289,11 +291,11 @@ class Trainer:
         with self._lock:
             if self._pending is not None or self._pipeline.background_jobs_running() or self._pipeline.ready():
                 return True
-            data_items = self._data_items
+            data_items = self.data_item_store
             if (
                 data_items is not None
                 and self._pipeline.accepted_items
-                and data_items.count(after_sequence=self._item_sequence) > 0
+                and data_items.count(after_sequence=self.item_sequence) > 0
             ):
                 return True
             return self._records.count(self.scenario, after_sequence=self._data_sequence) > 0
@@ -306,8 +308,8 @@ class Trainer:
         the trainer skips it.
         """
         with self._lock:
-            self._data_items = store
-            self._item_sequence = 0
+            self.data_item_store = store
+            self.item_sequence = 0
 
     def pipeline_status(self) -> Mapping[str, Any]:
         """Return caller-visible pipeline state under the pipeline's lock."""
@@ -364,12 +366,14 @@ class Trainer:
     def _consume_data(self) -> None:
         # Uploaded data items go first in a batch, so the trainer reads them before the records.
         accepted_items = self._pipeline.accepted_items
-        while self._data_items is not None and accepted_items:
-            stored_items = self._data_items.page(after_sequence=self._item_sequence, limit=self._DATA_READ_BATCH_SIZE)
+        while self.data_item_store is not None and accepted_items:
+            stored_items = self.data_item_store.page(
+                after_sequence=self.item_sequence, limit=self._DATA_READ_BATCH_SIZE
+            )
             if not stored_items:
                 break
             for stored in stored_items:
-                self._item_sequence = stored.sequence
+                self.item_sequence = stored.sequence
                 if type(stored.item) not in accepted_items or consumed_id(stored.item_id) in self.consumed_record_ids:
                     continue
                 self._pipeline.push_item(stored.item_id, stored.item)

@@ -18,9 +18,11 @@ from harbor.models.task.task import Task as HarborTaskLoader
 
 from reef.core.batches import TaskItem, TrainDataItem, TrajectoryItem
 from reef.dispatcher import Dispatcher
-from reef.service.wire import ITEM_ID_HEADER, RELEASE_ID_HEADER, SCENARIO_HEADER, HeaderError
+from reef.service.wire import RELEASE_ID_HEADER, SCENARIO_HEADER, HeaderError
 from reef.storage.tasks import files_digest
 
+#: The client gives the ID of an uploaded task in this header.
+ITEM_ID_HEADER = "x-reef-item-id"
 #: The most trajectories in one upload request.
 MAX_TRAJECTORIES_PER_UPLOAD = 1000
 #: The maximum size in bytes of the unpacked files of one uploaded task.

@@ -42,10 +42,23 @@ from reef.storage.tasks import TaskFileStore, files_digest
 
 @dataclass(frozen=True)
 class DataItemTable:
-    """The data item table of one database, and the namespace values that ``scope`` gives it."""
+    """The data item table of one database, and the namespace of one store in it.
+
+    Values: ``table`` is a table that ``data_item_table`` defines. ``scope`` maps
+    column names of ``table`` to values. It is empty for a table without a
+    namespace, and it names ``storage_id`` for a table that has that column.
+
+    Purpose: a SQL adapter makes it. ``SQLDataItemStore`` restricts each
+    operation to the rows that match ``scope``.
+    """
 
     table: Table
     scope: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        unknown = set(self.scope) - set(self.table.c.keys())
+        if unknown:
+            raise ValueError(f"the scope names columns that {self.table.name} does not have: {sorted(unknown)!r}")
 
     def condition(self) -> ColumnElement[bool]:
         """Restrict an operation to the namespace of the adapter, if any."""

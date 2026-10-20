@@ -44,7 +44,7 @@ from reef.record2record.staleness import producing_runtime_load_ids
 from reef.record2task import NoTasks, Record2Task
 from reef.storage.data_items import consumed_id
 from reef.task2batch import NoBatches, Task2Batch
-from reef.train.types import TrainDataItem, TrainingBatch
+from reef.train.types import TaskItem, TrainDataItem, TrainingBatch, TrajectoryItem
 
 
 #: In manual mode the pipeline holds at most this many batches of units; it releases older ones.
@@ -213,7 +213,7 @@ class TrainingPipeline:
         return self.task2batch.required_request_types
 
     @property
-    def accepted_items(self) -> frozenset[type[TrainDataItem]]:
+    def accepted_items(self) -> frozenset[type[TrajectoryItem] | type[TaskItem]]:
         """The kinds of uploaded data item that the trainer gives the pipeline."""
         return self.task2batch.accepted_items
 

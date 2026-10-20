@@ -35,18 +35,39 @@ def consumed_id(item_id: str) -> str:
 
 @dataclass(frozen=True)
 class StoredDataItem:
-    """One stored data item, with its position in upload order and the ID that the client gave it.
+    """One data item in a data item store.
 
-    The ``task_path`` of a stored ``TaskItem`` is its directory in the task file store.
+    Values: ``(sequence, item_id, item)`` is a stored data item if and only if
+    ``sequence`` is a positive integer, ``item_id`` is a non-empty string, and
+    ``item`` is a ``TrainDataItem``. ``sequence`` is the position of the item in
+    upload order. ``item_id`` is the ID that the client gave the item. The
+    ``task_path`` of a stored ``TaskItem`` is its directory in the task file store.
+
+    Purpose: ``DataItemStore.page`` makes it. The trainer reads it: ``sequence``
+    moves the trainer's cursor, ``consumed_id(item_id)`` tells whether a commit
+    consumed the item, and the pipeline batches ``item``.
     """
 
     sequence: int
     item_id: str
     item: TrainDataItem
 
+    def __post_init__(self) -> None:
+        if self.sequence < 1 or not self.item_id:
+            raise ValueError("a stored data item needs a positive sequence and a non-empty item_id")
+
 
 class DataItemStore(ABC):
-    """Keeps the data items of one scenario in upload order, and the files of its tasks."""
+    """The uploaded data items of one scenario, and the files of its tasks.
+
+    Values: the state of a store is a finite sequence of stored data items, in
+    increasing ``sequence``. No two of them have the same ``item_id``. A stored
+    item does not change, and record retention does not remove it. Archiving
+    the scenario retires the whole store.
+
+    Purpose: the dispatcher adds the items of each upload (``add``). The trainer
+    reads them in upload order, after its cursor (``page`` and ``count``).
+    """
 
     @abstractmethod
     def add(self, items: tuple[tuple[str, TrainDataItem], ...]) -> bool:
