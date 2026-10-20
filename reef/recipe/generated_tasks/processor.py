@@ -245,6 +245,8 @@ class RoundResult:
     Values: ``wait_for_batches`` is True when the next round waits for
     ``batches_per_round`` trained batches. It is False when the next round can
     start at once, because the round made no batch.
+    Purpose: ``GeneratedTaskTasks.finished_rounds`` makes it when a round ends.
+    ``GeneratedTaskRecord2Record.advance`` reads it to decide when the next round is due.
     """
 
     wait_for_batches: bool
