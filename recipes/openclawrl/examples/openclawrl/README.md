@@ -315,12 +315,12 @@ the first reply passes directly.
 ### GSM8K homework stream on Apple Silicon
 
 `results/2026-10-19-mlx-gsm8k-stream-qwen3.5-9b/` is a run of `serve-mlx.yaml`
-on one Mac. The result covers the first 59 sessions of the stream.
+on one Mac, over the whole stream.
 
 | Setting | Value |
 | --- | --- |
 | Config | `serve-mlx.yaml` as committed, with machine-specific paths and port |
-| Task | the 72-session GSM8K homework stream, sessions 0 to 58 |
+| Task | the 72-session GSM8K homework stream |
 | Model | `mlx-community/Qwen3.5-9B-MLX-4bit` as the policy, thinking off |
 | PRM | `z-ai/glm-5.3` through OpenRouter, 3 votes per turn |
 | Student | `qwen/qwen3-32b` through OpenRouter |
@@ -329,10 +329,11 @@ on one Mac. The result covers the first 59 sessions of the stream.
 
 The run reached the adaptation criterion at session 21, after 8 training
 steps: sessions 21, 22 and 23 passed. The habit did not hold. In sessions
-21 to 39, 7 of 19 sessions passed. In sessions 40 to 58, 1 of 19 passed, and
-the first reply of 17 of them used bold text again.
+21 to 39, 7 of 19 sessions passed. In sessions 40 to 71, 3 of 32 passed, and
+the first reply of 24 of them used bold text again. Over the whole stream,
+13 of 72 sessions passed.
 
-![Accumulated accepts and the rolling bold and list rates over the first 59 sessions of the MLX run](results/2026-10-19-mlx-gsm8k-stream-qwen3.5-9b/learning_curve.png)
+![Accumulated accepts and the rolling bold and list rates over the 72 sessions of the MLX run](results/2026-10-19-mlx-gsm8k-stream-qwen3.5-9b/learning_curve.png)
 
 | Sessions | Passed | First reply with bold text | First reply with a list |
 | --- | --- | --- | --- |
@@ -340,17 +341,18 @@ the first reply of 17 of them used bold text again.
 | 7 to 20 | 3 of 14 | 9 | 8 |
 | 21 to 39 | 7 of 19 | 6 | 8 |
 | 40 to 58 | 1 of 19 | 17 | 17 |
+| 59 to 71 | 2 of 13 | 7 | 8 |
 
 Other observations from the run:
 
-- The candidate evaluation selected 17 of 19 steps. Step 2 was skipped
+- The candidate evaluation selected 20 of 22 steps. Step 2 was skipped
   because 5 of its 8 rows were longer than `max_train_tokens`. Step 18 was
   held because its `reply_rate` was 0.375, below `min_reply_rate`.
 - The style probe's `clean_rate` stayed at 0 for every candidate. The
   stream shows the style change; the probe does not.
 - No step had a negative advantage. Tool turns are not trained, and a
   rejected reply trains only from its hint.
-- 18 of 59 sessions ended in a hermes turn timeout. The first reply of these
+- 27 of 72 sessions ended in a hermes turn timeout. The first reply of these
   sessions is still judged.
 
 `learning_curve.csv` holds the per-session verdicts, written by
