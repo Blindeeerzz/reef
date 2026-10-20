@@ -10,6 +10,7 @@ from aiohttp.test_utils import TestServer
 
 from recipes.openclawrl.turns import main_turn_message, turn_request_messages
 from reef.artifact import Artifact, LiveWeightArtifactRef
+from reef.inference.chat import ReasoningStreamSplitter
 from reef.inference.sglang.chat import NativeStreamCapture, SGLangGenerateClient, SGLangInferenceHandler
 from reef.service.request_service import client_inference_response
 from reef.service.streaming import stream_record
@@ -73,6 +74,47 @@ def test_reasoning_check_reads_the_rendered_prompt() -> None:
 
     pinned = SGLangInferenceHandler("http://unused", model_path="model", tokenizer=tokenizer, force_reasoning=True)
     assert pinned.reasoning_is_pre_opened(answering) is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("text", "force_reasoning", "message"),
+    [
+        ("No tags here.", False, {"role": "assistant", "content": "No tags here."}),
+        ("<think>still thinking", False, {"role": "assistant", "content": "", "reasoning_content": "still thinking"}),
+        (
+            "<think>a</think>\n\nb</think>c",
+            False,
+            {"role": "assistant", "content": "b</think>c", "reasoning_content": "a"},
+        ),
+        (
+            "plan the call\n<tool_call>{}</tool_call>",
+            True,
+            {"role": "assistant", "content": "<tool_call>{}</tool_call>", "reasoning_content": "plan the call"},
+        ),
+    ],
+)
+def test_reasoning_split_follows_sglang_qwen3_parser(text, force_reasoning, message) -> None:
+    """A leading <think> starts reasoning; the first </think> or <tool_call> ends it."""
+    split, _ = SGLangInferenceHandler._assistant_message(text, None, force_reasoning=force_reasoning)
+    assert split == message
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("deltas", "force_reasoning", "parts"),
+    [
+        (["<thi", "nk>a", "</th", "ink>\n\nb"], False, [("thinking", "a"), ("text", "b")]),
+        (["<think>a</think>b"], True, [("thinking", "a"), ("text", "b")]),
+        (["a", "<tool_", "call>x"], True, [("thinking", "a"), ("text", "<tool_call>x")]),
+        (["still thin", "king"], True, [("thinking", "still thin"), ("thinking", "king")]),
+        (["plain ", "text"], False, [("text", "plain "), ("text", "text")]),
+    ],
+)
+def test_reasoning_stream_split_follows_sglang_qwen3_parser(deltas, force_reasoning, parts) -> None:
+    splitter = ReasoningStreamSplitter(enabled=True, force_reasoning=force_reasoning)
+    streamed = [part for delta in deltas for part in splitter.feed(delta)]
+    assert [*streamed, *splitter.finish()] == parts
 
 
 @pytest.mark.unit
