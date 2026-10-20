@@ -39,7 +39,7 @@ Components of the pool:
 * ``RecordSet`` and ``RecordSetUnit`` (``sets.py``): the input of the
   record-to-task stage, and the record sets that train in one batch, the unit
   that a batch takes and that ``batch_size`` counts.
-* ``BatchUnitPool`` (``pool.py``): the held units, and the reserved batch.
+* ``RecordSetUnitPool`` (``pool.py``): the held units, and the reserved batch.
 * ``SelectionPolicy`` (``selection.py``): the order in which units go into a
   batch. ``ArrivalOrder`` takes the oldest first. ``GroupKeyOrder`` takes
   ungrouped units, then groups by key.
@@ -54,7 +54,7 @@ the trainer can both use it.
 
 from reef.record2record.base import InferenceRecord2Record, NoRecordSets, Record2Record, TaskStatus
 from reef.record2record.judging import JudgedSet, JudgingRecord2Record, RecordJudging
-from reef.record2record.pool import BatchUnitPool
+from reef.record2record.pool import RecordSetUnitPool
 from reef.record2record.reports import (
     ExclusiveReportRecord2Record,
     GroupDecision,
@@ -69,7 +69,6 @@ from reef.record2record.sets import RecordSet, RecordSetUnit, SingleRecordSet, S
 
 __all__ = [
     "ArrivalOrder",
-    "BatchUnitPool",
     "ExclusiveReportRecord2Record",
     "GroupDecision",
     "GroupKeyOrder",
@@ -81,6 +80,7 @@ __all__ = [
     "RecordJudging",
     "RecordSet",
     "RecordSetUnit",
+    "RecordSetUnitPool",
     "ReportCandidate",
     "ReportContext",
     "ReportGrouping",

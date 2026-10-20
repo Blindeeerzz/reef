@@ -14,11 +14,11 @@ from reef.core.artifact_ref import RuntimeLoadSpan
 from reef.core.batches import TaskItem
 from reef.record2record import (
     ArrivalOrder,
-    BatchUnitPool,
     GroupKeyOrder,
     InferenceRecord2Record,
     RecordSet,
     RecordSetUnit,
+    RecordSetUnitPool,
     SelectionPolicy,
     SingleRecordSet,
     SingleSetUnit,
@@ -119,7 +119,7 @@ def test_group_key_order_takes_ungrouped_units_before_groups_in_key_order() -> N
 
 
 def test_a_reservation_does_not_change_until_it_is_consumed() -> None:
-    pool = BatchUnitPool()
+    pool = RecordSetUnitPool()
     for name in ("a", "b", "c"):
         pool.put(named(name, pool.next_arrival_index()))
     reserved = pool.reserve(2)
@@ -134,8 +134,8 @@ def test_a_reservation_does_not_change_until_it_is_consumed() -> None:
 
 def test_a_reservation_refuses_a_negative_count_and_units_the_pool_does_not_hold() -> None:
     with pytest.raises(ValueError, match="max_unit_count must not be negative"):
-        BatchUnitPool().reserve(-1)
-    pool = BatchUnitPool(ForeignUnit())
+        RecordSetUnitPool().reserve(-1)
+    pool = RecordSetUnitPool(ForeignUnit())
     pool.put(named("held", pool.next_arrival_index()))
     with pytest.raises(ValueError, match="does not hold"):
         pool.reserve(1)

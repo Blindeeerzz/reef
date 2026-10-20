@@ -1,4 +1,4 @@
-"""The batch units that a stage holds, and the batch that the pipeline reserved from them."""
+"""The record set units that a record stage holds, and the batch that the pipeline reserved from them."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from reef.record2record.selection import ArrivalOrder, SelectionPolicy
 from reef.record2record.sets import RecordSetUnit
 
 
-class BatchUnitPool:
-    """Hold the batch units that a batch can use, and the reserved batch.
+class RecordSetUnitPool:
+    """Hold the record set units that a batch can use, and the reserved batch.
 
     The stage adds and removes units. It also decides what a consumed unit
     releases. The pool orders units only through its ``SelectionPolicy``.

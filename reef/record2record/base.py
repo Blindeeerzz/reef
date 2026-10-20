@@ -14,7 +14,7 @@ from typing import Any, Self
 from reef.core.plugins import NoSettings, Plugin, PluginConfigError
 from reef.core.records_types import AgentRecord, RequestType
 from reef.pipeline_context import PipelineContext
-from reef.record2record.pool import BatchUnitPool
+from reef.record2record.pool import RecordSetUnitPool
 from reef.record2record.selection import SelectionPolicy
 from reef.record2record.sets import RecordSet, RecordSetUnit, SingleRecordSet, SingleSetUnit
 from reef.record2record.staleness import canonical_runtime_load_id, stale_units
@@ -74,7 +74,7 @@ class Record2Record(ABC, Plugin):
 
     def __init__(self, selection: SelectionPolicy | None = None) -> None:
         #: The held batch units. The pipeline reserves a batch from it and consumes the reservation.
-        self.pool = BatchUnitPool(selection)
+        self.pool = RecordSetUnitPool(selection)
         #: Record sets that ended after the task stage saw them. The pipeline forgets their tasks.
         self.ended_set_ids: set[Hashable] = set()
         #: Records that ended and that no live set references, until their release.
