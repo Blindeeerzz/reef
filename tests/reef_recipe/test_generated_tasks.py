@@ -24,6 +24,7 @@ from reef.core.tasks import (
     TaskGenerator,
     TaskPlayResult,
     TaskValidationResult,
+    with_measurement_arms,
     write_harbor_task,
 )
 from reef.harness.client.tasks import TaskPlay
@@ -257,6 +258,7 @@ def test_a_batch_whose_groups_are_all_constant_is_skipped_and_keeps_the_step_cou
         (lambda: PlayArm("hint", 0), "positive integer"),
         (lambda: PlayArm("hint", 1, ("../hint.txt",)), "inside the task"),
         (lambda: PlayArm("hint", 1, ("/hint.txt",)), "inside the task"),
+        (lambda: with_measurement_arms(task_for("t-a", "r", 1), (PlayArm("hint", 1), PlayArm("hint", 2))), "unique"),
         (lambda: TaskPlayResult(task_for("t-a", "r", 1), (1.0,), error="refused"), "no rewards"),
         (lambda: TaskPlayResult(task_for("t-a", "r", 1), (float("nan"),)), "finite"),
         (lambda: TaskPlayResult(task_for("t-a", "r", 1), (), {"hint": [1.0]}), "tuples"),
@@ -318,9 +320,9 @@ def generated(round_number: int, *indices: int, hint: bool = True) -> tuple[Harb
     """Tasks of one round; each asks for a hint arm of one play unless ``hint`` is off."""
     arms = (PlayArm("hint", 1, ("solution/hint.txt",)),) if hint else ()
     return tuple(
-        dataclasses.replace(
+        with_measurement_arms(
             task_for(f"harbor-{round_number:05d}-{index:03d}", f"designer-{index}", 9000 + 10 * round_number + index),
-            measurement_arms=arms,
+            arms,
         )
         for index in indices
     )
@@ -572,16 +574,18 @@ def test_an_invalid_task_comes_back_with_its_errors_and_is_never_written(tmp_pat
     assert p.status()["task_generation"]["tasks_played"] == 1
 
 
-def test_a_measurement_arm_with_the_training_arms_name_is_refused_unplayed(tmp_path: Path) -> None:
-    clashing = dataclasses.replace(
-        task_for("harbor-00000-000", "designer-0", 9000), measurement_arms=(PlayArm("plain", 1),)
+def test_invalid_arms_or_an_arm_with_the_training_arms_name_are_refused_unplayed(tmp_path: Path) -> None:
+    clashing = with_measurement_arms(task_for("harbor-00000-000", "designer-0", 9000), (PlayArm("plain", 1),))
+    invalid = dataclasses.replace(
+        task_for("harbor-00000-002", "designer-2", 9002), metadata={"measurement_arms": [{"name": "hint"}]}
     )
-    task_generator = ScriptedGenerator([(clashing, *generated(0, 1))])
+    task_generator = ScriptedGenerator([(clashing, *generated(0, 1), invalid)])
     p, player = rounds(tmp_path, task_generator)
     assert not looked(p)
     assert task_generator.validated == ["harbor-00000-001"] and player.writes == ["harbor-00000-001"]
     (results,) = task_generator.results
     assert results[0].error == "the measurement arm 'plain' has the name of the training arm"
+    assert results[2].error.startswith("metadata.measurement_arms must be a list of arms")
 
 
 def test_a_refused_write_or_a_task_the_agent_cannot_play_comes_back_unplayed(tmp_path: Path) -> None:

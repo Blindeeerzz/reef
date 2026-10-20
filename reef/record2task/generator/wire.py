@@ -9,7 +9,6 @@ from pathlib import Path
 from reef.core.artifact_ref import decode_artifact_ref
 from reef.core.records_types import AgentRecord, RequestType
 from reef.core.tasks import HarborTask, HarborTaskError
-from reef.core.tasks.harbor import MEASUREMENT_ARMS_KEY, arms_from_documents
 from reef.harness.client.tasks import TaskPlay
 from reef.record2task.generator.designer import DesignerRequest
 from reef.record2task.generator.harbor import OracleResult
@@ -117,10 +116,6 @@ def task_from_document(document: object) -> HarborTask:
     if not isinstance(sources, list) or any(not isinstance(item, str) for item in sources):
         raise WireError("a task's source_agent_record_ids must be a list of strings")
     try:
-        measurement_arms = arms_from_documents(fields.get(MEASUREMENT_ARMS_KEY, []))
-    except (TypeError, ValueError) as exc:
-        raise WireError(f"a task's {MEASUREMENT_ARMS_KEY} are invalid: {exc}") from exc
-    try:
         return HarborTask(
             name=checked_string(fields, "name", label="a task"),
             instruction=checked_string(fields, "instruction", label="a task"),
@@ -130,7 +125,6 @@ def task_from_document(document: object) -> HarborTask:
             config=checked_tables(fields, "config", label="a task"),
             metadata={str(key): value for key, value in metadata.items()},
             source_agent_record_ids=tuple(sources),
-            measurement_arms=measurement_arms,
         )
     except HarborTaskError as exc:
         raise WireError(f"not a Harbor task: {exc}") from exc

@@ -12,7 +12,7 @@ import pytest
 
 from reef.core.config import config_option
 from reef.core.plugins import PluginSettings
-from reef.core.tasks import HarborTask, PlayArm, read_harbor_task, write_harbor_task
+from reef.core.tasks import HarborTask, PlayArm, read_harbor_task, with_measurement_arms, write_harbor_task
 from reef.service.assembly import build_dispatcher
 from reef.service.deploy.service_config import ServiceConfig
 from reef.storage.postgres import PostgresScenarioStorage
@@ -32,7 +32,7 @@ SPLIT = SplitSettings(eval_fraction=0.25, seed=7)
 
 
 def generated(name: str, *, instruction: str = "", sources: tuple[str, ...] = ("record-1",)) -> HarborTask:
-    return HarborTask(
+    task = HarborTask(
         name=name,
         instruction=instruction or f"Solve {name}.",
         tests={"test.sh": "#!/bin/sh\necho 1 > /logs/verifier/reward.txt\n"},
@@ -44,8 +44,8 @@ def generated(name: str, *, instruction: str = "", sources: tuple[str, ...] = ("
         metadata={"designer_record_id": "designer-1"},
         solution={"hint.txt": "look closer"},
         source_agent_record_ids=sources,
-        measurement_arms=(PlayArm("hinted", 2, ("solution/hint.txt",)),),
     )
+    return with_measurement_arms(task, (PlayArm("hinted", 2, ("solution/hint.txt",)),))
 
 
 def candidates(root: Path, *tasks: HarborTask) -> tuple[Path, ...]:

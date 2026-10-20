@@ -13,7 +13,14 @@ from tests.support.task_service_stubs import StandInGenerator, task_for
 from recipes.beta.spade import SpadeTaskGenerator
 from reef.core import AgentRecord, RequestType
 from reef.core.plugins import PluginConfigError
-from reef.core.tasks import PlayArm, TaskGenerationRequest, TaskPlayResult, read_harbor_task, write_harbor_task
+from reef.core.tasks import (
+    PlayArm,
+    TaskGenerationRequest,
+    TaskPlayResult,
+    measurement_arms,
+    read_harbor_task,
+    write_harbor_task,
+)
 from reef.pipeline_context import PipelineContext
 from reef.recipe.generated_tasks import GeneratedTaskTasks
 from reef.recipe.generated_tasks.processor import (
@@ -53,7 +60,7 @@ def played(generator: SpadeTaskGenerator, *, plain: float = 0.25, hint: float = 
             results.append(TaskPlayResult(task, error="; ".join(validation.errors)))
             continue
         asyncio.run(generator.service.write_task(task))
-        measurement_rewards = {arm.name: (hint,) * arm.count for arm in task.measurement_arms}
+        measurement_rewards = {arm.name: (hint,) * arm.count for arm in measurement_arms(task)}
         results.append(TaskPlayResult(task, (plain, plain), measurement_rewards))
     return tuple(results)
 
@@ -78,8 +85,9 @@ def test_a_generation_asks_the_designer_count_times_across_the_skills_and_asks_f
         "harbor-00000-001-repair",
         "harbor-00000-002-inspection",
     ]
-    assert all(item.measurement_arms == (PlayArm("hint", 1, ("solution/hint.txt",)),) for item in tasks)
-    assert asyncio.run(spade(tmp_path / "off", hint_plays=0).generate(REQUEST))[0].measurement_arms == ()
+    assert all(measurement_arms(task) == (PlayArm("hint", 1, ("solution/hint.txt",)),) for task in tasks)
+    assert measurement_arms(asyncio.run(spade(tmp_path / "off", hint_plays=0).generate(REQUEST))[0]) == ()
+    assert "measurement_arms" not in asyncio.run(spade(tmp_path / "plain", hint_plays=0).generate(REQUEST))[0].metadata
 
 
 def test_validation_checks_a_written_copy_and_removes_it(tmp_path: Path) -> None:

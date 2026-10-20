@@ -10,15 +10,21 @@ generator interface. Consumers own file reads, transport limits, and execution.
 from __future__ import annotations
 
 import math
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Self
 
 from reef.core.plugins import Plugin
 from reef.core.records_types import AgentRecord
 from reef.core.tasks.harbor import HarborTask
+
+ARM_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+#: The key of ``HarborTask.metadata`` that holds the measurement arms of a task.
+MEASUREMENT_ARMS_KEY = "measurement_arms"
+ARM_KEYS = frozenset({"name", "count", "extra_instruction_files"})
 
 
 @dataclass(frozen=True)
@@ -95,6 +101,74 @@ class TaskValidationResult:
 
 
 @dataclass(frozen=True)
+class PlayArm:
+    """Plays of a task that only the generator reads. The recipe never trains on them.
+
+    Each play shows the agent the task's instruction and then the files that
+    ``extra_instruction_files`` names, relative to the task directory (for
+    example ``solution/hint.txt``). A task keeps its arms in its metadata:
+    see :func:`with_measurement_arms` and :func:`measurement_arms`.
+    """
+
+    name: str
+    count: int
+    extra_instruction_files: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not ARM_NAME_PATTERN.fullmatch(self.name):
+            raise ValueError(f"an arm name must match {ARM_NAME_PATTERN.pattern}")
+        if isinstance(self.count, bool) or not isinstance(self.count, int) or self.count < 1:
+            raise ValueError("an arm's count must be a positive integer")
+        if not isinstance(self.extra_instruction_files, tuple):
+            raise TypeError("extra_instruction_files must be a tuple of relative file names")
+        for name in self.extra_instruction_files:
+            path = PurePosixPath(name) if isinstance(name, str) else None
+            if path is None or not name or path.is_absolute() or ".." in path.parts or "\\" in name:
+                raise ValueError("extra_instruction_files must be relative file names inside the task")
+
+
+def with_measurement_arms(task: HarborTask, arms: tuple[PlayArm, ...]) -> HarborTask:
+    """Return ``task`` with ``arms`` under ``metadata["measurement_arms"]``.
+
+    With no arms, the metadata has no such key, so the digest of the task does
+    not change. Raises ``ValueError`` if two arms have the same name.
+    """
+    if len({arm.name for arm in arms}) != len(arms):
+        raise ValueError("measurement arm names must be unique")
+    metadata = {key: value for key, value in task.metadata.items() if key != MEASUREMENT_ARMS_KEY}
+    if arms:
+        metadata[MEASUREMENT_ARMS_KEY] = [
+            {"name": arm.name, "count": arm.count, "extra_instruction_files": list(arm.extra_instruction_files)}
+            for arm in arms
+        ]
+    return replace(task, metadata=metadata)
+
+
+def measurement_arms(task: HarborTask) -> tuple[PlayArm, ...]:
+    """Return the measurement arms in the metadata of ``task``, or ``()`` if it has none.
+
+    Raises ``ValueError`` if ``metadata["measurement_arms"]`` is not a list of
+    arms, each with exactly a name, a count and a list of extra instruction
+    files, and with unique names.
+    """
+    documents = task.metadata.get(MEASUREMENT_ARMS_KEY, [])
+    if not isinstance(documents, list) or any(
+        not isinstance(document, Mapping)
+        or set(document) != ARM_KEYS
+        or not isinstance(document["extra_instruction_files"], list)
+        for document in documents
+    ):
+        raise ValueError(f"metadata.{MEASUREMENT_ARMS_KEY} must be a list of arms with {', '.join(sorted(ARM_KEYS))}")
+    arms = tuple(
+        PlayArm(document["name"], document["count"], tuple(document["extra_instruction_files"]))
+        for document in documents
+    )
+    if len({arm.name for arm in arms}) != len(arms):
+        raise ValueError("measurement arm names must be unique")
+    return arms
+
+
+@dataclass(frozen=True)
 class TaskPlayResult:
     """What became of one generated task in a round.
 
@@ -165,8 +239,8 @@ class TaskGenerator(Plugin, ABC):
         """Return zero or more new tasks.
 
         Preserve the request's source record ids in each task's
-        ``source_agent_record_ids``. Put the extra plays that the generator
-        wants in each task's ``measurement_arms``. An exception stops the round.
+        ``source_agent_record_ids``. Add the extra plays that the generator
+        wants with :func:`with_measurement_arms`. An exception stops the round.
         """
 
     @abstractmethod

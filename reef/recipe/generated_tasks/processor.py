@@ -51,6 +51,7 @@ from reef.core.tasks import (
     TaskGenerationRequest,
     TaskGenerator,
     TaskPlayResult,
+    measurement_arms,
     read_harbor_task,
     write_harbor_task,
 )
@@ -712,7 +713,12 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             candidates = generation.candidates or ()
             for index in generation.pending_indices:
                 task = read_harbor_task(self.task_store.path(candidates[index].files_digest))
-                if any(arm.name == TRAINING_ARM for arm in task.measurement_arms):
+                try:
+                    arms = measurement_arms(task)
+                except ValueError as invalid:
+                    self.task_store.reject_task(generation=job.round_number, index=index, reason=str(invalid))
+                    continue
+                if any(arm.name == TRAINING_ARM for arm in arms):
                     refusal = f"the measurement arm {TRAINING_ARM!r} has the name of the training arm"
                     self.task_store.reject_task(generation=job.round_number, index=index, reason=refusal)
                     continue
@@ -790,7 +796,8 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             error = f"the agent could not play the task: {training[0].error[:ERROR_EXCERPT_CHARS]}"
             return TaskPlayResult(task, error=error), 0
         measurement_rewards: dict[str, tuple[float, ...]] = {}
-        for arm in task.measurement_arms:
+        # The round rejected each task whose arms are invalid before it played any task.
+        for arm in measurement_arms(task):
             plays = await self.task_player.play(
                 written.path,
                 scenario=self.scenario,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import datetime
 import os
 import tomllib
@@ -15,7 +14,6 @@ from reef.core.tasks import (
     HarborTask,
     HarborTaskConflict,
     HarborTaskError,
-    PlayArm,
     primary_reward,
     read_harbor_task,
     write_harbor_task,
@@ -213,22 +211,6 @@ def test_read_returns_the_task_that_was_written(tmp_path: Path) -> None:
     root = write_harbor_task(written, tmp_path)
     assert read_harbor_task(root) == written
     assert read_harbor_task(root).digest == written.digest
-
-
-def test_measurement_arms_are_kept_in_the_reef_table_only_when_the_task_has_some(tmp_path: Path) -> None:
-    plain = task(solution={"hint.txt": "Add the ones first."})
-    hinted = dataclasses.replace(plain, measurement_arms=(PlayArm("hint", 2, ("solution/hint.txt",)),))
-    root = write_harbor_task(hinted, tmp_path)
-    assert read_harbor_task(root) == hinted
-    assert tomllib.loads((root / "task.toml").read_text())["metadata"]["reef"]["measurement_arms"] == [
-        {"name": "hint", "count": 2, "extra_instruction_files": ["solution/hint.txt"]}
-    ]
-    assert hinted.digest != plain.digest
-    # A task without arms writes no arms key, so its digest and task.toml are what they were before arms.
-    assert "measurement_arms" not in plain.document()
-    assert "measurement_arms" not in tomllib.loads(plain.task_toml())["metadata"]["reef"]
-    with pytest.raises(HarborTaskError, match="unique"):
-        dataclasses.replace(plain, measurement_arms=(PlayArm("hint", 1), PlayArm("hint", 2)))
 
 
 @pytest.mark.parametrize(
@@ -624,7 +606,7 @@ def test_extra_keys_under_the_reef_table_are_refused(tmp_path: Path) -> None:
     root = write_harbor_task(task(), tmp_path)
     text = (root / "task.toml").read_text().replace("[metadata.reef]", '[metadata.reef]\nsigned = "yes"')
     (root / "task.toml").write_text(text)
-    with pytest.raises(HarborTaskError, match="must hold digest and source_agent_record_ids"):
+    with pytest.raises(HarborTaskError, match="must hold exactly"):
         read_harbor_task(root)
 
 

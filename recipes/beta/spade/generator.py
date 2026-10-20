@@ -45,6 +45,7 @@ from reef.core.tasks import (
     TaskGenerator,
     TaskPlayResult,
     TaskValidationResult,
+    with_measurement_arms,
 )
 from reef.record2task.generator.client import (
     DuplicateTask,
@@ -190,7 +191,7 @@ class SpadeTaskGenerator(TaskGenerator):
                     if self.hint_plays and HINT_NAME in proposed.task.solution
                     else ()
                 )
-                tasks.append(replace(proposed.task, measurement_arms=arms))
+                tasks.append(with_measurement_arms(proposed.task, arms))
         except GeneratorError as exc:
             self.error = str(exc)
             logger.error("SPADE generation %d stopped: %s", self.generation, exc)

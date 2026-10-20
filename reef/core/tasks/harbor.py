@@ -44,7 +44,6 @@ TASK_CONFIG_VERSION = "1.0"
 NETWORK_MODES = ("no-network", "public", "allowlist")
 STAGING_DIRECTORY = ".staging"
 TASK_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,99}$")
-ARM_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 HOST_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 SIZE_KEYS = ("cpus", "memory_mb", "storage_mb", "gpus")
 #: The task.toml tables reef writes and, per table, the keys Harbor 0.23 reads (``harbor.models.task.config``).
@@ -63,8 +62,6 @@ KNOWN_CONFIG_KEYS: dict[str, tuple[str, ...]] = {
 }
 TOP_LEVEL_KEYS = ("version", "metadata", *KNOWN_CONFIG_KEYS)
 REEF_TABLE_KEYS = ("digest", "source_agent_record_ids")
-#: An optional key of the ``[metadata.reef]`` table. A task without measurement arms does not write it.
-MEASUREMENT_ARMS_KEY = "measurement_arms"
 TREE_DIRECTORIES = ("tests", "environment", "solution")
 ROOT_FILES = ("task.toml", "instruction.md")
 MAX_NAME_COMPONENT_BYTES = 255
@@ -92,40 +89,8 @@ class HarborTaskConflict(HarborTaskError):
 
 
 @dataclass(frozen=True)
-class PlayArm:
-    """Plays of a task that only the task generator reads. The recipe never trains on them.
-
-    Each play shows the agent the task's instruction and then the files that
-    ``extra_instruction_files`` names, relative to the task directory (for
-    example ``solution/hint.txt``). A task lists its arms in
-    ``HarborTask.measurement_arms``.
-    """
-
-    name: str
-    count: int
-    extra_instruction_files: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.name, str) or not ARM_NAME_PATTERN.fullmatch(self.name):
-            raise ValueError(f"an arm name must match {ARM_NAME_PATTERN.pattern}")
-        if isinstance(self.count, bool) or not isinstance(self.count, int) or self.count < 1:
-            raise ValueError("an arm's count must be a positive integer")
-        if not isinstance(self.extra_instruction_files, tuple):
-            raise TypeError("extra_instruction_files must be a tuple of relative file names")
-        for name in self.extra_instruction_files:
-            path = PurePosixPath(name) if isinstance(name, str) else None
-            if path is None or not name or path.is_absolute() or ".." in path.parts or "\\" in name:
-                raise ValueError("extra_instruction_files must be relative file names inside the task")
-
-
-@dataclass(frozen=True)
 class HarborTask:
-    """A task before it is written: everything the directory will hold, validated at construction.
-
-    ``measurement_arms`` are the plays that the task generator asks for
-    besides the training plays. The task directory keeps them, with the
-    source record ids, in the ``[metadata.reef]`` table of ``task.toml``.
-    """
+    """A task before it is written: everything the directory will hold, validated at construction."""
 
     name: str
     instruction: str
@@ -135,7 +100,6 @@ class HarborTask:
     metadata: Mapping[str, object] = field(default_factory=dict)
     solution: Mapping[str, str] = field(default_factory=dict)
     source_agent_record_ids: tuple[str, ...] = ()
-    measurement_arms: tuple[PlayArm, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not TASK_NAME_PATTERN.fullmatch(self.name) or ".." in self.name:
@@ -160,12 +124,6 @@ class HarborTask:
             or len(set(record_ids)) != len(record_ids)
         ):
             raise HarborTaskError("source_agent_record_ids must be a tuple of distinct non-empty strings")
-        if not isinstance(self.measurement_arms, tuple) or any(
-            not isinstance(arm, PlayArm) for arm in self.measurement_arms
-        ):
-            raise HarborTaskError("measurement_arms must be a tuple of PlayArm values")
-        if len({arm.name for arm in self.measurement_arms}) != len(self.measurement_arms):
-            raise HarborTaskError("measurement arm names must be unique")
         # One encode of everything the writer will put on disk: a lone surrogate anywhere fails here, not mid write.
         try:
             self.task_toml().encode("utf-8")
@@ -176,10 +134,7 @@ class HarborTask:
     def document(self) -> dict[str, object]:
         """Return the fields of the task as JSON values.
 
-        A task without measurement arms has no ``measurement_arms`` key, so its
-        digest is the same as before tasks had arms. To rebuild the task, call
-        ``HarborTask(**document)`` with ``source_agent_record_ids`` as a tuple
-        and ``measurement_arms`` read by :func:`arms_from_documents`.
+        To rebuild the task, call ``HarborTask(**document)`` with ``source_agent_record_ids`` as a tuple.
         """
         return {
             "name": self.name,
@@ -190,7 +145,6 @@ class HarborTask:
             "config": {table: dict(values) for table, values in self.config.items()},
             "metadata": dict(self.metadata),
             "source_agent_record_ids": list(self.source_agent_record_ids),
-            **({MEASUREMENT_ARMS_KEY: arm_documents(self.measurement_arms)} if self.measurement_arms else {}),
         }
 
     @property
@@ -209,15 +163,12 @@ class HarborTask:
         return files
 
     def task_toml(self) -> str:
-        """The task.toml text: the version, the tables in Harbor's order, reef's digest, source ids and arms under metadata."""
+        """The task.toml text: the version, the tables in Harbor's order, reef's digest and source ids under metadata."""
         document: dict[str, object] = {"version": TASK_CONFIG_VERSION}
-        reef_table: dict[str, object] = {
-            "digest": self.digest,
-            "source_agent_record_ids": list(self.source_agent_record_ids),
+        document["metadata"] = {
+            **self.metadata,
+            "reef": {"digest": self.digest, "source_agent_record_ids": list(self.source_agent_record_ids)},
         }
-        if self.measurement_arms:
-            reef_table[MEASUREMENT_ARMS_KEY] = arm_documents(self.measurement_arms)
-        document["metadata"] = {**self.metadata, "reef": reef_table}
         for table in KNOWN_CONFIG_KEYS:
             if table in self.config:
                 document[table] = dict(self.config[table])
@@ -278,16 +229,10 @@ def read_harbor_task(path: Path) -> HarborTask:
         raise HarborTaskError(f"{path / 'task.toml'} carries no [metadata.reef] table; reef did not write it")
     reef_table = metadata["reef"]
     record_ids = reef_table.get("source_agent_record_ids")
-    if sorted(set(reef_table) - {MEASUREMENT_ARMS_KEY}) != sorted(REEF_TABLE_KEYS) or not isinstance(record_ids, list):
-        raise HarborTaskError(
-            f"{path / 'task.toml'} metadata.reef must hold {' and '.join(REEF_TABLE_KEYS)}, and can hold {MEASUREMENT_ARMS_KEY}"
-        )
+    if sorted(reef_table) != sorted(REEF_TABLE_KEYS) or not isinstance(record_ids, list):
+        raise HarborTaskError(f"{path / 'task.toml'} metadata.reef must hold exactly {' and '.join(REEF_TABLE_KEYS)}")
     if any(not isinstance(record_id, str) for record_id in record_ids):
         raise HarborTaskError(f"{path / 'task.toml'} metadata.reef.source_agent_record_ids must hold strings")
-    try:
-        measurement_arms = arms_from_documents(reef_table.get(MEASUREMENT_ARMS_KEY, []))
-    except (TypeError, ValueError) as exc:
-        raise HarborTaskError(f"{path / 'task.toml'} metadata.reef.{MEASUREMENT_ARMS_KEY} is invalid: {exc}") from exc
     trees: dict[str, dict[str, str]] = {directory: {} for directory in TREE_DIRECTORIES}
     foreign: list[str] = []
     for relative, text in files.items():
@@ -317,36 +262,12 @@ def read_harbor_task(path: Path) -> HarborTask:
         metadata={key: value for key, value in metadata.items() if key != "reef"},
         solution=trees["solution"],
         source_agent_record_ids=tuple(record_ids),
-        measurement_arms=measurement_arms,
     )
     if reef_table["digest"] != task.digest:
         raise HarborTaskError(
             f"{path} does not match its digest: it was edited, renamed or read through another name after it was written"
         )
     return task
-
-
-def arm_documents(arms: tuple[PlayArm, ...]) -> list[dict[str, object]]:
-    """Return the measurement arms as JSON and TOML values."""
-    return [
-        {"name": arm.name, "count": arm.count, "extra_instruction_files": list(arm.extra_instruction_files)}
-        for arm in arms
-    ]
-
-
-def arms_from_documents(documents: object) -> tuple[PlayArm, ...]:
-    """Return the measurement arms of :func:`arm_documents` values. Raises ``TypeError`` or ``ValueError`` if one is invalid."""
-    if not isinstance(documents, list) or any(
-        not isinstance(document, Mapping)
-        or set(document) != {"name", "count", "extra_instruction_files"}
-        or not isinstance(document["extra_instruction_files"], list)
-        for document in documents
-    ):
-        raise TypeError("measurement arms must be a list of objects with name, count and extra_instruction_files")
-    return tuple(
-        PlayArm(document["name"], document["count"], tuple(document["extra_instruction_files"]))
-        for document in documents
-    )
 
 
 def read_all_entries(root: Path) -> tuple[dict[str, str], set[str]]:

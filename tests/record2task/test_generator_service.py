@@ -21,7 +21,7 @@ from reef_client.client import ReefClientError
 from recipes.beta.spade import SpadeTaskGenerator
 from reef.core import AgentRecord, RequestType
 from reef.core.artifact_ref import LiveWeightArtifactRef
-from reef.core.tasks import HarborTask, PlayArm, TaskGenerationRequest, read_harbor_task
+from reef.core.tasks import HarborTask, TaskGenerationRequest, read_harbor_task
 from reef.harness.client.tasks import TaskPlay
 from reef.pipeline_context import PipelineContext
 from reef.recipe.generated_tasks import GeneratedTaskTasks
@@ -581,10 +581,6 @@ def test_the_wire_forms_round_trip(tmp_path: Path) -> None:
         source_agent_record_ids=("d1",),
     )
     assert task_from_document(task_document(task)) == task
-    hinted = replace(task, measurement_arms=(PlayArm("hint", 2, ("tests/test.sh",)),))
-    assert task_from_document(task_document(hinted)) == hinted
-    with pytest.raises(ValueError, match="measurement_arms"):
-        task_from_document({**task_document(hinted), "measurement_arms": [{"name": "hint"}]})
     with pytest.raises(ValueError, match="not a Harbor task"):
         task_from_document({**task_document(task), "tests": {}})
     with pytest.raises(ValueError, match="must be a JSON object"):
