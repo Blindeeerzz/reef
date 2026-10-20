@@ -258,7 +258,7 @@ class ReportRecord2Record(Record2Record):
 
     # ------------------------------------------------------------- formation
 
-    def ingest(self, record: AgentRecord) -> None:
+    def push(self, record: AgentRecord) -> None:
         if record.scenario != self.scenario:
             raise ReportValidationError("records must belong to the pipeline's scenario")
         if record.request_type is RequestType.INFERENCE:

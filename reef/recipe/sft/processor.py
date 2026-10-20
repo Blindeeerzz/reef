@@ -80,6 +80,7 @@ class SFTTasks(ReportTasks):
 
     def __init__(self, settings: SFTSettings) -> None:
         # transformers is part of the training environment. The service never renders a sample.
+        super().__init__()
         from transformers import AutoTokenizer
 
         self.target = settings.target

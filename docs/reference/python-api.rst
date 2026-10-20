@@ -924,9 +924,10 @@ record2task=..., task2batch=...)``):
   (``TrainDataItem`` values). Reported feedback supplies a ``make_sample`` hook
   on ``ReportTasks`` that assembles valid reports; computed feedback supplies
   a ``JudgedTasks`` after an asynchronous ``judge`` derives new feedback.
-  A stage with slow work returns ``TaskResult.pending()`` from ``make_tasks``
-  and hands the result back through ``take_finished()`` (see `pending tasks
-  <../developer-guide/processors.rst#pending-tasks>`__).
+  The pipeline pushes each record set (``push``) and pulls the results
+  (``pull``). Most stages inherit ``ImmediateRecord2Task`` and implement
+  ``make_tasks``; a stage with slow work returns a result later (see `slow
+  record-to-task work <../developer-guide/processors.rst#slow-record-to-task-work>`__).
 - ``task2batch``: the task-to-batch stage (``reef.task2batch.Task2Batch``).
   Its ``make_batch(tasks, batch_id)`` shapes the tasks of the selected
   sets into a batch with the ID ``batch_id``. The pipeline assigns the ID.

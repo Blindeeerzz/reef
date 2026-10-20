@@ -87,7 +87,7 @@ class RoundRunner(ABC):
 
     @abstractmethod
     def finished_rounds(self) -> tuple[RoundResult, ...]:
-        """Return the results of the rounds that ended since the last call. The stage calls it in ``poll``."""
+        """Return the results of the rounds that ended since the last call. The stage calls it in ``advance``."""
 
 
 class RoundRecord2Record(ReportRecord2Record):
@@ -142,9 +142,9 @@ class RoundRecord2Record(ReportRecord2Record):
 
     # ---------------------------------------------------------------- rounds
 
-    def poll(self, now: float) -> None:
+    def advance(self, now: float) -> None:
         """End the rounds that finished, then start the next round when it is due, or stop the rounds at the limit."""
-        super().poll(now)
+        super().advance(now)
         if self.runner is None:
             return
         for result in self.runner.finished_rounds():

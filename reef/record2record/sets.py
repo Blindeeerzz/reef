@@ -1,4 +1,4 @@
-"""Record sets and batch units: the input of one ``make_tasks`` call, and the unit that a batch takes.
+"""Record sets and batch units: the input of the record-to-task stage, and the unit that a batch takes.
 
 Notation: ``refs(r)`` is the set of records that a record ``r`` references.
 """
@@ -14,7 +14,7 @@ from reef.core.records_types import AgentRecord
 
 @dataclass(frozen=True, kw_only=True)
 class RecordSet(ABC):
-    """The records that one ``make_tasks`` call reads.
+    """The records that the record-to-task stage makes tasks from, together.
 
     Values: ``X`` is a record set if and only if ``records(X)`` is not empty and
     ``refs(r) ⊆ records(X)`` for each record ``r`` in ``records(X)``. ``set_id``
@@ -22,8 +22,8 @@ class RecordSet(ABC):
     the position in which the stage formed ``X``. No record is in two record
     sets of one stage (``Record2Record.form``).
 
-    Purpose: the record stage forms it, and ``Record2Task.make_tasks`` reads it.
-    The result settles all records of the set together.
+    Purpose: the record stage forms it, and the pipeline pushes it to the
+    record-to-task stage. Its one result settles all records of the set together.
     """
 
     set_id: Hashable

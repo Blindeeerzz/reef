@@ -49,6 +49,7 @@ class SampleTasks(ReportTasks):
     """Each report becomes a task named after it. ``fail_assembly`` breaks the training contract."""
 
     def __init__(self) -> None:
+        super().__init__()
         self.assembled: list[str] = []
         self.fail_assembly = False
 

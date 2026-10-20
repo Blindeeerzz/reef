@@ -99,10 +99,10 @@ def test_a_stage_puts_a_record_in_one_record_set_only() -> None:
     stage.form(RecordsSet(set_id="second", arrival_index=2, held=(inference("i"), report("r2", "i"))))
 
 
-def test_a_ready_result_holds_one_or_more_tasks_and_any_other_result_none() -> None:
+def test_a_ready_result_holds_one_or_more_tasks_and_a_skipped_result_none() -> None:
     task = TaskItem(Path("task"))
     assert TaskResult.ready((task,)).tasks == (task,)
-    for status, tasks in ((TaskStatus.READY, ()), (TaskStatus.SKIPPED, (task,)), (TaskStatus.PENDING, (task,))):
+    for status, tasks in ((TaskStatus.READY, ()), (TaskStatus.SKIPPED, (task,))):
         with pytest.raises(ValueError, match="READY result holds one or more tasks"):
             TaskResult(status, tasks)
 

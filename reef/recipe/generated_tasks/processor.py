@@ -385,6 +385,7 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner, RoundRunner):
         worker: BackgroundJobWorker | None = None,
     ) -> None:
         #: The record stage that paces the rounds and closes the task groups.
+        super().__init__()
         self.round_stage = round_stage
         self.assembly = episode_assembly(settings.scaffold_tolerance)
         self.scenario = context.scenario

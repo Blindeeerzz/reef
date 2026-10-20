@@ -37,7 +37,7 @@ from reef.observability import ExperimentLogger
 from reef.pipeline_context import PipelineContext
 from reef.record2record import NoRecordSets, Record2Record, RecordSet, TaskStatus
 from reef.record2record.staleness import producing_runtime_load_ids
-from reef.record2task import NoTasks, Record2Task, TaskResult
+from reef.record2task import NoTasks, Record2Task
 from reef.task2batch import NoBatches, Task2Batch
 from reef.train.types import TrainDataItem, TrainingBatch
 
@@ -187,8 +187,8 @@ class TrainingPipeline:
         self.batch_number = 0
         #: Tasks by the ID of the record set that made them, until the set trains or ends.
         self.tasks: dict[Hashable, tuple[TrainDataItem, ...]] = {}
-        #: Record sets that the record-to-task stage still works on, by set ID. Their records stay held until settled.
-        self.pending_sets: dict[Hashable, RecordSet] = {}
+        #: Record sets pushed to the record-to-task stage that have no result yet, by set ID. Their records stay held.
+        self.waiting_sets: dict[Hashable, RecordSet] = {}
         self.set_training_mode(context.training_mode)
 
     @property
@@ -285,32 +285,25 @@ class TrainingPipeline:
         for set_id in self.record2record.take_ended():
             self.tasks.pop(set_id, None)
 
-    def make_formed_tasks(self) -> None:
-        """Make tasks from each set that the stage formed, give each result back, and forget the sets that ended."""
-        for record_set in self.record2record.take_formed():
-            self.settle_task_result(record_set, self.record2task.make_tasks(record_set))
-        self.forget_ended_sets()
+    def move_record_sets(self) -> None:
+        """Push each record set that the record stage formed to the task stage, and settle each task result.
 
-    def settle_finished_tasks(self) -> None:
-        """Give the record stage the result of each pending set that finished. A set settles one time only."""
-        stage_name = type(self.record2task).__name__
-        for set_id, result in self.record2task.take_finished():
-            if result.status is TaskStatus.PENDING:
-                raise ValueError(f"{stage_name}.take_finished returned a pending result for set {set_id!r}")
-            if set_id not in self.pending_sets:
+        The task stage returns the result of each pushed set one time. Until
+        then the set waits, and its records stay held.
+        """
+        for record_set in self.record2record.pull():
+            self.record2task.push(record_set)
+            self.waiting_sets[record_set.set_id] = record_set
+        for set_id, result in self.record2task.pull():
+            if set_id not in self.waiting_sets:
                 raise ValueError(
-                    f"{stage_name}.take_finished returned a result for set {set_id!r}, which is not pending"
+                    f"{type(self.record2task).__name__} returned a result for set {set_id!r}, which no set waits for"
                 )
-            self.settle_task_result(self.pending_sets.pop(set_id), result)
-
-    def settle_task_result(self, record_set: RecordSet, result: TaskResult) -> None:
-        """Hold a pending set, or keep a ready set's tasks and settle the set in the record stage."""
-        if result.status is TaskStatus.PENDING:
-            self.pending_sets[record_set.set_id] = record_set
-            return
-        if result.status is TaskStatus.READY:
-            self.tasks[record_set.set_id] = result.tasks
-        self.record2record.settle(record_set, result.status, producing_runtime_load_ids(result.tasks))
+            record_set = self.waiting_sets.pop(set_id)
+            if result.status is TaskStatus.READY:
+                self.tasks[set_id] = result.tasks
+            self.record2record.settle(record_set, result.status, producing_runtime_load_ids(result.tasks))
+        self.forget_ended_sets()
 
     def ingest(self, item: AgentRecord) -> None:
         """Read one record. Training instructions stay here; every other record goes through the record stage."""
@@ -321,8 +314,8 @@ class TrainingPipeline:
             if request.id not in self.consumed_requests:
                 self.training_requests.setdefault(request.id, request)
             return
-        self.record2record.ingest(item)
-        self.make_formed_tasks()
+        self.record2record.push(item)
+        self.move_record_sets()
 
     def observe_serving_runtime_load_id(self, runtime_load_id: str) -> None:
         """Give the record stage the runtime load ID that serves the scenario now, for its staleness check."""
@@ -336,9 +329,8 @@ class TrainingPipeline:
 
     def ready(self) -> bool:
         # Background work, such as judgments or finished rounds, forms sets without a new record.
-        self.settle_finished_tasks()
-        self.record2record.poll(time.monotonic())
-        self.make_formed_tasks()
+        self.record2record.advance(time.monotonic())
+        self.move_record_sets()
         if self.pending is not None:
             return True
         self.record2record.drop_stale_units(self.context.max_staleness)
@@ -399,9 +391,9 @@ class TrainingPipeline:
     # ------------------------------------------------------------- lifecycle
 
     def releasable_record_ids(self) -> frozenset[str]:
-        """Records whose held state can be released after a durable commit. A pending set's records stay held."""
-        pending = {record_id for record_set in self.pending_sets.values() for record_id in record_set.record_ids()}
-        return (frozenset(self.consumed_requests) | self.record2record.releasable_record_ids()) - pending
+        """Records whose held state can be released after a durable commit. A waiting set's records stay held."""
+        waiting = {record_id for record_set in self.waiting_sets.values() for record_id in record_set.record_ids()}
+        return (frozenset(self.consumed_requests) | self.record2record.releasable_record_ids()) - waiting
 
     def release_records(self, agent_record_ids: frozenset[str]) -> None:
         """Release committed in-memory state without changing stored records."""
@@ -409,14 +401,14 @@ class TrainingPipeline:
         self.record2record.release_records(agent_record_ids)
 
     def background_jobs_running(self) -> bool:
-        """Return True while background work runs: a pending set, or a record stage job such as a judgment.
+        """Return True while background work runs: a waiting set, or a record stage job such as a judgment.
 
         A finished job can make the pipeline ready without a new record.
         While this is True, the training thread polls at a fixed interval.
         Otherwise it sleeps until the next accepted record. The training
         thread reads this between drains. It must not block.
         """
-        return bool(self.pending_sets) or self.record2record.background_jobs_running()
+        return bool(self.waiting_sets) or self.record2record.background_jobs_running()
 
     def operational_metrics(self) -> Mapping[str, float | int]:
         """Numeric queue state, sampled under the trainer lock without advancing work."""

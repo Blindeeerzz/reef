@@ -31,6 +31,29 @@ The three stages
   shapes the tasks of the selected batch units into one ``TrainingBatch``. Grouped
   recipes set ``group_id`` on each member.
 
+The pipeline moves values through the stages with the same two operations,
+``push`` and ``pull``. The last stage is a function:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Stage
+     - In
+     - Out
+   * - ``Record2Record``
+     - ``push(record)``
+     - ``pull() -> tuple[RecordSet, ...]``
+   * - ``Record2Task``
+     - ``push(record_set)``
+     - ``pull() -> tuple[(set_id, TaskResult), ...]``
+   * - ``Task2Batch``
+     - ``make_batch(tasks, batch_id)``
+     - ``TrainingBatch``
+
+When the pipeline looks for a batch, it first calls the record stage's
+``advance(now)``. The stage then takes in background work that ended, such as
+judgments, and starts work that is due, such as a task-generation round.
+
 The recipe names a default class for each stage in its ``pipeline_spec()``.
 The deployment's ``pipeline`` section gives each stage its config and can name
 another class (see `the pipeline section
@@ -65,20 +88,18 @@ Record sets and batch units
 
 The record stage forms two kinds of value. Each kind has an exact definition.
 
-A record set (``RecordSet``) is the input of one ``make_tasks`` call. A value
-is a record set if and only if it holds one or more records, and it holds each
-record that its records reference. A report and the inference records that it
+A record set (``RecordSet``) is the unit that the record-to-task stage makes
+tasks from. A value is a record set if and only if it holds one or more
+records, and it holds each record that its records reference. A report and the inference records that it
 references form one record set. One judged record, or one inference record,
 also forms one. No record is in two record sets of one stage. Thus a report
 that references an inference of another record set ends without training.
 
-``make_tasks`` returns a ``TaskResult``. Its status settles all records of the
-set together:
+The record-to-task stage returns one ``TaskResult`` for each record set that
+the pipeline pushes. Its status settles all records of the set together:
 
 - ``READY``: one or more tasks. The records wait in one batch unit.
 - ``SKIPPED``: no task. The stage ends the records.
-- ``PENDING``: no task yet. ``take_finished`` returns ``READY`` or ``SKIPPED``
-  for the set later, one time.
 
 A batch unit (``BatchUnit``) holds one or more record sets that must train in
 the same batch. A report by itself is a unit of one record set. A ready group
@@ -94,16 +115,16 @@ trainer gives records to and takes batches from. Recipes do not subclass it.
 The trainer calls it on its own thread, under its lock; no call may block:
 
 - ``ingest(record)``: one record arrives. A TRAIN instruction stays in the
-  pipeline; every other record goes to the record stage. The pipeline gives
-  each set that the stage forms to the record-to-task stage and gives the
-  result back to the record stage (``settle``): ``READY`` with tasks, or a
-  skip, which ends the set's records. A record-to-task stage with slow work
-  returns ``TaskResult.pending()`` instead, and the pipeline holds the set
-  and its records (see `Pending tasks <#pending-tasks>`__).
-- ``ready()``: is a batch available. It first lets background work land: the
-  results that the record-to-task stage's ``take_finished`` hands back, then
-  the record stage's ``poll`` (for example finished judgments, or a
-  task-generation round that ended or is due).
+  pipeline. The pipeline pushes every other record to the record stage. It
+  then moves the record sets: it pulls the sets that the record stage
+  formed, pushes each one to the record-to-task stage, pulls the results
+  that are ready, and gives each result back to the record stage
+  (``settle``). A set without a result waits, and its records stay held (see
+  `Slow record-to-task work <#slow-record-to-task-work>`__).
+- ``ready()``: is a batch available. It first advances the record stage
+  (``advance``), for example to take in finished judgments or to start a
+  task-generation round that is due. Then it moves the record sets as
+  ``ingest`` does.
 - ``build_batch()``: reserve ``batch_size`` batch units from the record stage, in
   its selection order, and give their tasks to ``make_batch``. The trainer
   validates the batch against ``output_schema``. The same batch stays
@@ -116,11 +137,11 @@ The trainer calls it on its own thread, under its lock; no call may block:
   for a record stage that paces work on what trained.
 
 The pipeline also merges the record and task stages' ``status()`` and metrics.
-``background_jobs_running()`` is true while a set is pending or the record
-stage runs a background job, such as a judgment or a task-generation round. The trainer then polls ``ready()`` at a fixed
+``background_jobs_running()`` is true while a set waits for its result or the
+record stage runs a background job, such as a judgment or a task-generation round. The trainer then polls ``ready()`` at a fixed
 interval. ``close()`` closes the record and task stages.
 ``releasable_record_ids()`` returns
-the completed records that no held or pending set references, and
+the completed records that no held or waiting set references, and
 ``release_records(ids)`` frees their memory after a successful commit. New
 commits retain the stored bodies; consumption progress prevents retraining
 on restart. Storage can independently evict any body under capacity pressure,
@@ -138,23 +159,24 @@ stage adds an entry only when a terminal outcome cannot become a batch and an
 external runner must stop waiting (TTTD reports a complete mixed-artifact
 step as an invariant failure).
 
-Pending tasks
--------------
+Slow record-to-task work
+------------------------
 
-A record-to-task stage that needs slow work must not block the trainer. Its ``make_tasks`` submits the work to a worker that the
-stage owns and returns ``TaskResult.pending()``. The pipeline holds the set
-and its records. Each time the pipeline looks for a batch, it calls the
-stage's ``take_finished()``, which returns ``(set_id, TaskResult)`` pairs for
-the work that finished. The pipeline then settles each set in the record
-stage, the same way as an immediate result. Each set settles one time. A
-result from ``take_finished`` must not be pending, and its set must be
-pending; otherwise ``ready()`` raises ``ValueError``. The stage's ``close``
-stops its worker.
+Most record-to-task stages make the tasks of a set when the pipeline pushes
+it. They inherit ``ImmediateRecord2Task`` and implement ``make_tasks(record_set)``.
+
+A stage that needs slow work must not block the trainer. Its ``push`` submits
+the work to a worker that the stage owns, and its ``pull`` returns the result
+when the work ends. Until then the set waits, and the pipeline holds its
+records. The stage returns one result for each pushed set, one time. A result
+for a set that does not wait makes ``ready()`` raise ``ValueError``. The
+stage's ``close`` stops its worker.
 
 The record-to-record stage
 --------------------------
 
-1. The stage reads each record and forms record sets (``form``).
+1. The stage reads each record (``push``) and forms record sets (``form``).
+   The pipeline pulls them (``pull``).
 2. The record-to-task stage makes tasks from each record set.
 3. The stage holds the record sets that train in batch units in its
    ``pool``, places reports in their groups, and drops units that can no

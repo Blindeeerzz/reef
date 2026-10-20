@@ -90,14 +90,14 @@ class JudgingRecord2Record(Record2Record):
 
     # ------------------------------------------------------------- formation
 
-    def ingest(self, record: AgentRecord) -> None:
+    def push(self, record: AgentRecord) -> None:
         now = time.monotonic()
         # Expiry runs before the record is read, so an expired context can never capture it.
-        self.poll(now)
+        self.advance(now)
         self.judging.observe(record, now, self)
 
-    def poll(self, now: float) -> None:
-        """Retire expired records, then absorb the judgments that the worker finished."""
+    def advance(self, now: float) -> None:
+        """Retire expired records, then form a set of each judgment that the worker finished."""
         for receipt in self.judging.expire(now):
             self.abandon(receipt)
         if self.worker is None:

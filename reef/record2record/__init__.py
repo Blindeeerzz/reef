@@ -9,10 +9,10 @@ Entry point: ``Record2Record`` in ``base.py``.
 * Each training pipeline (``reef.train.pipeline.TrainingPipeline``) has one
   stage: the class the recipe's ``pipeline_spec()`` names, or the one the
   deployment's ``pipeline.record2record`` names, built with ``from_config``.
-  The pipeline gives the stage every record except training instructions.
-* The stage forms ``RecordSet`` values: the records that one ``make_tasks``
-  call reads. No record is in two record sets. The record-to-task stage
-  makes tasks from each set, and the pipeline gives the result back
+  The pipeline pushes every record except training instructions (``push``).
+* The stage forms ``RecordSet`` values, which the pipeline pulls (``pull``):
+  the records that the record-to-task stage makes tasks from, together. No
+  record is in two record sets. The pipeline gives each task result back
   (``settle``). The stage holds the sets that train in ``BatchUnit`` values
   in its pool, drops the units that can no longer train, and gives the
   pipeline the next batch's units in order. The stage never calls the other stages.
@@ -39,8 +39,8 @@ Stages:
 
 Components of the pool:
 
-* ``RecordSet`` and ``BatchUnit`` (``sets.py``): the input of one ``make_tasks``
-  call, and the unit that a batch takes and that ``batch_size`` counts.
+* ``RecordSet`` and ``BatchUnit`` (``sets.py``): the input of the record-to-task
+  stage, and the unit that a batch takes and that ``batch_size`` counts.
 * ``BatchUnitPool`` (``pool.py``): the held units, and the reserved batch.
 * ``SelectionPolicy`` (``selection.py``): the order in which units go into a
   batch. ``ArrivalOrder`` takes the oldest first. ``GroupKeyOrder`` takes
