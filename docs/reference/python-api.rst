@@ -568,18 +568,17 @@ task store before any rollout. Thus generation and rollout can recover
 independently after a restart. A caller can also add a task directory with
 ``add_task``. The contract and its values are in ``reef.storage.tasks``.
 
-To open a store, call
-``task_storage.open(name, split=SplitSettings(eval_fraction=..., seed=...))``.
-Each record-to-task stage uses its own ``name``. The first open saves the
-split settings. A later open with different settings raises
-``TaskStoreError``.
+To open a store, call ``task_storage.open(name)``. Each record-to-task stage
+uses its own ``name``.
 
 A pipeline stage gets ``task_storage`` from ``PipelineContext.task_storage``.
 The scenario factory gives ``session.tasks`` to ``Recipe.build_trainers``,
 which gives it to ``Trainer.build``. A recipe that overrides ``build`` must
 give ``task_storage`` to ``Trainer.build`` too. A composite recipe gives each
 component a ``TaskStorage`` that opens ``<component>/<name>``. Thus two
-components never share a store.
+components never share a store, except ``imported-tasks``
+(``reef.storage.tasks.IMPORTED_TASK_STORE``): the scenario's imported tasks,
+which every component opens by that name and only the service writes.
 
 A store holds generations. A generation holds its source record ids and its
 candidates. ``save_candidates`` saves a copy of each candidate task directory
