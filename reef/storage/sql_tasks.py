@@ -13,20 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from sqlalchemy import (
-    BigInteger,
-    Boolean,
-    Column,
-    Float,
-    ForeignKey,
-    MetaData,
-    String,
-    Table,
-    Text,
-    and_,
-    func,
-    select,
-)
+from sqlalchemy import BigInteger, Boolean, Column, ForeignKey, MetaData, String, Table, Text, and_, func, select
 from sqlalchemy.engine import Connection, RowMapping
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -35,7 +22,6 @@ from reef.storage.tasks import (
     SPLIT_NAMES,
     GenerationState,
     SplitName,
-    SplitSettings,
     StoredTask,
     TaskCandidate,
     TaskConflict,
@@ -50,14 +36,12 @@ from reef.storage.tasks import (
 class TaskTables:
     """The task tables of one database, and the namespace values that ``scope`` gives them.
 
-    ``stores`` holds the split settings of each store. ``generations`` holds
-    one row for each generation. ``candidates`` holds one row for each saved
+    ``generations`` holds one row for each generation. ``candidates`` holds one row for each saved
     candidate, with the digest of its task files and its outcome.
     ``published`` holds one row for each published task name, with its
     position in publication order and the digest of its task files.
     """
 
-    stores: Table
     generations: Table
     candidates: Table
     published: Table
@@ -79,13 +63,6 @@ def task_tables(metadata: MetaData, *, foreign_key: str | None = None) -> TaskTa
         return columns
 
     return TaskTables(
-        stores=Table(
-            "task_store",
-            metadata,
-            *key_columns(),
-            Column("eval_fraction", Float(53), nullable=False),
-            Column("seed", BigInteger, nullable=False),
-        ),
         generations=Table(
             "task_generation",
             metadata,
@@ -127,14 +104,14 @@ class SQLTaskStorage(TaskStorage):
         self.files = files
         self.scenario = scenario
 
-    def open(self, name: str, *, split: SplitSettings) -> SQLTaskStore:
-        return SQLTaskStore(self, name, split=split)
+    def open(self, name: str) -> SQLTaskStore:
+        return SQLTaskStore(self, name)
 
 
 class SQLTaskStore(TaskStore):
     """One named task store. Each database operation is one transaction of the record database."""
 
-    def __init__(self, storage: SQLTaskStorage, name: str, *, split: SplitSettings) -> None:
+    def __init__(self, storage: SQLTaskStorage, name: str) -> None:
         if not isinstance(name, str) or not name:
             raise ValueError("a task store name must be a non-empty string")
         self.records = storage.records
@@ -143,18 +120,6 @@ class SQLTaskStore(TaskStore):
         self.scenario = storage.scenario
         self.name = name
         self.key = {**self.tables.scope, "store_name": name}
-        stores = self.tables.stores
-        with self.records._transaction(write=True) as connection:
-            self.records._insert_if_absent(
-                connection, stores, {**self.key, "eval_fraction": split.eval_fraction, "seed": split.seed}
-            )
-            row = connection.execute(select(stores).where(self.matching(stores))).mappings().one()
-        stored = SplitSettings(eval_fraction=row["eval_fraction"], seed=row["seed"])
-        if stored != split:
-            raise TaskStoreError(
-                f"task store {name!r} has eval_fraction {stored.eval_fraction} and seed {stored.seed}, "
-                f"not eval_fraction {split.eval_fraction} and seed {split.seed}"
-            )
 
     def begin_generation(self, *, generation: int, source_record_ids: tuple[str, ...]) -> GenerationState:
         requested = GenerationState(generation=generation, source_record_ids=source_record_ids)
