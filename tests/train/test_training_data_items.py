@@ -250,7 +250,7 @@ def test_report_processor_reserves_and_acknowledges_mixed_data():
 
     from reef.record2record import ReportGrouping, ReportRecord2Record
 
-    context = PipelineContext("mixed", batch_size=2)
+    context = PipelineContext("mixed")
     processor = TrainingPipeline(
         context,
         record2record=ReportRecord2Record(context, ReportGrouping(), exclusive_sources=True),
@@ -276,14 +276,14 @@ def test_report_processor_reserves_and_acknowledges_mixed_data():
                 payload={"references": [f"inference-{index}"], "score": 1.0},
             )
         )
-    batch = processor.build_batch()
-    assert processor.build_batch() is batch
+    batch = processor.build_batch(2)
+    assert processor.build_batch(2) is batch
     assert isinstance(batch.items[0], TrajectoryItem)
     assert isinstance(batch.items[1], TaskItem)
     ids = frozenset({"inference-0", "report-0", "inference-1", "report-1"})
     assert processor.releasable_record_ids().isdisjoint(ids)
     assert processor.acknowledge(batch.batch_id) == ids
-    assert not processor.ready()
+    assert not processor.ready(2)
 
 
 @pytest.mark.parametrize("algorithm", ["sao", "openclawrl"])

@@ -196,21 +196,16 @@ class TTTDBatches(Task2Batch):
     the backend performs a well-defined zero-gradient step, also matching the
     reference behavior.
 
-    The grid comes from the record stage. The backend's batch size must not
-    exceed the grid, so that a batch takes exactly one step. Config:
-    ``buffer_size``.
+    The grid comes from the record stage. ``max_batch_samples`` is the grid,
+    so the trainer refuses a larger batch size and a batch takes exactly one
+    step. Config: ``buffer_size``.
     """
 
     def __init__(self, context: PipelineContext, record2record: TTTDRecord2Record, buffer_size: int | None) -> None:
         self.groups_per_step = record2record.groups_per_step
         self.rollouts_per_group = record2record.rollouts_per_group
-        grid_size = self.groups_per_step * self.rollouts_per_group
-        if context.batch_size > grid_size:
-            raise PluginConfigError(
-                f"{type(self).__name__} needs a batch size of at most the {grid_size} rollouts of one step, "
-                f"not {context.batch_size}"
-            )
         super().__init__(context, buffer_size)
+        self.max_batch_samples = self.groups_per_step * self.rollouts_per_group
 
     @classmethod
     def from_config(

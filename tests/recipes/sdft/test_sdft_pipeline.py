@@ -179,7 +179,7 @@ def test_processor_emits_one_sample_with_the_teacher_sequence(tokenizer: Countin
     processor.push(_inference("i1"))
     processor.push(_report("r1", ("i1",)))
 
-    batch = processor.build_batch()
+    batch = processor.build_batch(1)
 
     assert isinstance(batch, TrainingBatch)
     assert batch.batch_id == "science:batch:1"
@@ -228,7 +228,7 @@ def test_sdft_recipe_resolves_by_dotted_reference(tokenizer: CountingTokenizer) 
     assert isinstance(pipeline.record2record, ExclusiveReportRecord2Record)
     assert isinstance(pipeline.record2task, SDFTTasks)
     assert isinstance(pipeline.task2batch, DistillBatches)
-    assert pipeline.task2batch.buffer_size == 4, "four batches of the default batch size"
+    assert pipeline.task2batch.buffer_size is None, "without a trainer default the buffer holds every sample"
     assert pipeline.record2task.max_teacher_tokens == 0
     assert pipeline.record2task.template == DEFAULT_CONTEXT_TEMPLATE
 
@@ -252,9 +252,9 @@ def test_sdft_recipe_hands_each_stage_its_pipeline_config(tokenizer: CountingTok
     )
 
     assert recipe.checkpoint_strategy == EveryNVersions(4)
-    pipeline = recipe.build_pipeline(PipelineContext("science", TeacherContextReport, batch_size=4))
+    pipeline = recipe.build_pipeline(PipelineContext("science", TeacherContextReport, default_buffer_size=4))
     assert isinstance(pipeline.record2task, SDFTTasks)
-    assert (pipeline.batch_size, pipeline.task2batch.buffer_size) == (4, 16)
+    assert pipeline.task2batch.buffer_size == 16
     assert pipeline.record2task.max_teacher_tokens == 24000
     assert pipeline.record2task.template == "Example: {context}"
 
@@ -300,7 +300,7 @@ def test_objective_trains_every_batch_and_refuses_multiple_epochs(tokenizer: Cou
     processor = _processor()
     processor.push(_inference("i1"))
     processor.push(_report("r1", ("i1",)))
-    batch = processor.build_batch()
+    batch = processor.build_batch(1)
 
     signal = objective.prepare(batch, {"steps": 2})
 
@@ -315,7 +315,7 @@ def test_slime_payload_carries_the_teacher_sequence_beside_the_policy_row(tokeni
     processor = _processor()
     processor.push(_inference("i1"))
     processor.push(_report("r1", ("i1",)))
-    batch = processor.build_batch()
+    batch = processor.build_batch(1)
 
     prepared = prepare_slime_step(batch, TrainingMethod("sdft"), {}, StepScheduling(unit="sample"), step_size=1)
     payload = prepared.payload

@@ -140,7 +140,7 @@ def test_the_demonstration_is_the_trained_assistant_turn(tokenizer: TurnTokenize
     pipeline.push(_inference("i1"))
     pipeline.push(_report("r1", ("i1",)))
 
-    (sample,) = pipeline.build_batch().items
+    (sample,) = pipeline.build_batch(1).items
 
     assert source_record_id(sample) == "i1"
     assert sample.source_agent_record_ids == ("i1", "r1")
@@ -160,7 +160,7 @@ def test_the_recorded_response_is_the_target_of_an_imported_example(tokenizer: T
     pipeline.push(_inference("i1", response))
     pipeline.push(_report("r1", ("i1",), teacher_context=""))
 
-    (sample,) = pipeline.build_batch().items
+    (sample,) = pipeline.build_batch(1).items
 
     target_ids = [ord(character) for character in "lookup"] + [END_OF_TURN]
     assert sample.training["tokens"] == [*_prompt_ids(), *target_ids]
@@ -176,7 +176,7 @@ def test_a_sample_over_max_tokens_is_skipped_and_counted(tokenizer: TurnTokenize
     pipeline.push(_inference("i1"))
     pipeline.push(_report("r1", ("i1",)))
 
-    assert not pipeline.ready()
+    assert not pipeline.ready(1)
     assert pipeline.record2task.operational_metrics() == {"sft_overflow_reports": 1}
     assert pipeline.record2record.releasable_record_ids() == frozenset({"i1", "r1"})
 
@@ -216,8 +216,8 @@ def test_a_held_sample_never_becomes_stale(tokenizer: TurnTokenizer) -> None:
     pipeline.observe_serving_runtime_load_id("slime-v4")
     pipeline.observe_serving_runtime_load_id("slime-v5")
 
-    assert pipeline.ready()
-    assert len(pipeline.build_batch().items) == 1
+    assert pipeline.ready(1)
+    assert len(pipeline.build_batch(1).items) == 1
 
 
 @pytest.mark.unit
@@ -263,12 +263,12 @@ def test_sft_recipe_resolves_by_dotted_reference_and_builds_its_stages(tokenizer
     spec = SFTRecipe.training_spec()
     assert (spec.objective, spec.loss_family) == ("reef.recipe.sft:SftObjective", "sft")
     assert spec.scheduling == StepScheduling(unit="sample")
-    pipeline = recipe.build_pipeline(PipelineContext("science", TeacherContextReport, batch_size=64))
+    pipeline = recipe.build_pipeline(PipelineContext("science", TeacherContextReport, default_buffer_size=64))
     assert isinstance(pipeline.record2record, SFTRecord2Record)
     assert isinstance(pipeline.record2task, SFTTasks)
     assert (pipeline.record2task.target, pipeline.record2task.max_tokens) == ("response", 8)
     assert isinstance(pipeline.task2batch, DistillBatches)
-    assert (pipeline.batch_size, pipeline.task2batch.buffer_size) == (64, 256)
+    assert pipeline.task2batch.buffer_size == 256
 
 
 @pytest.mark.unit
@@ -293,7 +293,7 @@ def test_objective_trains_every_batch_without_advantages_and_allows_several_epoc
     pipeline.push(_inference("i1"))
     pipeline.push(_report("r1", ("i1",)))
 
-    signal = SftObjective().prepare(pipeline.build_batch(), {"steps": 2})
+    signal = SftObjective().prepare(pipeline.build_batch(1), {"steps": 2})
 
     assert (signal.action, signal.next_algorithm_state, signal.advantages) == ("train", {"steps": 3}, None)
     assert signal.metrics == {"steps": 3, "samples": 1}
@@ -313,7 +313,7 @@ def test_the_recipe_objective_resolves_where_the_recipe_was_never_imported(
     pipeline.push(_report("r1", ("i1",)))
 
     step = prepare_slime_step(
-        pipeline.build_batch(),
+        pipeline.build_batch(1),
         TrainingMethod(SFTRecipe.training_spec().objective),
         {},
         StepScheduling(unit="sample"),
@@ -331,7 +331,7 @@ def test_slime_payload_trains_the_target_tokens_without_log_probs(tokenizer: Tur
     pipeline.push(_report("r1", ("i1",)))
 
     payload = prepare_slime_step(
-        pipeline.build_batch(), TrainingMethod("sft"), {}, StepScheduling(unit="sample"), step_size=1
+        pipeline.build_batch(1), TrainingMethod("sft"), {}, StepScheduling(unit="sample"), step_size=1
     ).payload
 
     assert payload is not None

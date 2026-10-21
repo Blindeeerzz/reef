@@ -19,10 +19,10 @@ class PipelineContext:
     """What the training pipeline and its stages read for one scenario: its report contract, logger, and mode.
 
     Values: ``training_mode`` is ``auto``, ``manual`` or ``hybrid``;
-    ``max_staleness`` is a non-negative int; ``batch_size`` is a positive int.
-    The constructor refuses other values.
-    Purpose: ``Trainer.build`` makes it, with ``batch_size`` from the candidate
-    backend. The pipeline and each stage's ``from_config`` read it.
+    ``max_staleness`` is a non-negative int; ``default_buffer_size`` is None
+    or a positive int. The constructor refuses other values.
+    Purpose: ``Trainer.build`` makes it. The pipeline and each stage's
+    ``from_config`` read it.
     """
 
     scenario: str
@@ -36,8 +36,9 @@ class PipelineContext:
     max_staleness: int = 0
     #: Opens the generated task stores of the scenario. ``None`` if the trainer has no scenario session.
     task_storage: TaskStorage | None = None
-    #: The samples in one training step, from the candidate backend; a batch holds at least this many.
-    batch_size: int = 1
+    #: The buffer size when the task-to-batch stage sets none: four batches of the trainer's batch size.
+    #: None holds every sample, for a trainer that trains nothing.
+    default_buffer_size: int | None = None
     #: Whether the pipeline takes training instructions; a recipe whose proposer reads none turns it off.
     manual_enabled: bool = True
 
@@ -46,5 +47,9 @@ class PipelineContext:
             raise ValueError("training_mode must be 'auto', 'manual' or 'hybrid'")
         if not isinstance(self.max_staleness, int) or isinstance(self.max_staleness, bool) or self.max_staleness < 0:
             raise ValueError("max_staleness must be a non-negative integer")
-        if not isinstance(self.batch_size, int) or isinstance(self.batch_size, bool) or self.batch_size <= 0:
-            raise ValueError("batch_size must be a positive integer")
+        if self.default_buffer_size is not None and (
+            not isinstance(self.default_buffer_size, int)
+            or isinstance(self.default_buffer_size, bool)
+            or self.default_buffer_size <= 0
+        ):
+            raise ValueError("default_buffer_size must be None or a positive integer")

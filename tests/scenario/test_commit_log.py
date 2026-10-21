@@ -455,10 +455,6 @@ class _SavedArtifactBackend(CandidateBackend):
         self._artifact_path = artifact_path
         self.batch_ids: list[str] = []
 
-    @property
-    def batch_size(self) -> int:
-        return 1
-
     def initial_state(self):
         return {"steps": 0}
 
@@ -998,7 +994,6 @@ class _HarnessEvolveTestRecipe(Recipe):
             tasks=self.tasks,
             binary="fake-pi",
             models=ModelBinding(base_url="http://localhost:8000", model="qwen3-8b"),
-            batch_size=self.batch_size,
         )
         return Trainer.build(
             scenario,
@@ -1013,6 +1008,7 @@ class _HarnessEvolveTestRecipe(Recipe):
             candidate_evaluator=ScoreComparisonPlugin(candidate_backend),
             algorithm_state=algorithm_state,
             experiment_logger=experiment_logger,
+            batch_size=self.batch_size,
         )
 
 

@@ -63,10 +63,7 @@ def threshold_pipeline(
     record2record: ReportRecord2Record | None = None,
     task2batch: Task2Batch | None = None,
 ) -> TrainingPipeline:
-    """Every report by itself (or ``record2record``), one sample each, batched by ``ThresholdBatches`` (or ``task2batch``).
-
-    ``context.batch_size`` is the samples in one batch.
-    """
+    """Every report by itself (or ``record2record``), one sample each, batched by ``ThresholdBatches`` (or ``task2batch``)."""
     return TrainingPipeline(
         context,
         record2record=ReportRecord2Record(context, ReportGrouping()) if record2record is None else record2record,

@@ -270,7 +270,7 @@ class CordisRecipe(Recipe):
     binary: str | None = None
     episode_timeout_s: float = 600.0
     episode_repeats: int = 1
-    #: The traces in one evolution step; the pipeline makes a batch when it holds this many.
+    #: The traces in one evolution step; the trainer makes a batch when the pipeline holds this many.
     batch_size: int = 1
     forbid_residue: bool = False
     max_steps: int = 0
@@ -748,7 +748,6 @@ class CordisRecipe(Recipe):
             "binary": self.binary,
             "episode_timeout_s": self.episode_timeout_s,
             "episode_repeats": self.episode_repeats,
-            "batch_size": self.batch_size,
             "forbid_residue": self.forbid_residue,
             "executor": self.executor,
             "max_steps": self.max_steps,
@@ -805,4 +804,5 @@ class CordisRecipe(Recipe):
             experiment_logger=experiment_logger,
             training_mode=self.training_mode,
             task_storage=task_storage,
+            batch_size=self.batch_size,
         )

@@ -374,7 +374,8 @@ def test_example_yaml_boots_the_recipe_with_the_paper_wiring(example, tmp_path, 
     assert [layer.layer for layer in surface.components["skills"].validator.layers] == ["pi-agent"]
     # The pool reaches traffic through the proxy; no harness tree is installed, so no adapter is named.
     assert surface.harness is None and built.harness_adapter is None
-    assert isinstance(built.build("demo", SQLiteRecordStore()), Trainer)  # loads the seed; no episodes
+    trainer = built.build("demo", SQLiteRecordStore())  # loads the seed; no episodes
+    assert isinstance(trainer, Trainer) and trainer.batch_size == 60
 
 
 def test_seed_skills_must_name_an_existing_directory(example, tmp_path) -> None:
@@ -426,15 +427,15 @@ def test_the_days_last_report_completes_the_batch_passes_included() -> None:
             agent_record_id=agent_record_id,
         )
 
-    processor = harness_stages().build(PipelineContext("s", batch_size=3))
+    processor = harness_stages().build(PipelineContext("s"))
     for index, score in enumerate((1.0, 0.0), start=1):
         processor.push(_inference(f"inf-{index}"))
         processor.push(_report(f"rep-{index}", score, f"inf-{index}"))
-    assert not processor.ready()  # two of three reports: the day is not done
+    assert not processor.ready(3)  # two of three reports: the day is not done
     processor.push(_inference("inf-3"))
     processor.push(_report("rep-3", 1.0, "inf-3"))
-    assert processor.ready()
-    batch = processor.build_batch()
+    assert processor.ready(3)
+    batch = processor.build_batch(3)
     assert sorted(sample.metadata.get("reward") for sample in batch.items) == [0.0, 1.0, 1.0]
 
 

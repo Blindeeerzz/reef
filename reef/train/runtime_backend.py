@@ -115,10 +115,6 @@ class RuntimeCandidateBackend(CandidateBackend):
         return self.scheduler.inference_runtime
 
     @property
-    def batch_size(self) -> int:
-        return self.training_runtime.batch_size
-
-    @property
     def dispatched(self) -> bool:
         return True
 

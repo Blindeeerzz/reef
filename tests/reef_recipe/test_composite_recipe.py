@@ -48,10 +48,6 @@ class _FileBackend(CandidateBackend):
     def initial_state(self) -> Mapping[str, Any]:
         return {"steps": 0}
 
-    @property
-    def batch_size(self) -> int:
-        return 1
-
     def prepare_step(self, batch, state, scenario_step):
         step = int(state["steps"]) + 1
         path = self.artifact_dir / self.label / str(step)

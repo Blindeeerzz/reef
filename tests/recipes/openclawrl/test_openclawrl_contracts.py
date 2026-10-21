@@ -585,7 +585,7 @@ def test_processor_attaches_topk_and_candidates() -> None:
         )
 
     worker = FakeWorker()
-    context = PipelineContext("s", batch_size=2)
+    context = PipelineContext("s")
     stage = OpenClawRLRecord2Record(OpenClawRLJudgingSettings(), worker=worker)
     processor = TrainingPipeline(
         context,
@@ -610,7 +610,7 @@ def test_processor_attaches_topk_and_candidates() -> None:
     # The RL-only turn ships the un-enhanced anchor: the native ids verbatim.
     worker.push(TurnJudgment("i1", score=1.0, teacher_cands=({"hint": "", "teacher_tokens": [1, 2, 3, 4]},)))
 
-    batch = processor.build_batch()
+    batch = processor.build_batch(2)
     by_source = {source_record_id(sample): sample for sample in batch.items}
     sample = by_source["i0"]
     assert tuple(tuple(row) for row in sample.training.get("topk_indices", [])) == ((1, 2), (3, 4), (5, 6))

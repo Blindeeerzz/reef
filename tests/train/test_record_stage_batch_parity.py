@@ -78,17 +78,7 @@ Step = AgentRecord | Serve | str
 
 
 class CountingBackend(CandidateBackend):
-    """A dispatched backend that trains nothing and counts steps, so each reserved batch commits.
-
-    ``batch_size`` is the samples in one step, a positive int.
-    """
-
-    def __init__(self, batch_size: int = 1) -> None:
-        self.step_batch_size = batch_size
-
-    @property
-    def batch_size(self) -> int:
-        return self.step_batch_size
+    """A dispatched backend that trains nothing and counts steps, so each reserved batch commits."""
 
     @property
     def dispatched(self) -> bool:
@@ -149,7 +139,7 @@ class StreamRun:
 
     ``spec`` names the three stage classes, as a recipe does; ``pipeline`` is
     the deployment's ``pipeline`` section over it. ``batch_size`` is the
-    backend's samples in one step.
+    trainer's samples in one step.
     """
 
     spec: PipelineSpec
@@ -169,10 +159,11 @@ class StreamRun:
             "s",
             self.records,
             pipeline_factory=PipelineConfig.from_setting(self.pipeline, spec=self.spec, environ={}).build,
-            candidate_backend=CountingBackend(self.batch_size),
+            candidate_backend=CountingBackend(),
             report_type=self.report_type,
             training_mode=self.training_mode,
             max_staleness=self.max_staleness,
+            batch_size=self.batch_size,
         )
 
     def reload(self, trainer: Trainer) -> Trainer:

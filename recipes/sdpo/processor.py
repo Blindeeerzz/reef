@@ -244,8 +244,9 @@ class SDPOBatches(Task2Batch):
     weight of 0, so an all-unsuccessful step still takes its optimizer step,
     as the reference does. The teacher's renderer and windows come from
     ``SDPOTasks``. A teacher sequence over ``max_teacher_tokens`` fails the
-    step instead of dropping part of the grid. The backend's batch size must
-    not exceed the grid, so that a batch takes exactly one grid.
+    step instead of dropping part of the grid. ``max_batch_samples`` is the
+    grid, so the trainer refuses a larger batch size and a batch takes
+    exactly one grid.
     """
 
     def __init__(self, context: PipelineContext, settings: SDPODemonstrationSettings, record2task: SDPOTasks) -> None:
@@ -258,13 +259,9 @@ class SDPOBatches(Task2Batch):
         self.remove_thinking_from_demonstration = settings.remove_thinking_from_demonstration
         self.include_environment_feedback = settings.include_environment_feedback
         self.environment_feedback_only_without_solution = settings.environment_feedback_only_without_solution
-        grid_size = record2task.groups_per_step * record2task.rollouts_per_group
-        if context.batch_size > grid_size:
-            raise PluginConfigError(
-                f"{type(self).__name__} needs a batch size of at most the {grid_size} rollouts of one grid, "
-                f"not {context.batch_size}"
-            )
         super().__init__(context, settings.buffer_size)
+        # One batch is one grid: a larger batch size would mix the coordinates of two grids.
+        self.max_batch_samples = record2task.groups_per_step * record2task.rollouts_per_group
 
     @classmethod
     def from_config(

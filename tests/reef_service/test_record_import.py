@@ -69,10 +69,6 @@ class LearningBackend(ExampleBackend):
         super().__init__(scenario, [])
         self.batches = batches
 
-    @property
-    def batch_size(self):
-        return 2
-
     def prepare_step(self, batch, state, scenario_step):
         self.batches.append(batch)
         return PreparedStep.skipped(state={"trained": state.get("trained", 0) + len(batch.items)})
@@ -96,6 +92,7 @@ class LearningRecipe(Recipe):
             experiment_logger=experiment_logger,
             report_type=self.report_type,
             training_mode=self.training_mode,
+            batch_size=2,
         )
 
 

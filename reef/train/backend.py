@@ -111,16 +111,6 @@ class CandidateBackend(CandidateEvaluator, ABC):
     @abstractmethod
     def initial_state(self) -> Mapping[str, Any]: ...
 
-    @property
-    @abstractmethod
-    def batch_size(self) -> int:
-        """The samples in one training step, a positive int.
-
-        The training pipeline makes a batch when it holds at least this many
-        samples. A weight backend returns the rollouts in one optimizer step;
-        a harness backend returns the traces in one evolution step.
-        """
-
     def retire_scenario(self, scenario: str) -> None:
         """The scenario is being deleted: release what the backend holds for it beyond Reef's own state.
 

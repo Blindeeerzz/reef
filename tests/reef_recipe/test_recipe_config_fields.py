@@ -253,7 +253,7 @@ def test_default_build_uses_declared_stages_and_their_pipeline_config() -> None:
     assert trainer.candidate_evaluator._candidate_backend is trainer.candidate_backend
     assert trainer.candidate_backend.training_method_selector.method.objective == "sft"
     # The batch size comes from the training runtime, and the buffer size from the stage config.
-    assert (trainer.pipeline.batch_size, trainer.pipeline.buffer_size) == (2, 8)
+    assert (trainer.batch_size, trainer.pipeline.buffer_size) == (2, 8)
     # The shared recipe field reaches the stages as the typed context field, not as stage config.
     assert trainer.pipeline.context.max_staleness == 3
 

@@ -128,12 +128,13 @@ The trainer calls it on its own thread, under its lock; no call may block:
   that are ready, and gives each result back to the record stage
   (``settle``). A set without a result waits, and its records stay held (see
   `Slow record-to-task work <#slow-record-to-task-work>`__).
-- ``ready()``: is a batch available. It first advances the record stage
+- ``ready(sample_count)``: is a batch available. It first advances the record stage
   (``advance``), for example to take in finished judgments or to start a
   task-generation round that is due. Then it moves the record sets as
   ``push`` does.
-- ``build_batch()``: reserve whole batch units from the record stage, in
-  its selection order, until the batch holds at least ``batch_size`` samples,
+- ``build_batch(sample_count)``: reserve whole batch units from the record
+  stage, in its selection order, until the batch holds at least
+  ``sample_count`` samples,
   and give their tasks to ``make_batch``. Uploaded trajectories come first
   (see `Uploaded trajectories <#uploaded-trajectories>`__). The trainer
   validates the batch against ``output_schema``. The same batch stays
@@ -145,17 +146,18 @@ The trainer calls it on its own thread, under its lock; no call may block:
   them again. ``trained=False`` says the backend dropped the batch as stale,
   for a record stage that paces work on what trained.
 
-``batch_size`` is the candidate backend's batch size
-(``CandidateBackend.batch_size``), which ``Trainer.build`` puts in
-``PipelineContext.batch_size``: Slime's ``--global-batch-size``, Tinker's
-``batch_size``, or ``evolution.batch_size`` for harness evolution. Because a
-batch takes whole units, it can hold more than ``batch_size`` samples. Slime
-and Tinker cut it into optimizer steps of ``batch_size`` rollouts, and
+The pipeline does not know the batch size. The trainer passes its
+``batch_size`` as ``sample_count``: Slime's ``--global-batch-size`` or
+Tinker's ``batch_size`` through ``TrainingRuntime.batch_size``, or
+``evolution.batch_size`` for harness evolution. Because a batch takes whole
+units, it can hold more than ``batch_size`` samples. Slime and Tinker cut it
+into optimizer steps of ``batch_size`` rollouts, and
 ``StepScheduling.remainder`` decides what happens to a shorter last step.
 
 The held units are a buffer of at most ``buffer_size`` samples. The
-``Task2Batch`` sets it, and it is at least ``batch_size``. Without a
-``buffer_size`` setting, it is four times ``batch_size``. After each move of
+``Task2Batch`` sets it, and the trainer refuses one smaller than
+``batch_size``. Without a ``buffer_size`` setting, it is four times
+``batch_size``. After each move of
 record sets, in every training mode, the pipeline releases the oldest
 unreserved units while their samples are more than ``buffer_size``. It
 keeps the newest unit, so a unit larger than the buffer still trains. The

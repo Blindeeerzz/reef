@@ -509,7 +509,7 @@ def test_periodic_metrics_report_backlog_during_training_without_status_reads(st
     assert sample["training/reserved_batches"] == 1
     assert sample["processor/unreserved_reports"] == 0
     assert sample["processor/reserved_reports"] == 1
-    # The pipeline status is exported too; the default buffer holds four batches of the backend's batch size.
+    # The pipeline status is exported too; the default buffer holds four batches of the trainer's batch size.
     assert "processor/ready_samples" in sample
     assert (sample["processor/batch_size"], sample["processor/buffer_size"]) == (1, 4)
     assert not tracker.events

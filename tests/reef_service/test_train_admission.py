@@ -135,7 +135,7 @@ def test_requests_beyond_eight_are_accepted_and_pending_status_tracks_consumptio
             processor = (await status.json())["scenarios"]["agents"]["processor"]
             assert processor["buffered_requests"] == 1
             assert processor["pending_instructions"] == 10
-            # The batch size is the backend's (evolution.batch_size); the default buffer holds four batches.
+            # The batch size is the trainer's (evolution.batch_size); the default buffer holds four batches.
             assert (processor["ready_samples"], processor["batch_size"], processor["buffer_size"]) == (0, 3, 12)
             assert scenario.records.count("agents", request_type=RequestType.TRAIN) == 10
             # Retrying an accepted instruction does not add another pending request.

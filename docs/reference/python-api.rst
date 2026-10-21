@@ -86,11 +86,12 @@ that only happen to expose similarly named methods.
 Two other extension points have separate names and purposes:
 
 - ``reef.train.CandidateBackend`` prepares, evaluates and settles recipe updates,
-  including harness edits. Its ``batch_size`` property is the samples in one
-  training step; the pipeline makes a batch when it holds that many.
-  ``RuntimeCandidateBackend`` connects weight updates to Reef's scheduler and
-  returns the training runtime's ``batch_size``; ``Trainer`` accepts it as
-  ``candidate_backend``.
+  including harness edits. ``RuntimeCandidateBackend`` connects weight
+  updates to Reef's scheduler; ``Trainer`` accepts it as
+  ``candidate_backend``. ``Trainer.build(..., batch_size=...)`` takes the
+  samples in one training step: a weight recipe passes the training
+  runtime's ``batch_size``, and a harness recipe passes
+  ``evolution.batch_size``.
 - ``reef.runtime.interfaces.InferenceHandler`` executes one buffered or streaming
   request. Runtime and recipe objects expose it as ``inference_handler``;
   ``create_app`` and ``build_app`` accept the same keyword for an injected
@@ -948,10 +949,12 @@ record2task=..., task2batch=...)``):
   batch gets ``<scenario>:instruction:<request id>``. The number counts the
   batches of one pipeline. It is not a training step.
   ``Task2Batch.__init__(context, buffer_size)`` sets the most samples that
-  wait for a batch. ``None`` holds four times ``context.batch_size``, the
-  candidate backend's batch size; a smaller size than ``context.batch_size``
-  raises ``PluginConfigError``. ``BufferSettings`` parses the ``buffer_size``
-  key, and a stage with more keys extends it.
+  wait for a batch. ``None`` takes ``context.default_buffer_size``, four
+  times the trainer's batch size. ``Trainer.build`` raises
+  ``PluginConfigError`` for a buffer smaller than one batch, and for a batch
+  size above the stage's ``max_batch_samples`` (an SDPO or TTTD grid).
+  ``BufferSettings`` parses the ``buffer_size`` key, and a stage with more
+  keys extends it.
 
 Reef builds the stages for each scenario, in this order, with the class
 methods below; a later stage receives the stages built before it:

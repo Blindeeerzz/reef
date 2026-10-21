@@ -86,7 +86,7 @@ class GroupedPolicyBatches(Task2Batch):
 
 
 def grouped_policy_pipeline(context: PipelineContext, buffer_size: int | None = None) -> TrainingPipeline:
-    """Reports grouped by ``metadata.comparison_set``, two to a group; ``context.batch_size`` counts samples."""
+    """Reports grouped by ``metadata.comparison_set``, two to a group."""
     return TrainingPipeline(
         context,
         record2record=ReportRecord2Record(context, ComparisonSetGrouping()),

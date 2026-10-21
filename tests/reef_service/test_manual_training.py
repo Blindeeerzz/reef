@@ -35,15 +35,10 @@ from reef.train.types import TrainDataItem, TrainingBatch
 
 
 class CaptureBackend(ExampleBackend):
-    def __init__(self, *, dispatched=False, batch_size=1):
+    def __init__(self, *, dispatched=False):
         super().__init__("s", [])
         self.batches = []
         self._dispatched = dispatched
-        self.samples_per_step = batch_size
-
-    @property
-    def batch_size(self):
-        return self.samples_per_step
 
     @property
     def dispatched(self):
@@ -87,13 +82,14 @@ def failure(records, receipt):
     records.append(report(receipt))
 
 
-def build(records, backend, processor=records_pipeline, mode="manual"):
+def build(records, backend, processor=records_pipeline, mode="manual", batch_size=1):
     return Trainer.build(
         "s",
         records,
         pipeline_factory=processor,
         candidate_backend=backend,
         training_mode=mode,
+        batch_size=batch_size,
     )
 
 
@@ -114,8 +110,8 @@ def _release_texts(dispatcher, scenario="s"):
 @pytest.mark.parametrize("processor", [reports_pipeline, records_pipeline])
 @pytest.mark.parametrize("batch_size", [1, 100])
 def test_manual_waits_for_instruction_without_automatic_batch_gates(processor, batch_size):
-    records, backend = SQLiteRecordStore(), CaptureBackend(batch_size=batch_size)
-    trainer = build(records, backend, processor)
+    records, backend = SQLiteRecordStore(), CaptureBackend()
+    trainer = build(records, backend, processor, batch_size=batch_size)
     for receipt in ("other-session", "turn-1", "turn-2"):
         records.append(inference(receipt))
     records.append(
@@ -145,8 +141,8 @@ def test_manual_waits_for_instruction_without_automatic_batch_gates(processor, b
 
 
 def test_auto_keeps_recipe_batching():
-    records, backend = SQLiteRecordStore(), CaptureBackend(batch_size=2)
-    trainer = build(records, backend, mode="auto")
+    records, backend = SQLiteRecordStore(), CaptureBackend()
+    trainer = build(records, backend, mode="auto", batch_size=2)
     records.append(inference("a"))
     assert trainer.run_once() is None
     records.append(inference("b"))
@@ -343,9 +339,9 @@ def test_manual_instruction_batch_never_falls_back_to_auto():
         task2batch=TraceOnlyBatches(context, None),
     )
     pipeline.push(inference("held"))
-    assert not pipeline.ready()
+    assert not pipeline.ready(1)
     pipeline.push(instruction("one"))
-    batch = pipeline.build_batch()
+    batch = pipeline.build_batch(1)
     # The instruction runs alone: the held set an automatic batch would take stays held.
     assert batch.request.id == "one"
     assert batch.items == ()
@@ -367,21 +363,21 @@ def test_status_shows_how_far_a_partly_filled_batch_still_has_to_go():
         def make_batch(self, tasks, batch_id):
             return TrainingBatch(batch_id, tasks)
 
-    context = PipelineContext("s", training_mode="auto", batch_size=4)
+    context = PipelineContext("s", training_mode="auto")
     pipeline = TrainingPipeline(
         context,
         record2record=InferenceRecord2Record(),
         record2task=InferenceTasks(),
         task2batch=CountedBatches(context, 6),
     )
-    assert pipeline.status() == {"ready_samples": 0, "batch_size": 4, "buffer_size": 6}
+    assert pipeline.status() == {"ready_samples": 0, "buffer_size": 6}
     for index in range(3):
         pipeline.push(inference(f"inf-{index}"))
-    assert pipeline.status() == {"ready_samples": 3, "batch_size": 4, "buffer_size": 6}
-    assert not pipeline.ready()
+    assert pipeline.status() == {"ready_samples": 3, "buffer_size": 6}
+    assert not pipeline.ready(4)
     pipeline.push(inference("inf-3"))
     assert pipeline.status()["ready_samples"] == 4
-    assert pipeline.ready()
+    assert pipeline.ready(4)
     pipeline.close()
 
 
@@ -422,8 +418,8 @@ def test_processor_uses_shared_data_and_one_batch_assembly_hook(mode):
             task2batch=TrajectoryBatches(context, None),
         )
 
-    records, backend = SQLiteRecordStore(), CaptureBackend(batch_size=2)
-    trainer = build(records, backend, trajectory_pipeline, mode=mode)
+    records, backend = SQLiteRecordStore(), CaptureBackend()
+    trainer = build(records, backend, trajectory_pipeline, mode=mode, batch_size=2)
     try:
         records.append(inference("first"))
         assert trainer.run_once() is None
@@ -544,8 +540,8 @@ def test_switch_during_reserved_batch_keeps_original_acknowledgement(mode, dispa
 
 
 def test_switch_preserves_incomplete_auto_batch_and_unread_manual_instructions():
-    records, backend = SQLiteRecordStore(), CaptureBackend(batch_size=2)
-    trainer = build(records, backend, mode="auto")
+    records, backend = SQLiteRecordStore(), CaptureBackend()
+    trainer = build(records, backend, mode="auto", batch_size=2)
     try:
         records.append(inference("a"))
         assert trainer.run_once() is None
@@ -1108,8 +1104,8 @@ def test_an_instruction_runs_past_the_step_budget_and_the_failure_streak(tmp_pat
 
 @pytest.mark.parametrize("processor", [reports_pipeline, records_pipeline])
 def test_manual_traffic_is_available_to_auto_without_a_replay(processor):
-    records, backend = SQLiteRecordStore(), CaptureBackend(batch_size=2)
-    trainer = build(records, backend, processor, mode="manual")
+    records, backend = SQLiteRecordStore(), CaptureBackend()
+    trainer = build(records, backend, processor, mode="manual", batch_size=2)
     try:
         for receipt in ("a", "b"):
             records.append(inference(receipt))
@@ -1161,8 +1157,8 @@ def test_hybrid_is_a_recipe_and_processor_mode_and_a_fourth_value_is_refused(tmp
 
 @pytest.mark.parametrize("processor", [reports_pipeline, records_pipeline])
 def test_hybrid_runs_a_queued_instruction_alone_when_no_units_are_held(processor):
-    records, backend = SQLiteRecordStore(), CaptureBackend(batch_size=2)
-    trainer = build(records, backend, processor, mode="hybrid")
+    records, backend = SQLiteRecordStore(), CaptureBackend()
+    trainer = build(records, backend, processor, mode="hybrid", batch_size=2)
     try:
         assert trainer.run_once() is None
         records.append(instruction("alone"))
@@ -1186,8 +1182,8 @@ def test_hybrid_runs_a_queued_instruction_alone_when_no_units_are_held(processor
 
 @pytest.mark.parametrize("processor", [reports_pipeline, records_pipeline])
 def test_hybrid_runs_a_queued_instruction_with_the_held_units_as_samples(processor):
-    records, backend = SQLiteRecordStore(), CaptureBackend(batch_size=2)
-    trainer = build(records, backend, processor, mode="hybrid")
+    records, backend = SQLiteRecordStore(), CaptureBackend()
+    trainer = build(records, backend, processor, mode="hybrid", batch_size=2)
     try:
         failure(records, "a")
         assert trainer.run_once() is None
@@ -1214,15 +1210,15 @@ def test_hybrid_runs_two_queued_instructions_oldest_first_one_per_step():
     processor.push(instruction("first"))
     processor.push(instruction("second"))
     assert processor.status()["buffered_requests"] == 2
-    assert processor.ready()
-    batch = processor.build_batch()
+    assert processor.ready(1)
+    batch = processor.build_batch(1)
     assert batch.batch_id == "s:instruction:first"
     assert batch.request.id == "first"
-    assert processor.build_batch() is batch
+    assert processor.build_batch(1) is batch
     assert processor.acknowledge(batch.batch_id) == frozenset({"first"})
-    assert processor.build_batch().request.id == "second"
+    assert processor.build_batch(1).request.id == "second"
     assert processor.acknowledge("s:instruction:second") == frozenset({"second"})
-    assert not processor.ready()
+    assert not processor.ready(1)
     processor.close()
 
 
@@ -1230,7 +1226,7 @@ def test_hybrid_batches_as_auto_does_without_an_instruction():
     processor = reports_pipeline(PipelineContext("s", training_mode="hybrid"))
     processor.push(inference("a"))
     processor.push(report("a"))
-    batch = processor.build_batch()
+    batch = processor.build_batch(1)
     assert batch.batch_id == "s:batch:1"
     assert batch.request is None
     assert [source_record_id(sample) for sample in batch.items] == ["a"]
@@ -1239,8 +1235,8 @@ def test_hybrid_batches_as_auto_does_without_an_instruction():
 
 
 def test_hybrid_alternates_the_instruction_path_and_the_failure_path_without_a_mode_change():
-    records, backend = SQLiteRecordStore(), CaptureBackend(batch_size=2)
-    trainer = build(records, backend, reports_pipeline, mode="hybrid")
+    records, backend = SQLiteRecordStore(), CaptureBackend()
+    trainer = build(records, backend, reports_pipeline, mode="hybrid", batch_size=2)
 
     def step():
         result = trainer.run_once()
@@ -1280,8 +1276,8 @@ def test_hybrid_alternates_the_instruction_path_and_the_failure_path_without_a_m
 
 
 def test_switching_hybrid_to_auto_holds_the_unread_instruction_for_a_mode_that_takes_it():
-    records, backend = SQLiteRecordStore(), CaptureBackend(batch_size=2)
-    trainer = build(records, backend, reports_pipeline, mode="hybrid")
+    records, backend = SQLiteRecordStore(), CaptureBackend()
+    trainer = build(records, backend, reports_pipeline, mode="hybrid", batch_size=2)
     try:
         records.append(instruction("later"))
         trainer.set_training_mode("auto")
@@ -1393,8 +1389,8 @@ def test_the_proposal_route_refuses_in_manual_mode_and_admits_again_in_a_batchin
 
 @pytest.mark.parametrize("mode", ["auto", "manual", "hybrid"])
 def test_every_mode_releases_the_oldest_held_units_beyond_the_buffer(caplog, mode):
-    processor = reports_pipeline(PipelineContext("s", training_mode=mode))
-    # The default buffer holds four batches of the backend's batch size, one sample each.
+    # The trainer's default buffer holds four batches of batch size 1, one sample each.
+    processor = reports_pipeline(PipelineContext("s", training_mode=mode, default_buffer_size=4))
     assert processor.buffer_size == 4
 
     def fail(index):
@@ -1420,12 +1416,12 @@ def test_every_mode_releases_the_oldest_held_units_beyond_the_buffer(caplog, mod
     assert "buffer size 4" in caplog.records[0].message
     if mode == "manual":
         processor.push(instruction("do-it"))
-        batch = processor.build_batch()
+        batch = processor.build_batch(1)
         assert batch.items == ()
         assert processor.acknowledge(batch.batch_id) == frozenset({"do-it"})
         assert len(processor.record2record.pool) == 4
     else:
-        reserved = processor.build_batch()
+        reserved = processor.build_batch(1)
         fail(20)
         fail(21)
         # The handed-out batch keeps its unit and does not count; the buffer releases the oldest unreserved one.

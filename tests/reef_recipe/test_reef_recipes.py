@@ -245,7 +245,7 @@ def test_cookbook_recipes_reject_multi_turn_policy_samples(recipe, metadata) -> 
             )
         )
 
-    assert not pipeline.ready()
+    assert not pipeline.ready(1)
     assert "r1" not in pipeline.releasable_record_ids()
 
 
@@ -263,7 +263,7 @@ def test_openclawrl_recipe_never_trains_on_reports() -> None:
             references=("i1",),
         )
     )
-    assert not pipeline.ready()
+    assert not pipeline.ready(1)
     decision = pipeline.releasable_record_ids()
     assert "r1" in decision
     assert "r1" in decision
@@ -476,7 +476,7 @@ def test_opd_recipe_uses_configured_runtime_and_checkpoint_schedule() -> None:
     assert isinstance(recipe, OPDRecipe)
     assert recipe.training_runtime is runtime
     assert recipe.checkpoint_strategy == EveryNVersions(20)
-    assert recipe.build_pipeline(PipelineContext("math", batch_size=4)).task2batch.buffer_size == 16
+    assert recipe.build_pipeline(PipelineContext("math", default_buffer_size=4)).task2batch.buffer_size == 16
 
 
 def test_cordis_recipe_reads_the_evolution_batch_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

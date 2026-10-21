@@ -143,7 +143,7 @@ def test_openclawrl_processor_drops_unfillable_stale_version_candidates() -> Non
     from reef.pipeline_context import PipelineContext
 
     worker = _FakeWorker()
-    context = PipelineContext("s", batch_size=3)
+    context = PipelineContext("s")
     stage = OpenClawRLRecord2Record(OpenClawRLJudgingSettings(), worker=worker)
     processor = TrainingPipeline(
         context,
@@ -156,7 +156,7 @@ def test_openclawrl_processor_drops_unfillable_stale_version_candidates() -> Non
     processor.observe_serving_runtime_load_id("v2")
     _judged_turns(processor, worker, ["v1", "v1", "v2", "v2", "v2"])
 
-    batch = processor.build_batch()
+    batch = processor.build_batch(3)
     versions = {sample.training.get("runtime_load_id", None) for sample in batch.items}
     assert versions == {"v2"}
     assert len(batch.items) == 3
@@ -168,7 +168,7 @@ def test_openclawrl_processor_keeps_single_version_queue_intact() -> None:
     from reef.pipeline_context import PipelineContext
 
     worker = _FakeWorker()
-    context = PipelineContext("s", batch_size=3)
+    context = PipelineContext("s")
     stage = OpenClawRLRecord2Record(OpenClawRLJudgingSettings(), worker=worker)
     processor = TrainingPipeline(
         context,
@@ -178,7 +178,7 @@ def test_openclawrl_processor_keeps_single_version_queue_intact() -> None:
     )
     _judged_turns(processor, worker, ["v1", "v1"])
     # All-one-version queue below batch size: nothing is dropped, not ready yet.
-    assert not processor.ready()
+    assert not processor.ready(3)
     assert len(processor.releasable_record_ids()) == 0
 
 

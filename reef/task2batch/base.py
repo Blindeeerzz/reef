@@ -2,11 +2,11 @@
 
 The tasks of a record set enter the stage as samples when the record-to-task
 stage makes them. The buffer holds the samples of the record sets that wait
-for a batch, at most ``buffer_size``. The training pipeline
-(:class:`~reef.train.pipeline.TrainingPipeline`) makes a batch when the
-buffer holds the candidate backend's batch size: it selects whole batch units
-from the record-to-record stage and gives their samples to a recipe's
-``Task2Batch``. A task is a ``TrainDataItem``.
+for a batch, at most ``buffer_size``. When the trainer asks the training
+pipeline (:class:`~reef.train.pipeline.TrainingPipeline`) for a batch of its
+batch size, the pipeline selects whole batch units from the record-to-record
+stage and gives their samples to a recipe's ``Task2Batch``. A task is a
+``TrainDataItem``.
 """
 
 from __future__ import annotations
@@ -26,10 +26,6 @@ from reef.record2record import Record2Record
 from reef.record2task import Record2Task
 
 
-#: The batches that a buffer holds when the deployment does not set ``buffer_size``.
-DEFAULT_BUFFER_BATCHES = 4
-
-
 @dataclass(frozen=True)
 class BufferSettings(PluginSettings):
     """The config of a task-to-batch stage: the size of its sample buffer.
@@ -37,13 +33,12 @@ class BufferSettings(PluginSettings):
     Values: ``buffer_size`` is None or a positive int.
     Purpose: a stage's ``from_config`` parses it from
     ``pipeline.task2batch.config`` and gives ``buffer_size`` to
-    ``Task2Batch.__init__``. None there means ``DEFAULT_BUFFER_BATCHES``
-    batches of the backend's batch size. A stage settings class that has
-    more keys extends it.
+    ``Task2Batch.__init__``. None there means the trainer's default, four
+    batches. A stage settings class that has more keys extends it.
     """
 
     buffer_size: int | None = config_option(
-        None, help="The most samples the buffer holds; at least the batch size. Omitted holds 4 batches."
+        None, help="The most samples the buffer holds; at least the batch size. Omitted holds four batches."
     )
 
     def __post_init__(self) -> None:
@@ -54,9 +49,13 @@ class BufferSettings(PluginSettings):
 class Task2Batch(ABC, Plugin):
     """The task-to-batch stage: bound the sample buffer, and shape the samples of the selected batch units into one batch.
 
-    Values: ``buffer_size`` is an int and ``buffer_size >= context.batch_size``;
-    the constructor refuses a smaller size. The pipeline keeps at most
-    ``buffer_size`` samples of held record sets. A recipe implements ``make_batch``. The class attributes declare what the
+    Values: ``buffer_size`` is None or a positive int: the configured size, or
+    else ``context.default_buffer_size``; None holds every sample.
+    ``max_batch_samples`` is None or a positive int, the most samples one batch
+    may hold; None sets no limit. The pipeline keeps at most ``buffer_size``
+    samples of held record sets, and the trainer refuses a batch size below
+    ``buffer_size`` or above ``max_batch_samples``. A recipe implements
+    ``make_batch``. The class attributes declare what the
     pipeline and the trainer need to know about the recipe's batches.
     ``make_batch`` runs on the trainer thread without network or model calls.
     A deployment names a stage class in ``pipeline.task2batch`` and gives its
@@ -78,13 +77,10 @@ class Task2Batch(ABC, Plugin):
     def __init__(self, context: PipelineContext, buffer_size: int | None) -> None:
         self.context = context
         self.scenario = context.scenario
-        #: The most samples that the buffer holds, at least ``context.batch_size``.
-        self.buffer_size = DEFAULT_BUFFER_BATCHES * context.batch_size if buffer_size is None else buffer_size
-        if self.buffer_size < context.batch_size:
-            raise PluginConfigError(
-                f"{type(self).__name__} buffer_size {self.buffer_size} is smaller than the batch size "
-                f"{context.batch_size}"
-            )
+        #: The most samples that the buffer holds; None holds every sample.
+        self.buffer_size = context.default_buffer_size if buffer_size is None else buffer_size
+        #: The most samples one batch may hold; None sets no limit. A stage whose batch is one fixed unit sets it.
+        self.max_batch_samples: int | None = None
 
     @classmethod
     def from_config(

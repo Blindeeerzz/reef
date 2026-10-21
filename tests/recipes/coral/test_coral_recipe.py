@@ -66,7 +66,6 @@ def test_example_pipeline_section_builds_the_coral_stages():
     assert isinstance(pipeline.record2task, CoralTasks)
     assert pipeline.record2task.assembly.settings.accept_multi_turn_policy_samples
     assert isinstance(pipeline.task2batch, CoralBatches)
-    assert pipeline.batch_size == 1
 
 
 def test_default_group_size_is_four():

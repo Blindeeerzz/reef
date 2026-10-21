@@ -22,9 +22,9 @@ each record set's task result back to its stage, keeps the samples of held
 sets in the buffer, releases the oldest sets when the buffer is over the
 stage's ``buffer_size``, hands out one batch at a time until the trainer
 acknowledges or releases it, and runs the training modes and the training
-instructions. An automatic batch holds at least the candidate backend's batch
-size in samples (``PipelineContext.batch_size``). It takes whole record sets,
-so it can hold more.
+instructions. The pipeline does not know the batch size: the trainer passes
+it to ``ready`` and ``build_batch``. An automatic batch holds at least that
+many samples. It takes whole record sets, so it can hold more.
 
 A client can also upload an ATIF trajectory. It is not a record, so it does not
 go through the first two stages. It counts as one sample. A batch takes
@@ -157,14 +157,15 @@ class TrainingPipeline:
     but never becomes ready and never produces a batch.
 
     The samples of a held unit are the tasks of its record sets; an uploaded
-    trajectory is one sample. In ``auto`` the pipeline is ready if and only if
-    the held units and uploaded trajectories hold at least ``batch_size``
-    samples. ``build_batch`` takes the uploaded trajectories first, then
-    whole units in selection order until the batch holds ``batch_size``
-    samples or the units run out. After it moves record sets, the unreserved
-    units hold at most ``buffer_size`` samples, or are one unit: it releases
-    the oldest ones beyond that and keeps the newest, so a unit larger than
-    the buffer still trains.
+    trajectory is one sample. In ``auto``, ``ready(sample_count)`` is True if
+    and only if the held units and uploaded trajectories hold at least
+    ``sample_count`` samples. ``build_batch(sample_count)`` takes the uploaded
+    trajectories first, then whole units in selection order until the batch
+    holds ``sample_count`` samples or the units run out. When ``buffer_size``
+    is set, after it moves record sets, the unreserved units hold at most
+    ``buffer_size`` samples, or are one unit: it releases the oldest ones
+    beyond that and keeps the newest, so a unit larger than the buffer still
+    trains.
 
     The trainer-facing methods (``push``, ``ready``, ``build_batch``, and
     the others) run on the trainer's thread under its lock and must not block
@@ -233,13 +234,8 @@ class TrainingPipeline:
         return self.task2batch.accepts_trajectories
 
     @property
-    def batch_size(self) -> int:
-        """The samples in one training step, from the candidate backend. An automatic batch holds at least this many."""
-        return self.context.batch_size
-
-    @property
-    def buffer_size(self) -> int:
-        """The most samples that the held record sets keep; the task-to-batch stage sets it."""
+    def buffer_size(self) -> int | None:
+        """The most samples that the held record sets keep, or None for every sample; the task-to-batch stage sets it."""
         return self.task2batch.buffer_size
 
     @property
@@ -332,8 +328,11 @@ class TrainingPipeline:
         """Release the oldest unreserved units while their samples are more than ``buffer_size``.
 
         The reserved batch and the newest unreserved unit stay. Uploaded trajectories do not count: their store
-        keeps them.
+        keeps them. Without a ``buffer_size`` nothing is released.
         """
+        buffer_size = self.buffer_size
+        if buffer_size is None:
+            return
         pool = self.record2record.pool
         reserved = {unit.unit_id for unit in pool.reserved_units()}
         unreserved = sorted(
@@ -341,7 +340,7 @@ class TrainingPipeline:
         )
         held = sum(self.count_unit_samples(unit) for unit in unreserved)
         for unit in unreserved[:-1]:
-            if held <= self.buffer_size:
+            if held <= buffer_size:
                 break
             held -= self.count_unit_samples(unit)
             self.record2record.drop_held_unit(unit)
@@ -349,7 +348,7 @@ class TrainingPipeline:
                 logger.warning(
                     "scenario %r released a held record set beyond the buffer size %d (further releases are not logged)",
                     self.scenario,
-                    self.buffer_size,
+                    buffer_size,
                 )
                 self.buffer_release_warned = True
         self.forget_ended_sets()
@@ -401,12 +400,13 @@ class TrainingPipeline:
 
     # ------------------------------------------------------------ batch cycle
     #
-    # Batch when the held units and uploaded trajectories hold a batch size of
-    # samples (auto, hybrid) or an instruction is queued (manual, hybrid), hand
+    # Batch when the held units and uploaded trajectories hold the trainer's
+    # sample count (auto, hybrid) or an instruction is queued (manual, hybrid), hand
     # the same batch out until it is acknowledged, then end the units and
     # trajectories it consumed.
 
-    def ready(self) -> bool:
+    def ready(self, sample_count: int) -> bool:
+        """Whether a batch can be built now; in ``auto`` it needs ``sample_count`` held samples."""
         # Background work, such as judgments or finished rounds, forms sets without a new record.
         self.record2record.advance(time.monotonic())
         self.move_record_sets()
@@ -418,11 +418,12 @@ class TrainingPipeline:
             return bool(self.training_requests)
         if self.training_mode == "hybrid" and self.training_requests:
             return True
-        return self.count_held_samples() >= self.batch_size
+        return self.count_held_samples() >= sample_count
 
-    def build_batch(self) -> TrainingBatch:
+    def build_batch(self, sample_count: int) -> TrainingBatch:
+        """Return the handed out batch, or build one of at least ``sample_count`` samples when ``ready``."""
         if self.pending is None:
-            if not self.ready():
+            if not self.ready(sample_count):
                 raise RuntimeError(f"scenario {self.scenario!r} has no batch ready")
             self.batch_number += 1
             # Manual and hybrid run the oldest queued instruction first; auto leaves the queue to a mode that takes it.
@@ -432,11 +433,11 @@ class TrainingPipeline:
                 else None
             )
             # In manual mode an instruction runs alone; in hybrid it takes the samples that an automatic batch would.
-            sample_count = 0 if request is not None and self.training_mode == "manual" else self.batch_size
+            batch_samples = 0 if request is not None and self.training_mode == "manual" else sample_count
             # Uploaded trajectories go first, in upload order. Whole record set units, in selection order, fill
-            # the rest of the batch until it holds ``sample_count`` samples.
-            self.reserved_trajectory_ids = tuple(self.uploaded_trajectories)[:sample_count]
-            missing = sample_count - len(self.reserved_trajectory_ids)
+            # the rest of the batch until it holds ``batch_samples`` samples.
+            self.reserved_trajectory_ids = tuple(self.uploaded_trajectories)[:batch_samples]
+            missing = batch_samples - len(self.reserved_trajectory_ids)
             units: list[RecordSetUnit] = []
             for unit in self.record2record.pool.ordered_units():
                 if missing <= 0:
@@ -523,8 +524,9 @@ class TrainingPipeline:
     def status(self) -> Mapping[str, Any]:
         """Return JSON-safe state that callers need while waiting.
 
-        ``ready_samples`` against ``batch_size`` says how close the next batch
-        is; ``buffer_size`` is the most samples the held record sets keep. A
+        ``ready_samples`` against the trainer's ``batch_size`` says how close
+        the next batch is; ``buffer_size`` is the most samples the held record
+        sets keep, or None for every sample. A
         caller waiting on a release needs it to tell a batch that is
         still filling from one that never will: a scenario whose producer
         stopped short sits below the batch size with nothing else to report.
@@ -533,7 +535,6 @@ class TrainingPipeline:
         """
         state: dict[str, Any] = {
             "ready_samples": self.count_held_samples(),
-            "batch_size": self.batch_size,
             "buffer_size": self.buffer_size,
         }
         if self.supported_training_modes & {"manual", "hybrid"}:

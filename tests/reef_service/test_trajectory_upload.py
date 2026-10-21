@@ -49,11 +49,6 @@ class CountingBackend(CandidateBackend):
     def __init__(self, batches: list[TrainingBatch]) -> None:
         self.batches = batches
 
-    @property
-    def batch_size(self) -> int:
-        # An uploaded trajectory is one sample, so two uploads make one batch.
-        return 2
-
     def initial_state(self) -> Mapping[str, Any]:
         return {"trained": 0}
 
@@ -97,6 +92,8 @@ class UploadRecipe(Recipe):
             experiment_logger=experiment_logger,
             training_mode=self.training_mode,
             task_storage=task_storage,
+            # An uploaded trajectory is one sample, so two uploads make one batch.
+            batch_size=2,
         )
 
 
