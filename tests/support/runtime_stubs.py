@@ -155,7 +155,9 @@ class ExecutorRuntimeFixture(RuntimeCandidateBackend):
     def __init__(self, components=None, **kwargs):
         from reef.service.runtime import connect_executor_runtimes
 
-        training, inference = components if components is not None else connect_executor_runtimes(**kwargs)
+        training, inference = (
+            components if components is not None else connect_executor_runtimes(**{"batch_size": 1, **kwargs})
+        )
         super().__init__(
             training, FixedTrainingMethodSelector(TrainingMethod("sft")), StepScheduling(), inference_runtime=inference
         )

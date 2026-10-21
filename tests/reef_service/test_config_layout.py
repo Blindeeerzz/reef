@@ -207,6 +207,7 @@ def test_null_is_kept_for_optional_fields(tmp_path):
         orchestrator.resolve_deployment_config(raw, None, tmp_path / "config.yaml")
     raw["recipe"]["config"] = {"checkpoint-every-n-versions": None}
     raw["inference"] = {"model-path": "/models/demo", "upstream-api-key": None}
+    raw["training"] = {"options": {"global-batch-size": 1}}
     config, _ = orchestrator.resolve_deployment_config(raw, None, tmp_path / "config.yaml")
     assert config["reef"]["checkpoint_every_n_versions"] is None
 

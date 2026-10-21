@@ -31,9 +31,7 @@ class _MarkerCoordinator(CoordinatorClient):
         self.store = FileTrainingJobStore(backend.path)
         self.execution = TrainingExecution(self.store, backend, backend.state)
         self.commits: list[str] = []
-        self._config = TrainingCoordinationConfig(
-            save_hf_template=str(backend.path.parent / "hf-{rollout_id}"), batch_size=1
-        )
+        self._config = TrainingCoordinationConfig(save_hf_template=str(backend.path.parent / "hf-{rollout_id}"))
         self._store = self.store
 
     def health(self):
@@ -41,7 +39,6 @@ class _MarkerCoordinator(CoordinatorClient):
             "ok": True,
             "phase": "serving",
             "colocate": False,
-            "batch_size": 1,
             "inference_url": "http://inference",
             "lora_adapter": None,
             "lora_mode": None,
@@ -84,7 +81,7 @@ def _weight_job_before_the_restart(root: Path, *, published: bool) -> dict:
 
 def _restarted(root: Path) -> tuple[_MarkerCoordinator, RuntimeScheduler]:
     coordinator = _MarkerCoordinator(MemoryTrainingBackend(root))
-    return coordinator, RuntimeScheduler(ExecutorTrainingRuntime(coordinator), WeightReceiver())
+    return coordinator, RuntimeScheduler(ExecutorTrainingRuntime(coordinator, batch_size=1), WeightReceiver())
 
 
 @pytest.mark.unit

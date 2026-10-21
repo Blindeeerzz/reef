@@ -755,12 +755,10 @@ def test_the_delete_guard_reads_the_runtime_once(tmp_path: Path, dispatchers: _D
                 return {
                     "ok": False,
                     "phase": "dead",
-                    "batch_size": 1,
                     "training_job": {"deferred_weight_update": True, "status": "IDLE"},
                 }
             return {
                 "ok": True,
-                "batch_size": 1,
                 "training_job": {
                     "deferred_weight_update": True,
                     "status": "RUNNING",
@@ -771,7 +769,7 @@ def test_the_delete_guard_reads_the_runtime_once(tmp_path: Path, dispatchers: _D
 
     handle = Handle()
     dispatcher, _ = dispatchers.open(backends=_dispatched_pair(tmp_path), training=StubTrainingRuntime())
-    object.__setattr__(dispatcher.recipe, "training_runtime", ExecutorTrainingRuntime(handle))  # type: ignore[arg-type]
+    object.__setattr__(dispatcher.recipe, "training_runtime", ExecutorTrainingRuntime(handle, batch_size=1))  # type: ignore[arg-type]
     try:
         assert dispatcher.training_job_in_flight("x") is True
         assert handle.calls == 1

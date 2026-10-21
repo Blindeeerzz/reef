@@ -362,7 +362,7 @@ def test_reef_coordinator_closes_backend_operations_before_local_cleanup():
     from reef.runtime.interfaces import TrainingContext, TrainingCoordinationConfig
 
     plan, events = plan_for()
-    plan.training.config = TrainingCoordinationConfig(save_hf_template=None, batch_size=1)
+    plan.training.config = TrainingCoordinationConfig(save_hf_template=None)
     plan.training.context = TrainingContext()
 
     # The native operations may recreate workers inside the coordinator.

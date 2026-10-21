@@ -155,12 +155,7 @@ class SlimeTrainingBackend(TrainingBackend, ExecutorFailureListener):
         self._batch_processor = batch_processor
         self._save_hf_template = save_hf_template
         self._config = TrainingCoordinationConfig(
-            save_hf_template,
-            colocate,
-            lora,
-            adapter_capacity,
-            keep_lora_base_resident,
-            batch_size=args.global_batch_size,
+            save_hf_template, colocate, lora, adapter_capacity, keep_lora_base_resident
         )
         self._context = TrainingContext(
             next_rollout_id=start_rollout_id,

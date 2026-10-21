@@ -89,6 +89,7 @@ def _settings(**overrides) -> ServiceConfig:
         "ray_actor_name": "reef-train-bridge",
         "inference_url": "http://ray-head:30000",
         "model_path": "/models/demo",
+        "training_backend_options": {"global-batch-size": 4},
         "inference_timeout_s": 30.0,
         "inference_handler_factory": None,
         "inference_handler_config": {},
@@ -300,6 +301,7 @@ def test_build_dispatcher_connects_runtime_and_injects_selected_recipe(monkeypat
         "model_path": "/models/demo",
         "inference_timeout_s": 30.0,
         "train_timeout_s": None,
+        "batch_size": 4,
     }
     assert backend == {
         "config": {"repository": "/state/artifacts.git"},

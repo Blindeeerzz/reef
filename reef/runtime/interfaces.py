@@ -802,7 +802,12 @@ class TrainingRuntime(ABC):
     @property
     @abstractmethod
     def batch_size(self) -> int:
-        """The rollouts in one optimizer step: the least number of samples in one training batch."""
+        """The rollouts in one optimizer step, a positive int: the samples in one training batch.
+
+        The deployment reads it from the training options (Slime's
+        ``--global-batch-size``, Tinker's ``batch_size``) and gives it to the
+        runtime; a recipe passes it to ``Trainer.build``.
+        """
 
     @property
     def concurrent_training_scenarios(self) -> bool:
@@ -905,28 +910,13 @@ class PreparedTrainingJob(ABC):
 
 @dataclass(frozen=True)
 class TrainingCoordinationConfig:
-    """Deployment policy interpreted only by Reef's coordinator.
-
-    Values: ``save_hf_template`` is None or a checkpoint path template;
-    ``adapter_capacity`` is None or an int; ``batch_size`` is a positive int,
-    the rollouts in one optimizer step: Slime's ``--global-batch-size`` or
-    Tinker's ``batch_size``. The constructor refuses another ``batch_size``.
-    Purpose: a training backend makes it from its launch arguments. The
-    coordinator reads it and reports ``colocate``, ``lora`` and
-    ``batch_size`` in its health; the training pipeline fills each batch to at
-    least ``batch_size`` samples.
-    """
+    """Deployment policy interpreted only by Reef's coordinator."""
 
     save_hf_template: str | None
     colocate: bool = False
     lora: bool = False
     adapter_capacity: int | None = None
     keep_lora_base_resident: bool = False
-    batch_size: int = field(kw_only=True)
-
-    def __post_init__(self) -> None:
-        if isinstance(self.batch_size, bool) or not isinstance(self.batch_size, int) or self.batch_size <= 0:
-            raise ValueError(f"batch_size must be a positive int, got {self.batch_size!r}")
 
 
 def _initial_runtime_load_id() -> str:

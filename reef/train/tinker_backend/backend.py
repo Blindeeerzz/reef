@@ -78,7 +78,7 @@ class TinkerTrainingBackend(TrainingBackend):
         self._root.mkdir(parents=True, exist_ok=True)
         self._template = str(self._root / "checkpoints" / "rollout_{rollout_id}")
         self._coordination = TrainingCoordinationConfig(
-            self._template, lora=True, adapter_capacity=config.max_loaded_adapters, batch_size=config.batch_size
+            self._template, lora=True, adapter_capacity=config.max_loaded_adapters
         )
         self._context = TrainingContext(
             next_rollout_id=start_rollout_id, history=ScenarioHistory(history_path(self._template))

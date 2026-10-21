@@ -16,12 +16,7 @@ from reef.artifact import LiveWeightArtifactRef
 from reef.core import RuntimeLoadSpan
 from reef.observability.operations import OperationMetrics
 from reef.runtime.executor import ray as ray_executor
-from reef.runtime.executor.connection import (
-    RayCoordinatorClient,
-    RayRuntimeError,
-    RemoteRayCoordinatorClient,
-    training_job_status,
-)
+from reef.runtime.executor.connection import RayCoordinatorClient, RayRuntimeError, RemoteRayCoordinatorClient
 from reef.runtime.interfaces import (
     ActivatedModel,
     InferenceAdmissionController,
@@ -56,7 +51,6 @@ class FakeTrainGroupHandle(RayCoordinatorClient):
     def health(self) -> Mapping[str, Any]:
         return {
             "colocate": False,
-            "batch_size": 1,
             "training_job": {
                 "deferred_weight_update": True,
                 "status": getattr(self, "status", "IDLE"),
@@ -126,7 +120,6 @@ class DeferredWeightUpdateTrainGroupHandle(FakeTrainGroupHandle):
     def health(self) -> Mapping[str, Any]:
         return {
             "colocate": self.colocate,
-            "batch_size": 1,
             "lora_adapter": self.lora_adapter,
             "training_job": {
                 "deferred_weight_update": True,
@@ -269,18 +262,6 @@ def test_ray_runtime_rejects_a_malformed_served_adapter_name() -> None:
     handle.lora_adapter = ""
     with pytest.raises(RayRuntimeError, match="serving adapter name"):
         ExecutorRuntimeFixture(train_group_handle=handle, inference_url="http://router")
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("batch_size", [None, 0, -2, True, "4"])
-def test_training_job_status_refuses_a_missing_or_non_positive_batch_size(batch_size) -> None:
-    class SizedHandle(FakeTrainGroupHandle):
-        def health(self) -> Mapping[str, Any]:
-            return {**super().health(), "batch_size": batch_size}
-
-    assert training_job_status(FakeTrainGroupHandle())["batch_size"] == 1
-    with pytest.raises(RayRuntimeError, match="malformed batch size"):
-        training_job_status(SizedHandle())
 
 
 @pytest.mark.unit

@@ -613,13 +613,12 @@ def bridge_args(**overrides) -> SlimeArguments:
 
 
 @pytest.mark.unit
-def test_bridge_health_reports_start_rollout_id_and_the_global_batch_size() -> None:
+def test_bridge_health_reports_start_rollout_id() -> None:
     group = _FakeGroup()
     actor = build_slime_coordinator(
         group,
         _FakeRolloutManager(["packed"]),
         batch_processor=_FakeRolloutManager(["packed"]),
-        args=bridge_args(global_batch_size=4),
         save_hf_template=None,
         start_rollout_id=3,
     )
@@ -627,7 +626,6 @@ def test_bridge_health_reports_start_rollout_id_and_the_global_batch_size() -> N
     health = actor.health()
     assert health["ok"] is True
     assert health["start_rollout_id"] == 3
-    assert health["batch_size"] == 4
 
 
 @pytest.mark.unit
@@ -1974,7 +1972,7 @@ def test_slime_runtime_explains_timeout_without_committing_or_replaying(tmp_path
     executor = UniProcExecutor.from_workers([actor])
     client = ExecutorCoordinatorClient(executor, timeout_s=43200)
     monkeypatch.setattr("reef.train.slime_backend.runtime.connect_ray_coordinator", lambda **kwargs: client)
-    runtime = SlimeTrainingRuntime(train_timeout_s=43200)
+    runtime = SlimeTrainingRuntime(train_timeout_s=43200, batch_size=1)
     try:
         with pytest.raises(TimeoutError, match=r"training\.timeout-s") as error:
             runtime.execute_training_job(payload)

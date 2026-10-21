@@ -1552,8 +1552,10 @@ inherits from the other, and there is no aggregate runtime.
 * ``TrainingRuntime`` prepares batches, produces candidate checkpoints, rejects
   candidates and restores training weights/optimizer state. It receives serving
   versions as values; it does not own an inference endpoint or request backend.
-  Its ``batch_size`` property is the samples in one optimizer step: Slime's
-  ``--global-batch-size`` or Tinker's ``batch_size``.
+  Its ``batch_size`` property is the samples in one optimizer step. The
+  deployment reads it from the training options (Slime's
+  ``--global-batch-size``, Tinker's ``batch_size``) when it builds the
+  runtime; a hand-assembled runtime config sets ``batch_size``.
 * ``InferenceRuntime`` executes requests, manages admission and reconnection,
   loads selected weights or adapters, and reports serving versions. It restores
   serving weights without restoring optimizer state. Its ``model_path`` property

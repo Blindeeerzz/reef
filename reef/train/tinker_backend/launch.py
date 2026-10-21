@@ -143,6 +143,7 @@ class TinkerDeployment(InProcessTrainingDeployment):
             "ray_address": ray_address,
             "inference_timeout_s": settings["inference_timeout_s"],
             "train_timeout_s": settings["train_timeout_s"],
+            "batch_size": tinker_settings(settings["training_backend_options"] or {}).batch_size,
         }
         handler_factory = inference_handler_factory_for(settings["inference_handler_factory"])
         if handler_factory is not None:

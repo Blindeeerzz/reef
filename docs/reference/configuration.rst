@@ -1040,7 +1040,7 @@ Read by the weight-training stack. See `Evolve your model
    training.colocate | false | train on the inference GPUs: Reef reserves one shared allocation and derives the native offload flags
    training.ready-timeout | 3600 | backend-owned component startup deadline; in-process model loading is covered by reef.ready-timeout
    training.config.num_gpus | example-specific GPU count passed to Slime's model topology flags; does not reserve GPUs for the driver or set the Ray cluster's capacity
-   training.config.global_batch_size | samples in one optimizer step, passed to Slime as ``--global-batch-size``. It is also the batch size of the training pipeline: a batch forms when this many samples are held.
+   training.config.global_batch_size | samples in one optimizer step, passed to Slime as ``--global-batch-size``. It is also the batch size of the training pipeline: a batch forms when this many samples are held. Reef reads ``training.options.global-batch-size`` itself and refuses a Slime deployment without it, even when ``num-steps-per-rollout`` could derive it.
    training.config.checkpoint_dir | where Megatron and HF checkpoints are written
    training.config.megatron_checkpoint_path | optional pre-converted torch_dist checkpoint, to skip HF conversion on every start
    training.config.checkpoint_retention | storage-fraction bounds and the retention policy
