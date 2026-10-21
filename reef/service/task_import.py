@@ -1,7 +1,7 @@
 """The import of a deployment's Harbor tasks into each scenario's task store.
 
 A deployment names a split manifest and the directory of its tasks in its
-``task_import`` section. When a scenario opens, :class:`TaskImportingScenarioStorage`
+``task-import`` section. When a scenario opens, :class:`TaskImportingScenarioStorage`
 adds each task of the manifest to the scenario's task store ``imported-tasks``,
 in the split that the manifest gives. An identical import changes nothing, so
 the import runs again at each open and picks up the tasks that the operator
@@ -21,7 +21,7 @@ from reef.core.errors import ReefError
 from reef.core.plugins import PluginConfigError
 from reef.core.tasks.split import read_split_manifest
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage, ScenarioStore
-from reef.storage.tasks import SplitName, StoredTask, TaskFileStore, TaskStorage
+from reef.storage.tasks import SplitName, TaskFileStore, TaskStorage
 
 #: The task store of a scenario that holds the imported tasks.
 IMPORTED_TASK_STORE = "imported-tasks"
@@ -40,15 +40,15 @@ class TaskImport:
     and ``tasks_root`` is the directory that holds a Harbor task directory for
     each task name of the manifest. The files can change between imports.
 
-    Purpose: deployment assembly makes it from the ``task_import`` section.
+    Purpose: deployment assembly makes it from the ``task-import`` section.
     :class:`TaskImportingScenarioStorage` runs it when a scenario opens.
     """
 
     manifest: Path
     tasks_root: Path
 
-    def run(self, tasks: TaskStorage) -> tuple[StoredTask, ...]:
-        """Publish each task of the manifest to its split in the store ``imported-tasks``, and return them.
+    def run(self, tasks: TaskStorage) -> None:
+        """Publish each task of the manifest to its split in the store ``imported-tasks``.
 
         The train tasks come first, then the eval tasks, each in name order.
         Raises ``TaskSplitError`` if the manifest cannot be read,
@@ -58,7 +58,6 @@ class TaskImport:
         """
         manifest = read_split_manifest(self.manifest)
         store = tasks.open(IMPORTED_TASK_STORE)
-        published: list[StoredTask] = []
         splits: tuple[tuple[SplitName, tuple[str, ...]], ...] = (("train", manifest.train), ("eval", manifest.eval))
         for split, names in splits:
             for name in names:
@@ -67,12 +66,22 @@ class TaskImport:
                     HarborTaskLoader(directory)
                 except (ValueError, OSError) as exc:
                     raise TaskImportError(f"{directory} is not a Harbor task: {exc}") from exc
-                published.append(store.add_task(directory=directory, split=split))
-        return tuple(published)
+                store.add_task(directory=directory, split=split)
 
 
 class TaskImportingScenarioStorage(ScenarioStorage):
-    """Storage whose sessions hold the deployment's imported tasks when they open."""
+    """Scenario storage whose sessions hold the deployment's imported tasks when they open.
+
+    Values: ``(inner, task_import)`` is such a storage if and only if ``inner``
+    is a scenario storage and ``task_import`` is a task import. Each operation
+    is the operation of ``inner``, except ``open``: it opens the session of
+    ``inner``, runs ``task_import`` on its task storage, and returns the
+    session. If the import raises, ``open`` closes the session and raises.
+
+    Purpose: deployment assembly wraps the scenario storage in it when the
+    deployment has a ``task-import`` section. The scenario factory opens each
+    scenario's session through it.
+    """
 
     def __init__(self, inner: ScenarioStorage, task_import: TaskImport) -> None:
         self.inner = inner

@@ -73,7 +73,8 @@ For example, the local inference command above can also use:
 Run it with ``reef serve -c reef.yaml --inference.options.mem-fraction-static 0.7``.
 An explicit CLI value overrides the corresponding YAML value. Omitted public
 fields use their declared defaults. Hyphens and underscores are accepted in
-declared YAML fields; supplying both spellings of one field is an error.
+section names and declared YAML fields; supplying both spellings of one field
+is an error.
 Unknown sections and undeclared public fields are rejected.
 
 The public layout groups fields by their owner:

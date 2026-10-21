@@ -209,7 +209,7 @@ class ServiceConfig:
     task_import_tasks_root: str | None = config_option(
         None,
         public_path=("task_import", "tasks_root"),
-        help="Directory that holds a Harbor task directory for each task name of task_import.manifest.",
+        help="Directory that holds a Harbor task directory for each task name of task-import.manifest.",
     )
     record_database_url: str | None = field(
         default=None,
