@@ -21,10 +21,7 @@ from reef.core.errors import ReefError
 from reef.core.plugins import PluginConfigError
 from reef.core.tasks.split import read_split_manifest
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage, ScenarioStore
-from reef.storage.tasks import SplitName, TaskFileStore, TaskStorage
-
-#: The task store of a scenario that holds the imported tasks.
-IMPORTED_TASK_STORE = "imported-tasks"
+from reef.storage.tasks import IMPORTED_TASK_STORE, SplitName, TaskFileStore, TaskStorage
 
 
 class TaskImportError(ReefError):

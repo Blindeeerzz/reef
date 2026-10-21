@@ -14,9 +14,9 @@ from reef.core.tasks.split import TaskSplit, TaskSplitError, write_split_manifes
 from reef.service.assembly import build_dispatcher
 from reef.service.deploy.deployment_config import translate_layout
 from reef.service.deploy.service_config import ServiceConfig, normalize_service_config, service_config_from_mapping
-from reef.service.task_import import IMPORTED_TASK_STORE, TaskImport, TaskImportError, TaskImportingScenarioStorage
+from reef.service.task_import import TaskImport, TaskImportError, TaskImportingScenarioStorage
 from reef.storage.sqlite import SQLiteScenarioStorage
-from reef.storage.tasks import TaskConflict
+from reef.storage.tasks import IMPORTED_TASK_STORE, TaskConflict
 
 IMAGE = bytes(range(256))
 
