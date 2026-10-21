@@ -22,6 +22,7 @@ from recipes.sdpo import SDPOBatches, SDPORecipe, SDPORecord2Record, SDPOReport,
 from recipes.sdpo.processor import SDPODemonstrationSettings, SDPOGridSettings, SDPOTeacherSettings
 from recipes.sdpo.slime import SdpoAlgorithm, SdpoSettings
 from reef.core import AgentRecord, RequestType
+from reef.core.plugins import PluginConfigError
 from reef.recipe.errors import RecipeConfigError
 from reef.train import PipelineContext
 from reef.train.algos import StepScheduling
@@ -52,8 +53,7 @@ def tokenizer(monkeypatch: pytest.MonkeyPatch) -> SDPOTokenizer:
     return fake
 
 
-def processor(**config: Any) -> TrainingPipeline:
-    context = PipelineContext("science", SDPOReport)
+def processor(*, batch_size: int | None = None, **config: Any) -> TrainingPipeline:
     config = {
         "groups_per_step": 1,
         "rollouts_per_group": 2,
@@ -61,6 +61,9 @@ def processor(**config: Any) -> TrainingPipeline:
         "max_teacher_tokens": 18432,
         **config,
     }
+    # By default the batch size is one grid, so a batch is one optimizer step.
+    grid_size = config["groups_per_step"] * config["rollouts_per_group"]
+    context = PipelineContext("science", SDPOReport, batch_size=grid_size if batch_size is None else batch_size)
 
     def _settings(settings_type: type):
         # Each stage takes its own keys of the shared test config.
@@ -111,6 +114,13 @@ def push(
             payload=body,
         )
     )
+
+
+@pytest.mark.unit
+def test_the_batch_size_must_fit_in_one_grid(tokenizer: SDPOTokenizer) -> None:
+    assert processor(groups_per_step=2, batch_size=4).buffer_size == 16
+    with pytest.raises(PluginConfigError, match="at most the 4 rollouts of one grid, not 5"):
+        processor(groups_per_step=2, batch_size=5)
 
 
 @pytest.mark.unit
@@ -235,10 +245,10 @@ PIPELINE = {"record2task": {"config": {"tokenizer_path": "/models/test"}}}
 
 
 @pytest.mark.unit
-def test_sdpo_recipe_uses_one_actual_sized_step(tokenizer: SDPOTokenizer) -> None:
+def test_sdpo_recipe_trains_samples_from_the_paper_grid(tokenizer: SDPOTokenizer) -> None:
     recipe = recipe_from({"pipeline": PIPELINE})
     assert recipe.report_type is SDPOReport
-    assert recipe.training_spec().scheduling == StepScheduling(unit="sample", batch_size="actual")
+    assert recipe.training_spec().scheduling == StepScheduling(unit="sample")
     pipeline = recipe.build_pipeline(PipelineContext("science", SDPOReport))
     record2record, record2task, task2batch = pipeline.record2record, pipeline.record2task, pipeline.task2batch
     assert isinstance(record2record, SDPORecord2Record)
@@ -247,7 +257,7 @@ def test_sdpo_recipe_uses_one_actual_sized_step(tokenizer: SDPOTokenizer) -> Non
     assert record2record.step_grouping.groups_per_step == 32 and record2record.step_grouping.rollouts_per_group == 8
     assert (record2task.max_teacher_prompt_tokens, record2task.max_teacher_tokens) == (10240, 18432)
     assert task2batch.allow_own_success_as_demonstration is False
-    assert task2batch.batch_size == 1
+    assert task2batch.buffer_size == 4, "four batches of the default batch size"
     with pytest.raises(RecipeConfigError, match=r"training\.options"):
         recipe_from({"pipeline": PIPELINE, "optimization": {"divergence": "forward"}})
 
@@ -313,7 +323,7 @@ def wire(weights: list[float]) -> dict[str, Any]:
         ["one", [9, 1, 2], [1, 1], [-0.1, -0.2], 1.0, [7, 1, 2], weights[0]],
         ["two", [8, 3], [1], [-0.3], 0.0, [7, 3], weights[1]],
     ]
-    return {"loss": "sdpo", "samples": rows, "rollout_ids": [0, 1]}
+    return {"loss": "sdpo", "samples": rows, "rollout_ids": [0, 1], "external_step_sizes": [2]}
 
 
 @pytest.mark.unit

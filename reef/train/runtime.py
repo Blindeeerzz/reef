@@ -35,6 +35,11 @@ class ExecutorTrainingRuntime(TrainingRuntime):
         return self._train_group_handle
 
     @property
+    def batch_size(self) -> int:
+        """The batch size that the coordinator reports in its health."""
+        return int(self.training_job_status()["batch_size"])
+
+    @property
     def concurrent_training_scenarios(self) -> bool:
         return self.training_job_status().get("lora_mode") == "scenario"
 

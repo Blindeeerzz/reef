@@ -755,10 +755,12 @@ def test_the_delete_guard_reads_the_runtime_once(tmp_path: Path, dispatchers: _D
                 return {
                     "ok": False,
                     "phase": "dead",
+                    "batch_size": 1,
                     "training_job": {"deferred_weight_update": True, "status": "IDLE"},
                 }
             return {
                 "ok": True,
+                "batch_size": 1,
                 "training_job": {
                     "deferred_weight_update": True,
                     "status": "RUNNING",
@@ -1269,7 +1271,7 @@ class _ComputedWeightsRecipe(_TwoTrainerRecipe):
                 context,
                 record2record=JudgingRecord2Record(_RetiringRetriesJudging(), _JudgedAtOnce()),
                 record2task=_RetiringRetriesTasks(),
-                task2batch=RetiringRetriesBatches(context, 1),
+                task2batch=RetiringRetriesBatches(context, None),
             )
         return threshold_pipeline(context)
 

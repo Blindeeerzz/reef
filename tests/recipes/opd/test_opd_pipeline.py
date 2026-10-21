@@ -80,7 +80,7 @@ def test_exact_student_tokens_and_no_scalar_reward_reach_slime(processor: Traini
     batch = processor.build_batch()
     assert isinstance(batch, TrainingBatch)
     assert batch.batch_id == "math:batch:1"
-    prepared = prepare_slime_step(batch, TrainingMethod("opd"), {}, StepScheduling(unit="sample", batch_size="actual"))
+    prepared = prepare_slime_step(batch, TrainingMethod("opd"), {}, StepScheduling(unit="sample"), step_size=1)
     payload = prepared.payload
     assert payload is not None
     assert "advantages" not in payload
@@ -115,7 +115,7 @@ def test_recipe_resolves_and_rejects_multiple_epochs() -> None:
     assert isinstance(pipeline.record2record, ExclusiveReportRecord2Record)
     assert isinstance(pipeline.record2task, OPDTasks)
     assert isinstance(pipeline.task2batch, DistillBatches)
-    assert spec.scheduling == StepScheduling(unit="sample", batch_size="actual")
+    assert spec.scheduling == StepScheduling(unit="sample")
     with pytest.raises(ValueError, match="epochs"):
         OpdObjective().validate_scheduling(StepScheduling(unit="sample", epochs=2))
 

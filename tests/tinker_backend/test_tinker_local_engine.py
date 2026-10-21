@@ -175,7 +175,7 @@ class Stack:
             TrainingBatch("b", (item(version, sample=step),)),
             TrainingMethod(objective.name, schedule),
             {},
-            StepScheduling(unit="sample", batch_size="actual"),
+            StepScheduling(unit="sample"),
         )
         return {**prepared.payload, "scenario": "math", "scenario_step": step, "parent_runtime_load_id": version}
 

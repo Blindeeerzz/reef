@@ -38,14 +38,12 @@ from reef.train.types import TrainingBatch, TrainStepResult, TrajectoryItem, tra
 NUM_GPUS = 0
 
 
-def sao_pipeline(
-    context: PipelineContext, *, batch_size: int = 1, accept_multi_turn: bool = False
-) -> TrainingPipeline:
+def sao_pipeline(context: PipelineContext, *, accept_multi_turn: bool = False) -> TrainingPipeline:
     return TrainingPipeline(
         context,
         record2record=ExclusiveReportRecord2Record(context),
         record2task=SAOTasks(SampleAssemblySettings(accept_multi_turn_policy_samples=accept_multi_turn)),
-        task2batch=SAOBatches(context, batch_size),
+        task2batch=SAOBatches(context, None),
     )
 
 
@@ -67,6 +65,10 @@ class _PreparingBackend(CandidateBackend):
         self._objective = objective
 
     @property
+    def batch_size(self) -> int:
+        return 1
+
+    @property
     def dispatched(self) -> bool:
         return True
 
@@ -75,7 +77,7 @@ class _PreparingBackend(CandidateBackend):
 
     def prepare_step(self, batch, state, scenario_step):
         del scenario_step
-        prepared = prepare_slime_step(batch, TrainingMethod(self._objective), state, StepScheduling())
+        prepared = prepare_slime_step(batch, TrainingMethod(self._objective), state, StepScheduling(), step_size=1)
         return PreparedStep.skipped(state=prepared.next_algorithm_state, metrics=prepared.metrics)
 
     def evaluate(self, candidate):
@@ -179,14 +181,14 @@ def test_recipe_processor_never_becomes_ready() -> None:
     processor.push(inference("i1"))
 
     assert not processor.ready()
-    # A processor that never becomes ready says so: it holds no ready units, whatever it has been pushed.
-    assert processor.status()["ready_units"] == 0
+    # A processor that never becomes ready says so: it holds no ready samples, whatever it has been pushed.
+    assert processor.status()["ready_samples"] == 0
     assert processor.releasable_record_ids().isdisjoint(frozenset({"i1"}))
 
 
 @pytest.mark.unit
 def test_pairing_processor_uses_feedback_without_score_filtering() -> None:
-    processor = threshold_pipeline(PipelineContext("math"), batch_size=2)
+    processor = threshold_pipeline(PipelineContext("math", batch_size=2))
     processor.push(inference("bad"))
     processor.push(inference("good"))
     processor.push(report("bad-r", "bad", 0.1))
@@ -293,7 +295,7 @@ def test_cookbook_processors_assemble_before_rejecting_multi_turn_reports(
             context,
             record2record=tttd_record2record,
             record2task=TTTDTasks(SampleAssemblySettings(), tttd_record2record),
-            task2batch=TTTDBatches(context, tttd_record2record),
+            task2batch=TTTDBatches(context, tttd_record2record, None),
         )
     else:
         context = PipelineContext("math")
@@ -301,7 +303,7 @@ def test_cookbook_processors_assemble_before_rejecting_multi_turn_reports(
             context,
             record2record=ExclusiveReportRecord2Record(context),
             record2task=SAOTasks(SampleAssemblySettings()),
-            task2batch=SAOBatches(context, 1),
+            task2batch=SAOBatches(context, None),
         )
     processor.push(training_inference("i1", [10, 20], [1], [-0.1]))
     multi_turn_report = report("r1", ("i1", "i2"), 1.0, **metadata)
@@ -416,7 +418,9 @@ def test_algorithms_consume_formatted_batches_and_keep_algorithm_state() -> None
     sft_processor = threshold_pipeline(PipelineContext("math"))
     sft_processor.push(inference("i1"))
     sft_processor.push(report("r1", "i1", 1.0))
-    sft_result = prepare_slime_step(sft_processor.build_batch(), TrainingMethod("sft"), {}, StepScheduling())
+    sft_result = prepare_slime_step(
+        sft_processor.build_batch(), TrainingMethod("sft"), {}, StepScheduling(), step_size=1
+    )
     assert sft_result.next_algorithm_state == {"steps": 1}
 
     grpo_processor = grouped_policy_pipeline(PipelineContext("math"))
@@ -424,7 +428,7 @@ def test_algorithms_consume_formatted_batches_and_keep_algorithm_state() -> None
         grpo_processor.push(inference(rid))
         grpo_processor.push(report("r" + rid, rid, score, comparison_set="x"))
     result = prepare_slime_step(
-        grpo_processor.build_batch(), TrainingMethod(_GROUPED_PG_OBJECTIVE), {}, StepScheduling()
+        grpo_processor.build_batch(), TrainingMethod(_GROUPED_PG_OBJECTIVE), {}, StepScheduling(), step_size=1
     )
     assert result.metrics["advantages"] == pytest.approx((-1.0, 1.0))
 
@@ -443,8 +447,8 @@ def test_trainer_reserves_batch_and_commits_backend_preparation() -> None:
 
     batch = trainer.reserve_training_batch()
     assert batch is not None
-    # The reserved batch has not been consumed yet, so its unit is still counted as held.
-    assert trainer.pipeline_status() == {"ready_units": 1, "batch_size": 1}
+    # The reserved batch has not been consumed yet, so its sample is still counted as held.
+    assert trainer.pipeline_status() == {"ready_samples": 1, "batch_size": 1, "buffer_size": 4}
     execution = trainer.execute_reserved_step(0)
     result = execution.result
 
@@ -472,7 +476,7 @@ def test_trainer_acknowledges_a_dropped_batch_as_not_trained() -> None:
             context,
             record2record=ReportRecord2Record(context, ReportGrouping()),
             record2task=ThresholdTasks(),
-            task2batch=ThresholdBatches(context, 1),
+            task2batch=ThresholdBatches(context, None),
         )
 
     records = SQLiteRecordStore()
@@ -496,6 +500,8 @@ def test_trainer_executes_candidate_policy_between_evaluation_and_settlement() -
     calls = []
 
     class Backend(CandidateBackend):
+        batch_size = 1
+
         def initial_state(self):
             return {"steps": 0}
 
@@ -560,6 +566,8 @@ def test_trainer_uses_explicit_candidate_evaluator_instead_of_backend_fallback()
     calls = []
 
     class Backend(CandidateBackend):
+        batch_size = 1
+
         def initial_state(self):
             return {}
 
@@ -615,6 +623,8 @@ def test_trainer_aborts_candidate_when_policy_execution_fails() -> None:
     calls = []
 
     class Backend(CandidateBackend):
+        batch_size = 1
+
         def initial_state(self):
             return {}
 
@@ -658,6 +668,8 @@ def test_trainer_rejects_an_evaluator_that_replaces_its_evaluation_result() -> N
     calls = []
 
     class Backend(CandidateBackend):
+        batch_size = 1
+
         def initial_state(self):
             return {}
 
@@ -828,7 +840,7 @@ def test_scenario_runtime_executes_grpo_as_one_async_transaction(tmp_path) -> No
         def prepare_training_step(
             self, batch, objective, algorithm_state, scheduling, scenario_step, *, parent_runtime_load_id=None
         ):
-            prepared = prepare_slime_step(batch, objective, algorithm_state, scheduling)
+            prepared = prepare_slime_step(batch, objective, algorithm_state, scheduling, step_size=self.batch_size)
             assert prepared.payload is not None
             self.calls.append(("prepare", batch, objective))
             return PreparedTrainingStep(
@@ -942,7 +954,7 @@ def test_reported_samples_leave_required_tensor_validation_to_training_backend(m
     processor.push(report("r1", "i1", 1.0))
     batch = processor.build_batch()
     assert len(batch.items) == 1
-    prepared = prepare_slime_step(batch, TrainingMethod("sao"), {}, StepScheduling(unit="sample"))
+    prepared = prepare_slime_step(batch, TrainingMethod("sao"), {}, StepScheduling(unit="sample"), step_size=1)
     assert prepared.payload is not None
     with pytest.raises(ValueError):
         to_slime_rollout_data(prepared.payload)

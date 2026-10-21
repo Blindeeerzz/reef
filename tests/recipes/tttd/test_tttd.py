@@ -91,17 +91,19 @@ def _report(step: int, group: int, rollout: int, score: float) -> AgentRecord:
 
 
 def _processor(experiment_logger=None) -> TrainingPipeline:
+    # The batch size is the grid's six rollouts, so a batch is one step.
     context = PipelineContext(
         "discovery",
         report_type=TTTDGroupedRolloutReport,
         experiment_logger=experiment_logger or _ExperimentLogger(),
+        batch_size=6,
     )
     record2record = TTTDRecord2Record(context, TTTDGridSettings(groups_per_step=2, rollouts_per_group=3))
     return TrainingPipeline(
         context,
         record2record=record2record,
         record2task=TTTDTasks(SampleAssemblySettings(), record2record),
-        task2batch=TTTDBatches(context, record2record),
+        task2batch=TTTDBatches(context, record2record, None),
     )
 
 
@@ -158,13 +160,25 @@ def test_tttd_refuses_the_grid_in_the_recipe_config(key: str) -> None:
         ({"record2record": {"config": {"groups_per_step": 0}}}, "groups_per_step must be positive"),
         ({"record2record": {"config": {"rollouts_per_group": 1}}}, "rollouts_per_group must be at least two"),
         ({"record2task": {"config": {"groups_per_step": 2}}}, "groups_per_step"),
-        ({"task2batch": {"config": {"batch_size": 2}}}, "TTTDBatches takes no config"),
+        ({"task2batch": {"config": {"batch_size": 2}}}, "TTTDBatches: unknown config fields: batch_size"),
     ],
 )
 def test_tttd_refuses_a_bad_stage_config_when_the_pipeline_builds(pipeline: dict, message: str) -> None:
     recipe = _recipe({"data": {}, "pipeline": pipeline})
     with pytest.raises(RecipeConfigError, match=message):
         recipe.build_pipeline(PipelineContext("discovery", report_type=recipe.report_type))
+
+
+@pytest.mark.unit
+def test_tttd_batch_size_must_fit_in_one_grid() -> None:
+    def batches(batch_size: int) -> TTTDBatches:
+        context = PipelineContext("discovery", batch_size=batch_size)
+        grid = TTTDRecord2Record(context, TTTDGridSettings(groups_per_step=2, rollouts_per_group=3))
+        return TTTDBatches(context, grid, None)
+
+    assert batches(6).buffer_size == 24
+    with pytest.raises(PluginConfigError, match="at most the 6 rollouts of one step, not 7"):
+        batches(7)
 
 
 @pytest.mark.unit
@@ -424,7 +438,7 @@ def test_tttd_keeps_one_group_when_all_rewards_are_constant() -> None:
             processor.push(_report(0, group, rollout, 1.0))
 
     batch = processor.build_batch()
-    result = prepare_slime_step(batch, TrainingMethod("tttd"), {}, StepScheduling(unit="sample", batch_size="actual"))
+    result = prepare_slime_step(batch, TrainingMethod("tttd"), {}, StepScheduling(unit="sample"), step_size=6)
 
     assert len(trajectory_groups(batch)) == 1
     assert result.payload is not None

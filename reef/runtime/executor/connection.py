@@ -207,6 +207,9 @@ def _engine_facts(health: Mapping[str, Any]) -> dict[str, Any]:
     colocate = health.get("colocate", False)
     if not isinstance(colocate, bool):
         raise TrainingRuntimeError("train group returned malformed training-job status")
+    batch_size = health.get("batch_size")
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0:
+        raise TrainingRuntimeError(f"train group returned a malformed batch size: {batch_size!r}")
     lora_adapter = health.get("lora_adapter")
     if lora_adapter is not None and (not isinstance(lora_adapter, str) or not lora_adapter):
         raise TrainingRuntimeError("train group returned a malformed serving adapter name")
@@ -221,6 +224,7 @@ def _engine_facts(health: Mapping[str, Any]) -> dict[str, Any]:
         raise TrainingRuntimeError("train group returned malformed adapter residency")
     return {
         "colocate": colocate,
+        "batch_size": batch_size,
         "lora_adapter": lora_adapter,
         "lora_mode": lora_mode,
         "lora_adapters": dict(lora_adapters) if lora_adapters else {},

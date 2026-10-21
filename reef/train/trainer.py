@@ -108,6 +108,8 @@ class Trainer:
                 training_mode=training_mode,
                 max_staleness=max_staleness,
                 task_storage=task_storage,
+                # A trainer without a candidate backend trains nothing, so its pipeline never batches.
+                batch_size=candidate_backend.batch_size if candidate_backend is not None else 1,
             )
         )
         if pipeline.training_mode != training_mode:

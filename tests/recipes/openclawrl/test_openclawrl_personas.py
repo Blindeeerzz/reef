@@ -143,13 +143,13 @@ def test_openclawrl_processor_drops_unfillable_stale_version_candidates() -> Non
     from reef.pipeline_context import PipelineContext
 
     worker = _FakeWorker()
-    context = PipelineContext("s")
+    context = PipelineContext("s", batch_size=3)
     stage = OpenClawRLRecord2Record(OpenClawRLJudgingSettings(), worker=worker)
     processor = TrainingPipeline(
         context,
         record2record=stage,
         record2task=OpenClawRLTasks(),
-        task2batch=OpenClawRLBatches(context, OpenClawRLBatchSettings(batch_size=3), stage),
+        task2batch=OpenClawRLBatches(context, OpenClawRLBatchSettings(), stage),
     )
     # Two stale leftovers from before a weight swap, then a fresh generation.
     processor.observe_serving_runtime_load_id("v1")
@@ -168,13 +168,13 @@ def test_openclawrl_processor_keeps_single_version_queue_intact() -> None:
     from reef.pipeline_context import PipelineContext
 
     worker = _FakeWorker()
-    context = PipelineContext("s")
+    context = PipelineContext("s", batch_size=3)
     stage = OpenClawRLRecord2Record(OpenClawRLJudgingSettings(), worker=worker)
     processor = TrainingPipeline(
         context,
         record2record=stage,
         record2task=OpenClawRLTasks(),
-        task2batch=OpenClawRLBatches(context, OpenClawRLBatchSettings(batch_size=3), stage),
+        task2batch=OpenClawRLBatches(context, OpenClawRLBatchSettings(), stage),
     )
     _judged_turns(processor, worker, ["v1", "v1"])
     # All-one-version queue below batch size: nothing is dropped, not ready yet.

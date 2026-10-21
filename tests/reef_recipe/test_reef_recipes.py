@@ -98,7 +98,7 @@ def test_dotted_recipe_rejects_bad_references(reference: str, match: str) -> Non
         (
             OpenClawRLRecipe(
                 **runtime_bindings(StubTrainingRuntime()),
-                pipeline_stages=pipeline_stages(OpenClawRLRecipe, {"task2batch": {"config": {"batch_size": 3}}}),
+                pipeline_stages=pipeline_stages(OpenClawRLRecipe, {"task2batch": {"config": {"buffer_size": 3}}}),
             ),
             "openclawrl",
             OpenClawRLBatches,
@@ -108,7 +108,7 @@ def test_dotted_recipe_rejects_bad_references(reference: str, match: str) -> Non
         (
             SAORecipe(
                 **runtime_bindings(StubTrainingRuntime()),
-                pipeline_stages=pipeline_stages(SAORecipe, {"task2batch": {"config": {"batch_size": 1}}}),
+                pipeline_stages=pipeline_stages(SAORecipe, {"task2batch": {"config": {"buffer_size": 4}}}),
             ),
             "sao",
             SAOBatches,
@@ -306,14 +306,14 @@ def test_recipe_config_routes_sections_to_their_consumers() -> None:
     settings = recipe_config_from_mapping(
         {
             "implementation": "recipes.openclawrl.recipe:OpenClawRLRecipe",
-            "pipeline": {"task2batch": {"config": {"batch_size": 4}}},
+            "pipeline": {"task2batch": {"config": {"buffer_size": 4}}},
             "artifact": {"checkpoint_every_n_versions": 3},
             "model": {"path": "/models/qwen"},
         }
     )
     recipe = build_recipe(settings["implementation"], {}, config=settings, **runtime_bindings(StubTrainingRuntime()))
 
-    assert recipe.stages().task2batch.config == {"batch_size": 4}
+    assert recipe.stages().task2batch.config == {"buffer_size": 4}
     assert recipe.checkpoint_strategy == EveryNVersions(3)
 
 
@@ -468,7 +468,7 @@ def test_opd_recipe_uses_configured_runtime_and_checkpoint_schedule() -> None:
         "recipes.opd.recipe:OPDRecipe",
         {},
         config={
-            "pipeline": {"task2batch": {"config": {"batch_size": 4}}},
+            "pipeline": {"task2batch": {"config": {"buffer_size": 16}}},
             "artifact": {"checkpoint_every_n_versions": 20},
         },
         **runtime_bindings(runtime),
@@ -476,4 +476,34 @@ def test_opd_recipe_uses_configured_runtime_and_checkpoint_schedule() -> None:
     assert isinstance(recipe, OPDRecipe)
     assert recipe.training_runtime is runtime
     assert recipe.checkpoint_strategy == EveryNVersions(20)
-    assert recipe.build_pipeline(PipelineContext("math")).task2batch.batch_size == 4
+    assert recipe.build_pipeline(PipelineContext("math", batch_size=4)).task2batch.buffer_size == 16
+
+
+def test_cordis_recipe_reads_the_evolution_batch_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from reef.recipe.cordis import CordisRecipe
+
+    (tmp_path / "batch_size_strategies.py").write_text(
+        "from reef.evaluation.harness import EpisodeScorer\n"
+        "from reef.train.cordis_backend.strategies import Proposer\n\n"
+        "class Propose(Proposer):\n"
+        "    def propose(self, nodes, samples, models, **keywords):\n        return None\n\n"
+        "class Evaluate(EpisodeScorer):\n"
+        "    def score(self, task, result):\n        return 0.0\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    def evolution(**settings: object) -> dict[str, object]:
+        return {
+            "evolution": {
+                "propose": "batch_size_strategies:Propose",
+                "evaluate": "batch_size_strategies:Evaluate",
+                "tasks": ["task one"],
+                **settings,
+            }
+        }
+
+    assert CordisRecipe.from_environment({}, config=evolution()).batch_size == 1
+    assert CordisRecipe.from_environment({}, config=evolution(batch_size=3)).batch_size == 3
+    for invalid in (0, -2, 2.5, "3", True):
+        with pytest.raises(RecipeConfigError, match=r"evolution\.batch_size must be an integer of at least 1"):
+            CordisRecipe.from_environment({}, config=evolution(batch_size=invalid))

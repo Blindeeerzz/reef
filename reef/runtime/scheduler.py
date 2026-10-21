@@ -547,6 +547,7 @@ class TrainingCoordinator:
             "start_rollout_id": self._context.next_rollout_id,
             "phase": self._publication.phase,
             "colocate": self._config.colocate,
+            "batch_size": self._config.batch_size,
             # Where the serving engines answer; Reef dials this when the
             # deployment leaves ``reef.inference_url`` unset.
             "inference_url": self._inference_url,

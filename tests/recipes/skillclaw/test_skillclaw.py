@@ -338,7 +338,7 @@ def test_driver_preserves_executor_profiles(driver, monkeypatch):
 def test_example_yaml_boots_the_recipe_with_the_paper_wiring(example, tmp_path, monkeypatch) -> None:
     """The driver's load_recipe contract, hermetic: interpolate skillclaw.yaml
     through reef's config loader and build the explicit implementation - selection
-    always, batch_size 60, the seed composition plus the seed_skills pool."""
+    always, evolution.batch_size 60, the seed composition plus the seed_skills pool."""
     from reef.service.deploy.config_utils import load_config
     from reef.storage.sqlite import SQLiteRecordStore
     from reef.surface import Surface
@@ -361,7 +361,7 @@ def test_example_yaml_boots_the_recipe_with_the_paper_wiring(example, tmp_path, 
     assert type(built).__name__ == "SkillClawRecipe"
     assert built.name == "skillclaw"
     assert built.selection.plugin_class is BackendAlwaysSelectPlugin
-    assert built.stages().task2batch.config == {"batch_size": 60}
+    assert built.batch_size == 60
     assert [entry["id"] for entry in built.seed] == ["alpha"]
     assert built.seed[0]["config"]["name"] == "alpha"
     assert len(built.tasks) == 3
@@ -426,7 +426,7 @@ def test_the_days_last_report_completes_the_batch_passes_included() -> None:
             agent_record_id=agent_record_id,
         )
 
-    processor = harness_stages(3).build(PipelineContext("s"))
+    processor = harness_stages().build(PipelineContext("s", batch_size=3))
     for index, score in enumerate((1.0, 0.0), start=1):
         processor.push(_inference(f"inf-{index}"))
         processor.push(_report(f"rep-{index}", score, f"inf-{index}"))
@@ -461,7 +461,8 @@ def _dry_recipe(example: dict[str, ModuleType], tmp_path: Path, batch_size: int)
         binary=str(make_binary(tmp_path)),
         seed=SEED,
         selection=PluginReference(BackendAlwaysSelectPlugin),
-        pipeline_stages=harness_stages(batch_size),
+        batch_size=batch_size,
+        pipeline_stages=harness_stages(),
         runtime=runtime(),
     )
 

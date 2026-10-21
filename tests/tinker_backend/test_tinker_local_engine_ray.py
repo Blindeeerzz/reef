@@ -173,7 +173,7 @@ def test_tinker_trains_behind_the_model_driver_with_a_local_engine(tmp_path, mon
         },
         "training": {
             "backend": "tinker",
-            "options": {"state-dir": str(tmp_path / "tinker"), "lora-rank": 32, "batch-size": 1, "kl-coef": 0.0},
+            "options": {"state-dir": str(tmp_path / "tinker"), "lora-rank": 32, "batch-size": 4, "kl-coef": 0.0},
         },
         "storage": {
             "artifact-repository": str(tmp_path / "artifacts.git"),

@@ -467,7 +467,9 @@ class ScheduledTrainingBackend(TrainingBackend):
         self.sender = sender
         self.receiver = receiver
         self.directory = Path(directory)
-        self._config = TrainingCoordinationConfig(save_hf_template=str(self.directory / "hf/{rollout_id}"))
+        self._config = TrainingCoordinationConfig(
+            save_hf_template=str(self.directory / "hf/{rollout_id}"), batch_size=1
+        )
         self._context = TrainingContext()
 
     def start(self):

@@ -136,7 +136,6 @@ def dispatcher(tmp_path, *, checkpoint_every: int = 1, experiment_tracker=None):
     value = Dispatcher(
         TestPolicyRecipe(
             **runtime_bindings(runtime),
-            batch_size=1,
             checkpoint_strategy=EveryNVersions(checkpoint_every),
         ),
         backend_factory,

@@ -369,6 +369,9 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
     task store as the step reads it (:func:`eval_task_paths`), and ``tasks``
     is the split when the backend was built. A step fixes its list, so both
     sides of a comparison play the same tasks.
+
+    ``batch_size`` (``evolution.batch_size``, a positive int) is the traces
+    in one evolution step; the pipeline makes a batch when it holds that many.
     """
 
     def __init__(
@@ -383,6 +386,7 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
         binary: str | None = None,
         episode_timeout_s: float = 600.0,
         episode_repeats: int = 1,
+        batch_size: int = 1,
         forbid_residue: bool = False,
         max_steps: int = 0,
         max_failure_streak: int = 0,
@@ -430,6 +434,9 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
             raise ValueError("episode_timeout_s must be a positive number")
         if isinstance(episode_repeats, bool) or not isinstance(episode_repeats, int) or episode_repeats < 1:
             raise ValueError("episode_repeats must be an integer of at least 1")
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+            raise ValueError("batch_size must be an integer of at least 1")
+        self._batch_size = batch_size
         if not isinstance(forbid_residue, bool):
             raise ValueError("forbid_residue must be a boolean")
         for label, value in (
@@ -581,6 +588,11 @@ class CordisBackend(CandidateBackend, ProposalValidator, StepRecords, StepProgre
 
     def initial_state(self) -> Mapping[str, Any]:
         return {"steps": 0, "entries": [dict(entry) for entry in self._seed]}
+
+    @property
+    def batch_size(self) -> int:
+        """The traces in one evolution step: ``evolution.batch_size``."""
+        return self._batch_size
 
     def shipped_content_update(self, state: Mapping[str, Any], published_tree: Path) -> TrainStepResult | None:
         """Republish the reef-owned entries this Reef seeds when the served tree renders them differently.

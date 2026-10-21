@@ -66,7 +66,7 @@ class Receiver(InferenceBackend):
 
 class Trainer(TrainingBackend):
     def __init__(self, tmp_path, receiver, events, *, colocate=False):
-        self._config = TrainingCoordinationConfig(str(tmp_path / "step-{rollout_id}"), colocate=colocate)
+        self._config = TrainingCoordinationConfig(str(tmp_path / "step-{rollout_id}"), colocate=colocate, batch_size=1)
         self._context = TrainingContext(runtime_load_id="inc:0")
         # Fake transport endpoint: production adapters exchange tensor data
         # through native transport, never through coordinator control methods.
@@ -287,7 +287,7 @@ def test_fresh_full_and_lora_deployments_use_a_reef_owned_incarnation(tmp_path, 
     training = Trainer(tmp_path, inference, events)
     training._context = TrainingContext()
     initial = training.context.runtime_load_id
-    training._config = TrainingCoordinationConfig(str(tmp_path / "step-{rollout_id}"), lora=lora)
+    training._config = TrainingCoordinationConfig(str(tmp_path / "step-{rollout_id}"), lora=lora, batch_size=1)
     coordinator = TrainingCoordinator(training, inference)
     expected = initial if lora else initial.rsplit(":", 1)[0] + ":1"
     assert coordinator.serving_runtime_load_id() == expected

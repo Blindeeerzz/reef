@@ -429,7 +429,6 @@ def build_training_dispatcher(
     return Dispatcher(
         TestPolicyRecipe(
             **runtime_bindings(runtime),
-            batch_size=1,
             checkpoint_strategy=(checkpoint_strategy if checkpoint_strategy is not None else EveryNVersions(1000)),
         ),
         backend_factory,
@@ -455,6 +454,10 @@ class _SavedArtifactBackend(CandidateBackend):
     def __init__(self, artifact_path: Path) -> None:
         self._artifact_path = artifact_path
         self.batch_ids: list[str] = []
+
+    @property
+    def batch_size(self) -> int:
+        return 1
 
     def initial_state(self):
         return {"steps": 0}
@@ -605,12 +608,12 @@ def test_recovery_restores_the_live_head_step_and_state_from_the_log(tmp_path) -
 class ProtectAllPipeline(TrainingPipeline):
     """Pairs like SFT but never releases a row: every pushed id is protected."""
 
-    def __init__(self, context, batch_size: int) -> None:
+    def __init__(self, context) -> None:
         super().__init__(
             context,
             record2record=ReportRecord2Record(context, ReportGrouping()),
             record2task=ThresholdTasks(),
-            task2batch=ThresholdBatches(context, batch_size),
+            task2batch=ThresholdBatches(context, None),
         )
         self._seen: set[str] = set()
 
@@ -628,7 +631,7 @@ class ProtectAllPolicyRecipe(TestPolicyRecipe):
         return Trainer.build(
             scenario,
             records,
-            pipeline_factory=lambda context: ProtectAllPipeline(context, self.batch_size),
+            pipeline_factory=ProtectAllPipeline,
             candidate_backend=candidate_backend(self.training_runtime, "sft", StepScheduling()),
             algorithm_state=algorithm_state,
             experiment_logger=experiment_logger,
@@ -650,7 +653,6 @@ def test_recovery_resumes_record_progress_without_retraining(tmp_path) -> None:
     recipe = lambda runtime: (  # noqa: E731
         ProtectAllPolicyRecipe(
             **runtime_bindings(runtime),
-            batch_size=1,
             checkpoint_strategy=EveryNVersions(1000),
         )
     )
@@ -996,6 +998,7 @@ class _HarnessEvolveTestRecipe(Recipe):
             tasks=self.tasks,
             binary="fake-pi",
             models=ModelBinding(base_url="http://localhost:8000", model="qwen3-8b"),
+            batch_size=self.batch_size,
         )
         return Trainer.build(
             scenario,
@@ -1004,7 +1007,7 @@ class _HarnessEvolveTestRecipe(Recipe):
                 context,
                 record2record=ReportRecord2Record(context, ReportGrouping()),
                 record2task=TraceTasks(),
-                task2batch=TraceBatches(context, self.batch_size),
+                task2batch=TraceBatches(context, None),
             ),
             candidate_backend=candidate_backend,
             candidate_evaluator=ScoreComparisonPlugin(candidate_backend),

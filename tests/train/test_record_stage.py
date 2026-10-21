@@ -11,6 +11,7 @@ from tests.support._threshold_processor import threshold_pipeline
 from tests.train.test_record_stage_batch_parity import CountingBackend, inference, instruction, report
 
 from reef.core import AgentRecord
+from reef.core.plugins import PluginConfigError
 from reef.record2record import (
     GroupDecision,
     InferenceRecord2Record,
@@ -79,7 +80,7 @@ class RecordingBatches(Task2Batch):
     supported_training_modes = frozenset({"auto", "manual", "hybrid"})
 
     def __init__(self, context: PipelineContext) -> None:
-        super().__init__(context, 1)
+        super().__init__(context, None)
 
     def make_batch(self, tasks: tuple[TrainDataItem, ...], batch_id: str) -> TrainingBatch:
         return TrainingBatch(batch_id, tasks)
@@ -179,7 +180,7 @@ class PairPipeline(TrainingPipeline):
             context,
             record2record=ReportRecord2Record(context, PairGrouping(), exclusive_sources=True),
             record2task=self.pair_tasks,
-            task2batch=PairBatches(context, 1),
+            task2batch=PairBatches(context, None),
         )
 
 
@@ -218,8 +219,9 @@ def test_the_pipeline_adds_its_stages_background_work_and_status_and_closes_them
     processor.stage.pending = True
     assert processor.background_jobs_running()
     assert processor.status() == {
-        "ready_units": 0,
+        "ready_samples": 0,
         "batch_size": 1,
+        "buffer_size": 4,
         "buffered_requests": 0,
         "ended_records": 0,
     }
@@ -392,19 +394,19 @@ TRAJECTORY = TrajectoryItem({"schema_version": "ATIF-v1.4", "agent": {"name": "f
 
 
 @pytest.mark.unit
-def test_uploaded_trajectories_go_first_in_a_batch_and_count_as_units() -> None:
-    context = PipelineContext("s")
+def test_uploaded_trajectories_go_first_in_a_batch_and_count_as_one_sample_each() -> None:
+    context = PipelineContext("s", batch_size=2)
     processor = TrainingPipeline(
         context,
         record2record=InferenceRecord2Record(),
         record2task=InferenceTasks(),
-        task2batch=UploadBatches(context, 2),
+        task2batch=UploadBatches(context, None),
     )
     processor.push(inference("i1"))
     assert not processor.ready()
     processor.push_trajectory("t1", TRAJECTORY)
     processor.push_trajectory("t2", TRAJECTORY)
-    assert processor.status()["ready_units"] == 3
+    assert processor.status()["ready_samples"] == 3
 
     batch = processor.build_batch()
     assert batch.items == (TRAJECTORY, TRAJECTORY)
@@ -428,6 +430,87 @@ def test_uploaded_trajectories_go_first_in_a_batch_and_count_as_units() -> None:
 @pytest.mark.unit
 def test_a_pipeline_refuses_a_trajectory_that_its_batch_stage_does_not_accept() -> None:
     context = PipelineContext("s")
-    processor = TrainingPipeline(context, task2batch=PairBatches(context, 1))
+    processor = TrainingPipeline(context, task2batch=PairBatches(context, None))
     with pytest.raises(ValueError, match="does not accept uploaded trajectories"):
         processor.push_trajectory("t1", TRAJECTORY)
+
+
+def ready_tasks(*names: str) -> TaskResult:
+    return TaskResult.ready(tuple(TaskItem(Path(name)) for name in names))
+
+
+@pytest.mark.unit
+def test_the_pipeline_is_ready_when_its_held_units_hold_a_batch_size_of_samples() -> None:
+    processor = WaitingPipeline(PipelineContext("s", batch_size=3))
+    for record_id in ("i1", "i2", "i3"):
+        processor.push(inference(record_id))
+    processor.later_tasks.finish("i1", ready_tasks("a", "b"))
+    processor.later_tasks.finish("i2", TaskResult.skipped())
+    assert not processor.ready(), "one unit of two tasks and one skipped set hold two samples"
+    assert processor.status()["ready_samples"] == 2
+    processor.later_tasks.finish("i3", ready_tasks("c"))
+    assert processor.ready()
+    assert processor.status()["ready_samples"] == 3
+
+
+@pytest.mark.unit
+def test_a_batch_takes_whole_units_in_selection_order_until_it_holds_the_batch_size() -> None:
+    processor = WaitingPipeline(PipelineContext("s", batch_size=3))
+    for record_id in ("i1", "i2", "i3"):
+        processor.push(inference(record_id))
+    processor.later_tasks.finish("i3", ready_tasks("c"))
+    processor.later_tasks.finish("i2", ready_tasks("b1", "b2"))
+    processor.later_tasks.finish("i1", ready_tasks("a1", "a2"))
+    batch = processor.build_batch()
+    # The second unit passes the batch size; the batch keeps it whole and leaves the third unit held.
+    assert [str(item.task_path) for item in batch.items] == ["a1", "a2", "b1", "b2"]
+    assert processor.acknowledge(batch.batch_id) == {"i1", "i2"}
+    assert processor.status()["ready_samples"] == 1
+
+
+@pytest.mark.unit
+def test_the_pipeline_drops_the_oldest_unreserved_units_beyond_the_buffer_size() -> None:
+    context = PipelineContext("s")
+    processor = TrainingPipeline(
+        context,
+        record2record=InferenceRecord2Record(),
+        record2task=InferenceTasks(),
+        task2batch=UploadBatches(context, 2),
+    )
+    processor.push(inference("i1"))
+    reserved = processor.build_batch()
+    for record_id in ("i2", "i3", "i4"):
+        processor.push(inference(record_id))
+    for trajectory_id in ("t1", "t2", "t3"):
+        processor.push_trajectory(trajectory_id, TRAJECTORY)
+    processor.push(inference("i5"))
+    # The reserved batch stays, and uploaded trajectories do not count toward the buffer.
+    assert [unit.unit_id for unit in processor.record2record.pool.units()] == ["i1", "i4", "i5"]
+    assert {"i2", "i3"} <= processor.releasable_record_ids()
+    assert processor.status()["ready_samples"] == 6
+    assert processor.acknowledge(reserved.batch_id) == {"i1"}
+
+
+@pytest.mark.unit
+def test_the_pipeline_keeps_the_newest_unit_even_when_it_alone_is_over_the_buffer_size() -> None:
+    context = PipelineContext("s")
+    later_tasks = LaterTasks()
+    processor = TrainingPipeline(
+        context,
+        record2record=InferenceRecord2Record(),
+        record2task=later_tasks,
+        task2batch=UploadBatches(context, 2),
+    )
+    processor.push(inference("i1"))
+    later_tasks.finish("i1", ready_tasks("a", "b", "c"))
+    assert processor.ready()
+    assert [str(item.task_path) for item in processor.build_batch().items] == ["a", "b", "c"]
+
+
+@pytest.mark.unit
+def test_the_batch_stage_buffers_four_batches_by_default_and_refuses_less_than_one() -> None:
+    context = PipelineContext("s", batch_size=3)
+    assert PairBatches(context, None).buffer_size == 12
+    assert PairBatches(context, 3).buffer_size == 3
+    with pytest.raises(PluginConfigError, match="buffer_size 2 is smaller than the batch size 3"):
+        PairBatches(context, 2)

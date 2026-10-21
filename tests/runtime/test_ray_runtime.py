@@ -16,7 +16,12 @@ from reef.artifact import LiveWeightArtifactRef
 from reef.core import RuntimeLoadSpan
 from reef.observability.operations import OperationMetrics
 from reef.runtime.executor import ray as ray_executor
-from reef.runtime.executor.connection import RayCoordinatorClient, RayRuntimeError, RemoteRayCoordinatorClient
+from reef.runtime.executor.connection import (
+    RayCoordinatorClient,
+    RayRuntimeError,
+    RemoteRayCoordinatorClient,
+    training_job_status,
+)
 from reef.runtime.interfaces import (
     ActivatedModel,
     InferenceAdmissionController,
@@ -51,6 +56,7 @@ class FakeTrainGroupHandle(RayCoordinatorClient):
     def health(self) -> Mapping[str, Any]:
         return {
             "colocate": False,
+            "batch_size": 1,
             "training_job": {
                 "deferred_weight_update": True,
                 "status": getattr(self, "status", "IDLE"),
@@ -66,7 +72,7 @@ class FakeTrainGroupHandle(RayCoordinatorClient):
         algorithm_state: Mapping[str, Any],
         scheduling: StepScheduling,
     ) -> PreparedTrainingStep:
-        return slime_prepare_step(batch, objective, algorithm_state, scheduling)
+        return slime_prepare_step(batch, objective, algorithm_state, scheduling, step_size=1)
 
     def execute_training_job(self, payload: Mapping[str, Any]) -> TrainingJobResult:
         del payload
@@ -120,6 +126,7 @@ class DeferredWeightUpdateTrainGroupHandle(FakeTrainGroupHandle):
     def health(self) -> Mapping[str, Any]:
         return {
             "colocate": self.colocate,
+            "batch_size": 1,
             "lora_adapter": self.lora_adapter,
             "training_job": {
                 "deferred_weight_update": True,
@@ -262,6 +269,18 @@ def test_ray_runtime_rejects_a_malformed_served_adapter_name() -> None:
     handle.lora_adapter = ""
     with pytest.raises(RayRuntimeError, match="serving adapter name"):
         ExecutorRuntimeFixture(train_group_handle=handle, inference_url="http://router")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("batch_size", [None, 0, -2, True, "4"])
+def test_training_job_status_refuses_a_missing_or_non_positive_batch_size(batch_size) -> None:
+    class SizedHandle(FakeTrainGroupHandle):
+        def health(self) -> Mapping[str, Any]:
+            return {**super().health(), "batch_size": batch_size}
+
+    assert training_job_status(FakeTrainGroupHandle())["batch_size"] == 1
+    with pytest.raises(RayRuntimeError, match="malformed batch size"):
+        training_job_status(SizedHandle())
 
 
 @pytest.mark.unit
@@ -452,7 +471,7 @@ def test_ray_runtime_rejects_empty_serving_runtime_load_id() -> None:
 
 @pytest.mark.unit
 def test_slime_backend_preparation_emits_framework_agnostic_rows() -> None:
-    prepared = slime_prepare_step(policy_batch(), TrainingMethod("sft"), {}, StepScheduling())
+    prepared = slime_prepare_step(policy_batch(), TrainingMethod("sft"), {}, StepScheduling(), step_size=1)
     assert prepared.payload is not None
     payload = prepared.payload
 
@@ -487,7 +506,7 @@ def test_slime_backend_preparation_emits_sao_rows_with_action_mask_and_source_fi
         ),
     )
 
-    prepared = slime_prepare_step(batch, TrainingMethod("sao"), {}, StepScheduling(unit="sample"))
+    prepared = slime_prepare_step(batch, TrainingMethod("sao"), {}, StepScheduling(unit="sample"), step_size=1)
     assert prepared.payload is not None
     payload = prepared.payload
 
@@ -524,7 +543,7 @@ def test_slime_backend_preparation_sao_rows_tolerate_missing_source_fields() -> 
         ),
     )
 
-    prepared = slime_prepare_step(batch, TrainingMethod("sao"), {}, StepScheduling(unit="sample"))
+    prepared = slime_prepare_step(batch, TrainingMethod("sao"), {}, StepScheduling(unit="sample"), step_size=1)
     assert prepared.payload is not None
     payload = prepared.payload
 
@@ -1330,7 +1349,7 @@ def test_ray_runtime_producing_versions_follow_the_step_schedule() -> None:
         grouped_policy_batch(versions=("engine:0", "engine:1")),
         TrainingMethod("tests.runtime.test_ray_runtime:TwoEpochObjective"),
         {},
-        StepScheduling(unit="sample", batch_size="actual", epochs=2),
+        StepScheduling(unit="sample", epochs=2),
         0,
     )
 

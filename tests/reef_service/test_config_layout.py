@@ -212,7 +212,7 @@ def test_null_is_kept_for_optional_fields(tmp_path):
 
 
 def test_recipe_config_refuses_a_stage_setting(tmp_path):
-    # batch_size belongs to the task-to-batch stage, under the pipeline section.
+    # The training backend owns batch_size; the recipe config has no such field.
     raw = {
         "inference": {"model-path": "/models/demo"},
         "recipe": {"implementation": "recipes.sao.recipe:SAORecipe", "config": {"batch-size": 4}},

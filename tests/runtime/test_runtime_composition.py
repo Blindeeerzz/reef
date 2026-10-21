@@ -32,6 +32,10 @@ class CheckpointTrainer(TrainingRuntime):
     def __init__(self, checkpoint: Path) -> None:
         self.checkpoint = checkpoint
 
+    @property
+    def batch_size(self) -> int:
+        return 1
+
     def prepare_training_step(
         self, batch, objective, algorithm_state, scheduling, scenario_step, *, parent_runtime_load_id=None
     ):

@@ -65,6 +65,10 @@ class ExampleBackend(CandidateBackend):
         self.scenario = scenario
         self.events = events
 
+    @property
+    def batch_size(self) -> int:
+        return 1
+
     def initial_state(self) -> Mapping[str, Any]:
         self.events.append(f"initialize:{self.scenario}")
         return {"version": 0}

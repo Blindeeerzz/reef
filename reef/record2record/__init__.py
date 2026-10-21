@@ -38,7 +38,7 @@ Components of the pool:
 
 * ``RecordSet`` and ``RecordSetUnit`` (``sets.py``): the input of the
   record-to-task stage, and the record sets that train in one batch, the unit
-  that a batch takes and that ``batch_size`` counts.
+  that a batch takes whole.
 * ``RecordSetUnitPool`` (``pool.py``): the held units, and the reserved batch.
 * ``SelectionPolicy`` (``selection.py``): the order in which units go into a
   batch. ``ArrivalOrder`` takes the oldest first. ``GroupKeyOrder`` takes

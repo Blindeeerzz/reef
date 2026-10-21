@@ -53,21 +53,13 @@ def tensorize_external_fields(data: dict[str, Any], extra_dtypes: Mapping[str, s
             data[key] = [torch.as_tensor(value, dtype=dtype).detach().cpu().contiguous() for value in data[key]]
 
 
-def optimizer_step_sizes(data: Mapping[str, Any], global_batch_size: int) -> list[int]:
-    """Rollouts per optimizer step of one job's rollout data, in order: Reef's schedule, or the configured size."""
+def optimizer_step_sizes(data: Mapping[str, Any]) -> list[int]:
+    """Rollouts per optimizer step of one job's rollout data, in order, from Reef's schedule."""
     rollout_count = len(dict.fromkeys(data["rollout_ids"]))
-    step_sizes = data.get("external_step_sizes")
-    remainder = data.get("external_remainder", "error")
-    if step_sizes is not None:
-        if sum(step_sizes) != rollout_count:
-            raise ValueError(f"external_step_sizes {step_sizes!r} do not cover the {rollout_count} rollouts")
-        return [int(size) for size in step_sizes]
-    full_steps, tail = divmod(rollout_count, global_batch_size)
-    if tail and remainder != "partial":
-        raise ValueError(
-            f"{rollout_count} external rollouts do not form complete global batches of {global_batch_size}"
-        )
-    return [global_batch_size] * full_steps + ([tail] if tail else [])
+    step_sizes = data["external_step_sizes"]
+    if sum(step_sizes) != rollout_count:
+        raise ValueError(f"external_step_sizes {step_sizes!r} do not cover the {rollout_count} rollouts")
+    return [int(size) for size in step_sizes]
 
 
 class TrainingBatchProcessor:
@@ -118,10 +110,9 @@ class TrainingBatchProcessor:
         return references
 
     def _resolve_step_sizes(self, data) -> list[int]:
-        """Rollouts per optimizer step, in order — Reef's schedule or the configured size cut here."""
-        step_sizes = optimizer_step_sizes(data, self.args.global_batch_size)
-        data.pop("external_step_sizes", None)
-        data.pop("external_remainder", None)
+        """Rollouts per optimizer step, in order, from Reef's schedule."""
+        step_sizes = optimizer_step_sizes(data)
+        data.pop("external_step_sizes")
         return step_sizes
 
     def _schedule_steps(self, data, step_sizes: list[int]):

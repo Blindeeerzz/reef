@@ -30,7 +30,6 @@ from reef.recipe.generated_tasks.processor import (
     GeneratedTaskTasks,
     RoundJob,
     RoundSettings,
-    TaskBatchSettings,
     TaskGroupSettings,
     episode_assembly,
     reported_task_name,
@@ -40,6 +39,7 @@ from reef.record2record import GroupDecision, ReportContext
 from reef.record2task.generator.inputs import TaskGenerationRequest
 from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.storage.tasks import TaskStorage
+from reef.task2batch import BufferSettings
 from reef.train.algos.registry import resolve_objective
 from reef.train.pipeline import TrainingPipeline
 from reef.train.types import TrainingBatch, trajectory_groups
@@ -82,32 +82,31 @@ def report(
     )
 
 
-def stage_settings(config: Mapping[str, object]) -> tuple[TaskGroupSettings, RoundSettings, TaskBatchSettings]:
+def stage_settings(config: Mapping[str, object]) -> tuple[TaskGroupSettings, RoundSettings, BufferSettings]:
     """Split one flat config, as a test writes it, into the settings of the three stages."""
     group_names = {field.name for field in dataclasses.fields(TaskGroupSettings)}
     round_names = {field.name for field in dataclasses.fields(RoundSettings)}
-    batch_names = {field.name for field in dataclasses.fields(TaskBatchSettings)}
+    batch_names = {field.name for field in dataclasses.fields(BufferSettings)}
     unknown = sorted(set(config) - group_names - round_names - batch_names)
     if unknown:
         raise ValueError(f"unknown stage settings: {', '.join(unknown)}")
     return (
         TaskGroupSettings(**{key: value for key, value in config.items() if key in group_names}),
         RoundSettings(**{key: value for key, value in config.items() if key in round_names}),
-        TaskBatchSettings(**{key: value for key, value in config.items() if key in batch_names}),
+        BufferSettings(**{key: value for key, value in config.items() if key in batch_names}),
     )
 
 
-def processor(**config: object) -> TrainingPipeline:
-    context = PipelineContext("tasks")
-    group_settings, round_settings, batch_settings = stage_settings(
-        {"tasks_per_step": 2, "plays_per_task": 2, **config}
-    )
+def processor(*, batch_size: int = 4, **config: object) -> TrainingPipeline:
+    """A pipeline whose batch holds ``batch_size`` episodes: by default two task groups of two plays."""
+    context = PipelineContext("tasks", batch_size=batch_size)
+    group_settings, round_settings, buffer_settings = stage_settings({"plays_per_task": 2, **config})
     stage = GeneratedTaskRecord2Record(context, group_settings)
     return TrainingPipeline(
         context,
         record2record=stage,
         record2task=GeneratedTaskTasks(context, round_settings, stage),
-        task2batch=GeneratedTaskBatches(context, batch_settings),
+        task2batch=GeneratedTaskBatches(context, buffer_settings.buffer_size),
     )
 
 
@@ -204,7 +203,7 @@ def test_an_episode_whose_response_was_cut_at_max_tokens_still_trains() -> None:
             agent_record_id=record_id,
         )
 
-    p = processor(tasks_per_step=1)
+    p = processor(batch_size=2)
     p.push(turn("rec-0", [1, 2, *scaffold, *response], len(response)))
     p.push(turn("rec-1", [1, 2, *response, 3, *scaffold, 4], 1))
     payload = {**report("rep-0", "rec-0", "harbor-00000-000", 1.0).payload, "references": ["rec-0", "rec-1"]}
@@ -392,14 +391,14 @@ def rounds(
     player: StandInGenerator | None = None,
     *,
     worker: InlineWorker | DeferredWorker | None = None,
+    batch_size: int = 4,
     **config: object,
 ) -> tuple[TrainingPipeline, StandInGenerator]:
     player = player if player is not None else StandInGenerator(tmp_path / "tasks")
     worker = worker if worker is not None else InlineWorker()
-    context = PipelineContext("tasks", task_storage=task_storage(tmp_path))
-    group_settings, round_settings, batch_settings = stage_settings(
+    context = PipelineContext("tasks", task_storage=task_storage(tmp_path), batch_size=batch_size)
+    group_settings, round_settings, buffer_settings = stage_settings(
         {
-            "tasks_per_step": 2,
             "plays_per_task": 2,
             "rounds": 3,
             "description": DESCRIPTION,
@@ -416,7 +415,7 @@ def rounds(
         context,
         record2record=stage,
         record2task=generation,
-        task2batch=GeneratedTaskBatches(context, batch_settings),
+        task2batch=GeneratedTaskBatches(context, buffer_settings.buffer_size),
     )
     worker.generation = generation
     return built, player
@@ -588,7 +587,7 @@ def test_a_task_group_completes_at_the_episodes_its_plays_reported(
     worker = DeferredWorker()
     player = PartlyReported(tmp_path / "tasks", reported=reported)
     p, _ = rounds(
-        tmp_path, ScriptedGenerator([generated(0, 0)]), player, worker=worker, plays_per_task=4, tasks_per_step=1
+        tmp_path, ScriptedGenerator([generated(0, 0)]), player, worker=worker, plays_per_task=4, batch_size=2
     )
     assert not p.ready() and [job.round_number for job in worker.submitted] == [0]
     for index in range(reported):
@@ -604,7 +603,7 @@ def test_a_task_group_completes_at_the_episodes_its_plays_reported(
 
 def test_a_restarted_processor_closes_a_group_at_the_count_its_round_summary_kept(tmp_path: Path) -> None:
     player = PartlyReported(tmp_path / "tasks", reported=2)
-    config: dict[str, Any] = {"plays_per_task": 4, "tasks_per_step": 1, "rounds": 1}
+    config: dict[str, Any] = {"plays_per_task": 4, "batch_size": 2, "rounds": 1}
     first, _ = rounds(tmp_path, ScriptedGenerator([generated(0, 0)]), player, **config)
     assert not looked(first)
     first.close()
@@ -748,7 +747,7 @@ def test_the_real_worker_runs_a_round_off_the_trainers_thread(tmp_path: Path) ->
         context,
         record2record=stage,
         record2task=generation,
-        task2batch=GeneratedTaskBatches(context, TaskBatchSettings()),
+        task2batch=GeneratedTaskBatches(context, None),
     )
     try:
         assert not p.ready()
@@ -845,7 +844,7 @@ def test_no_session_waits_once_the_rounds_are_over(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("config", "message"),
     [
-        ({"tasks_per_step": 0}, "tasks_per_step must be positive"),
+        ({"buffer_size": 0}, "buffer_size must be positive"),
         ({"plays_per_task": 1}, "at least two"),
         ({"rounds": 1, "description": "x", "state_dir": "s"}, "pipeline.record2task.config.generator"),
         ({"source_records_per_round": 1}, "needs a source_tag"),
@@ -886,12 +885,13 @@ def test_the_recipe_binds_the_objective_its_schedule_and_its_stages() -> None:
     spec = GeneratedTaskRecipe.training_spec()
     assert GeneratedTaskRecipe.pipeline_spec().task2batch is GeneratedTaskBatches and spec.objective == "task_group"
     assert spec.loss_family == "importance_sampling"
-    assert spec.scheduling.unit == "sample" and spec.scheduling.batch_size == "actual"
+    assert spec.scheduling.unit == "sample"
     assert GeneratedTaskRecipe.report_type.fget(GeneratedTaskRecipe) is ScoredRolloutReport  # type: ignore[union-attr]
-    built = training_recipe().build_pipeline(PipelineContext("one"))
+    built = training_recipe().build_pipeline(PipelineContext("one", batch_size=8))
     assert isinstance(built.record2record, GeneratedTaskRecord2Record)
     assert isinstance(built.record2task, GeneratedTaskTasks) and built.record2task.worker is None, "no round runs"
-    assert isinstance(built.task2batch, GeneratedTaskBatches) and built.batch_size == 4
+    assert isinstance(built.task2batch, GeneratedTaskBatches)
+    assert (built.batch_size, built.buffer_size) == (8, 32), "the buffer holds four batches by default"
     built.close()
 
 
@@ -928,7 +928,7 @@ def test_the_pipeline_section_configures_the_stages_and_builds_the_generator_onc
             },
             "task2batch": {
                 "module": "reef.recipe.generated_tasks:GeneratedTaskBatches",
-                "config": {"tasks_per_step": 2},
+                "config": {"buffer_size": 16},
             },
         },
     )
@@ -939,9 +939,24 @@ def test_the_pipeline_section_configures_the_stages_and_builds_the_generator_onc
     assert ScriptedGenerator.built == [{"config": {"count": 3}, "scenario": "one", "environ": environ}]
     assert built.record2task.plays_per_task == 3, "the plays come from the record stage's groups"
     assert built.record2task.state_dir == tmp_path / "state" / "one"
-    assert built.batch_size == 2
+    assert built.buffer_size == 16
     assert recipe.scenario_state_dirs("one") == (tmp_path / "state" / "one",)
     built.close()
+
+
+def test_the_batch_stage_refuses_the_removed_tasks_per_step() -> None:
+    # The backend's batch size of episodes makes a batch; the stage takes no group count.
+    recipe = generated_pipeline_recipe(
+        {},
+        {
+            "task2batch": {
+                "module": "reef.recipe.generated_tasks:GeneratedTaskBatches",
+                "config": {"tasks_per_step": 2},
+            }
+        },
+    )
+    with pytest.raises(RecipeConfigError, match="unknown config fields: tasks_per_step"):
+        recipe.build_pipeline(PipelineContext("one"))
 
 
 @pytest.mark.parametrize(

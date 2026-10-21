@@ -49,6 +49,11 @@ class CountingBackend(CandidateBackend):
     def __init__(self, batches: list[TrainingBatch]) -> None:
         self.batches = batches
 
+    @property
+    def batch_size(self) -> int:
+        # An uploaded trajectory is one sample, so two uploads make one batch.
+        return 2
+
     def initial_state(self) -> Mapping[str, Any]:
         return {"trained": 0}
 
@@ -86,7 +91,7 @@ class UploadRecipe(Recipe):
         return Trainer.build(
             scenario,
             records,
-            pipeline_factory=lambda context: TrainingPipeline(context, task2batch=self.batch_stage(context, 2)),
+            pipeline_factory=lambda context: TrainingPipeline(context, task2batch=self.batch_stage(context, None)),
             candidate_backend=CountingBackend(self.batches),
             algorithm_state=algorithm_state,
             experiment_logger=experiment_logger,

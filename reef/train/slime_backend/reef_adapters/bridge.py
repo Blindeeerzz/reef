@@ -155,7 +155,12 @@ class SlimeTrainingBackend(TrainingBackend, ExecutorFailureListener):
         self._batch_processor = batch_processor
         self._save_hf_template = save_hf_template
         self._config = TrainingCoordinationConfig(
-            save_hf_template, colocate, lora, adapter_capacity, keep_lora_base_resident
+            save_hf_template,
+            colocate,
+            lora,
+            adapter_capacity,
+            keep_lora_base_resident,
+            batch_size=args.global_batch_size,
         )
         self._context = TrainingContext(
             next_rollout_id=start_rollout_id,
@@ -271,7 +276,7 @@ class SlimeTrainingBackend(TrainingBackend, ExecutorFailureListener):
                 raise RuntimeError(
                     "a recipe-selected learning-rate schedule cannot drive --decoupled-lr parameter groups"
                 )
-            optimizer_steps = len(optimizer_step_sizes(rollout_data, self.args.global_batch_size))
+            optimizer_steps = len(optimizer_step_sizes(rollout_data))
         context: Any = nullcontext(None)
         # A job that saves no checkpoint does not admit storage. Thus it does not delete an older checkpoint.
         if self._storage is not None and writes_checkpoint:
@@ -512,7 +517,12 @@ class SlimeTrainingBackend(TrainingBackend, ExecutorFailureListener):
     ) -> PreparedTrainingStep:
         """Prepare a framework-neutral Reef batch with Slime-owned logic; refuse a method the workers cannot train."""
         prepared = prepare_slime_step(
-            batch, method, algorithm_state, scheduling, sampler_topk=self._score_centering is not None
+            batch,
+            method,
+            algorithm_state,
+            scheduling,
+            step_size=self.args.global_batch_size,
+            sampler_topk=self._score_centering is not None,
         )
         if prepared.payload is not None:
             self.algorithm_for_loss_family(prepared.payload["loss"]).validate_payload(prepared.payload)

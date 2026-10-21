@@ -37,6 +37,10 @@ class StepBackend(CandidateBackend):
         self.resume = Event()
         self.result: TrainStepResult | None = None
 
+    @property
+    def batch_size(self) -> int:
+        return 1
+
     def initial_state(self):
         return {"steps": 0}
 

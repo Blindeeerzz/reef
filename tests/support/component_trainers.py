@@ -40,6 +40,10 @@ class _ComponentBackend(CandidateBackend):
         self.hold_next = False
         self.result: TrainStepResult | None = None
 
+    @property
+    def batch_size(self) -> int:
+        return 1
+
     def unblock(self) -> None:
         """Let go of any step the test holds, so the dispatcher can close."""
 
@@ -98,7 +102,7 @@ class _TwoTrainerRecipe(Recipe):
 
     def pipeline_for(self, component: str, context: PipelineContext) -> TrainingPipeline:
         if component in self.hybrid_components:
-            return threshold_pipeline(context, task2batch=HybridThresholdBatches(context, 1))
+            return threshold_pipeline(context, task2batch=HybridThresholdBatches(context, None))
         return threshold_pipeline(context)
 
     def build_trainers(

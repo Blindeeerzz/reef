@@ -118,7 +118,7 @@ class Record2Record(ABC, Plugin):
         return formed
 
     def context_changed(self, context: PipelineContext) -> None:
-        """The pipeline's context changed: its training mode, held-unit limit, or admitted report type."""
+        """The pipeline's context changed: its training mode or admitted report type."""
         return
 
     def settle(

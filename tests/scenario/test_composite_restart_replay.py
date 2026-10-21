@@ -31,7 +31,9 @@ class _MarkerCoordinator(CoordinatorClient):
         self.store = FileTrainingJobStore(backend.path)
         self.execution = TrainingExecution(self.store, backend, backend.state)
         self.commits: list[str] = []
-        self._config = TrainingCoordinationConfig(save_hf_template=str(backend.path.parent / "hf-{rollout_id}"))
+        self._config = TrainingCoordinationConfig(
+            save_hf_template=str(backend.path.parent / "hf-{rollout_id}"), batch_size=1
+        )
         self._store = self.store
 
     def health(self):
@@ -39,6 +41,7 @@ class _MarkerCoordinator(CoordinatorClient):
             "ok": True,
             "phase": "serving",
             "colocate": False,
+            "batch_size": 1,
             "inference_url": "http://inference",
             "lora_adapter": None,
             "lora_mode": None,

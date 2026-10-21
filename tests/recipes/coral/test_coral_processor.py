@@ -23,13 +23,14 @@ from reef.train.types import TrainingBatch
 SCENARIO = "coral-demo"
 
 
-def _processor(group_size=2):
-    context = PipelineContext(SCENARIO)
+def _processor(group_size=2, batch_size=None):
+    # By default a batch holds one sibling group.
+    context = PipelineContext(SCENARIO, batch_size=group_size if batch_size is None else batch_size)
     return TrainingPipeline(
         context,
         record2record=CoralRecord2Record(context, CoralGroupSettings(group_size=group_size)),
         record2task=CoralTasks(CoralAssemblySettings()),
-        task2batch=CoralBatches(context),
+        task2batch=CoralBatches(context, None),
     )
 
 
@@ -109,6 +110,24 @@ def test_groups_do_not_mix_across_parents():
     processor.push(_attempt_report("r2", "i2", 0.6, commit="c-b", parent="p1"))
     # two half-full groups, no cross-parent comparison
     assert not processor.ready()
+
+
+def test_a_batch_holds_complete_sibling_groups_each_grouped_by_its_own_parent():
+    processor = _processor(group_size=2, batch_size=4)
+    for index in range(4):
+        processor.push(_inference(f"i{index}", [1, 2], [1], [-0.1]))
+    processor.push(_attempt_report("r0", "i0", 0.1, commit="c-0", parent="p0"))
+    processor.push(_attempt_report("r1", "i1", 0.2, commit="c-1", parent="p0"))
+    assert not processor.ready(), "one sibling group is half a batch of four"
+    processor.push(_attempt_report("r2", "i2", 0.3, commit="c-2", parent="p1"))
+    processor.push(_attempt_report("r3", "i3", 0.4, commit="c-3", parent="p1"))
+    assert processor.ready()
+
+    groups = trajectory_groups(processor.build_batch())
+    assert [[(sample.group_id, trajectory_reward(sample)) for sample in group] for group in groups] == [
+        [("p0", 0.1), ("p0", 0.2)],
+        [("p1", 0.3), ("p1", 0.4)],
+    ]
 
 
 def test_regrade_retry_at_same_commit_is_terminal_not_double_counted():

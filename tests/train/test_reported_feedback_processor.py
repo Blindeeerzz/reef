@@ -66,7 +66,10 @@ class SampleBatches(Task2Batch):
 
 
 class SamplePipeline(TrainingPipeline):
-    """A reported-feedback pipeline over an exclusive report stage, with ``SampleTasks`` and ``batches``."""
+    """A reported-feedback pipeline over an exclusive report stage, with ``SampleTasks`` and ``batches``.
+
+    ``batch_size`` is the samples in one batch.
+    """
 
     def __init__(
         self,
@@ -78,13 +81,13 @@ class SamplePipeline(TrainingPipeline):
         tasks: SampleTasks | None = None,
         batches: type[SampleBatches] = SampleBatches,
     ) -> None:
-        context = PipelineContext("math", report_type)
+        context = PipelineContext("math", report_type, batch_size=batch_size)
         self.sample_tasks = SampleTasks() if tasks is None else tasks
         super().__init__(
             context,
             record2record=exclusive_stage(context, grouping, ordered_groups=ordered_groups),
             record2task=self.sample_tasks,
-            task2batch=batches(context, batch_size),
+            task2batch=batches(context, None),
         )
 
     @property
@@ -117,8 +120,8 @@ class PairGrouping(ReportGrouping):
 
 
 class GroupPipeline(SamplePipeline):
-    def __init__(self, batch_size: int = 1, *, batches: type[SampleBatches] = SampleBatches) -> None:
-        super().__init__(batch_size, grouping=PairGrouping(), batches=batches)
+    def __init__(self, *, batches: type[SampleBatches] = SampleBatches) -> None:
+        super().__init__(grouping=PairGrouping(), batches=batches)
 
     @property
     def grouping_policy(self) -> PairGrouping:

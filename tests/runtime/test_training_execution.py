@@ -34,7 +34,7 @@ class MemoryTrainingBackend(TrainingBackend, PreparedTrainingJob):
         self.state = TrainingJobState()
         self.prior = None
         self.payload = None
-        self._config = TrainingCoordinationConfig(save_hf_template=None)
+        self._config = TrainingCoordinationConfig(save_hf_template=None, batch_size=1)
         self._context = TrainingContext()
 
     @property

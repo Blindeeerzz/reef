@@ -27,11 +27,17 @@ class StubTrainingRuntime(TrainingRuntime):
     reservation, step preparation — without a running model service. The
     inference surface is disabled and training-path methods raise
     ``NotImplementedError``; tests reaching model execution supply their own
-    implementations.
+    implementations. ``batch_size`` is the samples in one training step that
+    the runtime reports, a positive int.
     """
 
-    def __init__(self, base_url: str = "http://training-runtime") -> None:
+    def __init__(self, base_url: str = "http://training-runtime", *, batch_size: int = 1) -> None:
         self.inference = StubInferenceRuntime(self, base_url=base_url)
+        self.step_batch_size = batch_size
+
+    @property
+    def batch_size(self) -> int:
+        return self.step_batch_size
 
     @property
     def inference_handler(self) -> InferenceHandler | None:  # type: ignore[override]

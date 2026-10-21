@@ -85,7 +85,7 @@ def test_group_size_in_the_recipe_config_is_refused(key):
     ("pipeline", "message"),
     [
         ({"record2record": {"config": {"group_size": 1}}}, "at least two"),
-        ({"task2batch": {"config": {"group_size": 2}}}, "CoralBatches takes no config"),
+        ({"task2batch": {"config": {"group_size": 2}}}, "CoralBatches: unknown config fields: group_size"),
         ({"record2task": {"config": {"group_size": 2}}}, "group_size"),
     ],
 )

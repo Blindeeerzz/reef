@@ -98,14 +98,14 @@ def _successor(prior_messages, next_state: str):
 
 
 def _processor(batch_size: int = 1, *, worker=None, ttl_s: float = 900.0, clients=None, **judging):
-    context = PipelineContext("s")
+    context = PipelineContext("s", batch_size=batch_size)
     settings = OpenClawRLJudgingSettings(session_ttl_s=ttl_s, **judging)
     stage = OpenClawRLRecord2Record(settings, worker=worker, clients=clients)
     return TrainingPipeline(
         context,
         record2record=stage,
         record2task=OpenClawRLTasks(),
-        task2batch=OpenClawRLBatches(context, OpenClawRLBatchSettings(batch_size=batch_size), stage),
+        task2batch=OpenClawRLBatches(context, OpenClawRLBatchSettings(), stage),
     )
 
 
@@ -324,7 +324,7 @@ def test_backend_passes_raw_rewards_through_without_normalization() -> None:
         for index, reward in enumerate((1.0, -1.0, 0.0, 1.0))
     )
     batch = TrainingBatch("s:openclawrl:1", tuple(sample for sample in samples))
-    result = prepare_slime_step(batch, TrainingMethod("openclawrl"), {}, StepScheduling(unit="sample"))
+    result = prepare_slime_step(batch, TrainingMethod("openclawrl"), {}, StepScheduling(unit="sample"), step_size=4)
     assert result.payload is not None
     assert result.payload["advantages"] == [1.0, -1.0, 0.0, 1.0]
     assert result.payload["loss"] == "openclawrl"
@@ -369,10 +369,10 @@ def test_the_pipeline_section_configures_the_stages() -> None:
                     "max_open_sessions": 16,
                 }
             },
-            "task2batch": {"config": {"batch_size": 2, "prm_record_file": "/tmp/prm-records.jsonl"}},
+            "task2batch": {"config": {"buffer_size": 8, "prm_record_file": "/tmp/prm-records.jsonl"}},
         }
     )
-    built = recipe.build_pipeline(PipelineContext("s"))
+    built = recipe.build_pipeline(PipelineContext("s", batch_size=2))
     try:
         assert isinstance(built.record2record, OpenClawRLRecord2Record)
         assert isinstance(built.record2task, OpenClawRLTasks)
@@ -384,7 +384,7 @@ def test_the_pipeline_section_configures_the_stages() -> None:
         assert judging.max_hint_candidates == 2
         assert judging.index.ttl_s == 60.0 and judging.index.max_sessions == 16
         assert isinstance(built.record2record.worker, BackgroundJobWorker), "a PRM judge starts the judging worker"
-        assert built.batch_size == 2
+        assert (built.batch_size, built.buffer_size) == (2, 8)
         assert built.task2batch.openclawrl_judging is judging, "the batches report what the record stage judged"
         assert str(built.task2batch.record_path) == "/tmp/prm-records.jsonl"
     finally:
@@ -392,11 +392,12 @@ def test_the_pipeline_section_configures_the_stages() -> None:
 
 
 @pytest.mark.unit
-def test_the_default_stages_are_correlate_only_with_the_upstream_batch_size() -> None:
-    built = openclawrl_recipe().build_pipeline(PipelineContext("s"))
+def test_the_default_stages_are_correlate_only_and_buffer_four_batches() -> None:
+    built = openclawrl_recipe().build_pipeline(PipelineContext("s", batch_size=16))
     assert isinstance(built.record2record, OpenClawRLRecord2Record)
     assert built.record2record.openclawrl_judging.prm is None and built.record2record.worker is None
-    assert built.batch_size == 16
+    assert (built.batch_size, built.buffer_size) == (16, 64)
+    assert isinstance(built.task2batch, OpenClawRLBatches) and built.task2batch.record_path is None
     built.close()
 
 
@@ -423,7 +424,8 @@ def test_the_retired_teacher_settings_are_refused() -> None:
         ({"record2record": {"config": {"prm_url": "http://prm:23001"}}}, "prm_tokenizer_path"),
         ({"record2record": {"config": {"prm_concurrency": 0}}}, "prm_concurrency must be positive"),
         ({"record2record": {"config": {"batch_size": 2}}}, "batch_size"),
-        ({"task2batch": {"config": {"batch_size": 0}}}, "batch_size must be positive"),
+        ({"task2batch": {"config": {"batch_size": 16}}}, "OpenClawRLBatches: unknown config fields: batch_size"),
+        ({"task2batch": {"config": {"buffer_size": 0}}}, "buffer_size must be positive"),
         ({"task2batch": {"config": {"prm_url": "http://prm:23001"}}}, "prm_url"),
     ],
 )
@@ -558,9 +560,7 @@ def test_the_prm_record_file_reports_the_judged_population(tmp_path) -> None:
         context,
         record2record=stage,
         record2task=OpenClawRLTasks(),
-        task2batch=OpenClawRLBatches(
-            context, OpenClawRLBatchSettings(batch_size=1, prm_record_file=str(record)), stage
-        ),
+        task2batch=OpenClawRLBatches(context, OpenClawRLBatchSettings(prm_record_file=str(record)), stage),
     )
     processor.push(_turn("t1", Q1))
     processor.push(_turn("t2", _successor(Q1, "that works")))

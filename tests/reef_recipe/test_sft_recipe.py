@@ -251,7 +251,7 @@ def test_sft_recipe_resolves_by_dotted_reference_and_builds_its_stages(tokenizer
         {
             "pipeline": {
                 "record2task": {"config": {"tokenizer_path": TOKENIZER_PATH, "target": "response", "max_tokens": 8}},
-                "task2batch": {"config": {"batch_size": 64}},
+                "task2batch": {"config": {"buffer_size": 256}},
             }
         },
         **runtime_bindings(StubTrainingRuntime()),
@@ -263,12 +263,12 @@ def test_sft_recipe_resolves_by_dotted_reference_and_builds_its_stages(tokenizer
     spec = SFTRecipe.training_spec()
     assert (spec.objective, spec.loss_family) == ("reef.recipe.sft:SftObjective", "sft")
     assert spec.scheduling == StepScheduling(unit="sample")
-    pipeline = recipe.build_pipeline(PipelineContext("science", TeacherContextReport))
+    pipeline = recipe.build_pipeline(PipelineContext("science", TeacherContextReport, batch_size=64))
     assert isinstance(pipeline.record2record, SFTRecord2Record)
     assert isinstance(pipeline.record2task, SFTTasks)
     assert (pipeline.record2task.target, pipeline.record2task.max_tokens) == ("response", 8)
     assert isinstance(pipeline.task2batch, DistillBatches)
-    assert pipeline.task2batch.batch_size == 64
+    assert (pipeline.batch_size, pipeline.task2batch.buffer_size) == (64, 256)
 
 
 @pytest.mark.unit
@@ -313,7 +313,11 @@ def test_the_recipe_objective_resolves_where_the_recipe_was_never_imported(
     pipeline.push(_report("r1", ("i1",)))
 
     step = prepare_slime_step(
-        pipeline.build_batch(), TrainingMethod(SFTRecipe.training_spec().objective), {}, StepScheduling(unit="sample")
+        pipeline.build_batch(),
+        TrainingMethod(SFTRecipe.training_spec().objective),
+        {},
+        StepScheduling(unit="sample"),
+        step_size=1,
     )
 
     assert step.payload is not None
@@ -327,7 +331,7 @@ def test_slime_payload_trains_the_target_tokens_without_log_probs(tokenizer: Tur
     pipeline.push(_report("r1", ("i1",)))
 
     payload = prepare_slime_step(
-        pipeline.build_batch(), TrainingMethod("sft"), {}, StepScheduling(unit="sample")
+        pipeline.build_batch(), TrainingMethod("sft"), {}, StepScheduling(unit="sample"), step_size=1
     ).payload
 
     assert payload is not None
