@@ -21,7 +21,7 @@ from reef.core.errors import ReefError
 from reef.core.plugins import PluginConfigError
 from reef.core.tasks.split import read_split_manifest
 from reef.storage.scenario import ScenarioSettings, ScenarioStorage, ScenarioStore
-from reef.storage.tasks import SplitName, SplitSettings, StoredTask, TaskFileStore, TaskStorage
+from reef.storage.tasks import SplitName, StoredTask, TaskFileStore, TaskStorage
 
 #: The task store of a scenario that holds the imported tasks.
 IMPORTED_TASK_STORE = "imported-tasks"
@@ -51,17 +51,13 @@ class TaskImport:
         """Publish each task of the manifest to its split in the store ``imported-tasks``, and return them.
 
         The train tasks come first, then the eval tasks, each in name order.
-        The store keeps the manifest's seed and eval fraction as its split
-        settings. Raises ``TaskSplitError`` if the manifest cannot be read,
+        Raises ``TaskSplitError`` if the manifest cannot be read,
         ``TaskImportError`` if a task directory is missing or is not a Harbor
-        task, ``TaskStoreError`` if the manifest changed its split settings, and
-        ``TaskConflict`` if a task is published with other files or in the
-        other split.
+        task, and ``TaskConflict`` if a task is published with other files or
+        in the other split.
         """
         manifest = read_split_manifest(self.manifest)
-        store = tasks.open(
-            IMPORTED_TASK_STORE, split=SplitSettings(eval_fraction=manifest.eval_fraction, seed=manifest.seed)
-        )
+        store = tasks.open(IMPORTED_TASK_STORE)
         published: list[StoredTask] = []
         splits: tuple[tuple[SplitName, tuple[str, ...]], ...] = (("train", manifest.train), ("eval", manifest.eval))
         for split, names in splits:

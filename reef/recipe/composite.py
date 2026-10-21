@@ -47,7 +47,7 @@ from reef.recipe.errors import RecipeConfigError
 from reef.recipe.registry import build_recipe, recipe_class_for
 from reef.runtime.interfaces import InferenceRuntime, TrainingRuntime
 from reef.storage.records import RecordStore
-from reef.storage.tasks import SplitSettings, TaskStorage, TaskStore
+from reef.storage.tasks import TaskStorage, TaskStore
 from reef.surface.base import ComponentSurface, HarnessInfo, Surface
 from reef.train.trainer import ComponentTrainer
 
@@ -113,8 +113,8 @@ class ComponentTaskStorage(TaskStorage):
         self.storage = storage
         self.component = component
 
-    def open(self, name: str, *, split: SplitSettings) -> TaskStore:
-        return self.storage.open(f"{self.component}/{name}", split=split)
+    def open(self, name: str) -> TaskStore:
+        return self.storage.open(f"{self.component}/{name}")
 
 
 @dataclass(frozen=True, kw_only=True)

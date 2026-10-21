@@ -63,7 +63,7 @@ from reef.record2task import Record2Task, ReportTasks
 from reef.record2task.assembly import SampleAssembly, SampleAssemblySettings
 from reef.record2task.generator.client import DuplicateTask, Generator, HttpGenerator, TaskNameConflict
 from reef.record2task.generator.inputs import TaskGenerationRequest
-from reef.storage.tasks import SplitName, SplitSettings, TaskConflict, TaskStore
+from reef.storage.tasks import SplitName, TaskConflict, TaskStore
 from reef.task2batch import Task2Batch
 from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem
 
@@ -153,7 +153,7 @@ def task_counts(store: TaskStore) -> dict[str, int]:
     }
 
 
-def assigned_split(store: TaskStore, settings: SplitSettings, task: HarborTask) -> SplitName:
+def assigned_split(store: TaskStore, task: HarborTask, *, seed: int, eval_fraction: float) -> SplitName:
     """Return the split of a task: the split of its published name, or else the split of its source records.
 
     Tasks that share a source record get the same split, and a published task keeps its split. Raises
@@ -166,8 +166,8 @@ def assigned_split(store: TaskStore, settings: SplitSettings, task: HarborTask) 
     previous = TaskSplit(
         train=tuple(name for name, stored in published.items() if stored.split == "train"),
         eval=tuple(name for name, stored in published.items() if stored.split == "eval"),
-        seed=settings.seed,
-        eval_fraction=settings.eval_fraction,
+        seed=seed,
+        eval_fraction=eval_fraction,
     )
     assigned = extend_split_by_source(
         previous=previous,
@@ -570,9 +570,10 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
             self.worker = BackgroundJobWorker(self, thread_name="generated-task-rounds", concurrency=1)
         if self.task_generator is not None:
             logger.info("scenario %r generates tasks with %s", self.scenario, type(self.task_generator).__name__)
-        self.split_settings = SplitSettings(eval_fraction=settings.eval_fraction, seed=settings.split_seed)
+        self.eval_fraction = settings.eval_fraction
+        self.split_seed = settings.split_seed
         self.task_store = (
-            context.task_storage.open(TASK_STORE_NAME, split=self.split_settings)
+            context.task_storage.open(TASK_STORE_NAME)
             if context.task_storage is not None and self.rounds > 0
             else None
         )
@@ -728,7 +729,9 @@ class GeneratedTaskTasks(ReportTasks, BackgroundJobRunner):
                 validation = await self.task_generator.validate(task)
                 if validation.is_valid:
                     try:
-                        split = assigned_split(self.task_store, self.split_settings, task)
+                        split = assigned_split(
+                            self.task_store, task, seed=self.split_seed, eval_fraction=self.eval_fraction
+                        )
                         self.task_store.publish_task(generation=job.round_number, index=index, split=split)
                     except (TaskConflict, TaskSplitConflict) as conflict:
                         self.task_store.reject_task(generation=job.round_number, index=index, reason=str(conflict))

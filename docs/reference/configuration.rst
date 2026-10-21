@@ -1196,9 +1196,7 @@ The generator's pass-rate band does not filter the store.
 
 Set ``eval_fraction`` and ``split_seed`` here rather than in a generator's configuration.
 The defaults keep every task in train.
-The task store saves these values when the scenario opens it for the first time.
-A scenario that loads with other values fails.
-Use a new scenario for a different split.
+A published task keeps its split. A change of these values applies to the tasks generated after it.
 
 ``GeneratedTaskBatches`` batches complete task groups:
 

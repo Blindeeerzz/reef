@@ -56,22 +56,6 @@ class TaskConflict(TaskStoreError):
 
 
 @dataclass(frozen=True)
-class SplitSettings:
-    """The split settings of a task store. They do not change for the life of the store."""
-
-    eval_fraction: float
-    seed: int
-
-    def __post_init__(self) -> None:
-        fraction = self.eval_fraction
-        if isinstance(fraction, bool) or not isinstance(fraction, (int, float)) or not 0 <= fraction <= 1:
-            raise ValueError("eval_fraction must be a number between 0 and 1")
-        if isinstance(self.seed, bool) or not isinstance(self.seed, int):
-            raise ValueError("seed must be an integer")
-        object.__setattr__(self, "eval_fraction", float(fraction))
-
-
-@dataclass(frozen=True)
 class TaskCandidate:
     """One candidate task of a generation, and its outcome.
 
@@ -162,9 +146,9 @@ class StoredTask:
 class TaskStore(ABC):
     """The generations and published tasks of one named store of a scenario.
 
-    Values: the state of a store is its split settings, a finite sequence of
-    generations in increasing ``generation``, and a finite sequence of
-    published tasks in publication order. No two published tasks have the
+    Values: the state of a store is a finite sequence of generations in
+    increasing ``generation``, and a finite sequence of published tasks in
+    publication order. No two published tasks have the
     same name. A published task does not change.
 
     Purpose: a record-to-task stage writes its generations and publishes their
@@ -253,15 +237,11 @@ class TaskStore(ABC):
 
 
 class TaskStorage(ABC):
-    """Opens the task stores of one scenario. Each store has a name and its own split settings."""
+    """Opens the task stores of one scenario by name."""
 
     @abstractmethod
-    def open(self, name: str, *, split: SplitSettings) -> TaskStore:
-        """Open the task store ``name``.
-
-        The first open saves ``split``. Raises ``TaskStoreError`` if a later
-        open gives different split settings.
-        """
+    def open(self, name: str) -> TaskStore:
+        """Open the task store ``name``. A store that holds nothing yet is empty."""
 
 
 class TaskFileStore(Plugin, ABC):
@@ -420,7 +400,6 @@ __all__ = [
     "GenerationState",
     "LocalTaskFileStore",
     "SplitName",
-    "SplitSettings",
     "StoredTask",
     "TaskCandidate",
     "TaskConflict",

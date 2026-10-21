@@ -345,8 +345,7 @@ scenario. A task that is already imported with the same files and split does
 not change. A scenario does not open, and the error says why, when:
 
 - a task directory is missing, or Harbor cannot load it;
-- an imported task now has other files, or it moved to the other split;
-- the manifest changed its ``seed`` or ``eval_fraction``.
+- an imported task now has other files, or it moved to the other split.
 
 To change an imported task, give it a new name.
 

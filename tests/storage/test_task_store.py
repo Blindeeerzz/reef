@@ -20,15 +20,12 @@ from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.storage.tasks import (
     GenerationState,
     LocalTaskFileStore,
-    SplitSettings,
     StoredTask,
     TaskCandidate,
     TaskConflict,
     TaskStoreError,
     files_digest,
 )
-
-SPLIT = SplitSettings(eval_fraction=0.25, seed=7)
 
 
 def generated(name: str, *, instruction: str = "", sources: tuple[str, ...] = ("record-1",)) -> HarborTask:
@@ -71,7 +68,7 @@ def session(storage):
 
 
 def test_a_generation_records_candidates_and_outcomes(session, tmp_path):
-    store = session.tasks.open("tasks", split=SPLIT)
+    store = session.tasks.open("tasks")
     tasks = (generated("alpha"), generated("beta", sources=("record-2",)), generated("gamma"))
     directories = candidates(tmp_path, *tasks)
     digests = [files_digest(directory) for directory in directories]
@@ -110,7 +107,7 @@ def test_a_generation_records_candidates_and_outcomes(session, tmp_path):
 
 
 def test_identical_retries_change_nothing(session, tmp_path):
-    store = session.tasks.open("tasks", split=SPLIT)
+    store = session.tasks.open("tasks")
     tasks = (generated("alpha"), generated("beta"))
     for _ in range(2):
         store.begin_generation(generation=3, source_record_ids=("record-1",))
@@ -129,7 +126,7 @@ def test_identical_retries_change_nothing(session, tmp_path):
 
 
 def test_conflicting_generation_writes_are_refused(session, tmp_path):
-    store = session.tasks.open("tasks", split=SPLIT)
+    store = session.tasks.open("tasks")
     with pytest.raises(TaskStoreError, match="does not exist"):
         store.save_candidates(generation=0, directories=candidates(tmp_path, generated("alpha")))
     store.begin_generation(generation=0, source_record_ids=("record-1",))
@@ -156,7 +153,7 @@ def test_conflicting_generation_writes_are_refused(session, tmp_path):
 
 
 def test_a_task_name_is_published_once(session, tmp_path):
-    store = session.tasks.open("tasks", split=SPLIT)
+    store = session.tasks.open("tasks")
     store.begin_generation(generation=0, source_record_ids=("record-1",))
     store.save_candidates(generation=0, directories=candidates(tmp_path, generated("alpha")))
     first = store.publish_task(generation=0, index=0, split="eval")
@@ -185,7 +182,7 @@ def binary_task(root: Path, name: str, content: bytes = bytes(range(256))) -> Pa
 
 
 def test_an_added_task_keeps_its_binary_files_and_publication_order(session, tmp_path):
-    store = session.tasks.open("tasks", split=SPLIT)
+    store = session.tasks.open("tasks")
     store.begin_generation(generation=0, source_record_ids=("record-1",))
     store.save_candidates(generation=0, directories=candidates(tmp_path, generated("alpha"), generated("beta")))
     store.publish_task(generation=0, index=1, split="train")
@@ -202,7 +199,7 @@ def test_an_added_task_keeps_its_binary_files_and_publication_order(session, tmp
 
 
 def test_an_added_task_conflicts_with_a_published_name(session, tmp_path):
-    store = session.tasks.open("tasks", split=SPLIT)
+    store = session.tasks.open("tasks")
     store.add_task(directory=binary_task(tmp_path / "first", "image-task"), split="eval")
     with pytest.raises(TaskConflict, match="published to eval, not train"):
         store.add_task(directory=binary_task(tmp_path / "second", "image-task"), split="train")
@@ -217,25 +214,23 @@ def test_an_added_task_conflicts_with_a_published_name(session, tmp_path):
     assert [task.name for task in store.tasks()] == ["image-task"]
 
 
-def test_split_settings_are_fixed_and_names_are_separate(session, tmp_path):
-    alpha = session.tasks.open("alpha", split=SPLIT)
+def test_store_names_are_separate(session, tmp_path):
+    alpha = session.tasks.open("alpha")
     alpha.begin_generation(generation=0, source_record_ids=("record-1",))
     alpha.save_candidates(generation=0, directories=candidates(tmp_path, generated("one")))
     alpha.publish_task(generation=0, index=0, split="train")
 
-    with pytest.raises(TaskStoreError, match=r"eval_fraction 0\.25 and seed 7"):
-        session.tasks.open("alpha", split=SplitSettings(eval_fraction=0.5, seed=7))
-    beta = session.tasks.open("beta", split=SplitSettings(eval_fraction=0.0, seed=0))
+    beta = session.tasks.open("beta")
     assert beta.tasks() == ()
     assert beta.generations() == ()
-    assert [task.name for task in session.tasks.open("alpha", split=SPLIT).tasks()] == ["one"]
+    assert [task.name for task in session.tasks.open("alpha").tasks()] == ["one"]
 
 
 def test_a_closed_session_opens_no_task_store(storage):
     session = storage.open("math")
     session.close()
     with pytest.raises(RuntimeError, match="closed"):
-        session.tasks.open("tasks", split=SPLIT)
+        session.tasks.open("tasks")
 
 
 @pytest.fixture(params=["sqlite", "postgres"])
@@ -250,7 +245,7 @@ def test_tasks_survive_a_restart_and_archive_retires_them(open_durable_storage, 
     sources = tmp_path / "source"
     sources.mkdir()
     with closing(open_durable_storage()) as storage, closing(storage.open("math")) as session:
-        store = session.tasks.open("tasks", split=SPLIT)
+        store = session.tasks.open("tasks")
         store.begin_generation(generation=0, source_record_ids=("record-1",))
         store.save_candidates(generation=0, directories=candidates(sources, generated("alpha"), generated("beta")))
         store.publish_task(generation=0, index=0, split="train")
@@ -258,7 +253,7 @@ def test_tasks_survive_a_restart_and_archive_retires_them(open_durable_storage, 
 
     with closing(open_durable_storage()) as storage:
         with closing(storage.open("math")) as session:
-            store = session.tasks.open("tasks", split=SPLIT)
+            store = session.tasks.open("tasks")
             state = store.generation(0)
             assert state is not None and state.pending_indices == (1,)
             assert read_harbor_task(store.path(state.candidates[1].files_digest)) == generated("beta")
@@ -268,7 +263,7 @@ def test_tasks_survive_a_restart_and_archive_retires_them(open_durable_storage, 
             assert (store.path(restored.files_digest) / "environment" / "image.png").read_bytes() == bytes(range(256))
         storage.archive("math")
         with closing(storage.open("math")) as session:
-            store = session.tasks.open("tasks", split=SPLIT)
+            store = session.tasks.open("tasks")
             assert store.generations() == ()
             with pytest.raises(TaskStoreError, match="no files"):
                 store.path(published.files_digest)
@@ -280,7 +275,7 @@ def test_an_archived_postgres_session_writes_no_task(postgres_config, tmp_path):
         closing(PostgresScenarioStorage(url, tmp_path, schema=schema)) as storage,
         closing(storage.open("math")) as session,
     ):
-        store = session.tasks.open("tasks", split=SPLIT)
+        store = session.tasks.open("tasks")
         storage.archive("math")
         with pytest.raises(RuntimeError, match="archived"):
             store.begin_generation(generation=0, source_record_ids=("record-1",))
@@ -344,7 +339,7 @@ def test_the_deployment_selects_the_task_file_store(tmp_path, backend, files_roo
     )
     dispatcher = build_dispatcher(settings)
     try:
-        store = dispatcher.get_or_create_scenario("math").store.tasks.open("tasks", split=SPLIT)
+        store = dispatcher.get_or_create_scenario("math").store.tasks.open("tasks")
         store.begin_generation(generation=0, source_record_ids=("record-1",))
         store.save_candidates(generation=0, directories=candidates(tmp_path, generated("alpha")))
         directory = store.path(store.publish_task(generation=0, index=0, split="train").files_digest)

@@ -568,11 +568,8 @@ task store before any rollout. Thus generation and rollout can recover
 independently after a restart. A caller can also add a task directory with
 ``add_task``. The contract and its values are in ``reef.storage.tasks``.
 
-To open a store, call
-``task_storage.open(name, split=SplitSettings(eval_fraction=..., seed=...))``.
-Each record-to-task stage uses its own ``name``. The first open saves the
-split settings. A later open with different settings raises
-``TaskStoreError``.
+To open a store, call ``task_storage.open(name)``. Each record-to-task stage
+uses its own ``name``.
 
 A pipeline stage gets ``task_storage`` from ``PipelineContext.task_storage``.
 The scenario factory gives ``session.tasks`` to ``Recipe.build_trainers``,

@@ -16,10 +16,9 @@ from reef.service.deploy.deployment_config import translate_layout
 from reef.service.deploy.service_config import ServiceConfig, normalize_service_config, service_config_from_mapping
 from reef.service.task_import import IMPORTED_TASK_STORE, TaskImport, TaskImportError, TaskImportingScenarioStorage
 from reef.storage.sqlite import SQLiteScenarioStorage
-from reef.storage.tasks import SplitSettings, TaskConflict
+from reef.storage.tasks import TaskConflict
 
 IMAGE = bytes(range(256))
-SPLIT = SplitSettings(eval_fraction=0.5, seed=3)
 
 
 def harbor_task(root: Path, name: str, port: int, *, instruction: str = "") -> Path:
@@ -31,13 +30,13 @@ def harbor_task(root: Path, name: str, port: int, *, instruction: str = "") -> P
 
 
 def manifest(path: Path, train: tuple[str, ...], eval_: tuple[str, ...]) -> Path:
-    write_split_manifest(path, TaskSplit(train=train, eval=eval_, seed=SPLIT.seed, eval_fraction=SPLIT.eval_fraction))
+    write_split_manifest(path, TaskSplit(train=train, eval=eval_, seed=0, eval_fraction=0.5))
     return path
 
 
 def imported(storage: TaskImportingScenarioStorage) -> list[tuple[str, str]]:
     with closing(storage.open("math")) as session:
-        return [(task.name, task.split) for task in session.tasks.open(IMPORTED_TASK_STORE, split=SPLIT).tasks()]
+        return [(task.name, task.split) for task in session.tasks.open(IMPORTED_TASK_STORE).tasks()]
 
 
 def test_each_open_imports_the_manifest_into_imported_tasks(tmp_path: Path) -> None:
@@ -49,7 +48,7 @@ def test_each_open_imports_the_manifest_into_imported_tasks(tmp_path: Path) -> N
     with closing(TaskImportingScenarioStorage(SQLiteScenarioStorage(tmp_path / "records"), task_import)) as storage:
         assert imported(storage) == [("a-task", "train"), ("b-task", "train"), ("c-task", "eval")]
         with closing(storage.open("math")) as session:
-            store = session.tasks.open(IMPORTED_TASK_STORE, split=SPLIT)
+            store = session.tasks.open(IMPORTED_TASK_STORE)
             (evaluated,) = store.tasks(split="eval")
             assert (store.path(evaluated.files_digest) / "environment" / "image.png").read_bytes() == IMAGE
 
@@ -111,7 +110,7 @@ def test_the_deployment_imports_its_tasks_into_each_scenario(tmp_path: Path) -> 
     )
     dispatcher = build_dispatcher(settings)
     try:
-        store = dispatcher.get_or_create_scenario("math").store.tasks.open(IMPORTED_TASK_STORE, split=SPLIT)
+        store = dispatcher.get_or_create_scenario("math").store.tasks.open(IMPORTED_TASK_STORE)
         assert [(task.name, task.split) for task in store.tasks()] == [("a-task", "eval")]
     finally:
         dispatcher.close()
