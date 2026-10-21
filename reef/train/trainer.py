@@ -164,7 +164,7 @@ class Trainer:
         candidate_backend: CandidateBackend | None,
         candidate_evaluator: CandidateEvaluationPlugin | None,
         state: Mapping[str, Any],
-        batch_size: int = 1,
+        batch_size: int,
     ) -> None:
         self._scenario = scenario
         #: The samples in one training step: an automatic batch holds at least this many.

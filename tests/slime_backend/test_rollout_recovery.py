@@ -626,12 +626,9 @@ def test_dp_packaging_splices_reef_step_sizes_with_a_partial_tail(monkeypatch: p
 
 
 @pytest.mark.unit
-def test_dp_packaging_refuses_step_sizes_that_do_not_cover_the_rollouts(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dp_packaging_trains_a_partial_last_step(monkeypatch: pytest.MonkeyPatch) -> None:
     manager = _manager_for_schedule(monkeypatch, global_batch_size=2)
     data = {"tokens": [[1], [2], [3], [4], [5]], "rollout_ids": [0, 1, 2, 3, 4]}
-
-    with pytest.raises(ValueError, match="do not cover the 5 rollouts"):
-        manager._split_train_data_by_dp({**data, "external_step_sizes": [2, 2]})
 
     packed = manager._split_train_data_by_dp({**data, "external_step_sizes": [2, 2, 1]})
     assert packed[0]["global_batch_sizes"] == [2, 2, 1]

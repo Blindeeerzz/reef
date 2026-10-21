@@ -53,15 +53,6 @@ def tensorize_external_fields(data: dict[str, Any], extra_dtypes: Mapping[str, s
             data[key] = [torch.as_tensor(value, dtype=dtype).detach().cpu().contiguous() for value in data[key]]
 
 
-def optimizer_step_sizes(data: Mapping[str, Any]) -> list[int]:
-    """Rollouts per optimizer step of one job's rollout data, in order, from Reef's schedule."""
-    rollout_count = len(dict.fromkeys(data["rollout_ids"]))
-    step_sizes = data["external_step_sizes"]
-    if sum(step_sizes) != rollout_count:
-        raise ValueError(f"external_step_sizes {step_sizes!r} do not cover the {rollout_count} rollouts")
-    return [int(size) for size in step_sizes]
-
-
 class TrainingBatchProcessor:
     """Prepare rank-specific data without owning actors or inference connections."""
 
@@ -79,7 +70,8 @@ class TrainingBatchProcessor:
         dp_size = self.train_parallel_config["dp_size"]
         total_lengths = [len(tokens) for tokens in data["tokens"]]
         data["total_lengths"] = total_lengths
-        step_sizes = self._resolve_step_sizes(data)
+        # Rollouts per optimizer step, in order; to_slime_rollout_data checked that they cover the rollouts.
+        step_sizes = data.pop("external_step_sizes")
         partitions, micro_batch_indices, num_microbatches, global_batch_sizes = self._schedule_steps(data, step_sizes)
 
         references = []
@@ -108,12 +100,6 @@ class TrainingBatchProcessor:
             else:
                 raise ValueError(f"unsupported rollout data transport: {transport!r}")
         return references
-
-    def _resolve_step_sizes(self, data) -> list[int]:
-        """Rollouts per optimizer step, in order, from Reef's schedule."""
-        step_sizes = optimizer_step_sizes(data)
-        data.pop("external_step_sizes")
-        return step_sizes
 
     def _schedule_steps(self, data, step_sizes: list[int]):
         """Run Slime's DP/micro-batch packer one step at a time and splice the results.
