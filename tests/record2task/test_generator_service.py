@@ -678,10 +678,10 @@ def test_history_and_materials_reach_the_designer_and_feedback_uses_its_receipt(
         context = PipelineContext("spade")
         round_stage = GeneratedTaskRecord2Record(context, TaskGroupSettings(plays_per_task=2))
         generation = GeneratedTaskTasks(context, RoundSettings(), round_stage, task_player=generator)
-        result, _ = await generation.played(task, 0)
+        result, _ = await generation.played(task, 0, labels={})
         assert result.is_played and len(result.training_rewards) == 2
         assert read_harbor_task(tmp_path / "tasks" / task.name).source_agent_record_ids == task.source_agent_record_ids
-        await task_generator.record_results((result,))
+        await task_generator.record_results((result,), generation=0)
 
     run_with(built, body)
     prompt = designer.calls[0]["messages"][1]["content"]
@@ -764,7 +764,7 @@ def test_source_based_refusal_reports_the_designer_receipt(tmp_path: Path) -> No
     async def body(generator: HttpGenerator) -> None:
         task_generator = spade(generator, tmp_path)
         assert await task_generator.generate(TaskGenerationRequest(source_records(), "rebuild")) == ()
-        await task_generator.record_results(())
+        await task_generator.record_results((), generation=0)
 
     run_with(built, body)
     assert designer.reports[0]["record_id"] == "designer-1"

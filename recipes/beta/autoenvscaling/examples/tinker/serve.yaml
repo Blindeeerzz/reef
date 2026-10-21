@@ -48,7 +48,6 @@ pipeline:
       rounds: 20
       # The stage requires a description; the generator takes what the tasks are from its sources file.
       description: coding tasks rebuilt from recorded coding-agent sessions
-      state_dir: ${REEF_AUTOENVSCALING_STATE_DIR}/rounds
       # Qwen3 with thinking off ends each generation prompt with an empty think block the history drops.
       scaffold_tolerance: 8
       # The task generator: count sessions rebuilt for each round, a pass-rate band to mark the tasks in reach.
@@ -71,7 +70,7 @@ pipeline:
           # A model call on the same Reef reviews each task's tests; a task they grade on what the instruction does
           # not state is refused.
           review: refuse
-  # A batch is tasks_per_step complete task groups.
+  # A rollout batch is tasks_per_step saved tasks; it trains on their settled groups.
   task2batch:
     config:
       tasks_per_step: 2
@@ -88,3 +87,4 @@ storage:
   artifact-work-dir: ${REEF_AUTOENVSCALING_STATE_DIR}/artifact-work
   artifact-cache-dir: ${REEF_AUTOENVSCALING_STATE_DIR}/artifact-cache
   agent-record-dir: ${REEF_AUTOENVSCALING_STATE_DIR}/agent-record
+  task-file-dir: ${REEF_AUTOENVSCALING_STATE_DIR}/task-files

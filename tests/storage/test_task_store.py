@@ -20,6 +20,7 @@ from reef.storage.sqlite import SQLiteScenarioStorage
 from reef.storage.tasks import (
     GenerationState,
     LocalTaskFileStore,
+    PlayedResult,
     StoredTask,
     TaskCandidate,
     TaskConflict,
@@ -214,6 +215,44 @@ def test_an_added_task_conflicts_with_a_published_name(session, tmp_path):
     assert [task.name for task in store.tasks()] == ["image-task"]
 
 
+def test_play_results_deliveries_and_trained_marks_are_kept_per_task(session, tmp_path):
+    store = session.tasks.open("tasks")
+    store.begin_generation(generation=0, source_record_ids=("record-1",))
+    store.save_candidates(
+        generation=0, directories=candidates(tmp_path, generated("alpha"), generated("beta"), generated("gamma"))
+    )
+    store.publish_task(generation=0, index=0, split="train")
+    store.publish_task(generation=0, index=1, split="train")
+    store.publish_task(generation=0, index=2, split="eval")
+    beta = PlayedResult("beta", training_rewards=(1.0, 0.0))
+    alpha = PlayedResult("alpha", error="the sandbox is gone", infrastructure_failure=True)
+
+    store.record_result(generation=0, result=beta)
+    store.record_result(generation=0, result=alpha)
+    store.record_result(generation=0, result=beta)
+    assert store.results(0) == (alpha, beta), "candidate order, and an identical retry changes nothing"
+    with pytest.raises(TaskStoreError, match="already has a result"):
+        store.record_result(generation=0, result=PlayedResult("beta"))
+    with pytest.raises(TaskStoreError, match="did not publish"):
+        store.record_result(generation=0, result=PlayedResult("gamma"))
+    with pytest.raises(TaskStoreError, match="did not publish"):
+        store.record_result(generation=1, result=PlayedResult("alpha"))
+
+    assert not store.is_delivered(0)
+    store.mark_delivered(generation=0)
+    store.mark_delivered(generation=0)
+    assert store.is_delivered(0)
+    with pytest.raises(TaskStoreError, match="does not exist"):
+        store.mark_delivered(generation=1)
+
+    store.mark_trained(task_names=("alpha",))
+    store.mark_trained(task_names=("alpha", "beta"))
+    assert store.trained_task_names() == {"alpha", "beta"}
+    with pytest.raises(TaskStoreError, match="not a published train task"):
+        store.mark_trained(task_names=("gamma",))
+    assert session.tasks.open("other").trained_task_names() == frozenset()
+
+
 def test_store_names_are_separate(session, tmp_path):
     alpha = session.tasks.open("alpha")
     alpha.begin_generation(generation=0, source_record_ids=("record-1",))
@@ -250,6 +289,9 @@ def test_tasks_survive_a_restart_and_archive_retires_them(open_durable_storage, 
         store.save_candidates(generation=0, directories=candidates(sources, generated("alpha"), generated("beta")))
         store.publish_task(generation=0, index=0, split="train")
         added = store.add_task(directory=binary_task(sources, "image-task"), split="eval")
+        store.record_result(generation=0, result=PlayedResult("alpha", training_rewards=(1.0,)))
+        store.mark_delivered(generation=0)
+        store.mark_trained(task_names=("alpha",))
 
     with closing(open_durable_storage()) as storage:
         with closing(storage.open("math")) as session:
@@ -261,10 +303,12 @@ def test_tasks_survive_a_restart_and_archive_retires_them(open_durable_storage, 
             assert read_harbor_task(store.path(published.files_digest)) == generated("alpha")
             assert restored == added
             assert (store.path(restored.files_digest) / "environment" / "image.png").read_bytes() == bytes(range(256))
+            assert store.results(0) == (PlayedResult("alpha", training_rewards=(1.0,)),)
+            assert store.is_delivered(0) and store.trained_task_names() == {"alpha"}
         storage.archive("math")
         with closing(storage.open("math")) as session:
             store = session.tasks.open("tasks")
-            assert store.generations() == ()
+            assert store.generations() == () and store.trained_task_names() == frozenset()
             with pytest.raises(TaskStoreError, match="no files"):
                 store.path(published.files_digest)
 

@@ -1134,8 +1134,8 @@ The built-in generated-task recipe,
 objective on Tinker's ``importance_sampling`` loss, so it requires the
 ``tinker`` training backend. Its stages are ``GeneratedTaskRecord2Record``,
 ``GeneratedTaskTasks``, and ``GeneratedTaskBatches``. Without
-``pipeline.record2task.config.rounds`` no round runs, and the recipe trains on
-the training arm's reports only.
+``pipeline.record2task.config.rounds`` no round runs, no task rolls out, and
+nothing trains.
 
 .. code:: yaml
 
@@ -1151,7 +1151,6 @@ the training arm's reports only.
          generator_url: ${endpoints.generator}
          rounds: 20
          description: shell tasks with hidden state under /var and /etc
-         state_dir: ${REEF_STATE_DIR}/rounds
          generator:
            module: recipes.beta.spade:SpadeTaskGenerator
            config:
@@ -1162,33 +1161,36 @@ the training arm's reports only.
        config:
          tasks_per_step: 2
 
-``GeneratedTaskRecord2Record`` groups the training plays by task and requests
-the rounds:
+``GeneratedTaskRecord2Record`` groups the training plays by task, paces the
+rounds, and chooses which saved tasks play:
 
 .. config::
 
-   pipeline.record2record.config.plays_per_task | 4 | training plays of each task; a group is complete at this count, or at the plays that reported when fewer did. At least 2.
+   pipeline.record2record.config.plays_per_task | 4 | training plays of each task in a rollout. At least 2.
    pipeline.record2record.config.batches_per_round | 1 | trained batches after which the next round starts
    pipeline.record2record.config.source_records_per_round | 0 | recorded sessions that each round gives the generator, at most; 0 generates from the description only
    pipeline.record2record.config.source_tag | the ``name=value`` tag that marks a source session: each of its model calls carries the header ``x-reef-tag-<name>: <value>``. Required when ``source_records_per_round`` is above 0.
+   pipeline.record2record.config.refill_tasks | 1 | the next round starts only while fewer saved tasks than this wait to roll out
 
-``GeneratedTaskTasks`` runs the rounds and turns the training plays into
-tasks. It plays each task ``plays_per_task`` times, as its record stage
-groups them:
+``GeneratedTaskTasks`` runs the generations, and turns the training plays
+into tasks. ``GeneratedTaskBatches`` plays each task ``plays_per_task`` times
+in a rollout:
 
 .. config::
 
-   pipeline.record2task.config.rounds | 0 | rounds of task generation; 0 generates nothing
+   pipeline.record2task.config.rounds | 0 | rounds of task generation; 0 generates nothing. A round counts when it finishes a generation or runs out of its attempts; a round of replayed sessions does not count. After a restart, only complete generations count.
    pipeline.record2task.config.generator | the ``TaskGenerator`` class (``module``) and its ``config``. Required with rounds.
    pipeline.record2task.config.description | what the tasks are about; every generation request carries it. Required with rounds.
    pipeline.record2task.config.generator_url | the generator service, ``${endpoints.generator}``. Required with rounds.
-   pipeline.record2task.config.state_dir | where each scenario keeps its round summaries. Required with rounds.
    pipeline.record2task.config.eval_fraction | 0.0 | fraction of new source groups held out before play; between 0 and 1
    pipeline.record2task.config.split_seed | 0 | fixed seed for the task store's train/eval split
    pipeline.record2task.config.served_model | the model the task player asks for; the deployment's by default
    pipeline.record2task.config.scaffold_tolerance | 8 | masked tokens the sample assembly may realign before a response, for a thinking template's scaffold
+   pipeline.record2task.config.generation_attempts | 3 | attempts of a generation whose generator or checks fail to run; after them the round is skipped, and the next round finishes the same generation
+   pipeline.record2task.config.generation_deadline_seconds | 1800 | seconds that all attempts of one generation may take
 
-With rounds enabled, each valid task and its split are saved in the scenario's task store before play.
+With rounds enabled, each valid task and its split are saved in the scenario's task store.
+A generation saves tasks and plays none; the saved train tasks play later, and their results are kept in the store.
 The task files go in the task file store; see `Choose the task file store
 <../user-guide/operate.rst#choose-the-task-file-store>`__.
 Related source sessions keep the same split across generations.
@@ -1200,11 +1202,13 @@ Set ``eval_fraction`` and ``split_seed`` here rather than in a generator's confi
 The defaults keep every task in train.
 A published task keeps its split. A change of these values applies to the tasks generated after it.
 
-``GeneratedTaskBatches`` batches complete task groups:
+``GeneratedTaskBatches`` batches complete task groups, and can roll saved tasks out first:
 
 .. config::
 
-   pipeline.task2batch.config.tasks_per_step | 4 | complete task groups in one batch
+   pipeline.task2batch.config.tasks_per_step | 4 | saved tasks of one rollout batch
+   pipeline.task2batch.config.episode_capacity | 0 | episodes of a rollout batch queued or running at once; 0 is ``tasks_per_step`` x ``plays_per_task``
+   pipeline.task2batch.config.settle_timeout_seconds | 600 | seconds a batch whose plays ended waits for its reports before its groups settle as they are
 
 Reef calls the generator class's ``from_config(config, *, scenario, environ)``
 once for each scenario. A generator that calls a remote service reads its

@@ -53,7 +53,9 @@ class TaskPlayResult:
     only of the episodes that ran. An episode that ran and returned no reward
     counts as 0. ``error`` is not
     empty when the task was not played: it failed validation, the task player
-    refused it, or the agent could not start on it.
+    refused it, or the agent could not start on it. ``infrastructure_failure``
+    marks an error where the task could not run at all, for example because
+    the sandbox failed; it is not a failure of the solver.
     An eval task has no rewards and is not played, even with an empty error.
     """
 
@@ -61,6 +63,7 @@ class TaskPlayResult:
     training_rewards: tuple[float, ...] = ()
     error: str = ""
     split: Literal["train", "eval"] = "train"
+    infrastructure_failure: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.task, HarborTask):
@@ -80,6 +83,8 @@ class TaskPlayResult:
             raise ValueError("task result split must be train or eval")
         if self.split == "eval" and self.training_rewards:
             raise ValueError("an eval task result cannot contain rollout rewards")
+        if self.infrastructure_failure and not self.error:
+            raise ValueError("an infrastructure failure needs the error that stopped the task")
 
     @property
     def is_played(self) -> bool:
@@ -121,10 +126,12 @@ class TaskGenerator(Plugin, ABC):
         that needs a directory writes its own copy.
         """
 
-    async def record_results(self, results: tuple[TaskPlayResult, ...]) -> None:
-        """Receive the result of each task that the last :meth:`generate` call returned.
+    async def record_results(self, results: tuple[TaskPlayResult, ...], *, generation: int) -> None:
+        """Receive the results of the tasks that the :meth:`generate` call of ``generation`` returned.
 
-        The recipe calls this once for each round, after the round's plays,
-        also when the round stopped early. A task that the round did not reach
-        has no result. The default keeps nothing.
+        The recipe calls this once each train task of the generation has a
+        result from its first play: possibly after later ``generate`` calls,
+        and after a restart. A crash before the recipe records the delivery
+        sends the same results again, so a second call for the same generation
+        must change nothing. The default keeps nothing.
         """

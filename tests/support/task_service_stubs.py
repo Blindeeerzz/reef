@@ -103,6 +103,7 @@ class StandInGenerator(Generator):
         self.reports: list[dict[str, object]] = []
         self.deleted: list[str] = []
         self.episodes = 0
+        self.task_episodes: dict[str, int] = {}
 
     async def propose(
         self, request: DesignerRequest, *, scenario, generation, index, tags, model=None
@@ -182,6 +183,9 @@ class StandInGenerator(Generator):
         rows = []
         for _ in range(plays):
             self.episodes += 1
+            # A task's reports are numbered from 0 across its plays, as a test that reports them names them.
+            index = self.task_episodes.get(task_path.name, 0)
+            self.task_episodes[task_path.name] = index + 1
             rows.append(
                 TaskPlay(
                     task_path=task_path,
@@ -192,7 +196,9 @@ class StandInGenerator(Generator):
                     error=self.play_error,
                     receipts=() if self.play_error else (f"rec-{self.episodes}",),
                     failed_calls=0,
-                    report_agent_record_ids=(f"rep-{self.episodes}",) if is_reporting and not self.play_error else (),
+                    report_agent_record_ids=(
+                        (f"rep-{task_path.name}-{index}",) if is_reporting and not self.play_error else ()
+                    ),
                     trial_uri=None,
                 )
             )

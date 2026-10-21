@@ -28,7 +28,9 @@ stage. A batch takes uploaded trajectories first.
 
 from __future__ import annotations
 
+import logging
 import time
+import uuid
 from collections.abc import Hashable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -40,15 +42,18 @@ from reef.core.training_request import TrainingRequest
 from reef.observability import ExperimentLogger
 from reef.pipeline_context import PipelineContext
 from reef.record2record import NoRecordSets, Record2Record, RecordSet, TaskStatus
+from reef.record2record.rollout import PooledTask, RolloutReportRecord2Record, is_batch_group
 from reef.record2record.staleness import producing_runtime_load_ids
 from reef.record2task import NoTasks, Record2Task
 from reef.storage.trajectories import consumed_trajectory_id
-from reef.task2batch import NoBatches, Task2Batch
+from reef.task2batch import NoBatches, RolloutTask2Batch, Task2Batch
 from reef.train.types import TrainDataItem, TrainingBatch, TrajectoryItem
 
 
 #: In manual mode the pipeline holds at most this many batches of units; it releases older ones.
 MANUAL_HELD_BATCHES = 4
+
+logger = logging.getLogger(__name__)
 
 
 #: The keys of the deployment's ``pipeline`` section, one for each stage.
@@ -139,6 +144,41 @@ def stage_reference(default: type[Plugin], value: object, stage: str) -> PluginR
 
 
 @dataclass(frozen=True)
+class RolloutStages:
+    """The two stages of a pipeline that rolls tasks out.
+
+    Values: ``record2record`` holds the task pool and groups the rollout
+    episodes; ``task2batch`` plays the rollout batches and builds their
+    training batches.
+    Purpose: ``TrainingPipeline`` makes it when its task-to-batch stage is a
+    ``RolloutTask2Batch``, and its rollout loop reads both stages through it.
+    """
+
+    record2record: RolloutReportRecord2Record
+    task2batch: RolloutTask2Batch
+
+
+@dataclass(frozen=True)
+class ActiveRollout:
+    """The rollout batch that plays, or that waits for its groups and its training.
+
+    Values: ``task_uses`` are the batch's task uses, and ``tasks`` the pooled
+    tasks that they play, in the same order. ``plays_ended_at`` is the
+    monotonic time when the plays ended, or None while they run; the settle
+    deadline counts from it. ``ready_uses`` are the uses whose groups settled
+    ready to train, before the staleness check.
+    Purpose: the pipeline keeps it from submit until the batch trains or ends.
+    A task whose group was ready but did not train goes back to the task pool.
+    """
+
+    batch: str
+    task_uses: tuple[str, ...]
+    tasks: tuple[PooledTask, ...]
+    plays_ended_at: float | None = None
+    ready_uses: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
 class InstructionFailure:
     """A failed instruction and the attempt metadata carried through an in-process trainer reload."""
 
@@ -200,6 +240,24 @@ class TrainingPipeline:
         self.reserved_trajectory_ids: tuple[str, ...] = ()
         #: The commit IDs of the uploaded trajectories that a batch consumed. A second read of one does not queue it.
         self.consumed_trajectory_ids: set[str] = set()
+        #: The stages that roll tasks out, when this pipeline rolls them out.
+        self.rollout_stages: RolloutStages | None = None
+        #: The rollout batch from submit until it trains or ends.
+        self.rollout: ActiveRollout | None = None
+        #: The task uses of each trained rollout batch, with the records that its commit consumes. The tasks are
+        #: marked trained when those records are released, after the commit is durable.
+        self.trained_rollouts: list[tuple[str, tuple[str, ...], frozenset[str]]] = []
+        if isinstance(self.task2batch, RolloutTask2Batch):
+            if not isinstance(self.record2record, RolloutReportRecord2Record):
+                raise TypeError(
+                    f"{type(self.task2batch).__name__} rolls tasks out and needs a RolloutReportRecord2Record, "
+                    f"not {type(self.record2record).__name__}"
+                )
+            if self.task2batch.accepts_trajectories:
+                raise TypeError(
+                    f"{type(self.task2batch).__name__} rolls tasks out and cannot take uploaded trajectories"
+                )
+            self.rollout_stages = RolloutStages(self.record2record, self.task2batch)
         self.set_training_mode(context.training_mode)
 
     @property
@@ -354,6 +412,8 @@ class TrainingPipeline:
         # Background work, such as judgments or finished rounds, forms sets without a new record.
         self.record2record.advance(time.monotonic())
         self.move_record_sets()
+        if self.rollout_stages is not None:
+            return self.rollout_ready(self.rollout_stages)
         if self.pending is not None:
             return True
         self.record2record.drop_stale_units(self.context.max_staleness)
@@ -363,6 +423,91 @@ class TrainingPipeline:
         if self.training_mode == "hybrid" and self.training_requests:
             return True
         return len(self.record2record.pool) + len(self.uploaded_trajectories) >= self.batch_size
+
+    def rollout_ready(self, stages: RolloutStages) -> bool:
+        """Advance the rollout loop; return True when a settled rollout batch can train."""
+        self.record_finished_plays(stages)
+        if self.pending is not None:
+            return True
+        if self.rollout is not None:
+            if not self.rollout_settled(stages):
+                return False
+            if not self.rollout.ready_uses:
+                batch = self.rollout.batch
+                ready_uses = frozenset(
+                    unit.group_key[1]
+                    for unit in stages.record2record.pool.units()
+                    if is_batch_group(unit, batch) and isinstance(unit.group_key, tuple)
+                )
+                self.rollout = replace(self.rollout, ready_uses=ready_uses)
+            if self.rollout_has_groups(stages.record2record):
+                return True
+            # No group of the batch can train.
+            self.end_rollout(stages, trained_uses=())
+        self.start_rollout(stages)
+        return False
+
+    def record_finished_plays(self, stages: RolloutStages) -> None:
+        """Hand each task use's training reports to the record stage when the rollout's plays end."""
+        for result in stages.task2batch.take_finished():
+            if self.rollout is None or result.batch != self.rollout.batch:
+                logger.warning(
+                    "scenario %r ignores the plays of rollout %r, which is not running", self.scenario, result.batch
+                )
+                continue
+            # A use without reports, as after a rollout job that failed, has no episode to wait for.
+            for task_use in self.rollout.task_uses:
+                stages.record2record.plays_ended(
+                    (result.batch, task_use), tuple(result.training_reports.get(task_use, ()))
+                )
+            self.rollout = replace(self.rollout, plays_ended_at=time.monotonic())
+
+    def rollout_settled(self, stages: RolloutStages) -> bool:
+        """Whether every group of the rollout batch settled; past the settle deadline, the groups settle as they are."""
+        if self.rollout is None or self.rollout.plays_ended_at is None:
+            return False
+        batch = self.rollout.batch
+        if stages.record2record.batch_groups_settled(batch):
+            return True
+        if time.monotonic() - self.rollout.plays_ended_at < stages.task2batch.settle_timeout_seconds:
+            return False
+        logger.warning("scenario %r settles rollout %r without the reports it still waits for", self.scenario, batch)
+        stages.record2record.close_groups(batch)
+        return stages.record2record.batch_groups_settled(batch)
+
+    def rollout_has_groups(self, record2record: RolloutReportRecord2Record) -> bool:
+        """Drop the stale groups, then tell whether a group of the settled rollout batch is left to train."""
+        if self.rollout is None:
+            return False
+        record2record.drop_stale_units(self.context.max_staleness)
+        self.forget_ended_sets()
+        batch = self.rollout.batch
+        return any(is_batch_group(unit, batch) for unit in record2record.pool.units())
+
+    def start_rollout(self, stages: RolloutStages) -> None:
+        """Submit up to ``batch_size`` pooled tasks as the next rollout batch; a failed submit keeps them pooled."""
+        taken = stages.record2record.task_pool.take(self.batch_size)
+        if not taken:
+            return
+        batch = f"{self.scenario}:rollout:{uuid.uuid4().hex[:12]}"
+        try:
+            task_uses = stages.task2batch.submit(batch, tuple(task.item for task in taken))
+        except Exception:
+            stages.record2record.task_pool.put_back(taken)
+            raise
+        stages.record2record.begin_rollout(batch, task_uses)
+        self.rollout = ActiveRollout(batch, task_uses, taken)
+
+    def end_rollout(self, stages: RolloutStages, *, trained_uses: tuple[str, ...]) -> None:
+        """End the rollout batch; the tasks whose groups could train but did not, such as stale ones, go back."""
+        if self.rollout is None:
+            return
+        rollout = self.rollout
+        stages.record2record.end_rollout(rollout.batch, trained=bool(trained_uses))
+        for task_use, task in zip(rollout.task_uses, rollout.tasks, strict=True):
+            if task_use in rollout.ready_uses and task_use not in trained_uses:
+                stages.record2record.task_pool.add(task.task_id, task.item, group_key=task.group_key)
+        self.rollout = None
 
     def build_batch(self) -> TrainingBatch:
         if self.pending is None:
@@ -377,6 +522,9 @@ class TrainingPipeline:
             )
             # In manual mode an instruction runs alone; in hybrid it takes the units that an automatic batch would.
             unit_count = 0 if request is not None and self.training_mode == "manual" else self.batch_size
+            if self.rollout is not None:
+                # A rollout batch trains on all of its groups that survived, however many there are.
+                unit_count = len(self.record2record.pool)
             # Uploaded trajectories go first, in upload order. Record set units fill the rest of the batch.
             self.reserved_trajectory_ids = tuple(self.uploaded_trajectories)[:unit_count]
             selected = self.record2record.pool.reserve(unit_count - len(self.reserved_trajectory_ids))
@@ -402,6 +550,12 @@ class TrainingPipeline:
         consumed_units = self.record2record.pool.consume_reserved()
         consumed = self.record2record.consume(consumed_units, trained=trained)
         self.forget_ended_sets()
+        if self.rollout is not None and self.rollout_stages is not None:
+            trained_uses: tuple[str, ...] = ()
+            if trained:
+                trained_uses = tuple(unit.group_key[1] for unit in consumed_units if isinstance(unit.group_key, tuple))
+                self.trained_rollouts.append((self.rollout.batch, trained_uses, consumed))
+            self.end_rollout(self.rollout_stages, trained_uses=trained_uses)
         for trajectory_id in self.reserved_trajectory_ids:
             self.uploaded_trajectories.pop(trajectory_id)
             self.consumed_trajectory_ids.add(consumed_trajectory_id(trajectory_id))
@@ -437,6 +591,12 @@ class TrainingPipeline:
         self.consumed_requests -= agent_record_ids
         self.consumed_trajectory_ids -= agent_record_ids
         self.record2record.release_records(agent_record_ids)
+        if self.rollout_stages is not None:
+            # The commit that consumed a trained rollout's records is durable now.
+            durable = [entry for entry in self.trained_rollouts if entry[2] & agent_record_ids]
+            for batch, trained_uses, _ in durable:
+                self.rollout_stages.task2batch.rollout_trained(batch, trained_uses)
+            self.trained_rollouts = [entry for entry in self.trained_rollouts if entry not in durable]
 
     def background_jobs_running(self) -> bool:
         """Return True while background work runs: a waiting set, or a record stage job such as a judgment.
@@ -446,7 +606,8 @@ class TrainingPipeline:
         Otherwise it sleeps until the next accepted record. The training
         thread reads this between drains. It must not block.
         """
-        return bool(self.waiting_sets) or self.record2record.background_jobs_running()
+        is_rolling_out = self.rollout is not None and self.pending is None
+        return bool(self.waiting_sets) or is_rolling_out or self.record2record.background_jobs_running()
 
     def operational_metrics(self) -> Mapping[str, float | int]:
         """Numeric queue state, sampled under the trainer lock without advancing work."""
@@ -472,10 +633,26 @@ class TrainingPipeline:
         }
         if self.supported_training_modes & {"manual", "hybrid"}:
             state["buffered_requests"] = self.buffered_requests()
-        return {**state, **self.record2record.status(), **self.record2task.status()}
+        if self.rollout_stages is None:
+            return {**state, **self.record2record.status(), **self.record2task.status()}
+        state["rollout"] = (
+            None
+            if self.rollout is None
+            else {
+                "batch": self.rollout.batch,
+                "task_uses": len(self.rollout.task_uses),
+                "is_playing": self.rollout_stages.task2batch.running(),
+            }
+        )
+        return {
+            **state,
+            **self.record2record.status(),
+            **self.record2task.status(),
+            **self.rollout_stages.task2batch.status(),
+        }
 
     def close(self) -> None:
-        """Close the record and task stages; safe to call more than once.
+        """Close the stages; safe to call more than once.
 
         After ``close`` returns, no background worker of a stage may touch
         shared state or deliver further results.
@@ -483,4 +660,9 @@ class TrainingPipeline:
         try:
             self.record2record.close()
         finally:
-            self.record2task.close()
+            try:
+                # A rollout still saves results through the record-to-task stage, so it closes first.
+                if self.rollout_stages is not None:
+                    self.rollout_stages.task2batch.close()
+            finally:
+                self.record2task.close()

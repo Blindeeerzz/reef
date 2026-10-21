@@ -21,6 +21,7 @@ from reef.storage.sql_records import SQLRecordStore
 from reef.storage.tasks import (
     SPLIT_NAMES,
     GenerationState,
+    PlayedResult,
     SplitName,
     StoredTask,
     TaskCandidate,
@@ -40,11 +41,17 @@ class TaskTables:
     candidate, with the digest of its task files and its outcome.
     ``published`` holds one row for each published task name, with its
     position in publication order and the digest of its task files.
+    ``results`` holds the first play result of each played train task,
+    ``deliveries`` one row for each generation whose results reached the
+    generator, and ``trained`` one row for each task that trained.
     """
 
     generations: Table
     candidates: Table
     published: Table
+    results: Table
+    deliveries: Table
+    trained: Table
     scope: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -91,6 +98,26 @@ def task_tables(metadata: MetaData, *, foreign_key: str | None = None) -> TaskTa
             Column("sequence", BigInteger, nullable=False),
             Column("files_digest", String(64), nullable=False),
             Column("split", Text, nullable=False),
+        ),
+        results=Table(
+            "task_result",
+            metadata,
+            *key_columns(),
+            Column("task_name", Text, primary_key=True),
+            Column("generation", BigInteger, nullable=False),
+            Column("result_json", Text, nullable=False),
+        ),
+        deliveries=Table(
+            "task_delivery",
+            metadata,
+            *key_columns(),
+            Column("generation", BigInteger, primary_key=True),
+        ),
+        trained=Table(
+            "task_trained",
+            metadata,
+            *key_columns(),
+            Column("task_name", Text, primary_key=True),
         ),
     )
 
@@ -243,6 +270,65 @@ class SQLTaskStore(TaskStore):
     def path(self, files_digest: str) -> Path:
         return self.files.path(self.scenario, files_digest)
 
+    def record_result(self, *, generation: int, result: PlayedResult) -> None:
+        document = result_document(result)
+        results = self.tables.results
+        with self.records._transaction(write=True) as connection:
+            state = self.read_generation(connection, generation)
+            published = state is not None and any(
+                candidate.name == result.task_name and candidate.split == "train"
+                for candidate in state.candidates or ()
+            )
+            if not published:
+                raise TaskStoreError(f"generation {generation} did not publish train task {result.task_name!r}")
+            existing = connection.execute(
+                select(results.c.result_json).where(self.matching(results, task_name=result.task_name))
+            ).scalar()
+            if existing is None:
+                connection.execute(
+                    results.insert().values(
+                        **self.key, task_name=result.task_name, generation=generation, result_json=document
+                    )
+                )
+            elif existing != document:
+                raise TaskStoreError(f"task {result.task_name!r} of generation {generation} already has a result")
+
+    def results(self, generation: int) -> tuple[PlayedResult, ...]:
+        results = self.tables.results
+        with self.records._transaction(write=False) as connection:
+            state = self.read_generation(connection, generation)
+            rows = connection.execute(
+                select(results.c.result_json).where(self.matching(results, generation=generation))
+            ).scalars()
+            saved = {result.task_name: result for result in map(result_from_document, rows.all())}
+        candidates = () if state is None else state.candidates or ()
+        names = dict.fromkeys(candidate.name for candidate in candidates)
+        return tuple(saved[name] for name in names if name in saved)
+
+    def mark_delivered(self, *, generation: int) -> None:
+        with self.records._transaction(write=True) as connection:
+            self.require_generation(connection, generation)
+            self.records._insert_if_absent(connection, self.tables.deliveries, {**self.key, "generation": generation})
+
+    def is_delivered(self, generation: int) -> bool:
+        deliveries = self.tables.deliveries
+        with self.records._transaction(write=False) as connection:
+            row = connection.execute(select(deliveries).where(self.matching(deliveries, generation=generation)))
+            return row.first() is not None
+
+    def mark_trained(self, *, task_names: tuple[str, ...]) -> None:
+        with self.records._transaction(write=True) as connection:
+            for name in task_names:
+                published = self.published_tasks(connection, task_name=name)
+                if not published or published[0].split != "train":
+                    raise TaskStoreError(f"task {name!r} is not a published train task")
+                self.records._insert_if_absent(connection, self.tables.trained, {**self.key, "task_name": name})
+
+    def trained_task_names(self) -> frozenset[str]:
+        trained = self.tables.trained
+        with self.records._transaction(write=False) as connection:
+            return frozenset(connection.execute(select(trained.c.task_name).where(self.matching(trained))).scalars())
+
     def publish(self, connection: Connection, name: str, digest: str, split: SplitName) -> StoredTask:
         """Record ``name`` as published with the files ``digest`` to ``split``, and return the published task.
 
@@ -336,6 +422,32 @@ class SQLTaskStore(TaskStore):
             .where(self.matching(candidates, generation=generation, candidate_index=index))
             .values(**outcome)
         )
+
+
+def result_document(result: PlayedResult) -> str:
+    """Encode a play result as canonical JSON text. An identical retry gives the same text."""
+    return json.dumps(
+        {
+            "task_name": result.task_name,
+            "training_rewards": list(result.training_rewards),
+            "error": result.error,
+            "infrastructure_failure": result.infrastructure_failure,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def result_from_document(text: str) -> PlayedResult:
+    """Decode the text of :func:`result_document`."""
+    document = json.loads(text)
+    return PlayedResult(
+        task_name=document["task_name"],
+        training_rewards=tuple(document["training_rewards"]),
+        error=document["error"],
+        infrastructure_failure=document["infrastructure_failure"],
+    )
 
 
 def generation_state(row: RowMapping, candidate_rows: Sequence[RowMapping]) -> GenerationState:

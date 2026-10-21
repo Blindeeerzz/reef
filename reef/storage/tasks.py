@@ -20,6 +20,10 @@ changes nothing. A deployment selects the file store in
 ``storage.task_file_backend``: ``local`` selects :class:`LocalTaskFileStore`,
 and a plugin reference selects another subclass of :class:`TaskFileStore`.
 
+A store also keeps what happens to the train tasks of its generations after
+they are published: each task's first play result, the generations whose
+results reached the generator, and the tasks that trained.
+
 A task store belongs to a scenario session. Archiving the scenario retires its
 task stores and task files with its records and commits. Record retention
 does not delete tasks.
@@ -147,6 +151,25 @@ class StoredTask:
             raise ValueError("a stored task needs a name, the split 'train' or 'eval', and a files digest")
 
 
+@dataclass(frozen=True)
+class PlayedResult:
+    """What the first play of a generation's train task returned.
+
+    Values: ``task_name`` names a train task that the generation published.
+    ``training_rewards`` are the rewards of the training episodes that ran. A
+    non-empty ``error`` means that the task was not played;
+    ``infrastructure_failure`` says that it could not run at all.
+    Purpose: the record-to-task stage saves it when the task first plays, and
+    sends the results of a generation to its generator once each train task of
+    the generation has one, also after a restart.
+    """
+
+    task_name: str
+    training_rewards: tuple[float, ...] = ()
+    error: str = ""
+    infrastructure_failure: bool = False
+
+
 class TaskStore(ABC):
     """The generations and published tasks of one named store of a scenario.
 
@@ -161,7 +184,7 @@ class TaskStore(ABC):
 
     A store is part of a scenario session and closes with it. Each write is
     durable when it returns. An identical retry of a write changes nothing.
-    The caller serializes the writers of one store.
+    Each write is atomic, so writers may run on several threads.
     """
 
     @abstractmethod
@@ -230,6 +253,38 @@ class TaskStore(ABC):
     @abstractmethod
     def tasks(self, *, split: SplitName | None = None) -> tuple[StoredTask, ...]:
         """Return the published tasks in publication order, optionally of one split."""
+
+    @abstractmethod
+    def record_result(self, *, generation: int, result: PlayedResult) -> None:
+        """Save the first play result of a train task that the generation published.
+
+        An identical retry changes nothing. Raises ``TaskStoreError`` if the
+        task already has another result, or if the generation did not publish
+        it to the train split.
+        """
+
+    @abstractmethod
+    def results(self, generation: int) -> tuple[PlayedResult, ...]:
+        """Return the saved play results of a generation's tasks, in candidate order."""
+
+    @abstractmethod
+    def mark_delivered(self, *, generation: int) -> None:
+        """Save that the generator received the results of the generation. A repeated call changes nothing."""
+
+    @abstractmethod
+    def is_delivered(self, generation: int) -> bool:
+        """Return whether the generator received the results of the generation."""
+
+    @abstractmethod
+    def mark_trained(self, *, task_names: tuple[str, ...]) -> None:
+        """Save that these published train tasks trained. A task marked again changes nothing.
+
+        Raises ``TaskStoreError`` if a name is not a published train task.
+        """
+
+    @abstractmethod
+    def trained_task_names(self) -> frozenset[str]:
+        """Return the names of the tasks that trained."""
 
     @abstractmethod
     def path(self, files_digest: str) -> Path:
@@ -404,6 +459,7 @@ __all__ = [
     "IMPORTED_TASK_STORE",
     "GenerationState",
     "LocalTaskFileStore",
+    "PlayedResult",
     "SplitName",
     "StoredTask",
     "TaskCandidate",

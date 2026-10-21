@@ -44,7 +44,6 @@ pipeline:
       generator_url: ${endpoints.generator}
       rounds: 20
       description: shell tasks with hidden state under /var and /etc
-      state_dir: ${REEF_SPADE_STATE_DIR}/rounds
       # Qwen3 with thinking off ends each generation prompt with an empty think block the history drops.
       scaffold_tolerance: 8
       # The task generator: SPADE's Designer, count tasks for each round, a hint arm for each task with a hint.
@@ -56,7 +55,7 @@ pipeline:
           hint_plays: 2
           skills: [inspection, repair]
           state_dir: ${REEF_SPADE_STATE_DIR}/generations
-  # A batch is tasks_per_step complete task groups.
+  # A rollout batch is tasks_per_step saved tasks; it trains on their settled groups.
   task2batch:
     config:
       tasks_per_step: 2
